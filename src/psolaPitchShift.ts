@@ -270,11 +270,13 @@ export function psolaPitchAndTimeShiftBuffer(
       );
 
       if (isVoiced) {
-        // グレイン長は「解析周期」と「合成周期」の大きい方に合わせる。
-        // こうしないと、ピッチを下げて間隔(synthPeriod)が広がった時に
-        // 元の周期(period)基準の狭いグレインだけでは隙間ができてしまい、
-        // 正規化(weightが薄い場所での除算)が異常増幅を起こす原因になる。
-        const grainHalf = Math.max(period, synthPeriod);
+        // グレイン長は実際の局所周期(period)に忠実に合わせる。
+        // ("synthPeriodとの大きい方"に広げると、ピッチを下げた時に
+        //  隣の周期まで巻き込んで位相がズレ、全体にジリジリした
+        //  細かいノイズが乗る副作用があったため元に戻した。
+        //  隙間(重なりが薄い場所)への対策は下の正規化の下限
+        //  (MIN_NORMALIZE_WEIGHT)だけで十分)
+        const grainHalf = period;
         const grainLen = grainHalf * 2;
         const window = hannWindow(grainLen);
         const grainStart = analysisMark - grainHalf;
