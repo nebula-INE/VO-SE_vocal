@@ -276,9 +276,20 @@ async function renderViaCore(
   }
 
   const samples: WorkerSampleEntry[] = [];
+  // [修正] OtoEntry.alias はC++側で固定64バイト。今のcacheKey
+  // (`voicebank:歌詞:直前歌詞:noteNum`)はボイスバンク名に日本語を含み、
+  // UTF-8で簡単に64バイトを超えてしまう。load_embedded_resource側は
+  // 文字列長の制限が無いため、set_oto_data側だけ切り詰められて
+  // 両者のキーが一致しなくなる(oto.iniが引けない/最悪未定義動作)おそれが
+  // あった。WASM側に渡すキーは常に短いASCII識別子(wasmKey)に分離し、
+  // 元のcacheKeyはJS側のサンプルキャッシュだけに使う。
+  const cacheKeyToWasmKey = new Map<string, string>();
+  let wasmKeySeq = 0;
   for (const [key, s] of rawSampleMap) {
     if (!s) continue;
-    samples.push({ key, pcm16: s.pcm16.buffer.slice(0), oto: s.oto });
+    const wasmKey = `s${wasmKeySeq++}`;
+    cacheKeyToWasmKey.set(key, wasmKey);
+    samples.push({ key: wasmKey, pcm16: s.pcm16.buffer.slice(0), oto: s.oto });
   }
 
   // NoteEvent列を「絶対時刻を持たない連結列」として構築する。
@@ -301,12 +312,13 @@ async function renderViaCore(
       pushSilence(info.durationMs);
     } else {
       const s = rawSampleMap.get(info.cacheKey);
-      if (!s) {
+      const wasmKey = cacheKeyToWasmKey.get(info.cacheKey);
+      if (!s || !wasmKey) {
         // サンプル取得失敗: 無音で埋めてタイミングだけは崩さない
         pushSilence(info.durationMs);
       } else {
         workerNotes.push({
-          key: info.cacheKey,
+          key: wasmKey,
           pitchCurveHz: buildPitchCurveHz(info.note, info.durationMs)
         });
       }
