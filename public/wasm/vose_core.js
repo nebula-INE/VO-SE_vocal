@@ -187,9 +187,19 @@ var ABORT = false;
 // include: runtime_common.js
 // include: runtime_exceptions.js
 // Base Emscripten EH error class
-class EmscriptenEH {}
+class EmscriptenEH extends Error {}
 
 class EmscriptenSjLj extends EmscriptenEH {}
+
+class CppException extends EmscriptenEH {
+  constructor(excPtr) {
+    super(excPtr);
+    this.excPtr = excPtr;
+    const excInfo = getExceptionMessage(this);
+    this.name = excInfo[0];
+    this.message = excInfo[1];
+  }
+}
 
 // end include: runtime_exceptions.js
 // include: runtime_debug.js
@@ -648,6 +658,121 @@ var warnOnce = text => {
   }
 };
 
+var UTF8Decoder = globalThis.TextDecoder && new TextDecoder;
+
+/**
+   * heapOrArray is either a regular array, or a JavaScript typed array view.
+   * @param {number} idx
+   * @param {number=} maxBytesToRead
+   * @param {boolean=} ignoreNul
+   * @return {number}
+   */ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
+  var maxIdx = idx + maxBytesToRead;
+  if (ignoreNul) return maxIdx;
+  // TextDecoder needs to know the byte length in advance, it doesn't stop on
+  // null terminator by itself.
+  // As a tiny code save trick, compare idx against maxIdx using a negation,
+  // so that maxBytesToRead=undefined/NaN means Infinity.
+  while (heapOrArray[idx] && !(idx >= maxIdx)) ++idx;
+  return idx;
+};
+
+/**
+   * Given a pointer 'idx' to a null-terminated UTF8-encoded string in the given
+   * array that contains uint8 values, returns a copy of that string as a
+   * Javascript String object.
+   * heapOrArray is either a regular array, or a JavaScript typed array view.
+   * @param {number=} idx
+   * @param {number=} maxBytesToRead
+   * @param {boolean=} ignoreNul - If true, the function will not stop on a NUL character.
+   * @return {string}
+   */ var UTF8ArrayToString = (heapOrArray, idx = 0, maxBytesToRead, ignoreNul) => {
+  var endPtr = findStringEnd(heapOrArray, idx, maxBytesToRead, ignoreNul);
+  // When using conditional TextDecoder, skip it for short strings as the overhead of the native call is not worth it.
+  if (endPtr - idx > 16 && heapOrArray.buffer && UTF8Decoder) {
+    return UTF8Decoder.decode(heapOrArray.subarray(idx, endPtr));
+  }
+  var str = "";
+  while (idx < endPtr) {
+    // For UTF8 byte structure, see:
+    // http://en.wikipedia.org/wiki/UTF-8#Description
+    // https://www.ietf.org/rfc/rfc2279.txt
+    // https://tools.ietf.org/html/rfc3629
+    var u0 = heapOrArray[idx++];
+    if (!(u0 & 128)) {
+      str += String.fromCharCode(u0);
+      continue;
+    }
+    var u1 = heapOrArray[idx++] & 63;
+    if ((u0 & 224) == 192) {
+      str += String.fromCharCode(((u0 & 31) << 6) | u1);
+      continue;
+    }
+    var u2 = heapOrArray[idx++] & 63;
+    if ((u0 & 240) == 224) {
+      u0 = ((u0 & 15) << 12) | (u1 << 6) | u2;
+    } else {
+      if ((u0 & 248) != 240) warnOnce(`Invalid UTF-8 leading byte ${ptrToString(u0)} encountered when deserializing a UTF-8 string in wasm memory to a JS string!`);
+      u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (heapOrArray[idx++] & 63);
+    }
+    if (u0 < 65536) {
+      str += String.fromCharCode(u0);
+    } else {
+      var ch = u0 - 65536;
+      str += String.fromCharCode(55296 | (ch >> 10), 56320 | (ch & 1023));
+    }
+  }
+  return str;
+};
+
+/** @type {!Uint8Array} */ var HEAPU8;
+
+/**
+   * Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the
+   * emscripten HEAP, returns a copy of that string as a Javascript String object.
+   *
+   * @param {number} ptr
+   * @param {number=} maxBytesToRead - An optional length that specifies the
+   *   maximum number of bytes to read. You can omit this parameter to scan the
+   *   string until the first 0 byte. If maxBytesToRead is passed, and the string
+   *   at [ptr, ptr+maxBytesToReadr[ contains a null byte in the middle, then the
+   *   string will cut short at that byte index.
+   * @param {boolean=} ignoreNul - If true, the function will not stop on a NUL character.
+   * @return {string}
+   */ var UTF8ToString = (ptr, maxBytesToRead, ignoreNul) => {
+  assert(typeof ptr == "number", `UTF8ToString expects a number (got ${typeof ptr})`);
+  return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead, ignoreNul) : "";
+};
+
+var ___assert_fail = (condition, filename, line, func) => abort(`Assertion failed: ${UTF8ToString(condition)}, at: ` + [ filename ? UTF8ToString(filename) : "unknown filename", line, func ? UTF8ToString(func) : "unknown function" ]);
+
+var exceptionCaught = [];
+
+var uncaughtExceptionCount = 0;
+
+var ___cxa_begin_catch = ptr => {
+  var info = new ExceptionInfo(ptr);
+  if (!info.get_caught()) {
+    info.set_caught(true);
+    uncaughtExceptionCount--;
+  }
+  info.set_rethrown(false);
+  exceptionCaught.push(info);
+  return ___cxa_get_exception_ptr(ptr);
+};
+
+var exceptionLast = null;
+
+var ___cxa_end_catch = () => {
+  // Clear state flag.
+  _setThrew(0, 0);
+  assert(exceptionCaught.length > 0);
+  // Call destructor if one is registered then clear it.
+  var info = exceptionCaught.pop();
+  ___cxa_decrement_exception_refcount(info.excPtr);
+  exceptionLast = null;
+};
+
 class ExceptionInfo {
   // excPtr - Thrown object pointer to wrap. Metadata pointer is calculated from it.
   constructor(excPtr) {
@@ -696,24 +821,114 @@ class ExceptionInfo {
   }
 }
 
-var uncaughtExceptionCount = 0;
+var setTempRet0 = val => __emscripten_tempret_set(val);
+
+var findMatchingCatch = args => {
+  var thrown = exceptionLast?.excPtr;
+  if (!thrown) {
+    // just pass through the null ptr
+    setTempRet0(0);
+    return 0;
+  }
+  var info = new ExceptionInfo(thrown);
+  info.set_adjusted_ptr(thrown);
+  var thrownType = info.get_type();
+  if (!thrownType) {
+    // just pass through the thrown ptr
+    setTempRet0(0);
+    return thrown;
+  }
+  // can_catch receives a **, add indirection
+  // The different catch blocks are denoted by different types.
+  // Due to inheritance, those types may not precisely match the
+  // type of the thrown object. Find one which matches, and
+  // return the type of the catch block which should be called.
+  for (var caughtType of args) {
+    if (!caughtType || caughtType === thrownType) {
+      // Catch all clause matched or exactly the same type is caught
+      break;
+    }
+    var adjusted_ptr_addr = info.ptr + 16;
+    if (___cxa_can_catch(caughtType, thrownType, adjusted_ptr_addr)) {
+      setTempRet0(caughtType);
+      return thrown;
+    }
+  }
+  setTempRet0(thrownType);
+  return thrown;
+};
+
+var ___cxa_find_matching_catch_2 = () => findMatchingCatch([]);
+
+var ___cxa_find_matching_catch_3 = arg0 => findMatchingCatch([ arg0 ]);
+
+var ___cxa_find_matching_catch_4 = (arg0, arg1) => findMatchingCatch([ arg0, arg1 ]);
 
 var __Unwind_RaiseException = ex => {
-  assert(false, "Exception thrown, but exception catching is not enabled. Compile with -sNO_DISABLE_EXCEPTION_CATCHING or -sEXCEPTION_CATCHING_ALLOWED=[..] to catch.");
+  throw ex;
 };
+
+var ___cxa_rethrow = () => {
+  if (!exceptionCaught.length) {
+    abort("no exception to throw");
+  }
+  var info = exceptionCaught.at(-1);
+  var ptr = info.excPtr;
+  info.set_rethrown(true);
+  info.set_caught(false);
+  uncaughtExceptionCount++;
+  ___cxa_increment_exception_refcount(ptr);
+  ptr = exceptionLast = new CppException(ptr);
+  __Unwind_RaiseException(ptr);
+};
+
+var stackAlloc = sz => __emscripten_stack_alloc(sz);
+
+var getExceptionMessageCommon = ptr => {
+  var sp = stackSave();
+  var type_addr_addr = stackAlloc(4);
+  var message_addr_addr = stackAlloc(4);
+  ___get_exception_message(ptr, type_addr_addr, message_addr_addr);
+  var type_addr = HEAPU32[((type_addr_addr) >> 2)];
+  var message_addr = HEAPU32[((message_addr_addr) >> 2)];
+  var type = UTF8ToString(type_addr);
+  _free(type_addr);
+  var message;
+  if (message_addr) {
+    message = UTF8ToString(message_addr);
+    _free(message_addr);
+  }
+  stackRestore(sp);
+  return [ type, message ];
+};
+
+var getExceptionMessage = exn => getExceptionMessageCommon(exn.excPtr);
 
 var ___cxa_throw = (ptr, type, destructor) => {
   var info = new ExceptionInfo(ptr);
   // Initialize ExceptionInfo content after it was allocated in __cxa_allocate_exception.
   info.init(type, destructor);
+  ___cxa_increment_exception_refcount(ptr);
+  ptr = exceptionLast = new CppException(ptr);
   uncaughtExceptionCount++;
   __Unwind_RaiseException(ptr);
 };
+
+var ___cxa_uncaught_exceptions = () => uncaughtExceptionCount;
 
 var ___handle_stack_overflow = requested => {
   var base = _emscripten_stack_get_base();
   var end = _emscripten_stack_get_end();
   abort(`stack overflow (Attempt to set SP to ${ptrToString(requested)}` + `, with stack limits [${ptrToString(end)} - ${ptrToString(base)}` + "]). If you require more stack space build with -sSTACK_SIZE=<bytes>");
+};
+
+var __Unwind_Resume = ex => {
+  throw ex;
+};
+
+var ___resumeException = ptr => {
+  ptr = exceptionLast ??= new CppException(ptr);
+  __Unwind_Resume(ptr);
 };
 
 var syscallGetVarargI = () => {
@@ -839,73 +1054,6 @@ var PATH_FS = {
     outputParts = outputParts.concat(toParts.slice(samePartsLength));
     return outputParts.join("/");
   }
-};
-
-var UTF8Decoder = globalThis.TextDecoder && new TextDecoder;
-
-/**
-   * heapOrArray is either a regular array, or a JavaScript typed array view.
-   * @param {number} idx
-   * @param {number=} maxBytesToRead
-   * @param {boolean=} ignoreNul
-   * @return {number}
-   */ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
-  var maxIdx = idx + maxBytesToRead;
-  if (ignoreNul) return maxIdx;
-  // TextDecoder needs to know the byte length in advance, it doesn't stop on
-  // null terminator by itself.
-  // As a tiny code save trick, compare idx against maxIdx using a negation,
-  // so that maxBytesToRead=undefined/NaN means Infinity.
-  while (heapOrArray[idx] && !(idx >= maxIdx)) ++idx;
-  return idx;
-};
-
-/**
-   * Given a pointer 'idx' to a null-terminated UTF8-encoded string in the given
-   * array that contains uint8 values, returns a copy of that string as a
-   * Javascript String object.
-   * heapOrArray is either a regular array, or a JavaScript typed array view.
-   * @param {number=} idx
-   * @param {number=} maxBytesToRead
-   * @param {boolean=} ignoreNul - If true, the function will not stop on a NUL character.
-   * @return {string}
-   */ var UTF8ArrayToString = (heapOrArray, idx = 0, maxBytesToRead, ignoreNul) => {
-  var endPtr = findStringEnd(heapOrArray, idx, maxBytesToRead, ignoreNul);
-  // When using conditional TextDecoder, skip it for short strings as the overhead of the native call is not worth it.
-  if (endPtr - idx > 16 && heapOrArray.buffer && UTF8Decoder) {
-    return UTF8Decoder.decode(heapOrArray.subarray(idx, endPtr));
-  }
-  var str = "";
-  while (idx < endPtr) {
-    // For UTF8 byte structure, see:
-    // http://en.wikipedia.org/wiki/UTF-8#Description
-    // https://www.ietf.org/rfc/rfc2279.txt
-    // https://tools.ietf.org/html/rfc3629
-    var u0 = heapOrArray[idx++];
-    if (!(u0 & 128)) {
-      str += String.fromCharCode(u0);
-      continue;
-    }
-    var u1 = heapOrArray[idx++] & 63;
-    if ((u0 & 224) == 192) {
-      str += String.fromCharCode(((u0 & 31) << 6) | u1);
-      continue;
-    }
-    var u2 = heapOrArray[idx++] & 63;
-    if ((u0 & 240) == 224) {
-      u0 = ((u0 & 15) << 12) | (u1 << 6) | u2;
-    } else {
-      if ((u0 & 248) != 240) warnOnce(`Invalid UTF-8 leading byte ${ptrToString(u0)} encountered when deserializing a UTF-8 string in wasm memory to a JS string!`);
-      u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (heapOrArray[idx++] & 63);
-    }
-    if (u0 < 65536) {
-      str += String.fromCharCode(u0);
-    } else {
-      var ch = u0 - 65536;
-      str += String.fromCharCode(55296 | (ch >> 10), 56320 | (ch & 1023));
-    }
-  }
-  return str;
 };
 
 var FS_stdin_getChar_buffer = [];
@@ -1469,25 +1617,6 @@ var FS_getMode = (canRead, canWrite) => {
   if (canRead) mode |= 292 | 73;
   if (canWrite) mode |= 146;
   return mode;
-};
-
-/** @type {!Uint8Array} */ var HEAPU8;
-
-/**
-   * Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the
-   * emscripten HEAP, returns a copy of that string as a Javascript String object.
-   *
-   * @param {number} ptr
-   * @param {number=} maxBytesToRead - An optional length that specifies the
-   *   maximum number of bytes to read. You can omit this parameter to scan the
-   *   string until the first 0 byte. If maxBytesToRead is passed, and the string
-   *   at [ptr, ptr+maxBytesToReadr[ contains a null byte in the middle, then the
-   *   string will cut short at that byte index.
-   * @param {boolean=} ignoreNul - If true, the function will not stop on a NUL character.
-   * @return {string}
-   */ var UTF8ToString = (ptr, maxBytesToRead, ignoreNul) => {
-  assert(typeof ptr == "number", `UTF8ToString expects a number (got ${typeof ptr})`);
-  return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead, ignoreNul) : "";
 };
 
 var strError = errno => UTF8ToString(_strerror(errno));
@@ -4153,7 +4282,20 @@ function _fd_write(fd, iov, iovcnt, pnum) {
   }
 }
 
+var _llvm_eh_typeid_for = type => type;
+
 var _random_get = (buffer, size) => randomFill(HEAPU8.subarray(buffer, buffer + size));
+
+var wasmTableMirror = [];
+
+var getWasmTableEntry = funcPtr => {
+  var func = wasmTableMirror[funcPtr];
+  if (!func) {
+    /** @suppress {checkTypes} */ wasmTableMirror[funcPtr] = func = wasmTable.get(funcPtr);
+  }
+  /** @suppress {checkTypes} */ assert(wasmTable.get(funcPtr) == func, "table mirror is out of date");
+  return func;
+};
 
 var getCFunc = ident => {
   var func = Module["_" + ident];
@@ -4166,8 +4308,6 @@ var writeArrayToMemory = (array, buffer) => {
   assert(array.length >= 0, "writeArrayToMemory array must have a length (should be an array or typed array)");
   HEAP8.set(array, buffer);
 };
-
-var stackAlloc = sz => __emscripten_stack_alloc(sz);
 
 var stringToUTF8OnStack = str => {
   var size = lengthBytesUTF8(str) + 1;
@@ -4322,17 +4462,6 @@ var stringToUTF8OnStack = str => {
     abort(`invalid type for setValue: ${type}`);
   }
 }
-
-var wasmTableMirror = [];
-
-var getWasmTableEntry = funcPtr => {
-  var func = wasmTableMirror[funcPtr];
-  if (!func) {
-    /** @suppress {checkTypes} */ wasmTableMirror[funcPtr] = func = wasmTable.get(funcPtr);
-  }
-  /** @suppress {checkTypes} */ assert(wasmTable.get(funcPtr) == func, "table mirror is out of date");
-  return func;
-};
 
 var updateTableMap = (offset, count) => {
   if (functionsInTableMap) {
@@ -4543,11 +4672,11 @@ Module["lengthBytesUTF8"] = lengthBytesUTF8;
 
 Module["FS"] = FS;
 
-var missingLibrarySymbols = [ "writeI53ToI64", "writeI53ToI64Clamped", "writeI53ToI64Signaling", "writeI53ToU64Clamped", "writeI53ToU64Signaling", "readI53FromI64", "readI53FromU64", "convertI32PairToI53", "convertI32PairToI53Checked", "convertU32PairToI53", "getTempRet0", "setTempRet0", "createNamedFunction", "zeroMemory", "exitJS", "withStackSave", "inetPton4", "inetNtop4", "inetPton6", "inetNtop6", "readSockaddr", "writeSockaddr", "readEmAsmArgs", "jstoi_q", "autoResumeAudioContext", "getDynCaller", "dynCall", "handleException", "keepRuntimeAlive", "runtimeKeepalivePush", "runtimeKeepalivePop", "callUserCallback", "maybeExit", "asmjsMangle", "HandleAllocator", "addOnInit", "addOnPostCtor", "addOnPreMain", "addOnExit", "STACK_SIZE", "STACK_ALIGN", "POINTER_SIZE", "ASSERTIONS", "intArrayToString", "AsciiToString", "stringToAscii", "UTF16ToString", "stringToUTF16", "lengthBytesUTF16", "UTF32ToString", "stringToUTF32", "lengthBytesUTF32", "stringToNewUTF8", "registerKeyEventCallback", "maybeCStringToJsString", "findEventTarget", "getBoundingClientRect", "fillMouseEventData", "registerMouseEventCallback", "registerWheelEventCallback", "registerUiEventCallback", "registerFocusEventCallback", "fillDeviceOrientationEventData", "registerDeviceOrientationEventCallback", "fillDeviceMotionEventData", "registerDeviceMotionEventCallback", "screenOrientation", "fillOrientationChangeEventData", "registerOrientationChangeEventCallback", "fillFullscreenChangeEventData", "registerFullscreenChangeEventCallback", "callCanvasResizedCallback", "JSEvents_requestFullscreen", "JSEvents_resizeCanvasForFullscreen", "registerRestoreOldStyle", "hideEverythingExceptGivenElement", "restoreHiddenElements", "setLetterbox", "currentFullscreenStrategy", "softFullscreenResizeWebGLRenderTarget", "doRequestFullscreen", "fillPointerlockChangeEventData", "registerPointerlockChangeEventCallback", "registerPointerlockErrorEventCallback", "requestPointerLock", "fillVisibilityChangeEventData", "registerVisibilityChangeEventCallback", "registerTouchEventCallback", "fillGamepadEventData", "registerGamepadEventCallback", "registerBeforeUnloadEventCallback", "fillBatteryEventData", "registerBatteryEventCallback", "setCanvasElementSize", "getCanvasElementSize", "jsStackTrace", "getCallstack", "convertPCtoSourceLocation", "checkWasiClock", "wasiRightsToMuslOFlags", "wasiOFlagsToMuslOFlags", "safeSetTimeout", "setImmediateWrapped", "safeRequestAnimationFrame", "clearImmediateWrapped", "registerPostMainLoop", "registerPreMainLoop", "getPromise", "makePromise", "addPromise", "idsToPromises", "makePromiseCallback", "findMatchingCatch", "incrementUncaughtExceptionCount", "decrementUncaughtExceptionCount", "Browser_asyncPrepareDataCounter", "isLeapYear", "ydayFromDate", "arraySum", "addDays", "getSocketFromFD", "getSocketAddress", "FS_mkdirTree", "_setNetworkCallback", "heapObjectForWebGLType", "toTypedArrayIndex", "webgl_enable_ANGLE_instanced_arrays", "webgl_enable_OES_vertex_array_object", "webgl_enable_WEBGL_draw_buffers", "webgl_enable_WEBGL_multi_draw", "webgl_enable_EXT_polygon_offset_clamp", "webgl_enable_EXT_clip_control", "webgl_enable_WEBGL_polygon_mode", "emscriptenWebGLGet", "computeUnpackAlignedImageSize", "colorChannelsInGlTextureFormat", "emscriptenWebGLGetTexPixelData", "emscriptenWebGLGetUniform", "webglGetProgramUniformLocation", "webglGetUniformLocation", "webglPrepareUniformLocationsBeforeFirstUse", "webglGetLeftBracePos", "emscriptenWebGLGetVertexAttrib", "__glGetActiveAttribOrUniform", "writeGLArray", "registerWebGlEventCallback", "runAndAbortIfError", "writeStringToMemory", "writeAsciiToMemory", "allocateUTF8", "allocateUTF8OnStack", "demangle", "stackTrace", "getNativeTypeSize" ];
+var missingLibrarySymbols = [ "writeI53ToI64", "writeI53ToI64Clamped", "writeI53ToI64Signaling", "writeI53ToU64Clamped", "writeI53ToU64Signaling", "readI53FromI64", "readI53FromU64", "convertI32PairToI53", "convertI32PairToI53Checked", "convertU32PairToI53", "getTempRet0", "createNamedFunction", "zeroMemory", "exitJS", "withStackSave", "inetPton4", "inetNtop4", "inetPton6", "inetNtop6", "readSockaddr", "writeSockaddr", "readEmAsmArgs", "jstoi_q", "autoResumeAudioContext", "getDynCaller", "dynCall", "handleException", "keepRuntimeAlive", "runtimeKeepalivePush", "runtimeKeepalivePop", "callUserCallback", "maybeExit", "asmjsMangle", "HandleAllocator", "addOnInit", "addOnPostCtor", "addOnPreMain", "addOnExit", "STACK_SIZE", "STACK_ALIGN", "POINTER_SIZE", "ASSERTIONS", "intArrayToString", "AsciiToString", "stringToAscii", "UTF16ToString", "stringToUTF16", "lengthBytesUTF16", "UTF32ToString", "stringToUTF32", "lengthBytesUTF32", "stringToNewUTF8", "registerKeyEventCallback", "maybeCStringToJsString", "findEventTarget", "getBoundingClientRect", "fillMouseEventData", "registerMouseEventCallback", "registerWheelEventCallback", "registerUiEventCallback", "registerFocusEventCallback", "fillDeviceOrientationEventData", "registerDeviceOrientationEventCallback", "fillDeviceMotionEventData", "registerDeviceMotionEventCallback", "screenOrientation", "fillOrientationChangeEventData", "registerOrientationChangeEventCallback", "fillFullscreenChangeEventData", "registerFullscreenChangeEventCallback", "callCanvasResizedCallback", "JSEvents_requestFullscreen", "JSEvents_resizeCanvasForFullscreen", "registerRestoreOldStyle", "hideEverythingExceptGivenElement", "restoreHiddenElements", "setLetterbox", "currentFullscreenStrategy", "softFullscreenResizeWebGLRenderTarget", "doRequestFullscreen", "fillPointerlockChangeEventData", "registerPointerlockChangeEventCallback", "registerPointerlockErrorEventCallback", "requestPointerLock", "fillVisibilityChangeEventData", "registerVisibilityChangeEventCallback", "registerTouchEventCallback", "fillGamepadEventData", "registerGamepadEventCallback", "registerBeforeUnloadEventCallback", "fillBatteryEventData", "registerBatteryEventCallback", "setCanvasElementSize", "getCanvasElementSize", "jsStackTrace", "getCallstack", "convertPCtoSourceLocation", "checkWasiClock", "wasiRightsToMuslOFlags", "wasiOFlagsToMuslOFlags", "safeSetTimeout", "setImmediateWrapped", "safeRequestAnimationFrame", "clearImmediateWrapped", "registerPostMainLoop", "registerPreMainLoop", "getPromise", "makePromise", "addPromise", "idsToPromises", "makePromiseCallback", "incrementUncaughtExceptionCount", "decrementUncaughtExceptionCount", "Browser_asyncPrepareDataCounter", "isLeapYear", "ydayFromDate", "arraySum", "addDays", "getSocketFromFD", "getSocketAddress", "FS_mkdirTree", "_setNetworkCallback", "heapObjectForWebGLType", "toTypedArrayIndex", "webgl_enable_ANGLE_instanced_arrays", "webgl_enable_OES_vertex_array_object", "webgl_enable_WEBGL_draw_buffers", "webgl_enable_WEBGL_multi_draw", "webgl_enable_EXT_polygon_offset_clamp", "webgl_enable_EXT_clip_control", "webgl_enable_WEBGL_polygon_mode", "emscriptenWebGLGet", "computeUnpackAlignedImageSize", "colorChannelsInGlTextureFormat", "emscriptenWebGLGetTexPixelData", "emscriptenWebGLGetUniform", "webglGetProgramUniformLocation", "webglGetUniformLocation", "webglPrepareUniformLocationsBeforeFirstUse", "webglGetLeftBracePos", "emscriptenWebGLGetVertexAttrib", "__glGetActiveAttribOrUniform", "writeGLArray", "registerWebGlEventCallback", "runAndAbortIfError", "writeStringToMemory", "writeAsciiToMemory", "allocateUTF8", "allocateUTF8OnStack", "demangle", "stackTrace", "getNativeTypeSize" ];
 
 missingLibrarySymbols.forEach(missingLibrarySymbol);
 
-var unexportedSymbols = [ "run", "out", "err", "callMain", "abort", "wasmExports", "writeStackCookie", "checkStackCookie", "INT53_MAX", "INT53_MIN", "bigintToI53Checked", "HEAP8", "HEAP16", "HEAPU16", "HEAP32", "HEAPU32", "HEAPF32", "HEAP64", "HEAPU64", "stackSave", "stackRestore", "stackAlloc", "ptrToString", "getHeapMax", "growMemory", "ENV", "setStackLimits", "ERRNO_CODES", "strError", "DNS", "Protocols", "Sockets", "timers", "warnOnce", "readEmAsmArgsArray", "getExecutableName", "asyncLoad", "alignMemory", "mmapAlloc", "wasmTable", "wasmMemory", "getUniqueRunDependency", "noExitRuntime", "addRunDependency", "removeRunDependency", "addOnPreRun", "addOnPostRun", "convertJsFunctionToWasm", "freeTableIndexes", "functionsInTableMap", "getEmptyTableSlot", "updateTableMap", "getFunctionAddress", "PATH", "PATH_FS", "UTF8Decoder", "UTF8ArrayToString", "UTF8ToString", "stringToUTF8Array", "intArrayFromString", "UTF16Decoder", "stringToUTF8OnStack", "writeArrayToMemory", "JSEvents", "specialHTMLTargets", "findCanvasEventTarget", "restoreOldWindowedStyle", "UNWIND_CACHE", "ExitStatus", "getEnvStrings", "doReadv", "doWritev", "initRandomFill", "randomFill", "emSetImmediate", "emClearImmediate_deps", "emClearImmediate", "promiseMap", "uncaughtExceptionCount", "exceptionCaught", "ExceptionInfo", "Browser", "requestFullscreen", "setCanvasSize", "getUserMedia", "createContext", "getPreloadedImageData__data", "wget", "MONTH_DAYS_REGULAR", "MONTH_DAYS_LEAP", "MONTH_DAYS_REGULAR_CUMULATIVE", "MONTH_DAYS_LEAP_CUMULATIVE", "SYSCALLS", "preloadPlugins", "FS_createPreloadedFile", "FS_preloadFile", "FS_modeStringToFlags", "FS_getMode", "FS_fileDataToTypedArray", "FS_stdin_getChar_buffer", "FS_stdin_getChar", "FS_unlink", "FS_createPath", "FS_createDevice", "FS_readFile", "FS_root", "FS_mounts", "FS_devices", "FS_streams", "FS_nextInode", "FS_nameTable", "FS_currentPath", "FS_initialized", "FS_ignorePermissions", "FS_filesystems", "FS_syncFSRequests", "FS_lookupPath", "FS_getPath", "FS_hashName", "FS_hashAddNode", "FS_hashRemoveNode", "FS_lookupNode", "FS_createNode", "FS_destroyNode", "FS_isRoot", "FS_isMountpoint", "FS_isFile", "FS_isDir", "FS_isLink", "FS_isChrdev", "FS_isBlkdev", "FS_isFIFO", "FS_isSocket", "FS_flagsToPermissionString", "FS_nodePermissions", "FS_mayLookup", "FS_mayCreate", "FS_mayDelete", "FS_mayOpen", "FS_checkOpExists", "FS_nextfd", "FS_getStreamChecked", "FS_getStream", "FS_createStream", "FS_closeStream", "FS_dupStream", "FS_doSetAttr", "FS_chrdev_stream_ops", "FS_major", "FS_minor", "FS_makedev", "FS_registerDevice", "FS_getDevice", "FS_getMounts", "FS_syncfs", "FS_mount", "FS_unmount", "FS_lookup", "FS_mknod", "FS_statfs", "FS_statfsStream", "FS_statfsNode", "FS_create", "FS_mkdir", "FS_mkdev", "FS_symlink", "FS_link", "FS_rename", "FS_rmdir", "FS_readdir", "FS_readlink", "FS_stat", "FS_fstat", "FS_lstat", "FS_doChmod", "FS_chmod", "FS_lchmod", "FS_fchmod", "FS_doChown", "FS_chown", "FS_lchown", "FS_fchown", "FS_doTruncate", "FS_truncate", "FS_ftruncate", "FS_utime", "FS_open", "FS_close", "FS_isClosed", "FS_llseek", "FS_read", "FS_write", "FS_mmap", "FS_msync", "FS_ioctl", "FS_writeFile", "FS_cwd", "FS_chdir", "FS_createDefaultDirectories", "FS_createDefaultDevices", "FS_createSpecialDirectories", "FS_createStandardStreams", "FS_staticInit", "FS_init", "FS_quit", "FS_findObject", "FS_analyzePath", "FS_createFile", "FS_createDataFile", "FS_forceLoadFile", "FS_createLazyFile", "MEMFS", "TTY", "PIPEFS", "SOCKFS", "tempFixedLengthArray", "miniTempWebGLFloatBuffers", "miniTempWebGLIntBuffers", "GL", "AL", "GLUT", "EGL", "GLEW", "IDBStore", "SDL", "SDL_gfx", "print", "printErr", "jstoi_s" ];
+var unexportedSymbols = [ "run", "out", "err", "callMain", "abort", "wasmExports", "writeStackCookie", "checkStackCookie", "INT53_MAX", "INT53_MIN", "bigintToI53Checked", "HEAP8", "HEAP16", "HEAPU16", "HEAP32", "HEAPU32", "HEAPF32", "HEAP64", "HEAPU64", "stackSave", "stackRestore", "stackAlloc", "setTempRet0", "ptrToString", "getHeapMax", "growMemory", "ENV", "setStackLimits", "ERRNO_CODES", "strError", "DNS", "Protocols", "Sockets", "timers", "warnOnce", "readEmAsmArgsArray", "getExecutableName", "asyncLoad", "alignMemory", "mmapAlloc", "wasmTable", "wasmMemory", "getUniqueRunDependency", "noExitRuntime", "addRunDependency", "removeRunDependency", "addOnPreRun", "addOnPostRun", "convertJsFunctionToWasm", "freeTableIndexes", "functionsInTableMap", "getEmptyTableSlot", "updateTableMap", "getFunctionAddress", "PATH", "PATH_FS", "UTF8Decoder", "UTF8ArrayToString", "UTF8ToString", "stringToUTF8Array", "intArrayFromString", "UTF16Decoder", "stringToUTF8OnStack", "writeArrayToMemory", "JSEvents", "specialHTMLTargets", "findCanvasEventTarget", "restoreOldWindowedStyle", "UNWIND_CACHE", "ExitStatus", "getEnvStrings", "doReadv", "doWritev", "initRandomFill", "randomFill", "emSetImmediate", "emClearImmediate_deps", "emClearImmediate", "promiseMap", "uncaughtExceptionCount", "exceptionLast", "exceptionCaught", "ExceptionInfo", "findMatchingCatch", "getExceptionMessageCommon", "incrementExceptionRefcount", "decrementExceptionRefcount", "getExceptionMessage", "Browser", "requestFullscreen", "setCanvasSize", "getUserMedia", "createContext", "getPreloadedImageData__data", "wget", "MONTH_DAYS_REGULAR", "MONTH_DAYS_LEAP", "MONTH_DAYS_REGULAR_CUMULATIVE", "MONTH_DAYS_LEAP_CUMULATIVE", "SYSCALLS", "preloadPlugins", "FS_createPreloadedFile", "FS_preloadFile", "FS_modeStringToFlags", "FS_getMode", "FS_fileDataToTypedArray", "FS_stdin_getChar_buffer", "FS_stdin_getChar", "FS_unlink", "FS_createPath", "FS_createDevice", "FS_readFile", "FS_root", "FS_mounts", "FS_devices", "FS_streams", "FS_nextInode", "FS_nameTable", "FS_currentPath", "FS_initialized", "FS_ignorePermissions", "FS_filesystems", "FS_syncFSRequests", "FS_lookupPath", "FS_getPath", "FS_hashName", "FS_hashAddNode", "FS_hashRemoveNode", "FS_lookupNode", "FS_createNode", "FS_destroyNode", "FS_isRoot", "FS_isMountpoint", "FS_isFile", "FS_isDir", "FS_isLink", "FS_isChrdev", "FS_isBlkdev", "FS_isFIFO", "FS_isSocket", "FS_flagsToPermissionString", "FS_nodePermissions", "FS_mayLookup", "FS_mayCreate", "FS_mayDelete", "FS_mayOpen", "FS_checkOpExists", "FS_nextfd", "FS_getStreamChecked", "FS_getStream", "FS_createStream", "FS_closeStream", "FS_dupStream", "FS_doSetAttr", "FS_chrdev_stream_ops", "FS_major", "FS_minor", "FS_makedev", "FS_registerDevice", "FS_getDevice", "FS_getMounts", "FS_syncfs", "FS_mount", "FS_unmount", "FS_lookup", "FS_mknod", "FS_statfs", "FS_statfsStream", "FS_statfsNode", "FS_create", "FS_mkdir", "FS_mkdev", "FS_symlink", "FS_link", "FS_rename", "FS_rmdir", "FS_readdir", "FS_readlink", "FS_stat", "FS_fstat", "FS_lstat", "FS_doChmod", "FS_chmod", "FS_lchmod", "FS_fchmod", "FS_doChown", "FS_chown", "FS_lchown", "FS_fchown", "FS_doTruncate", "FS_truncate", "FS_ftruncate", "FS_utime", "FS_open", "FS_close", "FS_isClosed", "FS_llseek", "FS_read", "FS_write", "FS_mmap", "FS_msync", "FS_ioctl", "FS_writeFile", "FS_cwd", "FS_chdir", "FS_createDefaultDirectories", "FS_createDefaultDevices", "FS_createSpecialDirectories", "FS_createStandardStreams", "FS_staticInit", "FS_init", "FS_quit", "FS_findObject", "FS_analyzePath", "FS_createFile", "FS_createDataFile", "FS_forceLoadFile", "FS_createLazyFile", "MEMFS", "TTY", "PIPEFS", "SOCKFS", "tempFixedLengthArray", "miniTempWebGLFloatBuffers", "miniTempWebGLIntBuffers", "GL", "AL", "GLUT", "EGL", "GLEW", "IDBStore", "SDL", "SDL_gfx", "print", "printErr", "jstoi_s" ];
 
 unexportedSymbols.forEach(unexportedRuntimeSymbol);
 
@@ -4612,6 +4741,10 @@ var _emscripten_stack_get_base = makeInvalidEarlyAccess("_emscripten_stack_get_b
 
 var _strerror = makeInvalidEarlyAccess("_strerror");
 
+var _setThrew = makeInvalidEarlyAccess("_setThrew");
+
+var __emscripten_tempret_set = makeInvalidEarlyAccess("__emscripten_tempret_set");
+
 var _emscripten_stack_init = makeInvalidEarlyAccess("_emscripten_stack_init");
 
 var _emscripten_stack_get_free = makeInvalidEarlyAccess("_emscripten_stack_get_free");
@@ -4621,6 +4754,16 @@ var __emscripten_stack_restore = makeInvalidEarlyAccess("__emscripten_stack_rest
 var __emscripten_stack_alloc = makeInvalidEarlyAccess("__emscripten_stack_alloc");
 
 var _emscripten_stack_get_current = makeInvalidEarlyAccess("_emscripten_stack_get_current");
+
+var ___cxa_decrement_exception_refcount = makeInvalidEarlyAccess("___cxa_decrement_exception_refcount");
+
+var ___cxa_increment_exception_refcount = makeInvalidEarlyAccess("___cxa_increment_exception_refcount");
+
+var ___get_exception_message = makeInvalidEarlyAccess("___get_exception_message");
+
+var ___cxa_can_catch = makeInvalidEarlyAccess("___cxa_can_catch");
+
+var ___cxa_get_exception_ptr = makeInvalidEarlyAccess("___cxa_get_exception_ptr");
 
 var ___set_stack_limits = Module["___set_stack_limits"] = makeInvalidEarlyAccess("___set_stack_limits");
 
@@ -4646,11 +4789,18 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["emscripten_stack_get_end"] != "undefined", "missing Wasm export: emscripten_stack_get_end");
   assert(typeof wasmExports["emscripten_stack_get_base"] != "undefined", "missing Wasm export: emscripten_stack_get_base");
   assert(typeof wasmExports["strerror"] != "undefined", "missing Wasm export: strerror");
+  assert(typeof wasmExports["setThrew"] != "undefined", "missing Wasm export: setThrew");
+  assert(typeof wasmExports["_emscripten_tempret_set"] != "undefined", "missing Wasm export: _emscripten_tempret_set");
   assert(typeof wasmExports["emscripten_stack_init"] != "undefined", "missing Wasm export: emscripten_stack_init");
   assert(typeof wasmExports["emscripten_stack_get_free"] != "undefined", "missing Wasm export: emscripten_stack_get_free");
   assert(typeof wasmExports["_emscripten_stack_restore"] != "undefined", "missing Wasm export: _emscripten_stack_restore");
   assert(typeof wasmExports["_emscripten_stack_alloc"] != "undefined", "missing Wasm export: _emscripten_stack_alloc");
   assert(typeof wasmExports["emscripten_stack_get_current"] != "undefined", "missing Wasm export: emscripten_stack_get_current");
+  assert(typeof wasmExports["__cxa_decrement_exception_refcount"] != "undefined", "missing Wasm export: __cxa_decrement_exception_refcount");
+  assert(typeof wasmExports["__cxa_increment_exception_refcount"] != "undefined", "missing Wasm export: __cxa_increment_exception_refcount");
+  assert(typeof wasmExports["__get_exception_message"] != "undefined", "missing Wasm export: __get_exception_message");
+  assert(typeof wasmExports["__cxa_can_catch"] != "undefined", "missing Wasm export: __cxa_can_catch");
+  assert(typeof wasmExports["__cxa_get_exception_ptr"] != "undefined", "missing Wasm export: __cxa_get_exception_ptr");
   assert(typeof wasmExports["__set_stack_limits"] != "undefined", "missing Wasm export: __set_stack_limits");
   assert(typeof wasmExports["memory"] != "undefined", "missing Wasm export: memory");
   assert(typeof wasmExports["__indirect_function_table"] != "undefined", "missing Wasm export: __indirect_function_table");
@@ -4667,19 +4817,35 @@ function assignWasmExports(wasmExports) {
   _emscripten_stack_get_end = wasmExports["emscripten_stack_get_end"];
   _emscripten_stack_get_base = wasmExports["emscripten_stack_get_base"];
   _strerror = createExportWrapper("strerror", wasmExports["strerror"], 1);
+  _setThrew = createExportWrapper("setThrew", wasmExports["setThrew"], 2);
+  __emscripten_tempret_set = createExportWrapper("_emscripten_tempret_set", wasmExports["_emscripten_tempret_set"], 1);
   _emscripten_stack_init = wasmExports["emscripten_stack_init"];
   _emscripten_stack_get_free = wasmExports["emscripten_stack_get_free"];
   __emscripten_stack_restore = wasmExports["_emscripten_stack_restore"];
   __emscripten_stack_alloc = wasmExports["_emscripten_stack_alloc"];
   _emscripten_stack_get_current = wasmExports["emscripten_stack_get_current"];
+  ___cxa_decrement_exception_refcount = createExportWrapper("__cxa_decrement_exception_refcount", wasmExports["__cxa_decrement_exception_refcount"], 1);
+  ___cxa_increment_exception_refcount = createExportWrapper("__cxa_increment_exception_refcount", wasmExports["__cxa_increment_exception_refcount"], 1);
+  ___get_exception_message = createExportWrapper("__get_exception_message", wasmExports["__get_exception_message"], 3);
+  ___cxa_can_catch = createExportWrapper("__cxa_can_catch", wasmExports["__cxa_can_catch"], 3);
+  ___cxa_get_exception_ptr = createExportWrapper("__cxa_get_exception_ptr", wasmExports["__cxa_get_exception_ptr"], 1);
   ___set_stack_limits = Module["___set_stack_limits"] = createExportWrapper("__set_stack_limits", wasmExports["__set_stack_limits"], 2);
   memory = wasmMemory = wasmExports["memory"];
   __indirect_function_table = wasmTable = wasmExports["__indirect_function_table"];
 }
 
 var wasmImports = {
+  /** @export */ __assert_fail: ___assert_fail,
+  /** @export */ __cxa_begin_catch: ___cxa_begin_catch,
+  /** @export */ __cxa_end_catch: ___cxa_end_catch,
+  /** @export */ __cxa_find_matching_catch_2: ___cxa_find_matching_catch_2,
+  /** @export */ __cxa_find_matching_catch_3: ___cxa_find_matching_catch_3,
+  /** @export */ __cxa_find_matching_catch_4: ___cxa_find_matching_catch_4,
+  /** @export */ __cxa_rethrow: ___cxa_rethrow,
   /** @export */ __cxa_throw: ___cxa_throw,
+  /** @export */ __cxa_uncaught_exceptions: ___cxa_uncaught_exceptions,
   /** @export */ __handle_stack_overflow: ___handle_stack_overflow,
+  /** @export */ __resumeException: ___resumeException,
   /** @export */ __syscall_fcntl64: ___syscall_fcntl64,
   /** @export */ __syscall_fstat64: ___syscall_fstat64,
   /** @export */ __syscall_ioctl: ___syscall_ioctl,
@@ -4700,8 +4866,357 @@ var wasmImports = {
   /** @export */ fd_read: _fd_read,
   /** @export */ fd_seek: _fd_seek,
   /** @export */ fd_write: _fd_write,
+  /** @export */ invoke_diii,
+  /** @export */ invoke_fiii,
+  /** @export */ invoke_i,
+  /** @export */ invoke_ii,
+  /** @export */ invoke_iii,
+  /** @export */ invoke_iiid,
+  /** @export */ invoke_iiii,
+  /** @export */ invoke_iiiii,
+  /** @export */ invoke_iiiiii,
+  /** @export */ invoke_iiiiiii,
+  /** @export */ invoke_iiiiiiii,
+  /** @export */ invoke_iiiiiiiiiiii,
+  /** @export */ invoke_iiiiiiiiiiiii,
+  /** @export */ invoke_iiiiij,
+  /** @export */ invoke_iij,
+  /** @export */ invoke_v,
+  /** @export */ invoke_vi,
+  /** @export */ invoke_vii,
+  /** @export */ invoke_viii,
+  /** @export */ invoke_viiii,
+  /** @export */ invoke_viiiii,
+  /** @export */ invoke_viiiiidiii,
+  /** @export */ invoke_viiiiii,
+  /** @export */ invoke_viiiiiii,
+  /** @export */ invoke_viiiiiiii,
+  /** @export */ invoke_viiiiiiiii,
+  /** @export */ invoke_viiiiiiiiii,
+  /** @export */ invoke_viiiiiiiiiiiiiii,
+  /** @export */ invoke_vij,
+  /** @export */ llvm_eh_typeid_for: _llvm_eh_typeid_for,
   /** @export */ random_get: _random_get
 };
+
+function invoke_vii(index, a1, a2) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_v(index) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)();
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_ii(index, a1) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiii(index, a1, a2, a3, a4, a5, a6) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viii(index, a1, a2, a3) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iii(index, a1, a2) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiii(index, a1, a2, a3, a4) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_vi(index, a1) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_vij(index, a1, a2) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiii(index, a1, a2, a3, a4) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiii(index, a1, a2, a3) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iij(index, a1, a2) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiid(index, a1, a2, a3) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8, a9);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiii(index, a1, a2, a3, a4, a5) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiidiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8, a9);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_i(index) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)();
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiiiii(index, a1, a2, a3, a4, a5, a6) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiiii(index, a1, a2, a3, a4, a5) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiiij(index, a1, a2, a3, a4, a5) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiiiiii(index, a1, a2, a3, a4, a5, a6, a7) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiiiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_fiii(index, a1, a2, a3) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_diii(index, a1, a2, a3) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiiii(index, a1, a2, a3, a4, a5, a6, a7) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiiiiiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
