@@ -1733,14 +1733,34 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                     synthesize_note_impl(p, note_bufs[idx]);
                 } catch (const std::exception& e) {
                     std::lock_guard<std::mutex> elg(worker_error_mutex);
-                    if (!worker_failed.exchange(true, std::memory_order_relaxed))
-                        worker_error_msg = e.what();
+                    if (!worker_failed.exchange(true, std::memory_order_relaxed)) {
+                        // [デバッグ用] どのノートで失敗したかを特定するため、
+                        // note index / wav_path / pitch_length を含める。
+                        // e.what()だけだと(libc++の length_error 等は)
+                        // "vector" のような素っ気ない文字列しか出ず、
+                        // 原因の切り分けができないため。
+                        char buf[256];
+                        snprintf(buf, sizeof(buf),
+                                 "note idx=%d wav_path=%s pitch_length=%d : %s",
+                                 idx,
+                                 notes[idx].wav_path ? notes[idx].wav_path : "(null)",
+                                 notes[idx].pitch_length,
+                                 e.what());
+                        worker_error_msg = buf;
+                    }
                     cancel_flag.store(true, std::memory_order_relaxed);
                     return;
                 } catch (...) {
                     std::lock_guard<std::mutex> elg(worker_error_mutex);
-                    if (!worker_failed.exchange(true, std::memory_order_relaxed))
-                        worker_error_msg = "unknown exception";
+                    if (!worker_failed.exchange(true, std::memory_order_relaxed)) {
+                        char buf[256];
+                        snprintf(buf, sizeof(buf),
+                                 "note idx=%d wav_path=%s pitch_length=%d : unknown exception",
+                                 idx,
+                                 notes[idx].wav_path ? notes[idx].wav_path : "(null)",
+                                 notes[idx].pitch_length);
+                        worker_error_msg = buf;
+                    }
                     cancel_flag.store(true, std::memory_order_relaxed);
                     return;
                 }
