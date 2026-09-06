@@ -769,7 +769,8 @@ jobs:
           xcrun stapler staple "$APP_BUNDLE"
           spctl --assess --type execute "$APP_BUNDLE"
 
-      - name: 💿 Package signed macOS artifacts
+      
+      - name: 💿 Package macOS artifacts (DMG + ZIP)
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
@@ -788,22 +789,16 @@ jobs:
           fi
 
           mkdir -p dist_out
-          echo "🍺 Installing create-dmg..."
-          brew install create-dmg
 
-          echo "💿 Generating signed DMG..."
-          create-dmg \
-            --volname "VO-SE vocal" \
-            --background "assets/dmg_bg.png" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --icon "VO-SE_vocal_Mac.app" 150 185 \
-            --app-drop-link 450 185 \
-            "dist_out/VO-SE_vocal_Mac_${MAC_LABEL}.dmg" \
-            "dist/"
+          echo "🗜️ Creating DMG..."
+          hdiutil create \
+            -volname "VO-SE vocal" \
+            -srcfolder "$APP_BUNDLE" \
+            -ov \
+            -format UDZO \
+            "dist_out/VO-SE_vocal_Mac_${MAC_LABEL}.dmg"
 
-          echo "🗜️ Generating signed update ZIP..."
+          echo "🗜️ Creating update ZIP..."
           (cd dist && zip -ry "../dist_out/VO-SE_vocal_Mac_${MAC_LABEL}_update.zip" VO-SE_vocal_Mac.app)
 
       - name: 🐧 Package Linux artifacts
