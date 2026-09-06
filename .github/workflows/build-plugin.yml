@@ -22,7 +22,7 @@ jobs:
         with:
           submodules: recursive
 
-      # --- Linux 依存関係のインストール ---
+      # --- Linux 依存関係 ---
       - name: Install Linux Dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -35,41 +35,45 @@ jobs:
             libwebkit2gtk-4.1-dev libglu1-mesa-dev \
             libgl1-mesa-dev
 
-      # --- [重要] FetchContent のキャッシュを削除（パス不一致防止） ---
+      # --- Windows: Visual Studio 環境をセットアップ（🔥 必須） ---
+      - name: Setup MSVC (Windows only)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # --- FetchContent のキャッシュをクリーン（パス不一致防止） ---
       - name: Clean FetchContent cache
         run: rm -rf build/_deps
         shell: bash
 
-      # --- CMake 設定 (Configure) ---
+      # --- CMake 設定 ---
       - name: Configure CMake
         shell: bash
         run: |
-          # 共通オプション（全てのプラットフォーム）
+          # 共通オプション
           COMMON_OPTS="-DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0 -DFETCHCONTENT_BASE_DIR=${HOME}/juce_cache --fresh"
 
           if [ "${{ matrix.os }}" == "macos-14" ]; then
-            # macOS: iconv のリンクフラグを明示
             cmake -B build \
               $COMMON_OPTS \
               -DCMAKE_MODULE_LINKER_FLAGS="-liconv" \
               -DCMAKE_SHARED_LINKER_FLAGS="-liconv" \
               -DCMAKE_EXE_LINKER_FLAGS="-liconv"
           elif [ "${{ matrix.os }}" == "windows-latest" ]; then
-            # Windows: Visual Studio 2022 と x64 を明示
+            # Windows: MSVC 環境が有効になったのでジェネレータを指定可能
             cmake -B build \
               -G "Visual Studio 17 2022" \
               -A x64 \
               $COMMON_OPTS
           else
-            # Linux およびその他
+            # Linux
             cmake -B build $COMMON_OPTS
           fi
 
-      # --- ビルド実行 ---
+      # --- ビルド ---
       - name: Build Plugin
         run: cmake --build build --config Release --parallel 4
 
-      # --- 成果物のアップロード ---
+      # --- 成果物アップロード ---
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
