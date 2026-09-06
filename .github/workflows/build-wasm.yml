@@ -64,6 +64,18 @@ jobs:
           #   エラーメッセージ(不正なポインタアクセス/型不一致等)を
           #   出させるために付与。原因が特定できたら外してよい
           #   (バイナリサイズと実行速度に多少ペナルティがあるため)。
+          # ★変更点9: -fexceptions と -s DISABLE_EXCEPTION_CATCHING=0 を追加。
+          #   実機で "Assertion failed: Exception thrown, but exception
+          #   catching is not enabled" というエラーで、レンダリング中盤の
+          #   特定ノートでC++側の例外が投げられた際に強制中断していた。
+          #   vose_core.cpp の synthesize_note_impl 呼び出し箇所(L1729-1743)
+          #   と set_bigvgan_model(L2252-2258) には元々 try/catch が書かれて
+          #   いたが、Emscriptenはデフォルトで例外機構を無効化(バイナリ
+          #   サイズ削減のため)するため、この try/catch が機能せず
+          #   ハードクラッシュになっていた。これを有効化することで、
+          #   個々のノート合成失敗時に例外がキャッチされ
+          #   (worker_error_msgにe.what()が格納される)、曲全体がクラッシュ
+          #   することなく処理を継続できる想定。
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
@@ -77,6 +89,7 @@ jobs:
                src/world/synthesis.cpp \
                -Iinclude \
                -O3 \
+               -fexceptions \
                -s WASM=1 \
                -s ALLOW_MEMORY_GROWTH=1 \
                -s ALLOW_TABLE_GROWTH=1 \
@@ -85,6 +98,7 @@ jobs:
                -s EXPORT_ES6=1 \
                -s ENVIRONMENT=web,worker \
                -s ASSERTIONS=2 \
+               -s DISABLE_EXCEPTION_CATCHING=0 \
                -g2 \
                -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
                -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF64']" \
