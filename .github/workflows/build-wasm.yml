@@ -6,6 +6,7 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+
 # ★追加: リポジトリ側の "Workflow permissions" 設定が Read-only の場合、
 # デフォルトの GITHUB_TOKEN では git push が 403 で拒否される。
 # ここで明示的に contents: write を宣言することで、リポジトリ側の設定を
