@@ -22,31 +22,54 @@ jobs:
         with:
           submodules: recursive
 
-      # --- Linux 固有の依存関係インストール ---
+      # --- Linux 依存関係のインストール ---
       - name: Install Linux Dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libjack-jackd2-dev ladspa-sdk libcurl4-openssl-dev libfreetype6-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libwebkit2gtk-4.1-dev libglu1-mesa-dev libgl1-mesa-dev
-      # --- ビルド設定 (Configure) ---
-      # MODULE用（プラグイン）とEXE用（Standalone）のリンカーフラグ両方に -liconv を注入します
+          sudo apt-get install -y \
+            libasound2-dev libjack-jackd2-dev \
+            ladspa-sdk libcurl4-openssl-dev \
+            libfreetype6-dev libx11-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxcursor-dev \
+            libwebkit2gtk-4.1-dev libglu1-mesa-dev \
+            libgl1-mesa-dev
+
+      # --- [重要] FetchContent のキャッシュを削除（パス不一致防止） ---
+      - name: Clean FetchContent cache
+        run: rm -rf build/_deps
+        shell: bash
+
+      # --- CMake 設定 (Configure) ---
       - name: Configure CMake
+        shell: bash
         run: |
+          # 共通オプション（全てのプラットフォーム）
+          COMMON_OPTS="-DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0 -DFETCHCONTENT_BASE_DIR=${HOME}/juce_cache --fresh"
+
           if [ "${{ matrix.os }}" == "macos-14" ]; then
-            cmake -B build -DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0 \
+            # macOS: iconv のリンクフラグを明示
+            cmake -B build \
+              $COMMON_OPTS \
               -DCMAKE_MODULE_LINKER_FLAGS="-liconv" \
               -DCMAKE_SHARED_LINKER_FLAGS="-liconv" \
               -DCMAKE_EXE_LINKER_FLAGS="-liconv"
+          elif [ "${{ matrix.os }}" == "windows-latest" ]; then
+            # Windows: Visual Studio 2022 と x64 を明示
+            cmake -B build \
+              -G "Visual Studio 17 2022" \
+              -A x64 \
+              $COMMON_OPTS
           else
-            cmake -B build -DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0
+            # Linux およびその他
+            cmake -B build $COMMON_OPTS
           fi
-        shell: bash
-        
-      # --- ビルド実行 (Build) ---
+
+      # --- ビルド実行 ---
       - name: Build Plugin
         run: cmake --build build --config Release --parallel 4
 
-      # --- 成果物のアップロード (Artifacts) ---
+      # --- 成果物のアップロード ---
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
