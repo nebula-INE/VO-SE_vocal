@@ -113,6 +113,20 @@ const OFF_OTO_OVERLAP = 624;
 
 let modPromise: Promise<VoseCoreModule> | null = null;
 
+// C++側の fprintf(stderr/stdout, ...) をここで横取りして直近N行を保持する。
+// Safari等でWeb Workerのコンソール出力を追うのが難しい環境でも、
+// レンダリング失敗時にこのログをエラーメッセージへ含めて
+// メインスレッド(アプリの通常のログ表示)へ届けるため。
+const MAX_CAPTURED_LINES = 30;
+const capturedLog: string[] = [];
+function captureLine(line: string): void {
+  capturedLog.push(line);
+  if (capturedLog.length > MAX_CAPTURED_LINES) capturedLog.shift();
+}
+function getCapturedLogText(): string {
+  return capturedLog.join('\n');
+}
+
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
@@ -120,7 +134,15 @@ async function getModule(): Promise<VoseCoreModule> {
     const mod = await import(/* @vite-ignore */ wasmJsUrl);
     const createVoseCoreModule = mod.default || mod;
     return await (createVoseCoreModule as any)({
-      locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path)
+      locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path),
+      print: (text: string) => {
+        captureLine(text);
+        console.log('[vose_core stdout]', text);
+      },
+      printErr: (text: string) => {
+        captureLine(text);
+        console.error('[vose_core stderr]', text);
+      }
     });
   })();
   return modPromise;
@@ -278,7 +300,22 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       [notesPtr, notes.length, outputPath, modeFlag, progressFnPtr, 0] // cancel_cb=0(nullptr)=キャンセル無し
     );
 
-    const wavBytes = mod.FS.readFile(outputPath, { encoding: 'binary' }) as Uint8Array;
+    let wavBytes: Uint8Array;
+    try {
+      wavBytes = mod.FS.readFile(outputPath, { encoding: 'binary' }) as Uint8Array;
+    } catch (readErr) {
+      // vose_core.cpp側の設計: 1ノートでも例外が出たら
+      // failed_during_synth=true でWAVを書き出さずreturnする
+      // (「例外発生時はレンダリングを中断（wavwriteしない）」)。
+      // そのため出力ファイルが存在しない=中断されたケースがほとんど。
+      // 実際の失敗理由は fprintf(stderr, "[Render] Worker thread failed: %s") で
+      // 出力されているはずなので、捕まえたログを添えてエラーにする。
+      const log = getCapturedLogText();
+      throw new Error(
+        `WAV出力が見つかりません(レンダリングが中断された可能性が高いです)。` +
+        (log ? `\n--- vose_core ログ ---\n${log}` : '(vose_coreからのログ出力なし)')
+      );
+    }
     const wavCopy = new Uint8Array(wavBytes); // WASMヒープ外へコピー
     try { mod.FS.unlink?.(outputPath); } catch (e) { /* ignore */ }
 
@@ -286,7 +323,14 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     (self as unknown as Worker).postMessage(resp, [wavCopy.buffer]);
   } catch (err: any) {
     console.error('[Worker] Error caught:', err);
-    const resp: RenderResponseMsg = { type: 'error', requestId, message: err?.message || String(err) };
+    const baseMsg = err?.message || String(err);
+    // 既に上でログを埋め込んだメッセージ(WAV出力が見つかりません...)は
+    // 二重に付与しない。それ以外の一般的な例外(WASM側のAbort等)には
+    // 捕まえたログをここで添える。
+    const alreadyHasLog = typeof baseMsg === 'string' && baseMsg.includes('--- vose_core ログ ---');
+    const log = alreadyHasLog ? '' : getCapturedLogText();
+    const message = log ? `${baseMsg}\n--- vose_core ログ ---\n${log}` : baseMsg;
+    const resp: RenderResponseMsg = { type: 'error', requestId, message };
     (self as unknown as Worker).postMessage(resp);
   } finally {
     // [修正] 以前はこのブロック全体が `if (progressFnPtr)` の中にあり、
