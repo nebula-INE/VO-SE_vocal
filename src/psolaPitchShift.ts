@@ -14,6 +14,22 @@
 //     グレインを配置する間隔だけを目標ピッチ比に合わせて詰め直す(OLA)
 // ことで、ピッチだけを変え声質を保持する。
 //
+// [修正] 実機レンダリングで大量のノイズバーストが出た問題への対応:
+//   1. 無声区間(s/k/t等の摩擦音・破裂音のような、周期性の無いノイズ的な
+//      音)にまでピッチ同期処理をかけると、ノイズを無理やり「周期波形」
+//      として扱うことになり、ブンブンという耳障りなバズ音になる。
+//      → 自己相関のスコア(周期性の強さ)が閾値未満の区間は「無声」と
+//        判定し、その区間だけはグレイン処理をせず単純な線形補間コピー
+//        (時間伸縮のみ、ピッチは変えない)に切り替える。
+//   2. オーバーラップ加算の正規化(out[i]/weight[i])が、グレインの
+//      重なりが薄い場所(特にピッチを下げて周期間隔が広がった時)で
+//      weightがほぼ0に近づき、除算で異常増幅してスパイクを作っていた。
+//      → (a) グレイン長を「解析周期」と「合成周期(伸縮後の間隔)」の
+//            大きい方に合わせて、間隔が広がってもグレイン同士が
+//            必ず重なるようにした(隙間そのものを無くす)
+//        (b) それでも重なりが薄い場所は、割る数に下限(MIN_WEIGHT)を
+//            設けて異常増幅を防止した
+//
 // オフライン(OfflineAudioContext)でのバウンス処理を前提にしており、
 // リアルタイム制約は無いためグレイン単位のループ処理で十分実用速度。
 
@@ -24,13 +40,24 @@ export interface PsolaOptions {
   maxF0Hz?: number;
   /** 基本周期を再推定する間隔(ms)。ピッチの時間変化(ビブラート等)に追従するため */
   reanalysisIntervalMs?: number;
+  /**
+   * 有声/無声の判定閾値(正規化自己相関スコア、0〜1)。
+   * これ未満は「周期性なし=無声」とみなしPSOLAを適用しない。
+   */
+  voicingThreshold?: number;
 }
 
 const DEFAULT_OPTS: Required<PsolaOptions> = {
   minF0Hz: 70,
   maxF0Hz: 800,
   reanalysisIntervalMs: 80,
+  voicingThreshold: 0.35,
 };
+
+// オーバーラップ加算の正規化で割る数の下限。
+// これより薄い重なりの場所は「異常増幅」を避けるため、この値で割る
+// (=音量が少し下がるだけで済み、スパイクにはならない)。
+const MIN_NORMALIZE_WEIGHT = 0.3;
 
 function hannWindow(length: number): Float32Array {
   const w = new Float32Array(length);
@@ -44,29 +71,38 @@ function hannWindow(length: number): Float32Array {
   return w;
 }
 
+interface PeriodEstimate {
+  period: number;
+  /** 正規化自己相関のピークスコア(0〜1程度)。周期性の強さの目安。 */
+  score: number;
+}
+
 /**
- * 正規化自己相関によるシンプルな基本周期(サンプル数)推定。
- * 無声区間やノイズ区間では信頼できるピークが出ないため、
- * その場合は前回値や中央値にフォールバックさせて呼び出し側で扱う。
+ * 正規化自己相関による基本周期(サンプル数)推定。
+ * 無声区間やノイズ区間ではスコアが低くなるため、呼び出し側で
+ * voicingThresholdと比較して有声/無声を判定する。
  */
-function estimatePeriodSamples(
+function estimatePeriod(
   data: Float32Array,
   sampleRate: number,
   centerSample: number,
   windowSamples: number,
   minF0: number,
-  maxF0: number
-): number | null {
+  maxF0: number,
+  fallbackPeriod: number
+): PeriodEstimate {
   const minPeriod = Math.max(2, Math.floor(sampleRate / maxF0));
   const maxPeriod = Math.max(minPeriod + 1, Math.floor(sampleRate / minF0));
 
   const start = Math.max(0, centerSample - Math.floor(windowSamples / 2));
   const end = Math.min(data.length, start + windowSamples);
   const n = end - start;
-  if (n < maxPeriod * 2) return null;
+  if (n < maxPeriod * 2) {
+    return { period: fallbackPeriod, score: 0 };
+  }
 
-  let bestPeriod = -1;
-  let bestScore = 0.15; // 閾値未満(=無声/無相関)は不採用にしてフォールバックさせる
+  let bestPeriod = fallbackPeriod;
+  let bestScore = 0;
 
   for (let period = minPeriod; period <= maxPeriod; period++) {
     let sum = 0;
@@ -88,29 +124,19 @@ function estimatePeriodSamples(
     }
   }
 
-  return bestPeriod > 0 ? bestPeriod : null;
+  return { period: bestPeriod, score: bestScore };
 }
 
 /**
  * TD-PSOLAでピッチと出力長(再生に使う実時間)を同時に変更し、
  * フォルマント(声質)を保持した AudioBuffer を返す。
- *
- * これまでの wasmEngine.ts は `source.playbackRate = baseRate` 一発で
- * 「ピッチを変える」のと「録音サンプルの消費速度を変える(preutterance/overlap
- * などのタイミング計算に必要)」を同時にやっていたため、ピッチと声質(フォルマント)
- * が連動してズレていた。
- *
- * この関数は両者を分離する:
- *  - `targetLengthSamples` … 何秒分の実時間に伸縮するか(今までのbaseRateによる
- *    時間圧縮/伸長と同じ役割。preutterance/overlapのタイミング計算はそのまま使える)
- *  - `pitchRatio` … 目標ピッチ比。フォルマントはこの比の影響を受けない。
+ * 無声(周期性の無い)区間は自動検出し、ピッチ同期処理を適用せず
+ * 単純な時間伸縮(線形補間)のみを行う。
  *
  * @param ctx                AudioContext / OfflineAudioContext (createBuffer用)
  * @param srcBuffer          元サンプル(必要な範囲を事前に切り出しておく)
  * @param pitchRatio         目標ピッチ比 (例: 1オクターブ上なら 2.0, 半音なら 2^(1/12))
  * @param targetLengthSamples 出力の長さ(サンプル数)。省略時は入力と同じ長さ
- *                             (=ピッチだけ変えて時間は変えない、ビブラート等の
- *                             微小ピッチ補正用途に使う)
  */
 export function psolaPitchAndTimeShiftBuffer(
   ctx: BaseAudioContext,
@@ -138,29 +164,18 @@ export function psolaPitchAndTimeShiftBuffer(
     64,
     Math.floor((o.reanalysisIntervalMs / 1000) * sampleRate)
   );
+  const minPeriod = Math.max(2, Math.floor(sampleRate / o.maxF0Hz));
+  const defaultPeriod = Math.floor(sampleRate / 220); // 見つからなければA3付近を仮定
 
   for (let ch = 0; ch < numCh; ch++) {
     const src = srcBuffer.getChannelData(ch);
     const out = new Float32Array(outLen);
     const weight = new Float32Array(outLen);
 
-    // フォールバック用: 全体を通した粗いデフォルト周期
-    const globalPeriod =
-      estimatePeriodSamples(
-        src,
-        sampleRate,
-        Math.floor(src.length / 2),
-        Math.min(src.length, reanalysisHop * 4),
-        o.minF0Hz,
-        o.maxF0Hz
-      ) ?? Math.floor(sampleRate / 220); // 見つからなければA3付近を仮定
-
-    let period = globalPeriod;
+    let period = defaultPeriod;
+    let isVoiced = false;
     let lastReanalysisMark = -Infinity;
     let synthMark = 0;
-
-    // 安全弁: 極端に短い周期や無限ループを防止
-    const minPeriod = Math.max(2, Math.floor(sampleRate / o.maxF0Hz));
 
     while (synthMark < outLen) {
       // 出力上の位置(synthMark)を、時間伸縮比(timeRatio)を使って元波形上の
@@ -171,48 +186,72 @@ export function psolaPitchAndTimeShiftBuffer(
       );
 
       if (analysisMark - lastReanalysisMark >= reanalysisHop || lastReanalysisMark < 0) {
-        const p = estimatePeriodSamples(
+        const est = estimatePeriod(
           src,
           sampleRate,
           analysisMark,
           reanalysisHop * 3,
           o.minF0Hz,
-          o.maxF0Hz
+          o.maxF0Hz,
+          period
         );
-        if (p !== null) period = p;
+        period = est.period;
+        isVoiced = est.score >= o.voicingThreshold;
         lastReanalysisMark = analysisMark;
       }
 
-      // グレイン(周期波形)は元波形からそのまま切り出す = フォルマントは不変。
-      const grainHalf = period;
-      const grainLen = grainHalf * 2;
-      const window = hannWindow(grainLen);
-      const grainStart = analysisMark - grainHalf;
-
-      for (let i = 0; i < grainLen; i++) {
-        const srcIdx = grainStart + i;
-        if (srcIdx < 0 || srcIdx >= src.length) continue;
-        const outIdx = synthMark - grainHalf + i;
-        if (outIdx < 0 || outIdx >= outLen) continue;
-        const w = window[i];
-        out[outIdx] += src[srcIdx] * w;
-        weight[outIdx] += w;
-      }
-
       // 合成マークの進み幅 = 元周期を「時間伸縮」と「ピッチ比」の両方で調整。
-      // - timeRatioで割る: 出力が元より長ければ、同じ本数の周期をより広い
-      //   区間に配って時間を伸ばす(逆に短ければ詰める)
-      // - pitchRatioで割る: ピッチを上げるほど周期間隔を詰める
       const synthPeriod = Math.max(
         minPeriod,
         Math.round((period * timeRatio) / pitchRatio)
       );
+
+      if (isVoiced) {
+        // グレイン長は「解析周期」と「合成周期」の大きい方に合わせる。
+        // こうしないと、ピッチを下げて間隔(synthPeriod)が広がった時に
+        // 元の周期(period)基準の狭いグレインだけでは隙間ができてしまい、
+        // 正規化(weightが薄い場所での除算)が異常増幅を起こす原因になる。
+        const grainHalf = Math.max(period, synthPeriod);
+        const grainLen = grainHalf * 2;
+        const window = hannWindow(grainLen);
+        const grainStart = analysisMark - grainHalf;
+
+        for (let i = 0; i < grainLen; i++) {
+          const srcIdx = grainStart + i;
+          if (srcIdx < 0 || srcIdx >= src.length) continue;
+          const outIdx = synthMark - grainHalf + i;
+          if (outIdx < 0 || outIdx >= outLen) continue;
+          const w = window[i];
+          out[outIdx] += src[srcIdx] * w;
+          weight[outIdx] += w;
+        }
+      } else {
+        // 無声区間: 周期性が無いノイズ的な音にPSOLAをかけるとブンブンいう
+        // バズ音になるため、ピッチ同期グレイン処理はせず、単純な時間伸縮
+        // (線形補間コピー、ピッチは変えない)だけを行う。
+        for (let i = 0; i < synthPeriod; i++) {
+          const outIdx = synthMark + i;
+          if (outIdx < 0 || outIdx >= outLen) continue;
+          const srcPosF = (synthMark + i) / timeRatio;
+          const i0 = Math.floor(srcPosF);
+          const frac = srcPosF - i0;
+          const s0 = i0 >= 0 && i0 < src.length ? src[i0] : 0;
+          const s1 = i0 + 1 >= 0 && i0 + 1 < src.length ? src[i0 + 1] : 0;
+          out[outIdx] += s0 + (s1 - s0) * frac;
+          weight[outIdx] += 1;
+        }
+      }
+
       synthMark += synthPeriod;
     }
 
-    // オーバーラップ加算の正規化(窓の重なりで音量が変動しないように)
+    // オーバーラップ加算の正規化(窓の重なりで音量が変動しないように)。
+    // 重なりが薄い場所は下限(MIN_NORMALIZE_WEIGHT)で割ることで、
+    // 異常増幅(スパイク/ノイズバースト)を防ぐ。
     for (let i = 0; i < outLen; i++) {
-      out[i] = weight[i] > 1e-6 ? out[i] / weight[i] : out[i];
+      if (weight[i] <= 0) continue;
+      const divisor = Math.max(weight[i], MIN_NORMALIZE_WEIGHT);
+      out[i] = out[i] / divisor;
     }
 
     outBuffer.copyToChannel(out, ch);
