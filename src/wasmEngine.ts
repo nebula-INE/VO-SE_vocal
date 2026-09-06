@@ -28,7 +28,7 @@ import {
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
-import { psolaPitchAndTimeShiftBuffer } from './psolaPitchShift';
+import { psolaPitchAndTimeShiftBuffer } from './utils/psolaPitchShift';
 
 export interface FetchedSample {
   buffer: AudioBuffer;
@@ -333,7 +333,18 @@ export async function renderStudioOffline(
   masterLimiter.connect(offlineCtx.destination);
 
   // 5. 各ノートの音響ノードをオフラインコンテキストにスケジュール (進捗: 32% -> 40%)
+  // [修正] このループはノートごとに自己相関計算+PSOLA+デクリックという
+  // 重いCPU処理を「同期的に」行っており、ノート数の多い曲では数秒〜十数秒
+  // メインスレッドを占有し続けてタブが完全に固まって見えていた。
+  // 数ノートごとに1回、明示的にイベントループへ制御を返す(yield)ことで、
+  // 処理時間そのものは変わらないが、ブラウザが固まらず(UIが反応し続け、
+  // 進捗表示も更新され続ける)ようにする。
+  const YIELD_EVERY_N_NOTES = 4;
   for (let idx = 0; idx < schedulingInfos.length; idx++) {
+    if (idx > 0 && idx % YIELD_EVERY_N_NOTES === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      onProgress?.(Math.round(32 + (idx / schedulingInfos.length) * 8));
+    }
     const { note, startTimeSec, durationSec, cacheKey } = schedulingInfos[idx];
     const cached = sampleDataMap.get(cacheKey);
 
