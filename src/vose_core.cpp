@@ -807,8 +807,18 @@ double map_time(double t_out_ms, const OtoEntry& oto,
 {
     const double offset     = oto.offset;
     const double fixed      = oto.consonant;
+    // [修正] 符号の意味が逆だった。UTAU oto.ini の慣習(= wasmEngine.ts の
+    // JS実装で既に正しく使われている解釈)に合わせる:
+    //   正の値: ファイル「末尾」からの距離   → source_wav_len_ms - cutoff
+    //   負の値: offset からの絶対距離(ms)   → offset + |cutoff|
+    // 旧実装は正の値をそのまま絶対位置として使っており、
+    // 例えば offset=12, consonant=182, cutoff=49 (実際に発生したケース)だと
+    // cutoff_pos=49 となり、source_stretch = 49 - (12+182) = -145 という
+    // 負値になって以降のresize/インデックス計算が破綻し、
+    // std::vector の length_error("vector") を引き起こしていた。
     const double cutoff_pos = (oto.cutoff < 0)
-                              ? source_wav_len_ms + oto.cutoff : oto.cutoff;
+                              ? offset - oto.cutoff
+                              : source_wav_len_ms - oto.cutoff;
     const double source_stretch = cutoff_pos - (offset + fixed);
     const double output_stretch = note_duration_ms - fixed;
     if (t_out_ms < fixed) return t_out_ms + offset;
