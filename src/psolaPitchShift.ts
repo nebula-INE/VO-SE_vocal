@@ -59,6 +59,69 @@ const DEFAULT_OPTS: Required<PsolaOptions> = {
 // (=音量が少し下がるだけで済み、スパイクにはならない)。
 const MIN_NORMALIZE_WEIGHT = 0.3;
 
+// [デクリック] 局所的な振幅の急変(前後数十サンプルの平均振幅に対して
+// 異常に大きいサンプル間ジャンプが連続する区間)を検出し、その区間だけを
+// 直前/直後の波形から線形補間で置き換える。声質・音量そのものには影響を
+// 与えず、PSOLAの周期境界や有声/無声切り替え点でごく短時間(数十サンプル
+// 程度)だけ生じうる破綻を除去するための後段の安全網。
+function declickBuffer(out: Float32Array, sampleRate: number): void {
+  const n = out.length;
+  if (n < 8) return;
+
+  const localWindow = Math.max(8, Math.round(sampleRate * 0.003)); // ~3ms
+  const jumpThresholdFactor = 6; // 局所平均振幅の何倍のジャンプを異常とみなすか
+  const minAbsJump = 0.02; // 無音に近い区間で過検出しないための下限(フルスケール比)
+  const maxBurstSamples = Math.round(sampleRate * 0.003); // 1バーストの最大幅(~3ms)
+  const mergeGapSamples = Math.round(sampleRate * 0.0005); // 近接した異常点は1つのバーストにまとめる
+
+  // 局所平均振幅(簡易移動平均)を計算
+  const localAbsAvg = new Float32Array(n);
+  let runningSum = 0;
+  const half = Math.floor(localWindow / 2);
+  for (let i = 0; i < n; i++) {
+    runningSum += Math.abs(out[i]);
+    if (i >= localWindow) runningSum -= Math.abs(out[i - localWindow]);
+    const count = Math.min(i + 1, localWindow);
+    localAbsAvg[Math.max(0, i - half)] = runningSum / count;
+  }
+
+  // 異常なサンプル間ジャンプを検出
+  const flagged = new Uint8Array(n);
+  for (let i = 1; i < n; i++) {
+    const jump = Math.abs(out[i] - out[i - 1]);
+    const threshold = Math.max(minAbsJump, localAbsAvg[i] * jumpThresholdFactor);
+    if (jump > threshold) {
+      flagged[i - 1] = 1;
+      flagged[i] = 1;
+    }
+  }
+
+  // 連続した異常点を1つのバーストにまとめ、短い区間だけ線形補間で置き換える。
+  // 幅が広すぎる場合(maxBurstSamples超)は誤検出の可能性が高いので触らない
+  // (本当に大きな正当な音量変化を誤って潰さないための安全策)。
+  let i = 0;
+  while (i < n) {
+    if (!flagged[i]) { i++; continue; }
+    let j = i;
+    while (j < n && (flagged[j] || (j + mergeGapSamples < n && flagged.slice(j, j + mergeGapSamples).some((v) => v)))) {
+      j++;
+    }
+    const burstStart = Math.max(0, i - 1);
+    const burstEnd = Math.min(n - 1, j);
+    const burstLen = burstEnd - burstStart;
+
+    if (burstLen > 0 && burstLen <= maxBurstSamples) {
+      const a = out[burstStart];
+      const b = out[burstEnd];
+      for (let k = burstStart + 1; k < burstEnd; k++) {
+        const t = (k - burstStart) / burstLen;
+        out[k] = a + (b - a) * t;
+      }
+    }
+    i = j + 1;
+  }
+}
+
 function hannWindow(length: number): Float32Array {
   const w = new Float32Array(length);
   if (length <= 1) {
@@ -253,6 +316,12 @@ export function psolaPitchAndTimeShiftBuffer(
       const divisor = Math.max(weight[i], MIN_NORMALIZE_WEIGHT);
       out[i] = out[i] / divisor;
     }
+
+    // [デクリック] 子音→母音のような非周期→周期の切り替わり地点は、
+    // たった1グレインだけ内容が周囲と整合しない「短時間の暴れ」が
+    // 残ることがある(数十サンプル=1ms未満)。声質・音量には影響しない
+    // ごく短い区間だけを検出し、前後の波形から線形補間で穴埋めする。
+    declickBuffer(out, sampleRate);
 
     outBuffer.copyToChannel(out, ch);
   }
