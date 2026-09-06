@@ -58,6 +58,12 @@ jobs:
           #   明示的にエクスポートしないとMODULARIZE=1のビルドでは
           #   Module(=mod)オブジェクト上に生えず、`mod.HEAPU8` が undefined
           #   になって "undefined is not an object" で失敗する。
+          # ★変更点8(一時的なデバッグ用): -s ASSERTIONS=2 と -g2 を追加。
+          #   "Aborted(undefined). Build with -sASSERTIONS for more info."
+          #   というエラーで原因不明のままクラッシュしていたため、詳細な
+          #   エラーメッセージ(不正なポインタアクセス/型不一致等)を
+          #   出させるために付与。原因が特定できたら外してよい
+          #   (バイナリサイズと実行速度に多少ペナルティがあるため)。
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
@@ -78,6 +84,8 @@ jobs:
                -s EXPORT_NAME="createVoseCoreModule" \
                -s EXPORT_ES6=1 \
                -s ENVIRONMENT=web,worker \
+               -s ASSERTIONS=2 \
+               -g2 \
                -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
                -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF64']" \
                -s DEFAULT_TO_CXX \
