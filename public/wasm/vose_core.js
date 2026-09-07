@@ -342,13 +342,10 @@ function writeStackCookie() {
   // The stack grow downwards towards _emscripten_stack_get_end.
   // We write cookies to the final two words in the stack and detect if they are
   // ever overwritten.
-  HEAPU32[((max) >> 2)] = stackCookie1;
+  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((max) >> 2), "storing")] = stackCookie1;
   checkInt32(stackCookie1);
-  HEAPU32[(((max) + (4)) >> 2)] = stackCookie2;
+  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((max) + (4)) >> 2), "storing")] = stackCookie2;
   checkInt32(stackCookie2);
-  // Also test the global address 0 for integrity.
-  HEAPU32[((0) >> 2)] = 1668509029;
-  checkInt32(1668509029);
 }
 
 function u32ToHexString(num) {
@@ -362,18 +359,38 @@ function checkStackCookie() {
   if (max == 0) {
     max += 4;
   }
-  var val1 = HEAPU32[((max) >> 2)];
-  var val2 = HEAPU32[(((max) + (4)) >> 2)];
+  var val1 = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((max) >> 2), "loading")];
+  var val2 = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((max) + (4)) >> 2), "loading")];
   if (val1 != stackCookie1 || val2 != stackCookie2) {
     abort(`Stack overflow! Stack cookie has been overwritten at ${ptrToString(max)}, expected hex dwords ${u32ToHexString(stackCookie2)} and ${u32ToHexString(stackCookie1)}, but received ${u32ToHexString(val2)} ${u32ToHexString(val1)}`);
-  }
-  // Also test the global address 0 for integrity.
-  if (HEAPU32[((0) >> 2)] != 1668509029) {
-    abort("Runtime error: The application has corrupted its heap memory area (address zero)!");
   }
 }
 
 // end include: runtime_stack_check.js
+// include: runtime_safe_heap.js
+function SAFE_HEAP_INDEX(arr, idx, action) {
+  const bytes = arr.BYTES_PER_ELEMENT;
+  const dest = idx * bytes;
+  if (idx <= 0) abort(`segmentation fault ${action} ${bytes} bytes at address ${dest}`);
+  if (runtimeInitialized) {
+    var brk = _sbrk(0);
+    if (dest + bytes > brk) abort(`segmentation fault, exceeded the top of the available dynamic heap when ${action} ${bytes} bytes at address ${dest}. DYNAMICTOP=${brk}`);
+    if (brk < _emscripten_stack_get_base()) abort(`brk >= _emscripten_stack_get_base() (brk=${brk}, _emscripten_stack_get_base()=${_emscripten_stack_get_base()})`);
+    // sbrk-managed memory must be above the stack
+    if (brk > wasmMemory.buffer.byteLength) abort(`brk <= wasmMemory.buffer.byteLength (brk=${brk}, wasmMemory.buffer.byteLength=${wasmMemory.buffer.byteLength})`);
+  }
+  return idx;
+}
+
+function segfault() {
+  abort("segmentation fault");
+}
+
+function alignfault() {
+  abort("alignment fault");
+}
+
+// end include: runtime_safe_heap.js
 // Memory management
 var runtimeInitialized = false;
 
@@ -391,11 +408,13 @@ function updateMemoryViews() {
   HEAP8 = new Int8Array(b);
   HEAP16 = new Int16Array(b);
   Module["HEAPU8"] = HEAPU8 = new Uint8Array(b);
+  HEAPU16 = new Uint16Array(b);
   HEAP32 = new Int32Array(b);
   HEAPU32 = new Uint32Array(b);
   HEAPF32 = new Float32Array(b);
   Module["HEAPF64"] = HEAPF64 = new Float64Array(b);
   HEAP64 = new BigInt64Array(b);
+  HEAPU64 = new BigUint64Array(b);
 }
 
 // include: memoryprofiler.js
@@ -614,11 +633,25 @@ class ExitStatus {
   }
 }
 
+/** @type {!Int16Array} */ var HEAP16;
+
 /** @type {!Int32Array} */ var HEAP32;
+
+/** not-@type {!BigInt64Array} */ var HEAP64;
 
 /** @type {!Int8Array} */ var HEAP8;
 
+/** @type {!Float32Array} */ var HEAPF32;
+
+/** @type {!Float64Array} */ var HEAPF64;
+
+/** @type {!Uint16Array} */ var HEAPU16;
+
 /** @type {!Uint32Array} */ var HEAPU32;
+
+/** not-@type {!BigUint64Array} */ var HEAPU64;
+
+/** @type {!Uint8Array} */ var HEAPU8;
 
 var callRuntimeCallbacks = callbacks => {
   while (callbacks.length > 0) {
@@ -630,6 +663,41 @@ var callRuntimeCallbacks = callbacks => {
 var onPostRuns = [];
 
 var onPreRuns = [];
+
+/**
+   * @param {number} ptr
+   * @param {string} type
+   */ function getValue(ptr, type = "i8") {
+  if (type.endsWith("*")) type = "*";
+  switch (type) {
+   case "i1":
+    return HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "loading")];
+
+   case "i8":
+    return HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "loading")];
+
+   case "i16":
+    return HEAP16[SAFE_HEAP_INDEX(HEAP16, ((ptr) >> 1), "loading")];
+
+   case "i32":
+    return HEAP32[SAFE_HEAP_INDEX(HEAP32, ((ptr) >> 2), "loading")];
+
+   case "i64":
+    return HEAP64[SAFE_HEAP_INDEX(HEAP64, ((ptr) >> 3), "loading")];
+
+   case "float":
+    return HEAPF32[SAFE_HEAP_INDEX(HEAPF32, ((ptr) >> 2), "loading")];
+
+   case "double":
+    return HEAPF64[SAFE_HEAP_INDEX(HEAPF64, ((ptr) >> 3), "loading")];
+
+   case "*":
+    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((ptr) >> 2), "loading")];
+
+   default:
+    abort(`invalid type for getValue: ${type}`);
+  }
+}
 
 var noExitRuntime = true;
 
@@ -645,6 +713,55 @@ var setStackLimits = () => {
   var stackHigh = _emscripten_stack_get_end();
   ___set_stack_limits(stackLow, stackHigh);
 };
+
+/**
+   * @param {number} ptr
+   * @param {number} value
+   * @param {string} type
+   */ function setValue(ptr, value, type = "i8") {
+  if (type.endsWith("*")) type = "*";
+  switch (type) {
+   case "i1":
+    HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "storing")] = value;
+    checkInt8(value);
+    break;
+
+   case "i8":
+    HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "storing")] = value;
+    checkInt8(value);
+    break;
+
+   case "i16":
+    HEAP16[SAFE_HEAP_INDEX(HEAP16, ((ptr) >> 1), "storing")] = value;
+    checkInt16(value);
+    break;
+
+   case "i32":
+    HEAP32[SAFE_HEAP_INDEX(HEAP32, ((ptr) >> 2), "storing")] = value;
+    checkInt32(value);
+    break;
+
+   case "i64":
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, ((ptr) >> 3), "storing")] = BigInt(value);
+    checkInt64(value);
+    break;
+
+   case "float":
+    HEAPF32[SAFE_HEAP_INDEX(HEAPF32, ((ptr) >> 2), "storing")] = value;
+    break;
+
+   case "double":
+    HEAPF64[SAFE_HEAP_INDEX(HEAPF64, ((ptr) >> 3), "storing")] = value;
+    break;
+
+   case "*":
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((ptr) >> 2), "storing")] = value;
+    break;
+
+   default:
+    abort(`invalid type for setValue: ${type}`);
+  }
+}
 
 var stackRestore = val => __emscripten_stack_restore(val);
 
@@ -725,8 +842,6 @@ var UTF8Decoder = globalThis.TextDecoder && new TextDecoder;
   return str;
 };
 
-/** @type {!Uint8Array} */ var HEAPU8;
-
 /**
    * Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the
    * emscripten HEAP, returns a copy of that string as a Javascript String object.
@@ -780,32 +895,32 @@ class ExceptionInfo {
     this.ptr = excPtr - 24;
   }
   set_type(type) {
-    HEAPU32[(((this.ptr) + (4)) >> 2)] = type;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (4)) >> 2), "storing")] = type;
   }
   get_type() {
-    return HEAPU32[(((this.ptr) + (4)) >> 2)];
+    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (4)) >> 2), "loading")];
   }
   set_destructor(destructor) {
-    HEAPU32[(((this.ptr) + (8)) >> 2)] = destructor;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (8)) >> 2), "storing")] = destructor;
   }
   get_destructor() {
-    return HEAPU32[(((this.ptr) + (8)) >> 2)];
+    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (8)) >> 2), "loading")];
   }
   set_caught(caught) {
     caught = caught ? 1 : 0;
-    HEAP8[(this.ptr) + (12)] = caught;
+    HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (12), "storing")] = caught;
     checkInt8(caught);
   }
   get_caught() {
-    return HEAP8[(this.ptr) + (12)] != 0;
+    return HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (12), "loading")] != 0;
   }
   set_rethrown(rethrown) {
     rethrown = rethrown ? 1 : 0;
-    HEAP8[(this.ptr) + (13)] = rethrown;
+    HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (13), "storing")] = rethrown;
     checkInt8(rethrown);
   }
   get_rethrown() {
-    return HEAP8[(this.ptr) + (13)] != 0;
+    return HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (13), "loading")] != 0;
   }
   // Initialize native structure fields. Should be called once after allocated.
   init(type, destructor) {
@@ -814,10 +929,10 @@ class ExceptionInfo {
     this.set_destructor(destructor);
   }
   set_adjusted_ptr(adjustedPtr) {
-    HEAPU32[(((this.ptr) + (16)) >> 2)] = adjustedPtr;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (16)) >> 2), "storing")] = adjustedPtr;
   }
   get_adjusted_ptr() {
-    return HEAPU32[(((this.ptr) + (16)) >> 2)];
+    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (16)) >> 2), "loading")];
   }
 }
 
@@ -889,8 +1004,8 @@ var getExceptionMessageCommon = ptr => {
   var type_addr_addr = stackAlloc(4);
   var message_addr_addr = stackAlloc(4);
   ___get_exception_message(ptr, type_addr_addr, message_addr_addr);
-  var type_addr = HEAPU32[((type_addr_addr) >> 2)];
-  var message_addr = HEAPU32[((message_addr_addr) >> 2)];
+  var type_addr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((type_addr_addr) >> 2), "loading")];
+  var message_addr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((message_addr_addr) >> 2), "loading")];
   var type = UTF8ToString(type_addr);
   _free(type_addr);
   var message;
@@ -934,7 +1049,7 @@ var ___resumeException = ptr => {
 var syscallGetVarargI = () => {
   assert(SYSCALLS.varargs != undefined);
   // the `+` prepended here is necessary to convince the JSCompiler that varargs is indeed a number.
-  var ret = HEAP32[((+SYSCALLS.varargs) >> 2)];
+  var ret = HEAP32[SAFE_HEAP_INDEX(HEAP32, ((+SYSCALLS.varargs) >> 2), "loading")];
   SYSCALLS.varargs += 4;
   return ret;
 };
@@ -3574,8 +3689,6 @@ var FS = {
   }
 };
 
-/** not-@type {!BigInt64Array} */ var HEAP64;
-
 var SYSCALLS = {
   currentUmask: 18,
   calculateAt(dirfd, path, allowEmpty) {
@@ -3599,64 +3712,64 @@ var SYSCALLS = {
     return dir + "/" + path;
   },
   writeStat(buf, stat) {
-    HEAPU32[((buf) >> 2)] = stat.dev;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((buf) >> 2), "storing")] = stat.dev;
     checkInt32(stat.dev);
-    HEAPU32[(((buf) + (4)) >> 2)] = stat.mode;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (4)) >> 2), "storing")] = stat.mode;
     checkInt32(stat.mode);
-    HEAPU32[(((buf) + (8)) >> 2)] = stat.nlink;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (8)) >> 2), "storing")] = stat.nlink;
     checkInt32(stat.nlink);
-    HEAPU32[(((buf) + (12)) >> 2)] = stat.uid;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (12)) >> 2), "storing")] = stat.uid;
     checkInt32(stat.uid);
-    HEAPU32[(((buf) + (16)) >> 2)] = stat.gid;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (16)) >> 2), "storing")] = stat.gid;
     checkInt32(stat.gid);
-    HEAPU32[(((buf) + (20)) >> 2)] = stat.rdev;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (20)) >> 2), "storing")] = stat.rdev;
     checkInt32(stat.rdev);
-    HEAP64[(((buf) + (24)) >> 3)] = BigInt(stat.size);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (24)) >> 3), "storing")] = BigInt(stat.size);
     checkInt64(stat.size);
-    HEAP32[(((buf) + (32)) >> 2)] = 4096;
+    HEAP32[SAFE_HEAP_INDEX(HEAP32, (((buf) + (32)) >> 2), "storing")] = 4096;
     checkInt32(4096);
-    HEAP32[(((buf) + (36)) >> 2)] = stat.blocks;
+    HEAP32[SAFE_HEAP_INDEX(HEAP32, (((buf) + (36)) >> 2), "storing")] = stat.blocks;
     checkInt32(stat.blocks);
     var atime = stat.atime.getTime();
     var mtime = stat.mtime.getTime();
     var ctime = stat.ctime.getTime();
-    HEAP64[(((buf) + (40)) >> 3)] = BigInt(Math.floor(atime / 1e3));
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (40)) >> 3), "storing")] = BigInt(Math.floor(atime / 1e3));
     checkInt64(Math.floor(atime / 1e3));
-    HEAPU32[(((buf) + (48)) >> 2)] = (atime % 1e3) * 1e3 * 1e3;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (48)) >> 2), "storing")] = (atime % 1e3) * 1e3 * 1e3;
     checkInt32((atime % 1e3) * 1e3 * 1e3);
-    HEAP64[(((buf) + (56)) >> 3)] = BigInt(Math.floor(mtime / 1e3));
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (56)) >> 3), "storing")] = BigInt(Math.floor(mtime / 1e3));
     checkInt64(Math.floor(mtime / 1e3));
-    HEAPU32[(((buf) + (64)) >> 2)] = (mtime % 1e3) * 1e3 * 1e3;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (64)) >> 2), "storing")] = (mtime % 1e3) * 1e3 * 1e3;
     checkInt32((mtime % 1e3) * 1e3 * 1e3);
-    HEAP64[(((buf) + (72)) >> 3)] = BigInt(Math.floor(ctime / 1e3));
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (72)) >> 3), "storing")] = BigInt(Math.floor(ctime / 1e3));
     checkInt64(Math.floor(ctime / 1e3));
-    HEAPU32[(((buf) + (80)) >> 2)] = (ctime % 1e3) * 1e3 * 1e3;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (80)) >> 2), "storing")] = (ctime % 1e3) * 1e3 * 1e3;
     checkInt32((ctime % 1e3) * 1e3 * 1e3);
-    HEAP64[(((buf) + (88)) >> 3)] = BigInt(stat.ino);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (88)) >> 3), "storing")] = BigInt(stat.ino);
     checkInt64(stat.ino);
     return 0;
   },
   writeStatFs(buf, stats) {
-    HEAPU32[(((buf) + (4)) >> 2)] = stats.bsize;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (4)) >> 2), "storing")] = stats.bsize;
     checkInt32(stats.bsize);
-    HEAPU32[(((buf) + (60)) >> 2)] = stats.bsize;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (60)) >> 2), "storing")] = stats.bsize;
     checkInt32(stats.bsize);
-    HEAP64[(((buf) + (8)) >> 3)] = BigInt(stats.blocks);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (8)) >> 3), "storing")] = BigInt(stats.blocks);
     checkInt64(stats.blocks);
-    HEAP64[(((buf) + (16)) >> 3)] = BigInt(stats.bfree);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (16)) >> 3), "storing")] = BigInt(stats.bfree);
     checkInt64(stats.bfree);
-    HEAP64[(((buf) + (24)) >> 3)] = BigInt(stats.bavail);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (24)) >> 3), "storing")] = BigInt(stats.bavail);
     checkInt64(stats.bavail);
-    HEAP64[(((buf) + (32)) >> 3)] = BigInt(stats.files);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (32)) >> 3), "storing")] = BigInt(stats.files);
     checkInt64(stats.files);
-    HEAP64[(((buf) + (40)) >> 3)] = BigInt(stats.ffree);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (40)) >> 3), "storing")] = BigInt(stats.ffree);
     checkInt64(stats.ffree);
-    HEAPU32[(((buf) + (48)) >> 2)] = stats.fsid;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (48)) >> 2), "storing")] = stats.fsid;
     checkInt32(stats.fsid);
-    HEAPU32[(((buf) + (64)) >> 2)] = stats.flags;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (64)) >> 2), "storing")] = stats.flags;
     checkInt32(stats.flags);
     // ST_NOSUID
-    HEAPU32[(((buf) + (56)) >> 2)] = stats.namelen;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (56)) >> 2), "storing")] = stats.namelen;
     checkInt32(stats.namelen);
   },
   doMsync(addr, stream, len, flags, offset) {
@@ -3680,8 +3793,6 @@ var SYSCALLS = {
     return ret;
   }
 };
-
-/** @type {!Int16Array} */ var HEAP16;
 
 function ___syscall_fcntl64(fd, cmd, varargs) {
   SYSCALLS.varargs = varargs;
@@ -3723,7 +3834,7 @@ function ___syscall_fcntl64(fd, cmd, varargs) {
         var arg = syscallGetVarargP();
         var offset = 0;
         // We're always unlocked.
-        HEAP16[(((arg) + (offset)) >> 1)] = 2;
+        HEAP16[SAFE_HEAP_INDEX(HEAP16, (((arg) + (offset)) >> 1), "storing")] = 2;
         checkInt16(2);
         return 0;
       }
@@ -3769,16 +3880,16 @@ function ___syscall_ioctl(fd, op, varargs) {
         if (stream.tty.ops.ioctl_tcgets) {
           var termios = stream.tty.ops.ioctl_tcgets(stream);
           var argp = syscallGetVarargP();
-          HEAP32[((argp) >> 2)] = termios.c_iflag || 0;
+          HEAP32[SAFE_HEAP_INDEX(HEAP32, ((argp) >> 2), "storing")] = termios.c_iflag || 0;
           checkInt32(termios.c_iflag || 0);
-          HEAP32[(((argp) + (4)) >> 2)] = termios.c_oflag || 0;
+          HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (4)) >> 2), "storing")] = termios.c_oflag || 0;
           checkInt32(termios.c_oflag || 0);
-          HEAP32[(((argp) + (8)) >> 2)] = termios.c_cflag || 0;
+          HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (8)) >> 2), "storing")] = termios.c_cflag || 0;
           checkInt32(termios.c_cflag || 0);
-          HEAP32[(((argp) + (12)) >> 2)] = termios.c_lflag || 0;
+          HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (12)) >> 2), "storing")] = termios.c_lflag || 0;
           checkInt32(termios.c_lflag || 0);
           for (var i = 0; i < 32; i++) {
-            HEAP8[(argp + i) + (17)] = termios.c_cc[i] || 0;
+            HEAP8[SAFE_HEAP_INDEX(HEAP8, (argp + i) + (17), "storing")] = termios.c_cc[i] || 0;
             checkInt8(termios.c_cc[i] || 0);
           }
           return 0;
@@ -3801,13 +3912,13 @@ function ___syscall_ioctl(fd, op, varargs) {
         if (!stream.tty) return -59;
         if (stream.tty.ops.ioctl_tcsets) {
           var argp = syscallGetVarargP();
-          var c_iflag = HEAP32[((argp) >> 2)];
-          var c_oflag = HEAP32[(((argp) + (4)) >> 2)];
-          var c_cflag = HEAP32[(((argp) + (8)) >> 2)];
-          var c_lflag = HEAP32[(((argp) + (12)) >> 2)];
+          var c_iflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, ((argp) >> 2), "loading")];
+          var c_oflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (4)) >> 2), "loading")];
+          var c_cflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (8)) >> 2), "loading")];
+          var c_lflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (12)) >> 2), "loading")];
           var c_cc = [];
           for (var i = 0; i < 32; i++) {
-            c_cc.push(HEAP8[(argp + i) + (17)]);
+            c_cc.push(HEAP8[SAFE_HEAP_INDEX(HEAP8, (argp + i) + (17), "loading")]);
           }
           return stream.tty.ops.ioctl_tcsets(stream.tty, op, {
             c_iflag,
@@ -3824,7 +3935,7 @@ function ___syscall_ioctl(fd, op, varargs) {
       {
         if (!stream.tty) return -59;
         var argp = syscallGetVarargP();
-        HEAP32[((argp) >> 2)] = 0;
+        HEAP32[SAFE_HEAP_INDEX(HEAP32, ((argp) >> 2), "storing")] = 0;
         checkInt32(0);
         return 0;
       }
@@ -3850,9 +3961,9 @@ function ___syscall_ioctl(fd, op, varargs) {
         if (stream.tty.ops.ioctl_tiocgwinsz) {
           var winsize = stream.tty.ops.ioctl_tiocgwinsz(stream.tty);
           var argp = syscallGetVarargP();
-          HEAP16[((argp) >> 1)] = winsize[0];
+          HEAP16[SAFE_HEAP_INDEX(HEAP16, ((argp) >> 1), "storing")] = winsize[0];
           checkInt16(winsize[0]);
-          HEAP16[(((argp) + (2)) >> 1)] = winsize[1];
+          HEAP16[SAFE_HEAP_INDEX(HEAP16, (((argp) + (2)) >> 1), "storing")] = winsize[1];
           checkInt16(winsize[1]);
         }
         return 0;
@@ -4004,8 +4115,8 @@ var __tzset_js = (timezone, daylight, std_name, dst_name) => {
   // Coordinated Universal Time (UTC) and local standard time."), the same
   // as returned by stdTimezoneOffset.
   // See http://pubs.opengroup.org/onlinepubs/009695399/functions/tzset.html
-  HEAPU32[((timezone) >> 2)] = stdTimezoneOffset * 60;
-  HEAP32[((daylight) >> 2)] = Number(winterOffset != summerOffset);
+  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((timezone) >> 2), "storing")] = stdTimezoneOffset * 60;
+  HEAP32[SAFE_HEAP_INDEX(HEAP32, ((daylight) >> 2), "storing")] = Number(winterOffset != summerOffset);
   checkInt32(Number(winterOffset != summerOffset));
   var extractZone = timezoneOffset => {
     // Why inverse sign?
@@ -4150,7 +4261,7 @@ var _environ_get = (__environ, environ_buf) => {
   var envp = 0;
   for (var string of getEnvStrings()) {
     var ptr = environ_buf + bufSize;
-    HEAPU32[(((__environ) + (envp)) >> 2)] = ptr;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((__environ) + (envp)) >> 2), "storing")] = ptr;
     bufSize += stringToUTF8(string, ptr, Infinity) + 1;
     envp += 4;
   }
@@ -4159,13 +4270,13 @@ var _environ_get = (__environ, environ_buf) => {
 
 var _environ_sizes_get = (penviron_count, penviron_buf_size) => {
   var strings = getEnvStrings();
-  HEAPU32[((penviron_count) >> 2)] = strings.length;
+  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((penviron_count) >> 2), "storing")] = strings.length;
   checkInt32(strings.length);
   var bufSize = 0;
   for (var string of strings) {
     bufSize += lengthBytesUTF8(string) + 1;
   }
-  HEAPU32[((penviron_buf_size) >> 2)] = bufSize;
+  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((penviron_buf_size) >> 2), "storing")] = bufSize;
   checkInt32(bufSize);
   return 0;
 };
@@ -4184,8 +4295,8 @@ function _fd_close(fd) {
 /** @param {number=} offset */ var doReadv = (stream, iov, iovcnt, offset) => {
   var ret = 0;
   for (var i = 0; i < iovcnt; i++) {
-    var ptr = HEAPU32[((iov) >> 2)];
-    var len = HEAPU32[(((iov) + (4)) >> 2)];
+    var ptr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((iov) >> 2), "loading")];
+    var len = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((iov) + (4)) >> 2), "loading")];
     iov += 8;
     try {
       var curr = FS.read(stream, HEAP8, ptr, len, offset);
@@ -4213,7 +4324,7 @@ function _fd_read(fd, iov, iovcnt, pnum) {
   try {
     var stream = SYSCALLS.getStreamFromFD(fd);
     var num = doReadv(stream, iov, iovcnt);
-    HEAPU32[((pnum) >> 2)] = num;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((pnum) >> 2), "storing")] = num;
     checkInt32(num);
     return 0;
   } catch (e) {
@@ -4234,7 +4345,7 @@ function _fd_seek(fd, offset, whence, newOffset) {
     if (isNaN(offset)) return 22;
     var stream = SYSCALLS.getStreamFromFD(fd);
     FS.llseek(stream, offset, whence);
-    HEAP64[((newOffset) >> 3)] = BigInt(stream.position);
+    HEAP64[SAFE_HEAP_INDEX(HEAP64, ((newOffset) >> 3), "storing")] = BigInt(stream.position);
     checkInt64(stream.position);
     if (stream.getdents && !offset && whence === 0) stream.getdents = null;
     // reset readdir state
@@ -4252,17 +4363,17 @@ function _fd_seek(fd, offset, whence, newOffset) {
   // socket send into multiple segments, breaking stream byte semantics.
   if (iovcnt == 1) {
     // Single iovec: write directly from HEAP8, no gather buffer needed.
-    return FS.write(stream, HEAP8, HEAPU32[((iov) >> 2)], HEAPU32[(((iov) + (4)) >> 2)], offset);
+    return FS.write(stream, HEAP8, HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((iov) >> 2), "loading")], HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((iov) + (4)) >> 2), "loading")], offset);
   }
   var total = 0;
   for (var i = 0, p = iov; i < iovcnt; i++, p += 8) {
-    total += HEAPU32[(((p) + (4)) >> 2)];
+    total += HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((p) + (4)) >> 2), "loading")];
   }
   var view = new Uint8Array(total);
   var voff = 0;
   for (var i = 0; i < iovcnt; i++, iov += 8) {
-    var ptr = HEAPU32[((iov) >> 2)];
-    var len = HEAPU32[(((iov) + (4)) >> 2)];
+    var ptr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((iov) >> 2), "loading")];
+    var len = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((iov) + (4)) >> 2), "loading")];
     view.set(HEAPU8.subarray(ptr, ptr + len), voff);
     voff += len;
   }
@@ -4273,7 +4384,7 @@ function _fd_write(fd, iov, iovcnt, pnum) {
   try {
     var stream = SYSCALLS.getStreamFromFD(fd);
     var num = doWritev(stream, iov, iovcnt);
-    HEAPU32[((pnum) >> 2)] = num;
+    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((pnum) >> 2), "storing")] = num;
     checkInt32(num);
     return 0;
   } catch (e) {
@@ -4374,94 +4485,6 @@ var stringToUTF8OnStack = str => {
    * @param {Array=} argTypes
    * @param {Object=} opts
    */ var cwrap = (ident, returnType, argTypes, opts) => (...args) => ccall(ident, returnType, argTypes, args, opts);
-
-/** @type {!Float32Array} */ var HEAPF32;
-
-/** @type {!Float64Array} */ var HEAPF64;
-
-/**
-   * @param {number} ptr
-   * @param {string} type
-   */ function getValue(ptr, type = "i8") {
-  if (type.endsWith("*")) type = "*";
-  switch (type) {
-   case "i1":
-    return HEAP8[ptr];
-
-   case "i8":
-    return HEAP8[ptr];
-
-   case "i16":
-    return HEAP16[((ptr) >> 1)];
-
-   case "i32":
-    return HEAP32[((ptr) >> 2)];
-
-   case "i64":
-    return HEAP64[((ptr) >> 3)];
-
-   case "float":
-    return HEAPF32[((ptr) >> 2)];
-
-   case "double":
-    return HEAPF64[((ptr) >> 3)];
-
-   case "*":
-    return HEAPU32[((ptr) >> 2)];
-
-   default:
-    abort(`invalid type for getValue: ${type}`);
-  }
-}
-
-/**
-   * @param {number} ptr
-   * @param {number} value
-   * @param {string} type
-   */ function setValue(ptr, value, type = "i8") {
-  if (type.endsWith("*")) type = "*";
-  switch (type) {
-   case "i1":
-    HEAP8[ptr] = value;
-    checkInt8(value);
-    break;
-
-   case "i8":
-    HEAP8[ptr] = value;
-    checkInt8(value);
-    break;
-
-   case "i16":
-    HEAP16[((ptr) >> 1)] = value;
-    checkInt16(value);
-    break;
-
-   case "i32":
-    HEAP32[((ptr) >> 2)] = value;
-    checkInt32(value);
-    break;
-
-   case "i64":
-    HEAP64[((ptr) >> 3)] = BigInt(value);
-    checkInt64(value);
-    break;
-
-   case "float":
-    HEAPF32[((ptr) >> 2)] = value;
-    break;
-
-   case "double":
-    HEAPF64[((ptr) >> 3)] = value;
-    break;
-
-   case "*":
-    HEAPU32[((ptr) >> 2)] = value;
-    break;
-
-   default:
-    abort(`invalid type for setValue: ${type}`);
-  }
-}
 
 var updateTableMap = (offset, count) => {
   if (functionsInTableMap) {
@@ -4741,6 +4764,10 @@ var _emscripten_stack_get_base = makeInvalidEarlyAccess("_emscripten_stack_get_b
 
 var _strerror = makeInvalidEarlyAccess("_strerror");
 
+var _sbrk = makeInvalidEarlyAccess("_sbrk");
+
+var _emscripten_get_sbrk_ptr = makeInvalidEarlyAccess("_emscripten_get_sbrk_ptr");
+
 var _setThrew = makeInvalidEarlyAccess("_setThrew");
 
 var __emscripten_tempret_set = makeInvalidEarlyAccess("__emscripten_tempret_set");
@@ -4789,6 +4816,8 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["emscripten_stack_get_end"] != "undefined", "missing Wasm export: emscripten_stack_get_end");
   assert(typeof wasmExports["emscripten_stack_get_base"] != "undefined", "missing Wasm export: emscripten_stack_get_base");
   assert(typeof wasmExports["strerror"] != "undefined", "missing Wasm export: strerror");
+  assert(typeof wasmExports["sbrk"] != "undefined", "missing Wasm export: sbrk");
+  assert(typeof wasmExports["emscripten_get_sbrk_ptr"] != "undefined", "missing Wasm export: emscripten_get_sbrk_ptr");
   assert(typeof wasmExports["setThrew"] != "undefined", "missing Wasm export: setThrew");
   assert(typeof wasmExports["_emscripten_tempret_set"] != "undefined", "missing Wasm export: _emscripten_tempret_set");
   assert(typeof wasmExports["emscripten_stack_init"] != "undefined", "missing Wasm export: emscripten_stack_init");
@@ -4817,6 +4846,8 @@ function assignWasmExports(wasmExports) {
   _emscripten_stack_get_end = wasmExports["emscripten_stack_get_end"];
   _emscripten_stack_get_base = wasmExports["emscripten_stack_get_base"];
   _strerror = createExportWrapper("strerror", wasmExports["strerror"], 1);
+  _sbrk = createExportWrapper("sbrk", wasmExports["sbrk"], 1);
+  _emscripten_get_sbrk_ptr = wasmExports["emscripten_get_sbrk_ptr"];
   _setThrew = createExportWrapper("setThrew", wasmExports["setThrew"], 2);
   __emscripten_tempret_set = createExportWrapper("_emscripten_tempret_set", wasmExports["_emscripten_tempret_set"], 1);
   _emscripten_stack_init = wasmExports["emscripten_stack_init"];
@@ -4858,6 +4889,7 @@ var wasmImports = {
   /** @export */ __syscall_unlinkat: ___syscall_unlinkat,
   /** @export */ _abort_js: __abort_js,
   /** @export */ _tzset_js: __tzset_js,
+  /** @export */ alignfault,
   /** @export */ emscripten_get_heap_max: _emscripten_get_heap_max,
   /** @export */ emscripten_resize_heap: _emscripten_resize_heap,
   /** @export */ environ_get: _environ_get,
@@ -4896,7 +4928,8 @@ var wasmImports = {
   /** @export */ invoke_viiiiiiiiiiiiiii,
   /** @export */ invoke_vij,
   /** @export */ llvm_eh_typeid_for: _llvm_eh_typeid_for,
-  /** @export */ random_get: _random_get
+  /** @export */ random_get: _random_get,
+  /** @export */ segfault
 };
 
 function invoke_vii(index, a1, a2) {
