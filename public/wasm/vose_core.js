@@ -84,6 +84,10 @@ var programArgs = [];
 
 var thisProgram = "./this.program";
 
+var quit_ = (status, toThrow) => {
+  throw toThrow;
+};
+
 var _scriptName = import.meta.url;
 
 // `/` should be present at the end if `scriptDirectory` is not empty
@@ -137,6 +141,22 @@ var out = console.log.bind(console);
 
 var err = console.error.bind(console);
 
+var IDBFS = "IDBFS is no longer included by default; build with -lidbfs.js";
+
+var PROXYFS = "PROXYFS is no longer included by default; build with -lproxyfs.js";
+
+var WORKERFS = "WORKERFS is no longer included by default; build with -lworkerfs.js";
+
+var FETCHFS = "FETCHFS is no longer included by default; build with -lfetchfs.js";
+
+var ICASEFS = "ICASEFS is no longer included by default; build with -licasefs.js";
+
+var JSFILEFS = "JSFILEFS is no longer included by default; build with -ljsfilefs.js";
+
+var OPFS = "OPFS is no longer included by default; build with -lopfs.js";
+
+var NODEFS = "NODEFS is no longer included by default; build with -lnodefs.js";
+
 // perform assertions in shell.js after we set up out() and err(), as otherwise
 // if an assertion fails it cannot print the message
 assert(!ENVIRONMENT_IS_NODE, "node environment detected but not enabled at build time (add `node` to `-sENVIRONMENT` to enable)");
@@ -166,6 +186,11 @@ if (!globalThis.WebAssembly) {
 // whether we are quitting the application. no code should run after this.
 // set in exit() and abort()
 var ABORT = false;
+
+// set by exit() and abort().  Passed to 'onExit' handler.
+// NOTE: This is also used as the process return code in shell environments
+// but only when noExitRuntime is false.
+var EXITSTATUS;
 
 // In STRICT mode, we only define assert() when ASSERTIONS is set.  i.e. we
 // don't define it at all in release modes.  This matches the behaviour of
@@ -315,11 +340,15 @@ function checkInt(value, bits, min, max) {
   assert(value >= min, `value (${value}) too small to write as ${bits}-bit value`);
 }
 
+var checkInt1 = value => checkInt(value, 1, 1);
+
 var checkInt8 = value => checkInt(value, 8, MIN_INT8, MAX_UINT8);
 
 var checkInt16 = value => checkInt(value, 16, MIN_INT16, MAX_UINT16);
 
 var checkInt32 = value => checkInt(value, 32, MIN_INT32, MAX_UINT32);
+
+var checkInt53 = value => checkInt(value, 53, MIN_INT53, MAX_UINT53);
 
 var checkInt64 = value => checkInt(value, 64, MIN_INT64, MAX_UINT64);
 
@@ -662,7 +691,11 @@ var callRuntimeCallbacks = callbacks => {
 
 var onPostRuns = [];
 
+var addOnPostRun = cb => onPostRuns.push(cb);
+
 var onPreRuns = [];
+
+var addOnPreRun = cb => onPreRuns.push(cb);
 
 /**
    * @param {number} ptr
@@ -1018,6 +1051,10 @@ var getExceptionMessageCommon = ptr => {
 };
 
 var getExceptionMessage = exn => getExceptionMessageCommon(exn.excPtr);
+
+var decrementExceptionRefcount = exn => ___cxa_decrement_exception_refcount(exn.excPtr);
+
+var incrementExceptionRefcount = exn => ___cxa_increment_exception_refcount(exn.excPtr);
 
 var ___cxa_throw = (ptr, type, destructor) => {
   var info = new ExceptionInfo(ptr);
@@ -4898,7 +4935,10 @@ var wasmImports = {
   /** @export */ fd_read: _fd_read,
   /** @export */ fd_seek: _fd_seek,
   /** @export */ fd_write: _fd_write,
+  /** @export */ invoke_ddidd,
+  /** @export */ invoke_di,
   /** @export */ invoke_diii,
+  /** @export */ invoke_diiii,
   /** @export */ invoke_fiii,
   /** @export */ invoke_i,
   /** @export */ invoke_ii,
@@ -4916,7 +4956,10 @@ var wasmImports = {
   /** @export */ invoke_v,
   /** @export */ invoke_vi,
   /** @export */ invoke_vii,
+  /** @export */ invoke_viiddiii,
+  /** @export */ invoke_viidid,
   /** @export */ invoke_viii,
+  /** @export */ invoke_viiidd,
   /** @export */ invoke_viiii,
   /** @export */ invoke_viiiii,
   /** @export */ invoke_viiiiidiii,
@@ -4927,48 +4970,16 @@ var wasmImports = {
   /** @export */ invoke_viiiiiiiiii,
   /** @export */ invoke_viiiiiiiiiiiiiii,
   /** @export */ invoke_vij,
+  /** @export */ invoke_vijijjij,
   /** @export */ llvm_eh_typeid_for: _llvm_eh_typeid_for,
   /** @export */ random_get: _random_get,
   /** @export */ segfault
 };
 
-function invoke_vii(index, a1, a2) {
+function invoke_iii(index, a1, a2) {
   var sp = stackSave();
   try {
-    getWasmTableEntry(index)(a1, a2);
-  } catch (e) {
-    stackRestore(sp);
-    if (!(e instanceof EmscriptenEH)) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_v(index) {
-  var sp = stackSave();
-  try {
-    getWasmTableEntry(index)();
-  } catch (e) {
-    stackRestore(sp);
-    if (!(e instanceof EmscriptenEH)) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_ii(index, a1) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1);
-  } catch (e) {
-    stackRestore(sp);
-    if (!(e instanceof EmscriptenEH)) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiiiii(index, a1, a2, a3, a4, a5, a6) {
-  var sp = stackSave();
-  try {
-    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6);
+    return getWasmTableEntry(index)(a1, a2);
   } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
@@ -4987,10 +4998,10 @@ function invoke_viii(index, a1, a2, a3) {
   }
 }
 
-function invoke_iii(index, a1, a2) {
+function invoke_vii(index, a1, a2) {
   var sp = stackSave();
   try {
-    return getWasmTableEntry(index)(a1, a2);
+    getWasmTableEntry(index)(a1, a2);
   } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
@@ -5002,6 +5013,28 @@ function invoke_viiii(index, a1, a2, a3, a4) {
   var sp = stackSave();
   try {
     getWasmTableEntry(index)(a1, a2, a3, a4);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_ii(index, a1) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiii(index, a1, a2, a3) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3);
   } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
@@ -5031,28 +5064,6 @@ function invoke_vij(index, a1, a2) {
   }
 }
 
-function invoke_iiiii(index, a1, a2, a3, a4) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1, a2, a3, a4);
-  } catch (e) {
-    stackRestore(sp);
-    if (!(e instanceof EmscriptenEH)) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiii(index, a1, a2, a3) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(index)(a1, a2, a3);
-  } catch (e) {
-    stackRestore(sp);
-    if (!(e instanceof EmscriptenEH)) throw e;
-    _setThrew(1, 0);
-  }
-}
-
 function invoke_iij(index, a1, a2) {
   var sp = stackSave();
   try {
@@ -5068,6 +5079,17 @@ function invoke_iiid(index, a1, a2, a3) {
   var sp = stackSave();
   try {
     return getWasmTableEntry(index)(a1, a2, a3);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiiii(index, a1, a2, a3, a4, a5, a6) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6);
   } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
@@ -5097,10 +5119,76 @@ function invoke_viiiiiiiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9) {
   }
 }
 
-function invoke_viiiii(index, a1, a2, a3, a4, a5) {
+function invoke_iiiii(index, a1, a2, a3, a4) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_di(index, a1) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_ddidd(index, a1, a2, a3, a4) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_diiii(index, a1, a2, a3, a4) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)(a1, a2, a3, a4);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viidid(index, a1, a2, a3, a4, a5) {
   var sp = stackSave();
   try {
     getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiidd(index, a1, a2, a3, a4, a5) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiddiii(index, a1, a2, a3, a4, a5, a6, a7) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7);
   } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
@@ -5119,10 +5207,32 @@ function invoke_viiiiidiii(index, a1, a2, a3, a4, a5, a6, a7, a8, a9) {
   }
 }
 
-function invoke_i(index) {
+function invoke_v(index) {
   var sp = stackSave();
   try {
-    return getWasmTableEntry(index)();
+    getWasmTableEntry(index)();
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_vijijjij(index, a1, a2, a3, a4, a5, a6, a7) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5, a6, a7);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_viiiii(index, a1, a2, a3, a4, a5) {
+  var sp = stackSave();
+  try {
+    getWasmTableEntry(index)(a1, a2, a3, a4, a5);
   } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
@@ -5145,6 +5255,17 @@ function invoke_iiiiii(index, a1, a2, a3, a4, a5) {
   var sp = stackSave();
   try {
     return getWasmTableEntry(index)(a1, a2, a3, a4, a5);
+  } catch (e) {
+    stackRestore(sp);
+    if (!(e instanceof EmscriptenEH)) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_i(index) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(index)();
   } catch (e) {
     stackRestore(sp);
     if (!(e instanceof EmscriptenEH)) throw e;
@@ -5286,6 +5407,46 @@ async function run() {
   consumedModuleProp("onRuntimeInitialized");
   assert(!Module["_main"], 'compiled without a main, but one is present. if you added it from JS, use Module["onRuntimeInitialized"]');
   postRun();
+}
+
+function checkUnflushedContent() {
+  // Compiler settings do not allow exiting the runtime, so flushing
+  // the streams is not possible. but in ASSERTIONS mode we check
+  // if there was something to flush, and if so tell the user they
+  // should request that the runtime be exitable.
+  // Normally we would not even include flush() at all, but in ASSERTIONS
+  // builds we do so just for this check, and here we see if there is any
+  // content to flush, that is, we check if there would have been
+  // something a non-ASSERTIONS build would have not seen.
+  // How we flush the streams depends on whether we are in SYSCALLS_REQUIRE_FILESYSTEM=0
+  // mode (which has its own special function for this; otherwise, all
+  // the code is inside libc)
+  var oldOut = out;
+  var oldErr = err;
+  var has = false;
+  out = err = x => {
+    has = true;
+  };
+  try {
+    // it doesn't matter if it fails
+    _fflush(0);
+    // also flush in the JS FS layer
+    for (var name of [ "stdout", "stderr" ]) {
+      var info = FS.analyzePath("/dev/" + name);
+      if (!info) return;
+      var stream = info.object;
+      var rdev = stream.rdev;
+      var tty = TTY.ttys[rdev];
+      if (tty?.output?.length) {
+        has = true;
+      }
+    }
+  } catch (e) {}
+  out = oldOut;
+  err = oldErr;
+  if (has) {
+    warnOnce("stdio streams had content in them that was not flushed. you should set EXIT_RUNTIME to 1 (see the Emscripten FAQ), or make sure to emit a newline when you printf etc.");
+  }
 }
 
 var wasmExports;
