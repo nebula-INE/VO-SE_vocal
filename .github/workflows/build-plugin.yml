@@ -45,11 +45,11 @@ jobs:
         run: rm -rf juce_plugin/build
         shell: bash
 
-      # --- CMake 設定 ---
+      # --- CMake 設定（外部キャッシュの指定を削除） ---
       - name: Configure CMake
         shell: bash
         run: |
-          COMMON_OPTS="-DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0 -DFETCHCONTENT_BASE_DIR=${HOME}/juce_cache"
+          COMMON_OPTS="-DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0"
 
           if [ "${{ matrix.os }}" == "macos-14" ]; then
             cmake --fresh -B juce_plugin/build -S juce_plugin \
@@ -73,7 +73,7 @@ jobs:
           fi
         shell: bash
 
-      # --- 成果物アップロード（正しいアクション名に修正） ---
+      # --- 成果物アップロード ---
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
