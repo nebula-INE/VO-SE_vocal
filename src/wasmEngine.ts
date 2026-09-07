@@ -28,7 +28,7 @@ import {
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
-import { psolaPitchAndTimeShiftBuffer } from './utils/psolaPitchShift';
+import { psolaPitchAndTimeShiftBuffer } from './psolaPitchShift';
 
 export interface FetchedSample {
   buffer: AudioBuffer;
