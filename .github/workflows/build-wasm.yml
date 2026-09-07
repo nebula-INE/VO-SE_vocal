@@ -6,7 +6,6 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
-
 # ★追加: リポジトリ側の "Workflow permissions" 設定が Read-only の場合、
 # デフォルトの GITHUB_TOKEN では git push が 403 で拒否される。
 # ここで明示的に contents: write を宣言することで、リポジトリ側の設定を
@@ -77,6 +76,18 @@ jobs:
           #   個々のノート合成失敗時に例外がキャッチされ
           #   (worker_error_msgにe.what()が格納される)、曲全体がクラッシュ
           #   することなく処理を継続できる想定。
+          # ★変更点10(一時的なデバッグ用): -s SAFE_HEAP=1 を追加。
+          #   "Out of bounds memory access (evaluating
+          #   'getWasmTableEntry(index)(a1...a8)')" という、関数ポインタ
+          #   経由の間接呼び出しがWASMテーブル上の無効な場所を指す
+          #   エラーが発生した。これは典型的にどこかでメモリの範囲外
+          #   書き込みが起きて関数テーブル(あるいはそれを指すポインタ)を
+          #   破壊したことを示唆する。SAFE_HEAPは全てのヒープ読み書きに
+          #   境界・アライメントチェックを挟み、違反時に正確なアドレスと
+          #   型を報告してくれるため、voseCoreWorker.ts側の手組みの
+          #   構造体マーシャリング(NoteEvent/OtoEntry)を含め、実際の
+          #   メモリ破壊の発生源を特定するために使う。原因が特定できたら
+          #   外してよい(実行速度への影響が大きいため)。
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
@@ -99,6 +110,7 @@ jobs:
                -s EXPORT_ES6=1 \
                -s ENVIRONMENT=web,worker \
                -s ASSERTIONS=2 \
+               -s SAFE_HEAP=1 \
                -s DISABLE_EXCEPTION_CATCHING=0 \
                -g2 \
                -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
