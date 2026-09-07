@@ -1345,7 +1345,19 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     const int     output_frames = static_cast<int>(note_ms / kFramePeriod);
     const OtoEntry& current_oto = pp.has_oto ? pp.oto : kDefaultOto;
 
-    auto cache_cur = get_or_analyze(pp.ev, fft_size, spec_bins);
+    // [デバッグ] どの段階で例外が発生しているか特定するため、
+    // VOSE_Synthesis より手前の各段階を個別に try/catch で囲む。
+    decltype(get_or_analyze(pp.ev, fft_size, spec_bins)) cache_cur;
+    try {
+        cache_cur = get_or_analyze(pp.ev, fft_size, spec_bins);
+    } catch (const std::exception& e) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "get_or_analyze(cur) failed: fft_size=%d spec_bins=%d "
+                 "src_ms=%.2f pitch_length=%d : %s",
+                 fft_size, spec_bins, src_ms, n.pitch_length, e.what());
+        throw std::runtime_error(buf);
+    }
 
     // フォルマント追従用: 音源の基準F0を求める。
     // ★修正: 以前は解析(CheapTrick/Harvest)の有声フレーム単純平均のみを
@@ -1362,8 +1374,18 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         base_f0 = (voiced > 0) ? base_f0 / voiced : 220.0;
     }
 
-    tl_scratch.ensure_f0(output_frames);
-    tl_scratch.ensure_spec(output_frames, spec_bins);
+    try {
+        tl_scratch.ensure_f0(output_frames);
+        tl_scratch.ensure_spec(output_frames, spec_bins);
+    } catch (const std::exception& e) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "ensure_f0/ensure_spec failed: output_frames=%d spec_bins=%d "
+                 "note_samples=%lld note_ms=%.2f : %s",
+                 output_frames, spec_bins, static_cast<long long>(note_samples),
+                 note_ms, e.what());
+        throw std::runtime_error(buf);
+    }
 
     // apply_post_eq の高域シェルフ減衰量を決めるための、ノート全体の
     // 代表的なフォルマント補正量(f0_ratio平均)を集計する
@@ -1373,6 +1395,7 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     // ステップ1: cur スペクトルを DSP 込みで書き込む
     // (blend_transition_spectra より先に実行する必要がある)
     // ----------------------------------------------------------------
+    try {
     for (int j = 0; j < output_frames; ++j) {
         const double t_out_ms = j * kFramePeriod;
         const double t_src_ms = map_time(t_out_ms, current_oto, src_ms, note_ms);
@@ -1413,17 +1436,33 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         apply_gender_shift(sr, spec_bins, gender, tl_scratch.spec_tmp.data(), f0_ratio);
         apply_tension_breath(sr, ar, spec_bins, tension, breath);
     }
+    } catch (const std::exception& e) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "step1 loop failed: output_frames=%d pitch_length=%d "
+                 "cache_cur->length=%d spec_bins=%d : %s",
+                 output_frames, n.pitch_length, cache_cur->length, spec_bins, e.what());
+        throw std::runtime_error(buf);
+    }
     // ----------------------------------------------------------------
     // ステップ2: prev スペクトルを scratch_prev に展開してブレンド
     // (cur が書き終わった後でないと blend の cur 側がゼロになる)
     // ----------------------------------------------------------------
     if (pp.prev_ev) {
+        try {
         auto cache_prev = get_or_analyze(pp.prev_ev, fft_size, spec_bins);
         copy_cache_to_scratch_prev(*cache_prev);
         blend_transition_spectra(
             tl_scratch.spec_ptrs.data(), tl_scratch.ap_ptrs.data(), output_frames,
             tl_scratch.spec_ptrs_prev.data(), tl_scratch.ap_ptrs_prev.data(),
             cache_prev->length, spec_bins, kTransitionFrames);
+        } catch (const std::exception& e) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "prev blend failed: output_frames=%d spec_bins=%d : %s",
+                     output_frames, spec_bins, e.what());
+            throw std::runtime_error(buf);
+        }
     }
 
     smooth_f0_gaussian(tl_scratch.f0.data(), output_frames);
