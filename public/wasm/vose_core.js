@@ -371,9 +371,9 @@ function writeStackCookie() {
   // The stack grow downwards towards _emscripten_stack_get_end.
   // We write cookies to the final two words in the stack and detect if they are
   // ever overwritten.
-  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((max) >> 2), "storing")] = stackCookie1;
+  HEAPU32[_asan_js_check_index(HEAPU32, ((max) >> 2), ___asan_storeN)] = stackCookie1;
   checkInt32(stackCookie1);
-  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((max) + (4)) >> 2), "storing")] = stackCookie2;
+  HEAPU32[_asan_js_check_index(HEAPU32, (((max) + (4)) >> 2), ___asan_storeN)] = stackCookie2;
   checkInt32(stackCookie2);
 }
 
@@ -388,40 +388,31 @@ function checkStackCookie() {
   if (max == 0) {
     max += 4;
   }
-  var val1 = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((max) >> 2), "loading")];
-  var val2 = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((max) + (4)) >> 2), "loading")];
+  var val1 = HEAPU32[_asan_js_check_index(HEAPU32, ((max) >> 2), ___asan_loadN)];
+  var val2 = HEAPU32[_asan_js_check_index(HEAPU32, (((max) + (4)) >> 2), ___asan_loadN)];
   if (val1 != stackCookie1 || val2 != stackCookie2) {
     abort(`Stack overflow! Stack cookie has been overwritten at ${ptrToString(max)}, expected hex dwords ${u32ToHexString(stackCookie2)} and ${u32ToHexString(stackCookie1)}, but received ${u32ToHexString(val2)} ${u32ToHexString(val1)}`);
   }
 }
 
 // end include: runtime_stack_check.js
-// include: runtime_safe_heap.js
-function SAFE_HEAP_INDEX(arr, idx, action) {
-  const bytes = arr.BYTES_PER_ELEMENT;
-  const dest = idx * bytes;
-  if (idx <= 0) abort(`segmentation fault ${action} ${bytes} bytes at address ${dest}`);
-  if (runtimeInitialized) {
-    var brk = _sbrk(0);
-    if (dest + bytes > brk) abort(`segmentation fault, exceeded the top of the available dynamic heap when ${action} ${bytes} bytes at address ${dest}. DYNAMICTOP=${brk}`);
-    if (brk < _emscripten_stack_get_base()) abort(`brk >= _emscripten_stack_get_base() (brk=${brk}, _emscripten_stack_get_base()=${_emscripten_stack_get_base()})`);
-    // sbrk-managed memory must be above the stack
-    if (brk > wasmMemory.buffer.byteLength) abort(`brk <= wasmMemory.buffer.byteLength (brk=${brk}, wasmMemory.buffer.byteLength=${wasmMemory.buffer.byteLength})`);
+// include: runtime_asan.js
+// C versions of asan_js_{load|store} will be used from compiled code, which have
+// ASan instrumentation on them. However, until the wasm module is ready, we
+// must access things directly.
+function _asan_js_check_index(arr, index, asanFn) {
+  if (runtimeInitialized && !runtimeExited) {
+    const elemSize = arr.BYTES_PER_ELEMENT;
+    asanFn(index * elemSize, elemSize);
   }
-  return idx;
+  return index;
 }
 
-function segfault() {
-  abort("segmentation fault");
-}
-
-function alignfault() {
-  abort("alignment fault");
-}
-
-// end include: runtime_safe_heap.js
+// end include: runtime_asan.js
 // Memory management
 var runtimeInitialized = false;
+
+var runtimeExited = false;
 
 // When ALLOW_MEMORY_GROWTH is enabled, the conversion from Wasm
 // memory to ArrayBuffer requires some additional logic.
@@ -437,13 +428,11 @@ function updateMemoryViews() {
   HEAP8 = new Int8Array(b);
   HEAP16 = new Int16Array(b);
   Module["HEAPU8"] = HEAPU8 = new Uint8Array(b);
-  HEAPU16 = new Uint16Array(b);
   HEAP32 = new Int32Array(b);
   HEAPU32 = new Uint32Array(b);
   HEAPF32 = new Float32Array(b);
   Module["HEAPF64"] = HEAPF64 = new Float64Array(b);
   HEAP64 = new BigInt64Array(b);
-  HEAPU64 = new BigUint64Array(b);
 }
 
 // include: memoryprofiler.js
@@ -476,6 +465,22 @@ function initRuntime() {
   FS.ignorePermissions = false;
   // End ATPOSTCTORS hooks
   checkStackCookie();
+}
+
+var runtimeExiting = false;
+
+function exitRuntime() {
+  assert(!runtimeExited);
+  assert(!runtimeExiting, "Re-entrant call to exitRuntime()! This can happen if an atexit() registered callback throws an exception.");
+  runtimeExiting = true;
+  checkStackCookie();
+  ___funcs_on_exit();
+  // Native atexit() functions
+  // Begin ATEXITS hooks
+  FS.quit();
+  TTY.shutdown();
+  // End ATEXITS hooks
+  runtimeExited = true;
 }
 
 function postRun() {
@@ -522,6 +527,7 @@ function createExportWrapper(name, func, nargs) {
   assert(func);
   return (...args) => {
     assert(runtimeInitialized, `native function \`${name}\` called before runtime initialization`);
+    assert(!runtimeExited, `native function \`${name}\` called after runtime exit (use NO_EXIT_RUNTIME to keep it alive after main() exits)`);
     // Only assert for too many arguments. Too few can be valid since the missing arguments will be zero filled.
     assert(args.length <= nargs, `native function \`${name}\` called with ${args.length} args but expects ${nargs}`);
     return func(...args);
@@ -662,25 +668,11 @@ class ExitStatus {
   }
 }
 
-/** @type {!Int16Array} */ var HEAP16;
-
 /** @type {!Int32Array} */ var HEAP32;
-
-/** not-@type {!BigInt64Array} */ var HEAP64;
 
 /** @type {!Int8Array} */ var HEAP8;
 
-/** @type {!Float32Array} */ var HEAPF32;
-
-/** @type {!Float64Array} */ var HEAPF64;
-
-/** @type {!Uint16Array} */ var HEAPU16;
-
 /** @type {!Uint32Array} */ var HEAPU32;
-
-/** not-@type {!BigUint64Array} */ var HEAPU64;
-
-/** @type {!Uint8Array} */ var HEAPU8;
 
 var callRuntimeCallbacks = callbacks => {
   while (callbacks.length > 0) {
@@ -697,42 +689,7 @@ var onPreRuns = [];
 
 var addOnPreRun = cb => onPreRuns.push(cb);
 
-/**
-   * @param {number} ptr
-   * @param {string} type
-   */ function getValue(ptr, type = "i8") {
-  if (type.endsWith("*")) type = "*";
-  switch (type) {
-   case "i1":
-    return HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "loading")];
-
-   case "i8":
-    return HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "loading")];
-
-   case "i16":
-    return HEAP16[SAFE_HEAP_INDEX(HEAP16, ((ptr) >> 1), "loading")];
-
-   case "i32":
-    return HEAP32[SAFE_HEAP_INDEX(HEAP32, ((ptr) >> 2), "loading")];
-
-   case "i64":
-    return HEAP64[SAFE_HEAP_INDEX(HEAP64, ((ptr) >> 3), "loading")];
-
-   case "float":
-    return HEAPF32[SAFE_HEAP_INDEX(HEAPF32, ((ptr) >> 2), "loading")];
-
-   case "double":
-    return HEAPF64[SAFE_HEAP_INDEX(HEAPF64, ((ptr) >> 3), "loading")];
-
-   case "*":
-    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((ptr) >> 2), "loading")];
-
-   default:
-    abort(`invalid type for getValue: ${type}`);
-  }
-}
-
-var noExitRuntime = true;
+var noExitRuntime = false;
 
 function ptrToString(ptr) {
   assert(typeof ptr === "number", `ptrToString expects a number, got ${typeof ptr}`);
@@ -746,55 +703,6 @@ var setStackLimits = () => {
   var stackHigh = _emscripten_stack_get_end();
   ___set_stack_limits(stackLow, stackHigh);
 };
-
-/**
-   * @param {number} ptr
-   * @param {number} value
-   * @param {string} type
-   */ function setValue(ptr, value, type = "i8") {
-  if (type.endsWith("*")) type = "*";
-  switch (type) {
-   case "i1":
-    HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "storing")] = value;
-    checkInt8(value);
-    break;
-
-   case "i8":
-    HEAP8[SAFE_HEAP_INDEX(HEAP8, ptr, "storing")] = value;
-    checkInt8(value);
-    break;
-
-   case "i16":
-    HEAP16[SAFE_HEAP_INDEX(HEAP16, ((ptr) >> 1), "storing")] = value;
-    checkInt16(value);
-    break;
-
-   case "i32":
-    HEAP32[SAFE_HEAP_INDEX(HEAP32, ((ptr) >> 2), "storing")] = value;
-    checkInt32(value);
-    break;
-
-   case "i64":
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, ((ptr) >> 3), "storing")] = BigInt(value);
-    checkInt64(value);
-    break;
-
-   case "float":
-    HEAPF32[SAFE_HEAP_INDEX(HEAPF32, ((ptr) >> 2), "storing")] = value;
-    break;
-
-   case "double":
-    HEAPF64[SAFE_HEAP_INDEX(HEAPF64, ((ptr) >> 3), "storing")] = value;
-    break;
-
-   case "*":
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((ptr) >> 2), "storing")] = value;
-    break;
-
-   default:
-    abort(`invalid type for setValue: ${type}`);
-  }
-}
 
 var stackRestore = val => __emscripten_stack_restore(val);
 
@@ -875,6 +783,8 @@ var UTF8Decoder = globalThis.TextDecoder && new TextDecoder;
   return str;
 };
 
+/** @type {!Uint8Array} */ var HEAPU8;
+
 /**
    * Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the
    * emscripten HEAP, returns a copy of that string as a Javascript String object.
@@ -928,32 +838,32 @@ class ExceptionInfo {
     this.ptr = excPtr - 24;
   }
   set_type(type) {
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (4)) >> 2), "storing")] = type;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((this.ptr) + (4)) >> 2), ___asan_storeN)] = type;
   }
   get_type() {
-    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (4)) >> 2), "loading")];
+    return HEAPU32[_asan_js_check_index(HEAPU32, (((this.ptr) + (4)) >> 2), ___asan_loadN)];
   }
   set_destructor(destructor) {
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (8)) >> 2), "storing")] = destructor;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((this.ptr) + (8)) >> 2), ___asan_storeN)] = destructor;
   }
   get_destructor() {
-    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (8)) >> 2), "loading")];
+    return HEAPU32[_asan_js_check_index(HEAPU32, (((this.ptr) + (8)) >> 2), ___asan_loadN)];
   }
   set_caught(caught) {
     caught = caught ? 1 : 0;
-    HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (12), "storing")] = caught;
+    HEAP8[_asan_js_check_index(HEAP8, (this.ptr) + (12), ___asan_storeN)] = caught;
     checkInt8(caught);
   }
   get_caught() {
-    return HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (12), "loading")] != 0;
+    return HEAP8[_asan_js_check_index(HEAP8, (this.ptr) + (12), ___asan_loadN)] != 0;
   }
   set_rethrown(rethrown) {
     rethrown = rethrown ? 1 : 0;
-    HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (13), "storing")] = rethrown;
+    HEAP8[_asan_js_check_index(HEAP8, (this.ptr) + (13), ___asan_storeN)] = rethrown;
     checkInt8(rethrown);
   }
   get_rethrown() {
-    return HEAP8[SAFE_HEAP_INDEX(HEAP8, (this.ptr) + (13), "loading")] != 0;
+    return HEAP8[_asan_js_check_index(HEAP8, (this.ptr) + (13), ___asan_loadN)] != 0;
   }
   // Initialize native structure fields. Should be called once after allocated.
   init(type, destructor) {
@@ -962,10 +872,10 @@ class ExceptionInfo {
     this.set_destructor(destructor);
   }
   set_adjusted_ptr(adjustedPtr) {
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (16)) >> 2), "storing")] = adjustedPtr;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((this.ptr) + (16)) >> 2), ___asan_storeN)] = adjustedPtr;
   }
   get_adjusted_ptr() {
-    return HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((this.ptr) + (16)) >> 2), "loading")];
+    return HEAPU32[_asan_js_check_index(HEAPU32, (((this.ptr) + (16)) >> 2), ___asan_loadN)];
   }
 }
 
@@ -1037,8 +947,8 @@ var getExceptionMessageCommon = ptr => {
   var type_addr_addr = stackAlloc(4);
   var message_addr_addr = stackAlloc(4);
   ___get_exception_message(ptr, type_addr_addr, message_addr_addr);
-  var type_addr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((type_addr_addr) >> 2), "loading")];
-  var message_addr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((message_addr_addr) >> 2), "loading")];
+  var type_addr = HEAPU32[_asan_js_check_index(HEAPU32, ((type_addr_addr) >> 2), ___asan_loadN)];
+  var message_addr = HEAPU32[_asan_js_check_index(HEAPU32, ((message_addr_addr) >> 2), ___asan_loadN)];
   var type = UTF8ToString(type_addr);
   _free(type_addr);
   var message;
@@ -1082,16 +992,6 @@ var ___resumeException = ptr => {
   ptr = exceptionLast ??= new CppException(ptr);
   __Unwind_Resume(ptr);
 };
-
-var syscallGetVarargI = () => {
-  assert(SYSCALLS.varargs != undefined);
-  // the `+` prepended here is necessary to convince the JSCompiler that varargs is indeed a number.
-  var ret = HEAP32[SAFE_HEAP_INDEX(HEAP32, ((+SYSCALLS.varargs) >> 2), "loading")];
-  SYSCALLS.varargs += 4;
-  return ret;
-};
-
-var syscallGetVarargP = syscallGetVarargI;
 
 var PATH = {
   isAbs: path => path.charAt(0) === "/",
@@ -1428,8 +1328,18 @@ var TTY = {
   }
 };
 
+var zeroMemory = (ptr, size) => HEAPU8.fill(0, ptr, ptr + size);
+
+var alignMemory = (size, alignment) => {
+  assert(alignment, "alignment argument is required");
+  return Math.ceil(size / alignment) * alignment;
+};
+
 var mmapAlloc = size => {
-  abort("internal error: mmapAlloc called but `emscripten_builtin_memalign` native symbol not exported");
+  size = alignMemory(size, 65536);
+  var ptr = _emscripten_builtin_memalign(65536, size);
+  if (ptr) zeroMemory(ptr, size);
+  return ptr;
 };
 
 var MEMFS = {
@@ -3726,6 +3636,8 @@ var FS = {
   }
 };
 
+/** not-@type {!BigInt64Array} */ var HEAP64;
+
 var SYSCALLS = {
   currentUmask: 18,
   calculateAt(dirfd, path, allowEmpty) {
@@ -3749,64 +3661,64 @@ var SYSCALLS = {
     return dir + "/" + path;
   },
   writeStat(buf, stat) {
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((buf) >> 2), "storing")] = stat.dev;
+    HEAPU32[_asan_js_check_index(HEAPU32, ((buf) >> 2), ___asan_storeN)] = stat.dev;
     checkInt32(stat.dev);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (4)) >> 2), "storing")] = stat.mode;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (4)) >> 2), ___asan_storeN)] = stat.mode;
     checkInt32(stat.mode);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (8)) >> 2), "storing")] = stat.nlink;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (8)) >> 2), ___asan_storeN)] = stat.nlink;
     checkInt32(stat.nlink);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (12)) >> 2), "storing")] = stat.uid;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (12)) >> 2), ___asan_storeN)] = stat.uid;
     checkInt32(stat.uid);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (16)) >> 2), "storing")] = stat.gid;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (16)) >> 2), ___asan_storeN)] = stat.gid;
     checkInt32(stat.gid);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (20)) >> 2), "storing")] = stat.rdev;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (20)) >> 2), ___asan_storeN)] = stat.rdev;
     checkInt32(stat.rdev);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (24)) >> 3), "storing")] = BigInt(stat.size);
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (24)) >> 3), ___asan_storeN)] = BigInt(stat.size);
     checkInt64(stat.size);
-    HEAP32[SAFE_HEAP_INDEX(HEAP32, (((buf) + (32)) >> 2), "storing")] = 4096;
+    HEAP32[_asan_js_check_index(HEAP32, (((buf) + (32)) >> 2), ___asan_storeN)] = 4096;
     checkInt32(4096);
-    HEAP32[SAFE_HEAP_INDEX(HEAP32, (((buf) + (36)) >> 2), "storing")] = stat.blocks;
+    HEAP32[_asan_js_check_index(HEAP32, (((buf) + (36)) >> 2), ___asan_storeN)] = stat.blocks;
     checkInt32(stat.blocks);
     var atime = stat.atime.getTime();
     var mtime = stat.mtime.getTime();
     var ctime = stat.ctime.getTime();
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (40)) >> 3), "storing")] = BigInt(Math.floor(atime / 1e3));
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (40)) >> 3), ___asan_storeN)] = BigInt(Math.floor(atime / 1e3));
     checkInt64(Math.floor(atime / 1e3));
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (48)) >> 2), "storing")] = (atime % 1e3) * 1e3 * 1e3;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (48)) >> 2), ___asan_storeN)] = (atime % 1e3) * 1e3 * 1e3;
     checkInt32((atime % 1e3) * 1e3 * 1e3);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (56)) >> 3), "storing")] = BigInt(Math.floor(mtime / 1e3));
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (56)) >> 3), ___asan_storeN)] = BigInt(Math.floor(mtime / 1e3));
     checkInt64(Math.floor(mtime / 1e3));
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (64)) >> 2), "storing")] = (mtime % 1e3) * 1e3 * 1e3;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (64)) >> 2), ___asan_storeN)] = (mtime % 1e3) * 1e3 * 1e3;
     checkInt32((mtime % 1e3) * 1e3 * 1e3);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (72)) >> 3), "storing")] = BigInt(Math.floor(ctime / 1e3));
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (72)) >> 3), ___asan_storeN)] = BigInt(Math.floor(ctime / 1e3));
     checkInt64(Math.floor(ctime / 1e3));
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (80)) >> 2), "storing")] = (ctime % 1e3) * 1e3 * 1e3;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (80)) >> 2), ___asan_storeN)] = (ctime % 1e3) * 1e3 * 1e3;
     checkInt32((ctime % 1e3) * 1e3 * 1e3);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (88)) >> 3), "storing")] = BigInt(stat.ino);
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (88)) >> 3), ___asan_storeN)] = BigInt(stat.ino);
     checkInt64(stat.ino);
     return 0;
   },
   writeStatFs(buf, stats) {
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (4)) >> 2), "storing")] = stats.bsize;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (4)) >> 2), ___asan_storeN)] = stats.bsize;
     checkInt32(stats.bsize);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (60)) >> 2), "storing")] = stats.bsize;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (60)) >> 2), ___asan_storeN)] = stats.bsize;
     checkInt32(stats.bsize);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (8)) >> 3), "storing")] = BigInt(stats.blocks);
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (8)) >> 3), ___asan_storeN)] = BigInt(stats.blocks);
     checkInt64(stats.blocks);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (16)) >> 3), "storing")] = BigInt(stats.bfree);
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (16)) >> 3), ___asan_storeN)] = BigInt(stats.bfree);
     checkInt64(stats.bfree);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (24)) >> 3), "storing")] = BigInt(stats.bavail);
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (24)) >> 3), ___asan_storeN)] = BigInt(stats.bavail);
     checkInt64(stats.bavail);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (32)) >> 3), "storing")] = BigInt(stats.files);
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (32)) >> 3), ___asan_storeN)] = BigInt(stats.files);
     checkInt64(stats.files);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, (((buf) + (40)) >> 3), "storing")] = BigInt(stats.ffree);
+    HEAP64[_asan_js_check_index(HEAP64, (((buf) + (40)) >> 3), ___asan_storeN)] = BigInt(stats.ffree);
     checkInt64(stats.ffree);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (48)) >> 2), "storing")] = stats.fsid;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (48)) >> 2), ___asan_storeN)] = stats.fsid;
     checkInt32(stats.fsid);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (64)) >> 2), "storing")] = stats.flags;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (64)) >> 2), ___asan_storeN)] = stats.flags;
     checkInt32(stats.flags);
     // ST_NOSUID
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((buf) + (56)) >> 2), "storing")] = stats.namelen;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buf) + (56)) >> 2), ___asan_storeN)] = stats.namelen;
     checkInt32(stats.namelen);
   },
   doMsync(addr, stream, len, flags, offset) {
@@ -3830,6 +3742,28 @@ var SYSCALLS = {
     return ret;
   }
 };
+
+function ___syscall_dup(fd) {
+  try {
+    var old = SYSCALLS.getStreamFromFD(fd);
+    return FS.dupStream(old).fd;
+  } catch (e) {
+    if (typeof FS == "undefined" || !(e.name === "ErrnoError")) throw e;
+    return -e.errno;
+  }
+}
+
+var syscallGetVarargI = () => {
+  assert(SYSCALLS.varargs != undefined);
+  // the `+` prepended here is necessary to convince the JSCompiler that varargs is indeed a number.
+  var ret = HEAP32[_asan_js_check_index(HEAP32, ((+SYSCALLS.varargs) >> 2), ___asan_loadN)];
+  SYSCALLS.varargs += 4;
+  return ret;
+};
+
+var syscallGetVarargP = syscallGetVarargI;
+
+/** @type {!Int16Array} */ var HEAP16;
 
 function ___syscall_fcntl64(fd, cmd, varargs) {
   SYSCALLS.varargs = varargs;
@@ -3871,7 +3805,7 @@ function ___syscall_fcntl64(fd, cmd, varargs) {
         var arg = syscallGetVarargP();
         var offset = 0;
         // We're always unlocked.
-        HEAP16[SAFE_HEAP_INDEX(HEAP16, (((arg) + (offset)) >> 1), "storing")] = 2;
+        HEAP16[_asan_js_check_index(HEAP16, (((arg) + (offset)) >> 1), ___asan_storeN)] = 2;
         checkInt16(2);
         return 0;
       }
@@ -3917,16 +3851,16 @@ function ___syscall_ioctl(fd, op, varargs) {
         if (stream.tty.ops.ioctl_tcgets) {
           var termios = stream.tty.ops.ioctl_tcgets(stream);
           var argp = syscallGetVarargP();
-          HEAP32[SAFE_HEAP_INDEX(HEAP32, ((argp) >> 2), "storing")] = termios.c_iflag || 0;
+          HEAP32[_asan_js_check_index(HEAP32, ((argp) >> 2), ___asan_storeN)] = termios.c_iflag || 0;
           checkInt32(termios.c_iflag || 0);
-          HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (4)) >> 2), "storing")] = termios.c_oflag || 0;
+          HEAP32[_asan_js_check_index(HEAP32, (((argp) + (4)) >> 2), ___asan_storeN)] = termios.c_oflag || 0;
           checkInt32(termios.c_oflag || 0);
-          HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (8)) >> 2), "storing")] = termios.c_cflag || 0;
+          HEAP32[_asan_js_check_index(HEAP32, (((argp) + (8)) >> 2), ___asan_storeN)] = termios.c_cflag || 0;
           checkInt32(termios.c_cflag || 0);
-          HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (12)) >> 2), "storing")] = termios.c_lflag || 0;
+          HEAP32[_asan_js_check_index(HEAP32, (((argp) + (12)) >> 2), ___asan_storeN)] = termios.c_lflag || 0;
           checkInt32(termios.c_lflag || 0);
           for (var i = 0; i < 32; i++) {
-            HEAP8[SAFE_HEAP_INDEX(HEAP8, (argp + i) + (17), "storing")] = termios.c_cc[i] || 0;
+            HEAP8[_asan_js_check_index(HEAP8, (argp + i) + (17), ___asan_storeN)] = termios.c_cc[i] || 0;
             checkInt8(termios.c_cc[i] || 0);
           }
           return 0;
@@ -3949,13 +3883,13 @@ function ___syscall_ioctl(fd, op, varargs) {
         if (!stream.tty) return -59;
         if (stream.tty.ops.ioctl_tcsets) {
           var argp = syscallGetVarargP();
-          var c_iflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, ((argp) >> 2), "loading")];
-          var c_oflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (4)) >> 2), "loading")];
-          var c_cflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (8)) >> 2), "loading")];
-          var c_lflag = HEAP32[SAFE_HEAP_INDEX(HEAP32, (((argp) + (12)) >> 2), "loading")];
+          var c_iflag = HEAP32[_asan_js_check_index(HEAP32, ((argp) >> 2), ___asan_loadN)];
+          var c_oflag = HEAP32[_asan_js_check_index(HEAP32, (((argp) + (4)) >> 2), ___asan_loadN)];
+          var c_cflag = HEAP32[_asan_js_check_index(HEAP32, (((argp) + (8)) >> 2), ___asan_loadN)];
+          var c_lflag = HEAP32[_asan_js_check_index(HEAP32, (((argp) + (12)) >> 2), ___asan_loadN)];
           var c_cc = [];
           for (var i = 0; i < 32; i++) {
-            c_cc.push(HEAP8[SAFE_HEAP_INDEX(HEAP8, (argp + i) + (17), "loading")]);
+            c_cc.push(HEAP8[_asan_js_check_index(HEAP8, (argp + i) + (17), ___asan_loadN)]);
           }
           return stream.tty.ops.ioctl_tcsets(stream.tty, op, {
             c_iflag,
@@ -3972,7 +3906,7 @@ function ___syscall_ioctl(fd, op, varargs) {
       {
         if (!stream.tty) return -59;
         var argp = syscallGetVarargP();
-        HEAP32[SAFE_HEAP_INDEX(HEAP32, ((argp) >> 2), "storing")] = 0;
+        HEAP32[_asan_js_check_index(HEAP32, ((argp) >> 2), ___asan_storeN)] = 0;
         checkInt32(0);
         return 0;
       }
@@ -3998,9 +3932,9 @@ function ___syscall_ioctl(fd, op, varargs) {
         if (stream.tty.ops.ioctl_tiocgwinsz) {
           var winsize = stream.tty.ops.ioctl_tiocgwinsz(stream.tty);
           var argp = syscallGetVarargP();
-          HEAP16[SAFE_HEAP_INDEX(HEAP16, ((argp) >> 1), "storing")] = winsize[0];
+          HEAP16[_asan_js_check_index(HEAP16, ((argp) >> 1), ___asan_storeN)] = winsize[0];
           checkInt16(winsize[0]);
-          HEAP16[SAFE_HEAP_INDEX(HEAP16, (((argp) + (2)) >> 1), "storing")] = winsize[1];
+          HEAP16[_asan_js_check_index(HEAP16, (((argp) + (2)) >> 1), ___asan_storeN)] = winsize[1];
           checkInt16(winsize[1]);
         }
         return 0;
@@ -4128,10 +4062,69 @@ function ___syscall_unlinkat(dirfd, path, flags) {
 
 var __abort_js = () => abort("native code called abort()");
 
+var getExecutableName = () => thisProgram;
+
 var stringToUTF8 = (str, outPtr, maxBytesToWrite) => {
   assert(typeof maxBytesToWrite == "number", "stringToUTF8 requires a third parameter that specifies the length of the output buffer");
   return stringToUTF8Array(str, HEAPU8, outPtr, maxBytesToWrite);
 };
+
+var __emscripten_get_progname = (str, len) => stringToUTF8(getExecutableName(), str, len);
+
+var stringToNewUTF8 = str => {
+  var size = lengthBytesUTF8(str) + 1;
+  var ret = _malloc(size);
+  if (ret) stringToUTF8(str, ret, size);
+  return ret;
+};
+
+var __emscripten_sanitizer_get_option = name => stringToNewUTF8(Module[UTF8ToString(name)] ?? "");
+
+var __emscripten_sanitizer_use_colors = () => {
+  var setting = Module["printWithColors"];
+  if (setting !== undefined) {
+    return setting;
+  }
+  return ENVIRONMENT_IS_NODE && process.stderr.isTTY;
+};
+
+var INT53_MAX = 9007199254740992;
+
+var INT53_MIN = -9007199254740992;
+
+var bigintToI53Checked = num => (num < INT53_MIN || num > INT53_MAX) ? NaN : Number(num);
+
+function __mmap_js(len, prot, flags, fd, offset, allocated, addr) {
+  offset = bigintToI53Checked(offset);
+  try {
+    // musl's mmap doesn't allow values over a certain limit
+    // see OFF_MASK in mmap.c.
+    assert(!isNaN(offset));
+    var stream = SYSCALLS.getStreamFromFD(fd);
+    var res = FS.mmap(stream, len, offset, prot, flags);
+    var ptr = res.ptr;
+    HEAP32[_asan_js_check_index(HEAP32, ((allocated) >> 2), ___asan_storeN)] = res.allocated;
+    checkInt32(res.allocated);
+    HEAPU32[_asan_js_check_index(HEAPU32, ((addr) >> 2), ___asan_storeN)] = ptr;
+    return 0;
+  } catch (e) {
+    if (typeof FS == "undefined" || !(e.name === "ErrnoError")) throw e;
+    return -e.errno;
+  }
+}
+
+function __munmap_js(addr, len, prot, flags, fd, offset) {
+  offset = bigintToI53Checked(offset);
+  try {
+    var stream = SYSCALLS.getStreamFromFD(fd);
+    if (prot & 2) {
+      SYSCALLS.doMsync(addr, stream, len, flags, offset);
+    }
+  } catch (e) {
+    if (typeof FS == "undefined" || !(e.name === "ErrnoError")) throw e;
+    return -e.errno;
+  }
+}
 
 var __tzset_js = (timezone, daylight, std_name, dst_name) => {
   // TODO: Use (malleable) environment variables instead of system settings.
@@ -4152,8 +4145,8 @@ var __tzset_js = (timezone, daylight, std_name, dst_name) => {
   // Coordinated Universal Time (UTC) and local standard time."), the same
   // as returned by stdTimezoneOffset.
   // See http://pubs.opengroup.org/onlinepubs/009695399/functions/tzset.html
-  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((timezone) >> 2), "storing")] = stdTimezoneOffset * 60;
-  HEAP32[SAFE_HEAP_INDEX(HEAP32, ((daylight) >> 2), "storing")] = Number(winterOffset != summerOffset);
+  HEAPU32[_asan_js_check_index(HEAPU32, ((timezone) >> 2), ___asan_storeN)] = stdTimezoneOffset * 60;
+  HEAP32[_asan_js_check_index(HEAP32, ((daylight) >> 2), ___asan_storeN)] = Number(winterOffset != summerOffset);
   checkInt32(Number(winterOffset != summerOffset));
   var extractZone = timezoneOffset => {
     // Why inverse sign?
@@ -4180,6 +4173,35 @@ var __tzset_js = (timezone, daylight, std_name, dst_name) => {
   }
 };
 
+var _emscripten_get_now = () => performance.now();
+
+var _emscripten_date_now = () => Date.now();
+
+var nowIsMonotonic = 1;
+
+var checkWasiClock = clock_id => clock_id >= 0 && clock_id <= 3;
+
+function _clock_time_get(clk_id, ignored_precision, ptime) {
+  ignored_precision = bigintToI53Checked(ignored_precision);
+  if (!checkWasiClock(clk_id)) {
+    return 28;
+  }
+  var now;
+  // all wasi clocks but realtime are monotonic
+  if (clk_id === 0) {
+    now = _emscripten_date_now();
+  } else if (nowIsMonotonic) {
+    now = _emscripten_get_now();
+  } else {
+    return 52;
+  }
+  // "now" is in ms, and wasi times are in ns.
+  var nsec = Math.round(now * 1e3 * 1e3);
+  HEAP64[_asan_js_check_index(HEAP64, ((ptime) >> 3), ___asan_storeN)] = BigInt(nsec);
+  checkInt64(nsec);
+  return 0;
+}
+
 var getHeapMax = () => // Stay one Wasm page short of 4GB: while e.g. Chrome is able to allocate
 // full 4GB Wasm memories, the size will wrap back to 0 bytes in Wasm side
 // for any code that deals with heap sizes, which would require special
@@ -4188,11 +4210,129 @@ var getHeapMax = () => // Stay one Wasm page short of 4GB: while e.g. Chrome is 
 
 var _emscripten_get_heap_max = () => getHeapMax();
 
-var _emscripten_get_now = () => performance.now();
+var UNWIND_CACHE = {};
 
-var alignMemory = (size, alignment) => {
-  assert(alignment, "alignment argument is required");
-  return Math.ceil(size / alignment) * alignment;
+var convertPCtoSourceLocation = pc => {
+  if (UNWIND_CACHE.last_get_source_pc == pc) return UNWIND_CACHE.last_source;
+  var match;
+  var source;
+  if (!source) {
+    var frame = UNWIND_CACHE[pc];
+    if (!frame) return null;
+    // Example: at callMain (a.out.js:6335:22)
+    if (match = /\((.*):(\d+):(\d+)\)$/.exec(frame)) {
+      source = {
+        file: match[1],
+        line: match[2],
+        column: match[3]
+      };
+    } else if (match = /@(.*):(\d+):(\d+)/.exec(frame)) {
+      source = {
+        file: match[1],
+        line: match[2],
+        column: match[3]
+      };
+    }
+  }
+  UNWIND_CACHE.last_get_source_pc = pc;
+  UNWIND_CACHE.last_source = source;
+  return source;
+};
+
+var _emscripten_pc_get_column = pc => {
+  var result = convertPCtoSourceLocation(pc);
+  return result ? result.column || 0 : 0;
+};
+
+/** @suppress{checkTypes} */ var noLeakCheck = func => {
+  if (runtimeInitialized) ___lsan_disable();
+  try {
+    return func();
+  } finally {
+    if (runtimeInitialized) ___lsan_enable();
+  }
+};
+
+var _emscripten_pc_get_file = pc => noLeakCheck(() => {
+  var result = convertPCtoSourceLocation(pc);
+  if (!result) return 0;
+  _free(_emscripten_pc_get_file.ret ?? 0);
+  _emscripten_pc_get_file.ret = stringToNewUTF8(result.file);
+  return _emscripten_pc_get_file.ret;
+});
+
+/** @returns {number} */ var convertFrameToPC = frame => {
+  var match;
+  if (match = /\bwasm-function\[\d+\]:(0x[0-9a-f]+)/.exec(frame)) {
+    // Wasm engines give the binary offset directly, so we use that as return address
+    return +match[1];
+  } else if (match = /\bwasm-function\[(\d+)\]:(\d+)/.exec(frame)) {
+    // Older versions of v8 (e.g node v10) give function index and offset in
+    // the function.  That format is not supported since it does not provide
+    // the information we need to map the frame to a global program counter.
+    warnOnce("legacy backtrace format detected, this version of v8 is no longer supported by the emscripten backtrace mechanism");
+  } else if (match = /:(\d+):\d+(?:\)|$)/.exec(frame)) {
+    // If we are in js, we can use the js line number as the "return address".
+    // This should work for wasm2js.  We tag the high bit to distinguish this
+    // from wasm addresses.
+    return 2147483648 | +match[1];
+  }
+  // return 0 if we can't find any
+  return 0;
+};
+
+var saveInUnwindCache = callstack => {
+  for (var line of callstack) {
+    var pc = convertFrameToPC(line);
+    if (pc) {
+      UNWIND_CACHE[pc] = line;
+    }
+  }
+};
+
+var jsStackTrace = () => (new Error).stack.toString();
+
+var _emscripten_stack_snapshot = () => {
+  var callstack = jsStackTrace().split("\n");
+  if (callstack[0] == "Error") {
+    callstack.shift();
+  }
+  saveInUnwindCache(callstack);
+  // Caches the stack snapshot so that emscripten_stack_unwind_buffer() can
+  // unwind from this spot.
+  UNWIND_CACHE.last_addr = convertFrameToPC(callstack[3]);
+  UNWIND_CACHE.last_stack = callstack;
+  return UNWIND_CACHE.last_addr;
+};
+
+var _emscripten_pc_get_function = pc => noLeakCheck(() => {
+  var frame = UNWIND_CACHE[pc];
+  if (!frame) return 0;
+  var name;
+  var match;
+  // First try to match foo.wasm.sym files explcitly. e.g.
+  //   at test_return_address.wasm.main (wasm://wasm/test_return_address.wasm-0012cc2a:wasm-function[26]:0x9f3
+  // Then match JS symbols which don't include that module name:
+  //   at invokeEntryPoint (.../test_return_address.js:1500:42)
+  // Finally match firefox format:
+  //   Object._main@http://server.com:4324:12'
+  if (match = /^\s+at .*\.wasm\.(.*) \(.*\)$/.exec(frame)) {
+    name = match[1];
+  } else if (match = /^\s+at (.*) \(.*\)$/.exec(frame)) {
+    name = match[1];
+  } else if (match = /^(.+?)@/.exec(frame)) {
+    name = match[1];
+  } else {
+    return 0;
+  }
+  _free(_emscripten_pc_get_function.ret ?? 0);
+  _emscripten_pc_get_function.ret = stringToNewUTF8(name);
+  return _emscripten_pc_get_function.ret;
+});
+
+var _emscripten_pc_get_line = pc => {
+  var result = convertPCtoSourceLocation(pc);
+  return result ? result.line : 0;
 };
 
 var growMemory = size => {
@@ -4260,9 +4400,38 @@ var _emscripten_resize_heap = requestedSize => {
   return false;
 };
 
-var ENV = {};
+var _emscripten_return_address = level => {
+  var callstack = jsStackTrace().split("\n");
+  if (callstack[0] == "Error") {
+    callstack.shift();
+  }
+  // skip this function and the caller to get caller's return address
+  var caller = callstack[level + 3];
+  return convertFrameToPC(caller);
+};
 
-var getExecutableName = () => thisProgram;
+var _emscripten_stack_unwind_buffer = (addr, buffer, count) => {
+  var stack;
+  if (UNWIND_CACHE.last_addr == addr) {
+    stack = UNWIND_CACHE.last_stack;
+  } else {
+    stack = jsStackTrace().split("\n");
+    if (stack[0] == "Error") {
+      stack.shift();
+    }
+    saveInUnwindCache(stack);
+  }
+  var offset = 3;
+  while (stack[offset] && convertFrameToPC(stack[offset]) != addr) {
+    ++offset;
+  }
+  for (var i = 0; i < count && stack[i + offset]; ++i) {
+    HEAPU32[_asan_js_check_index(HEAPU32, (((buffer) + (i * 4)) >> 2), ___asan_storeN)] = convertFrameToPC(stack[i + offset]);
+  }
+  return i;
+};
+
+var ENV = {};
 
 var getEnvStrings = () => {
   if (!getEnvStrings.strings) {
@@ -4298,7 +4467,7 @@ var _environ_get = (__environ, environ_buf) => {
   var envp = 0;
   for (var string of getEnvStrings()) {
     var ptr = environ_buf + bufSize;
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((__environ) + (envp)) >> 2), "storing")] = ptr;
+    HEAPU32[_asan_js_check_index(HEAPU32, (((__environ) + (envp)) >> 2), ___asan_storeN)] = ptr;
     bufSize += stringToUTF8(string, ptr, Infinity) + 1;
     envp += 4;
   }
@@ -4307,13 +4476,13 @@ var _environ_get = (__environ, environ_buf) => {
 
 var _environ_sizes_get = (penviron_count, penviron_buf_size) => {
   var strings = getEnvStrings();
-  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((penviron_count) >> 2), "storing")] = strings.length;
+  HEAPU32[_asan_js_check_index(HEAPU32, ((penviron_count) >> 2), ___asan_storeN)] = strings.length;
   checkInt32(strings.length);
   var bufSize = 0;
   for (var string of strings) {
     bufSize += lengthBytesUTF8(string) + 1;
   }
-  HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((penviron_buf_size) >> 2), "storing")] = bufSize;
+  HEAPU32[_asan_js_check_index(HEAPU32, ((penviron_buf_size) >> 2), ___asan_storeN)] = bufSize;
   checkInt32(bufSize);
   return 0;
 };
@@ -4332,8 +4501,8 @@ function _fd_close(fd) {
 /** @param {number=} offset */ var doReadv = (stream, iov, iovcnt, offset) => {
   var ret = 0;
   for (var i = 0; i < iovcnt; i++) {
-    var ptr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((iov) >> 2), "loading")];
-    var len = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((iov) + (4)) >> 2), "loading")];
+    var ptr = HEAPU32[_asan_js_check_index(HEAPU32, ((iov) >> 2), ___asan_loadN)];
+    var len = HEAPU32[_asan_js_check_index(HEAPU32, (((iov) + (4)) >> 2), ___asan_loadN)];
     iov += 8;
     try {
       var curr = FS.read(stream, HEAP8, ptr, len, offset);
@@ -4361,7 +4530,7 @@ function _fd_read(fd, iov, iovcnt, pnum) {
   try {
     var stream = SYSCALLS.getStreamFromFD(fd);
     var num = doReadv(stream, iov, iovcnt);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((pnum) >> 2), "storing")] = num;
+    HEAPU32[_asan_js_check_index(HEAPU32, ((pnum) >> 2), ___asan_storeN)] = num;
     checkInt32(num);
     return 0;
   } catch (e) {
@@ -4370,19 +4539,13 @@ function _fd_read(fd, iov, iovcnt, pnum) {
   }
 }
 
-var INT53_MAX = 9007199254740992;
-
-var INT53_MIN = -9007199254740992;
-
-var bigintToI53Checked = num => (num < INT53_MIN || num > INT53_MAX) ? NaN : Number(num);
-
 function _fd_seek(fd, offset, whence, newOffset) {
   offset = bigintToI53Checked(offset);
   try {
     if (isNaN(offset)) return 22;
     var stream = SYSCALLS.getStreamFromFD(fd);
     FS.llseek(stream, offset, whence);
-    HEAP64[SAFE_HEAP_INDEX(HEAP64, ((newOffset) >> 3), "storing")] = BigInt(stream.position);
+    HEAP64[_asan_js_check_index(HEAP64, ((newOffset) >> 3), ___asan_storeN)] = BigInt(stream.position);
     checkInt64(stream.position);
     if (stream.getdents && !offset && whence === 0) stream.getdents = null;
     // reset readdir state
@@ -4400,17 +4563,17 @@ function _fd_seek(fd, offset, whence, newOffset) {
   // socket send into multiple segments, breaking stream byte semantics.
   if (iovcnt == 1) {
     // Single iovec: write directly from HEAP8, no gather buffer needed.
-    return FS.write(stream, HEAP8, HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((iov) >> 2), "loading")], HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((iov) + (4)) >> 2), "loading")], offset);
+    return FS.write(stream, HEAP8, HEAPU32[_asan_js_check_index(HEAPU32, ((iov) >> 2), ___asan_loadN)], HEAPU32[_asan_js_check_index(HEAPU32, (((iov) + (4)) >> 2), ___asan_loadN)], offset);
   }
   var total = 0;
   for (var i = 0, p = iov; i < iovcnt; i++, p += 8) {
-    total += HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((p) + (4)) >> 2), "loading")];
+    total += HEAPU32[_asan_js_check_index(HEAPU32, (((p) + (4)) >> 2), ___asan_loadN)];
   }
   var view = new Uint8Array(total);
   var voff = 0;
   for (var i = 0; i < iovcnt; i++, iov += 8) {
-    var ptr = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((iov) >> 2), "loading")];
-    var len = HEAPU32[SAFE_HEAP_INDEX(HEAPU32, (((iov) + (4)) >> 2), "loading")];
+    var ptr = HEAPU32[_asan_js_check_index(HEAPU32, ((iov) >> 2), ___asan_loadN)];
+    var len = HEAPU32[_asan_js_check_index(HEAPU32, (((iov) + (4)) >> 2), ___asan_loadN)];
     view.set(HEAPU8.subarray(ptr, ptr + len), voff);
     voff += len;
   }
@@ -4421,7 +4584,7 @@ function _fd_write(fd, iov, iovcnt, pnum) {
   try {
     var stream = SYSCALLS.getStreamFromFD(fd);
     var num = doWritev(stream, iov, iovcnt);
-    HEAPU32[SAFE_HEAP_INDEX(HEAPU32, ((pnum) >> 2), "storing")] = num;
+    HEAPU32[_asan_js_check_index(HEAPU32, ((pnum) >> 2), ___asan_storeN)] = num;
     checkInt32(num);
     return 0;
   } catch (e) {
@@ -4431,6 +4594,19 @@ function _fd_write(fd, iov, iovcnt, pnum) {
 }
 
 var _llvm_eh_typeid_for = type => type;
+
+var runtimeKeepaliveCounter = 0;
+
+var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
+
+var _proc_exit = code => {
+  EXITSTATUS = code;
+  if (!keepRuntimeAlive()) {
+    Module["onExit"]?.(code);
+    ABORT = true;
+  }
+  quit_(code, new ExitStatus(code));
+};
 
 var _random_get = (buffer, size) => randomFill(HEAPU8.subarray(buffer, buffer + size));
 
@@ -4522,6 +4698,94 @@ var stringToUTF8OnStack = str => {
    * @param {Array=} argTypes
    * @param {Object=} opts
    */ var cwrap = (ident, returnType, argTypes, opts) => (...args) => ccall(ident, returnType, argTypes, args, opts);
+
+/** @type {!Float32Array} */ var HEAPF32;
+
+/** @type {!Float64Array} */ var HEAPF64;
+
+/**
+   * @param {number} ptr
+   * @param {string} type
+   */ function getValue(ptr, type = "i8") {
+  if (type.endsWith("*")) type = "*";
+  switch (type) {
+   case "i1":
+    return HEAP8[_asan_js_check_index(HEAP8, ptr, ___asan_loadN)];
+
+   case "i8":
+    return HEAP8[_asan_js_check_index(HEAP8, ptr, ___asan_loadN)];
+
+   case "i16":
+    return HEAP16[_asan_js_check_index(HEAP16, ((ptr) >> 1), ___asan_loadN)];
+
+   case "i32":
+    return HEAP32[_asan_js_check_index(HEAP32, ((ptr) >> 2), ___asan_loadN)];
+
+   case "i64":
+    return HEAP64[_asan_js_check_index(HEAP64, ((ptr) >> 3), ___asan_loadN)];
+
+   case "float":
+    return HEAPF32[_asan_js_check_index(HEAPF32, ((ptr) >> 2), ___asan_loadN)];
+
+   case "double":
+    return HEAPF64[_asan_js_check_index(HEAPF64, ((ptr) >> 3), ___asan_loadN)];
+
+   case "*":
+    return HEAPU32[_asan_js_check_index(HEAPU32, ((ptr) >> 2), ___asan_loadN)];
+
+   default:
+    abort(`invalid type for getValue: ${type}`);
+  }
+}
+
+/**
+   * @param {number} ptr
+   * @param {number} value
+   * @param {string} type
+   */ function setValue(ptr, value, type = "i8") {
+  if (type.endsWith("*")) type = "*";
+  switch (type) {
+   case "i1":
+    HEAP8[_asan_js_check_index(HEAP8, ptr, ___asan_storeN)] = value;
+    checkInt8(value);
+    break;
+
+   case "i8":
+    HEAP8[_asan_js_check_index(HEAP8, ptr, ___asan_storeN)] = value;
+    checkInt8(value);
+    break;
+
+   case "i16":
+    HEAP16[_asan_js_check_index(HEAP16, ((ptr) >> 1), ___asan_storeN)] = value;
+    checkInt16(value);
+    break;
+
+   case "i32":
+    HEAP32[_asan_js_check_index(HEAP32, ((ptr) >> 2), ___asan_storeN)] = value;
+    checkInt32(value);
+    break;
+
+   case "i64":
+    HEAP64[_asan_js_check_index(HEAP64, ((ptr) >> 3), ___asan_storeN)] = BigInt(value);
+    checkInt64(value);
+    break;
+
+   case "float":
+    HEAPF32[_asan_js_check_index(HEAPF32, ((ptr) >> 2), ___asan_storeN)] = value;
+    break;
+
+   case "double":
+    HEAPF64[_asan_js_check_index(HEAPF64, ((ptr) >> 3), ___asan_storeN)] = value;
+    break;
+
+   case "*":
+    HEAPU32[_asan_js_check_index(HEAPU32, ((ptr) >> 2), ___asan_storeN)] = value;
+    break;
+
+   default:
+    abort(`invalid type for setValue: ${type}`);
+  }
+}
 
 var updateTableMap = (offset, count) => {
   if (functionsInTableMap) {
@@ -4732,11 +4996,11 @@ Module["lengthBytesUTF8"] = lengthBytesUTF8;
 
 Module["FS"] = FS;
 
-var missingLibrarySymbols = [ "writeI53ToI64", "writeI53ToI64Clamped", "writeI53ToI64Signaling", "writeI53ToU64Clamped", "writeI53ToU64Signaling", "readI53FromI64", "readI53FromU64", "convertI32PairToI53", "convertI32PairToI53Checked", "convertU32PairToI53", "getTempRet0", "createNamedFunction", "zeroMemory", "exitJS", "withStackSave", "inetPton4", "inetNtop4", "inetPton6", "inetNtop6", "readSockaddr", "writeSockaddr", "readEmAsmArgs", "jstoi_q", "autoResumeAudioContext", "getDynCaller", "dynCall", "handleException", "keepRuntimeAlive", "runtimeKeepalivePush", "runtimeKeepalivePop", "callUserCallback", "maybeExit", "asmjsMangle", "HandleAllocator", "addOnInit", "addOnPostCtor", "addOnPreMain", "addOnExit", "STACK_SIZE", "STACK_ALIGN", "POINTER_SIZE", "ASSERTIONS", "intArrayToString", "AsciiToString", "stringToAscii", "UTF16ToString", "stringToUTF16", "lengthBytesUTF16", "UTF32ToString", "stringToUTF32", "lengthBytesUTF32", "stringToNewUTF8", "registerKeyEventCallback", "maybeCStringToJsString", "findEventTarget", "getBoundingClientRect", "fillMouseEventData", "registerMouseEventCallback", "registerWheelEventCallback", "registerUiEventCallback", "registerFocusEventCallback", "fillDeviceOrientationEventData", "registerDeviceOrientationEventCallback", "fillDeviceMotionEventData", "registerDeviceMotionEventCallback", "screenOrientation", "fillOrientationChangeEventData", "registerOrientationChangeEventCallback", "fillFullscreenChangeEventData", "registerFullscreenChangeEventCallback", "callCanvasResizedCallback", "JSEvents_requestFullscreen", "JSEvents_resizeCanvasForFullscreen", "registerRestoreOldStyle", "hideEverythingExceptGivenElement", "restoreHiddenElements", "setLetterbox", "currentFullscreenStrategy", "softFullscreenResizeWebGLRenderTarget", "doRequestFullscreen", "fillPointerlockChangeEventData", "registerPointerlockChangeEventCallback", "registerPointerlockErrorEventCallback", "requestPointerLock", "fillVisibilityChangeEventData", "registerVisibilityChangeEventCallback", "registerTouchEventCallback", "fillGamepadEventData", "registerGamepadEventCallback", "registerBeforeUnloadEventCallback", "fillBatteryEventData", "registerBatteryEventCallback", "setCanvasElementSize", "getCanvasElementSize", "jsStackTrace", "getCallstack", "convertPCtoSourceLocation", "checkWasiClock", "wasiRightsToMuslOFlags", "wasiOFlagsToMuslOFlags", "safeSetTimeout", "setImmediateWrapped", "safeRequestAnimationFrame", "clearImmediateWrapped", "registerPostMainLoop", "registerPreMainLoop", "getPromise", "makePromise", "addPromise", "idsToPromises", "makePromiseCallback", "incrementUncaughtExceptionCount", "decrementUncaughtExceptionCount", "Browser_asyncPrepareDataCounter", "isLeapYear", "ydayFromDate", "arraySum", "addDays", "getSocketFromFD", "getSocketAddress", "FS_mkdirTree", "_setNetworkCallback", "heapObjectForWebGLType", "toTypedArrayIndex", "webgl_enable_ANGLE_instanced_arrays", "webgl_enable_OES_vertex_array_object", "webgl_enable_WEBGL_draw_buffers", "webgl_enable_WEBGL_multi_draw", "webgl_enable_EXT_polygon_offset_clamp", "webgl_enable_EXT_clip_control", "webgl_enable_WEBGL_polygon_mode", "emscriptenWebGLGet", "computeUnpackAlignedImageSize", "colorChannelsInGlTextureFormat", "emscriptenWebGLGetTexPixelData", "emscriptenWebGLGetUniform", "webglGetProgramUniformLocation", "webglGetUniformLocation", "webglPrepareUniformLocationsBeforeFirstUse", "webglGetLeftBracePos", "emscriptenWebGLGetVertexAttrib", "__glGetActiveAttribOrUniform", "writeGLArray", "registerWebGlEventCallback", "runAndAbortIfError", "writeStringToMemory", "writeAsciiToMemory", "allocateUTF8", "allocateUTF8OnStack", "demangle", "stackTrace", "getNativeTypeSize" ];
+var missingLibrarySymbols = [ "writeI53ToI64", "writeI53ToI64Clamped", "writeI53ToI64Signaling", "writeI53ToU64Clamped", "writeI53ToU64Signaling", "readI53FromI64", "readI53FromU64", "convertI32PairToI53", "convertI32PairToI53Checked", "convertU32PairToI53", "getTempRet0", "createNamedFunction", "exitJS", "withStackSave", "inetPton4", "inetNtop4", "inetPton6", "inetNtop6", "readSockaddr", "writeSockaddr", "readEmAsmArgs", "jstoi_q", "autoResumeAudioContext", "getDynCaller", "dynCall", "handleException", "runtimeKeepalivePush", "runtimeKeepalivePop", "callUserCallback", "maybeExit", "asmjsMangle", "HandleAllocator", "addOnInit", "addOnPostCtor", "addOnPreMain", "addOnExit", "STACK_SIZE", "STACK_ALIGN", "POINTER_SIZE", "ASSERTIONS", "intArrayToString", "AsciiToString", "stringToAscii", "UTF16ToString", "stringToUTF16", "lengthBytesUTF16", "UTF32ToString", "stringToUTF32", "lengthBytesUTF32", "registerKeyEventCallback", "maybeCStringToJsString", "findEventTarget", "getBoundingClientRect", "fillMouseEventData", "registerMouseEventCallback", "registerWheelEventCallback", "registerUiEventCallback", "registerFocusEventCallback", "fillDeviceOrientationEventData", "registerDeviceOrientationEventCallback", "fillDeviceMotionEventData", "registerDeviceMotionEventCallback", "screenOrientation", "fillOrientationChangeEventData", "registerOrientationChangeEventCallback", "fillFullscreenChangeEventData", "registerFullscreenChangeEventCallback", "callCanvasResizedCallback", "JSEvents_requestFullscreen", "JSEvents_resizeCanvasForFullscreen", "registerRestoreOldStyle", "hideEverythingExceptGivenElement", "restoreHiddenElements", "setLetterbox", "currentFullscreenStrategy", "softFullscreenResizeWebGLRenderTarget", "doRequestFullscreen", "fillPointerlockChangeEventData", "registerPointerlockChangeEventCallback", "registerPointerlockErrorEventCallback", "requestPointerLock", "fillVisibilityChangeEventData", "registerVisibilityChangeEventCallback", "registerTouchEventCallback", "fillGamepadEventData", "registerGamepadEventCallback", "registerBeforeUnloadEventCallback", "fillBatteryEventData", "registerBatteryEventCallback", "setCanvasElementSize", "getCanvasElementSize", "getCallstack", "wasiRightsToMuslOFlags", "wasiOFlagsToMuslOFlags", "safeSetTimeout", "setImmediateWrapped", "safeRequestAnimationFrame", "clearImmediateWrapped", "registerPostMainLoop", "registerPreMainLoop", "getPromise", "makePromise", "addPromise", "idsToPromises", "makePromiseCallback", "incrementUncaughtExceptionCount", "decrementUncaughtExceptionCount", "Browser_asyncPrepareDataCounter", "isLeapYear", "ydayFromDate", "arraySum", "addDays", "getSocketFromFD", "getSocketAddress", "FS_mkdirTree", "_setNetworkCallback", "heapObjectForWebGLType", "toTypedArrayIndex", "webgl_enable_ANGLE_instanced_arrays", "webgl_enable_OES_vertex_array_object", "webgl_enable_WEBGL_draw_buffers", "webgl_enable_WEBGL_multi_draw", "webgl_enable_EXT_polygon_offset_clamp", "webgl_enable_EXT_clip_control", "webgl_enable_WEBGL_polygon_mode", "emscriptenWebGLGet", "computeUnpackAlignedImageSize", "colorChannelsInGlTextureFormat", "emscriptenWebGLGetTexPixelData", "emscriptenWebGLGetUniform", "webglGetProgramUniformLocation", "webglGetUniformLocation", "webglPrepareUniformLocationsBeforeFirstUse", "webglGetLeftBracePos", "emscriptenWebGLGetVertexAttrib", "__glGetActiveAttribOrUniform", "writeGLArray", "registerWebGlEventCallback", "runAndAbortIfError", "writeStringToMemory", "writeAsciiToMemory", "allocateUTF8", "allocateUTF8OnStack", "demangle", "stackTrace", "getNativeTypeSize" ];
 
 missingLibrarySymbols.forEach(missingLibrarySymbol);
 
-var unexportedSymbols = [ "run", "out", "err", "callMain", "abort", "wasmExports", "writeStackCookie", "checkStackCookie", "INT53_MAX", "INT53_MIN", "bigintToI53Checked", "HEAP8", "HEAP16", "HEAPU16", "HEAP32", "HEAPU32", "HEAPF32", "HEAP64", "HEAPU64", "stackSave", "stackRestore", "stackAlloc", "setTempRet0", "ptrToString", "getHeapMax", "growMemory", "ENV", "setStackLimits", "ERRNO_CODES", "strError", "DNS", "Protocols", "Sockets", "timers", "warnOnce", "readEmAsmArgsArray", "getExecutableName", "asyncLoad", "alignMemory", "mmapAlloc", "wasmTable", "wasmMemory", "getUniqueRunDependency", "noExitRuntime", "addRunDependency", "removeRunDependency", "addOnPreRun", "addOnPostRun", "convertJsFunctionToWasm", "freeTableIndexes", "functionsInTableMap", "getEmptyTableSlot", "updateTableMap", "getFunctionAddress", "PATH", "PATH_FS", "UTF8Decoder", "UTF8ArrayToString", "UTF8ToString", "stringToUTF8Array", "intArrayFromString", "UTF16Decoder", "stringToUTF8OnStack", "writeArrayToMemory", "JSEvents", "specialHTMLTargets", "findCanvasEventTarget", "restoreOldWindowedStyle", "UNWIND_CACHE", "ExitStatus", "getEnvStrings", "doReadv", "doWritev", "initRandomFill", "randomFill", "emSetImmediate", "emClearImmediate_deps", "emClearImmediate", "promiseMap", "uncaughtExceptionCount", "exceptionLast", "exceptionCaught", "ExceptionInfo", "findMatchingCatch", "getExceptionMessageCommon", "incrementExceptionRefcount", "decrementExceptionRefcount", "getExceptionMessage", "Browser", "requestFullscreen", "setCanvasSize", "getUserMedia", "createContext", "getPreloadedImageData__data", "wget", "MONTH_DAYS_REGULAR", "MONTH_DAYS_LEAP", "MONTH_DAYS_REGULAR_CUMULATIVE", "MONTH_DAYS_LEAP_CUMULATIVE", "SYSCALLS", "preloadPlugins", "FS_createPreloadedFile", "FS_preloadFile", "FS_modeStringToFlags", "FS_getMode", "FS_fileDataToTypedArray", "FS_stdin_getChar_buffer", "FS_stdin_getChar", "FS_unlink", "FS_createPath", "FS_createDevice", "FS_readFile", "FS_root", "FS_mounts", "FS_devices", "FS_streams", "FS_nextInode", "FS_nameTable", "FS_currentPath", "FS_initialized", "FS_ignorePermissions", "FS_filesystems", "FS_syncFSRequests", "FS_lookupPath", "FS_getPath", "FS_hashName", "FS_hashAddNode", "FS_hashRemoveNode", "FS_lookupNode", "FS_createNode", "FS_destroyNode", "FS_isRoot", "FS_isMountpoint", "FS_isFile", "FS_isDir", "FS_isLink", "FS_isChrdev", "FS_isBlkdev", "FS_isFIFO", "FS_isSocket", "FS_flagsToPermissionString", "FS_nodePermissions", "FS_mayLookup", "FS_mayCreate", "FS_mayDelete", "FS_mayOpen", "FS_checkOpExists", "FS_nextfd", "FS_getStreamChecked", "FS_getStream", "FS_createStream", "FS_closeStream", "FS_dupStream", "FS_doSetAttr", "FS_chrdev_stream_ops", "FS_major", "FS_minor", "FS_makedev", "FS_registerDevice", "FS_getDevice", "FS_getMounts", "FS_syncfs", "FS_mount", "FS_unmount", "FS_lookup", "FS_mknod", "FS_statfs", "FS_statfsStream", "FS_statfsNode", "FS_create", "FS_mkdir", "FS_mkdev", "FS_symlink", "FS_link", "FS_rename", "FS_rmdir", "FS_readdir", "FS_readlink", "FS_stat", "FS_fstat", "FS_lstat", "FS_doChmod", "FS_chmod", "FS_lchmod", "FS_fchmod", "FS_doChown", "FS_chown", "FS_lchown", "FS_fchown", "FS_doTruncate", "FS_truncate", "FS_ftruncate", "FS_utime", "FS_open", "FS_close", "FS_isClosed", "FS_llseek", "FS_read", "FS_write", "FS_mmap", "FS_msync", "FS_ioctl", "FS_writeFile", "FS_cwd", "FS_chdir", "FS_createDefaultDirectories", "FS_createDefaultDevices", "FS_createSpecialDirectories", "FS_createStandardStreams", "FS_staticInit", "FS_init", "FS_quit", "FS_findObject", "FS_analyzePath", "FS_createFile", "FS_createDataFile", "FS_forceLoadFile", "FS_createLazyFile", "MEMFS", "TTY", "PIPEFS", "SOCKFS", "tempFixedLengthArray", "miniTempWebGLFloatBuffers", "miniTempWebGLIntBuffers", "GL", "AL", "GLUT", "EGL", "GLEW", "IDBStore", "SDL", "SDL_gfx", "print", "printErr", "jstoi_s" ];
+var unexportedSymbols = [ "run", "out", "err", "callMain", "abort", "wasmExports", "writeStackCookie", "checkStackCookie", "INT53_MAX", "INT53_MIN", "bigintToI53Checked", "HEAP8", "HEAP16", "HEAPU16", "HEAP32", "HEAPU32", "HEAPF32", "HEAP64", "HEAPU64", "stackSave", "stackRestore", "stackAlloc", "setTempRet0", "ptrToString", "zeroMemory", "getHeapMax", "growMemory", "ENV", "setStackLimits", "ERRNO_CODES", "strError", "DNS", "Protocols", "Sockets", "timers", "warnOnce", "noLeakCheck", "readEmAsmArgsArray", "getExecutableName", "keepRuntimeAlive", "asyncLoad", "alignMemory", "mmapAlloc", "wasmTable", "wasmMemory", "getUniqueRunDependency", "noExitRuntime", "addRunDependency", "removeRunDependency", "addOnPreRun", "addOnPostRun", "convertJsFunctionToWasm", "freeTableIndexes", "functionsInTableMap", "getEmptyTableSlot", "updateTableMap", "getFunctionAddress", "PATH", "PATH_FS", "UTF8Decoder", "UTF8ArrayToString", "UTF8ToString", "stringToUTF8Array", "intArrayFromString", "UTF16Decoder", "stringToNewUTF8", "stringToUTF8OnStack", "writeArrayToMemory", "JSEvents", "specialHTMLTargets", "findCanvasEventTarget", "restoreOldWindowedStyle", "jsStackTrace", "UNWIND_CACHE", "convertPCtoSourceLocation", "ExitStatus", "getEnvStrings", "checkWasiClock", "doReadv", "doWritev", "initRandomFill", "randomFill", "emSetImmediate", "emClearImmediate_deps", "emClearImmediate", "promiseMap", "uncaughtExceptionCount", "exceptionLast", "exceptionCaught", "ExceptionInfo", "findMatchingCatch", "getExceptionMessageCommon", "incrementExceptionRefcount", "decrementExceptionRefcount", "getExceptionMessage", "Browser", "requestFullscreen", "setCanvasSize", "getUserMedia", "createContext", "getPreloadedImageData__data", "wget", "MONTH_DAYS_REGULAR", "MONTH_DAYS_LEAP", "MONTH_DAYS_REGULAR_CUMULATIVE", "MONTH_DAYS_LEAP_CUMULATIVE", "SYSCALLS", "preloadPlugins", "FS_createPreloadedFile", "FS_preloadFile", "FS_modeStringToFlags", "FS_getMode", "FS_fileDataToTypedArray", "FS_stdin_getChar_buffer", "FS_stdin_getChar", "FS_unlink", "FS_createPath", "FS_createDevice", "FS_readFile", "FS_root", "FS_mounts", "FS_devices", "FS_streams", "FS_nextInode", "FS_nameTable", "FS_currentPath", "FS_initialized", "FS_ignorePermissions", "FS_filesystems", "FS_syncFSRequests", "FS_lookupPath", "FS_getPath", "FS_hashName", "FS_hashAddNode", "FS_hashRemoveNode", "FS_lookupNode", "FS_createNode", "FS_destroyNode", "FS_isRoot", "FS_isMountpoint", "FS_isFile", "FS_isDir", "FS_isLink", "FS_isChrdev", "FS_isBlkdev", "FS_isFIFO", "FS_isSocket", "FS_flagsToPermissionString", "FS_nodePermissions", "FS_mayLookup", "FS_mayCreate", "FS_mayDelete", "FS_mayOpen", "FS_checkOpExists", "FS_nextfd", "FS_getStreamChecked", "FS_getStream", "FS_createStream", "FS_closeStream", "FS_dupStream", "FS_doSetAttr", "FS_chrdev_stream_ops", "FS_major", "FS_minor", "FS_makedev", "FS_registerDevice", "FS_getDevice", "FS_getMounts", "FS_syncfs", "FS_mount", "FS_unmount", "FS_lookup", "FS_mknod", "FS_statfs", "FS_statfsStream", "FS_statfsNode", "FS_create", "FS_mkdir", "FS_mkdev", "FS_symlink", "FS_link", "FS_rename", "FS_rmdir", "FS_readdir", "FS_readlink", "FS_stat", "FS_fstat", "FS_lstat", "FS_doChmod", "FS_chmod", "FS_lchmod", "FS_fchmod", "FS_doChown", "FS_chown", "FS_lchown", "FS_fchown", "FS_doTruncate", "FS_truncate", "FS_ftruncate", "FS_utime", "FS_open", "FS_close", "FS_isClosed", "FS_llseek", "FS_read", "FS_write", "FS_mmap", "FS_msync", "FS_ioctl", "FS_writeFile", "FS_cwd", "FS_chdir", "FS_createDefaultDirectories", "FS_createDefaultDevices", "FS_createSpecialDirectories", "FS_createStandardStreams", "FS_staticInit", "FS_init", "FS_quit", "FS_findObject", "FS_analyzePath", "FS_createFile", "FS_createDataFile", "FS_forceLoadFile", "FS_createLazyFile", "MEMFS", "TTY", "PIPEFS", "SOCKFS", "tempFixedLengthArray", "miniTempWebGLFloatBuffers", "miniTempWebGLIntBuffers", "GL", "AL", "GLUT", "EGL", "GLEW", "IDBStore", "SDL", "SDL_gfx", "print", "printErr", "jstoi_s" ];
 
 unexportedSymbols.forEach(unexportedRuntimeSymbol);
 
@@ -4789,6 +5053,8 @@ var _get_engine_version = Module["_get_engine_version"] = makeInvalidEarlyAccess
 
 var _clear_engine_cache = Module["_clear_engine_cache"] = makeInvalidEarlyAccess("_clear_engine_cache");
 
+var ___funcs_on_exit = makeInvalidEarlyAccess("___funcs_on_exit");
+
 var _fflush = makeInvalidEarlyAccess("_fflush");
 
 var _free = Module["_free"] = makeInvalidEarlyAccess("_free");
@@ -4801,9 +5067,7 @@ var _emscripten_stack_get_base = makeInvalidEarlyAccess("_emscripten_stack_get_b
 
 var _strerror = makeInvalidEarlyAccess("_strerror");
 
-var _sbrk = makeInvalidEarlyAccess("_sbrk");
-
-var _emscripten_get_sbrk_ptr = makeInvalidEarlyAccess("_emscripten_get_sbrk_ptr");
+var _emscripten_builtin_memalign = makeInvalidEarlyAccess("_emscripten_builtin_memalign");
 
 var _setThrew = makeInvalidEarlyAccess("_setThrew");
 
@@ -4829,6 +5093,18 @@ var ___cxa_can_catch = makeInvalidEarlyAccess("___cxa_can_catch");
 
 var ___cxa_get_exception_ptr = makeInvalidEarlyAccess("___cxa_get_exception_ptr");
 
+var __ZN6__asan9FakeStack17AddrIsInFakeStackEm = Module["__ZN6__asan9FakeStack17AddrIsInFakeStackEm"] = makeInvalidEarlyAccess("__ZN6__asan9FakeStack17AddrIsInFakeStackEm");
+
+var __ZN6__asan9FakeStack8AllocateEmmm = Module["__ZN6__asan9FakeStack8AllocateEmmm"] = makeInvalidEarlyAccess("__ZN6__asan9FakeStack8AllocateEmmm");
+
+var ___asan_loadN = makeInvalidEarlyAccess("___asan_loadN");
+
+var ___asan_storeN = makeInvalidEarlyAccess("___asan_storeN");
+
+var ___lsan_disable = makeInvalidEarlyAccess("___lsan_disable");
+
+var ___lsan_enable = makeInvalidEarlyAccess("___lsan_enable");
+
 var ___set_stack_limits = Module["___set_stack_limits"] = makeInvalidEarlyAccess("___set_stack_limits");
 
 var memory = makeInvalidEarlyAccess("memory");
@@ -4847,14 +5123,14 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["set_vocal_timeline"] != "undefined", "missing Wasm export: set_vocal_timeline");
   assert(typeof wasmExports["get_engine_version"] != "undefined", "missing Wasm export: get_engine_version");
   assert(typeof wasmExports["clear_engine_cache"] != "undefined", "missing Wasm export: clear_engine_cache");
+  assert(typeof wasmExports["__funcs_on_exit"] != "undefined", "missing Wasm export: __funcs_on_exit");
   assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
   assert(typeof wasmExports["free"] != "undefined", "missing Wasm export: free");
   assert(typeof wasmExports["malloc"] != "undefined", "missing Wasm export: malloc");
   assert(typeof wasmExports["emscripten_stack_get_end"] != "undefined", "missing Wasm export: emscripten_stack_get_end");
   assert(typeof wasmExports["emscripten_stack_get_base"] != "undefined", "missing Wasm export: emscripten_stack_get_base");
   assert(typeof wasmExports["strerror"] != "undefined", "missing Wasm export: strerror");
-  assert(typeof wasmExports["sbrk"] != "undefined", "missing Wasm export: sbrk");
-  assert(typeof wasmExports["emscripten_get_sbrk_ptr"] != "undefined", "missing Wasm export: emscripten_get_sbrk_ptr");
+  assert(typeof wasmExports["emscripten_builtin_memalign"] != "undefined", "missing Wasm export: emscripten_builtin_memalign");
   assert(typeof wasmExports["setThrew"] != "undefined", "missing Wasm export: setThrew");
   assert(typeof wasmExports["_emscripten_tempret_set"] != "undefined", "missing Wasm export: _emscripten_tempret_set");
   assert(typeof wasmExports["emscripten_stack_init"] != "undefined", "missing Wasm export: emscripten_stack_init");
@@ -4867,6 +5143,12 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["__get_exception_message"] != "undefined", "missing Wasm export: __get_exception_message");
   assert(typeof wasmExports["__cxa_can_catch"] != "undefined", "missing Wasm export: __cxa_can_catch");
   assert(typeof wasmExports["__cxa_get_exception_ptr"] != "undefined", "missing Wasm export: __cxa_get_exception_ptr");
+  assert(typeof wasmExports["_ZN6__asan9FakeStack17AddrIsInFakeStackEm"] != "undefined", "missing Wasm export: _ZN6__asan9FakeStack17AddrIsInFakeStackEm");
+  assert(typeof wasmExports["_ZN6__asan9FakeStack8AllocateEmmm"] != "undefined", "missing Wasm export: _ZN6__asan9FakeStack8AllocateEmmm");
+  assert(typeof wasmExports["__asan_loadN"] != "undefined", "missing Wasm export: __asan_loadN");
+  assert(typeof wasmExports["__asan_storeN"] != "undefined", "missing Wasm export: __asan_storeN");
+  assert(typeof wasmExports["__lsan_disable"] != "undefined", "missing Wasm export: __lsan_disable");
+  assert(typeof wasmExports["__lsan_enable"] != "undefined", "missing Wasm export: __lsan_enable");
   assert(typeof wasmExports["__set_stack_limits"] != "undefined", "missing Wasm export: __set_stack_limits");
   assert(typeof wasmExports["memory"] != "undefined", "missing Wasm export: memory");
   assert(typeof wasmExports["__indirect_function_table"] != "undefined", "missing Wasm export: __indirect_function_table");
@@ -4877,14 +5159,14 @@ function assignWasmExports(wasmExports) {
   _set_vocal_timeline = Module["_set_vocal_timeline"] = createExportWrapper("set_vocal_timeline", wasmExports["set_vocal_timeline"], 2);
   _get_engine_version = Module["_get_engine_version"] = createExportWrapper("get_engine_version", wasmExports["get_engine_version"], 0);
   _clear_engine_cache = Module["_clear_engine_cache"] = createExportWrapper("clear_engine_cache", wasmExports["clear_engine_cache"], 0);
+  ___funcs_on_exit = createExportWrapper("__funcs_on_exit", wasmExports["__funcs_on_exit"], 0);
   _fflush = createExportWrapper("fflush", wasmExports["fflush"], 1);
   _free = Module["_free"] = createExportWrapper("free", wasmExports["free"], 1);
   _malloc = Module["_malloc"] = createExportWrapper("malloc", wasmExports["malloc"], 1);
   _emscripten_stack_get_end = wasmExports["emscripten_stack_get_end"];
   _emscripten_stack_get_base = wasmExports["emscripten_stack_get_base"];
   _strerror = createExportWrapper("strerror", wasmExports["strerror"], 1);
-  _sbrk = createExportWrapper("sbrk", wasmExports["sbrk"], 1);
-  _emscripten_get_sbrk_ptr = wasmExports["emscripten_get_sbrk_ptr"];
+  _emscripten_builtin_memalign = createExportWrapper("emscripten_builtin_memalign", wasmExports["emscripten_builtin_memalign"], 2);
   _setThrew = createExportWrapper("setThrew", wasmExports["setThrew"], 2);
   __emscripten_tempret_set = createExportWrapper("_emscripten_tempret_set", wasmExports["_emscripten_tempret_set"], 1);
   _emscripten_stack_init = wasmExports["emscripten_stack_init"];
@@ -4897,6 +5179,12 @@ function assignWasmExports(wasmExports) {
   ___get_exception_message = createExportWrapper("__get_exception_message", wasmExports["__get_exception_message"], 3);
   ___cxa_can_catch = createExportWrapper("__cxa_can_catch", wasmExports["__cxa_can_catch"], 3);
   ___cxa_get_exception_ptr = createExportWrapper("__cxa_get_exception_ptr", wasmExports["__cxa_get_exception_ptr"], 1);
+  __ZN6__asan9FakeStack17AddrIsInFakeStackEm = Module["__ZN6__asan9FakeStack17AddrIsInFakeStackEm"] = createExportWrapper("_ZN6__asan9FakeStack17AddrIsInFakeStackEm", wasmExports["_ZN6__asan9FakeStack17AddrIsInFakeStackEm"], 2);
+  __ZN6__asan9FakeStack8AllocateEmmm = Module["__ZN6__asan9FakeStack8AllocateEmmm"] = createExportWrapper("_ZN6__asan9FakeStack8AllocateEmmm", wasmExports["_ZN6__asan9FakeStack8AllocateEmmm"], 4);
+  ___asan_loadN = wasmExports["__asan_loadN"];
+  ___asan_storeN = wasmExports["__asan_storeN"];
+  ___lsan_disable = wasmExports["__lsan_disable"];
+  ___lsan_enable = wasmExports["__lsan_enable"];
   ___set_stack_limits = Module["___set_stack_limits"] = createExportWrapper("__set_stack_limits", wasmExports["__set_stack_limits"], 2);
   memory = wasmMemory = wasmExports["memory"];
   __indirect_function_table = wasmTable = wasmExports["__indirect_function_table"];
@@ -4914,6 +5202,7 @@ var wasmImports = {
   /** @export */ __cxa_uncaught_exceptions: ___cxa_uncaught_exceptions,
   /** @export */ __handle_stack_overflow: ___handle_stack_overflow,
   /** @export */ __resumeException: ___resumeException,
+  /** @export */ __syscall_dup: ___syscall_dup,
   /** @export */ __syscall_fcntl64: ___syscall_fcntl64,
   /** @export */ __syscall_fstat64: ___syscall_fstat64,
   /** @export */ __syscall_ioctl: ___syscall_ioctl,
@@ -4925,10 +5214,23 @@ var wasmImports = {
   /** @export */ __syscall_stat64: ___syscall_stat64,
   /** @export */ __syscall_unlinkat: ___syscall_unlinkat,
   /** @export */ _abort_js: __abort_js,
+  /** @export */ _emscripten_get_progname: __emscripten_get_progname,
+  /** @export */ _emscripten_sanitizer_get_option: __emscripten_sanitizer_get_option,
+  /** @export */ _emscripten_sanitizer_use_colors: __emscripten_sanitizer_use_colors,
+  /** @export */ _mmap_js: __mmap_js,
+  /** @export */ _munmap_js: __munmap_js,
   /** @export */ _tzset_js: __tzset_js,
-  /** @export */ alignfault,
+  /** @export */ clock_time_get: _clock_time_get,
   /** @export */ emscripten_get_heap_max: _emscripten_get_heap_max,
+  /** @export */ emscripten_get_now: _emscripten_get_now,
+  /** @export */ emscripten_pc_get_column: _emscripten_pc_get_column,
+  /** @export */ emscripten_pc_get_file: _emscripten_pc_get_file,
+  /** @export */ emscripten_pc_get_function: _emscripten_pc_get_function,
+  /** @export */ emscripten_pc_get_line: _emscripten_pc_get_line,
   /** @export */ emscripten_resize_heap: _emscripten_resize_heap,
+  /** @export */ emscripten_return_address: _emscripten_return_address,
+  /** @export */ emscripten_stack_snapshot: _emscripten_stack_snapshot,
+  /** @export */ emscripten_stack_unwind_buffer: _emscripten_stack_unwind_buffer,
   /** @export */ environ_get: _environ_get,
   /** @export */ environ_sizes_get: _environ_sizes_get,
   /** @export */ fd_close: _fd_close,
@@ -4972,8 +5274,8 @@ var wasmImports = {
   /** @export */ invoke_vij,
   /** @export */ invoke_vijijjij,
   /** @export */ llvm_eh_typeid_for: _llvm_eh_typeid_for,
-  /** @export */ random_get: _random_get,
-  /** @export */ segfault
+  /** @export */ proc_exit: _proc_exit,
+  /** @export */ random_get: _random_get
 };
 
 function invoke_iii(index, a1, a2) {
@@ -5407,46 +5709,6 @@ async function run() {
   consumedModuleProp("onRuntimeInitialized");
   assert(!Module["_main"], 'compiled without a main, but one is present. if you added it from JS, use Module["onRuntimeInitialized"]');
   postRun();
-}
-
-function checkUnflushedContent() {
-  // Compiler settings do not allow exiting the runtime, so flushing
-  // the streams is not possible. but in ASSERTIONS mode we check
-  // if there was something to flush, and if so tell the user they
-  // should request that the runtime be exitable.
-  // Normally we would not even include flush() at all, but in ASSERTIONS
-  // builds we do so just for this check, and here we see if there is any
-  // content to flush, that is, we check if there would have been
-  // something a non-ASSERTIONS build would have not seen.
-  // How we flush the streams depends on whether we are in SYSCALLS_REQUIRE_FILESYSTEM=0
-  // mode (which has its own special function for this; otherwise, all
-  // the code is inside libc)
-  var oldOut = out;
-  var oldErr = err;
-  var has = false;
-  out = err = x => {
-    has = true;
-  };
-  try {
-    // it doesn't matter if it fails
-    _fflush(0);
-    // also flush in the JS FS layer
-    for (var name of [ "stdout", "stderr" ]) {
-      var info = FS.analyzePath("/dev/" + name);
-      if (!info) return;
-      var stream = info.object;
-      var rdev = stream.rdev;
-      var tty = TTY.ttys[rdev];
-      if (tty?.output?.length) {
-        has = true;
-      }
-    }
-  } catch (e) {}
-  out = oldOut;
-  err = oldErr;
-  if (has) {
-    warnOnce("stdio streams had content in them that was not flushed. you should set EXIT_RUNTIME to 1 (see the Emscripten FAQ), or make sure to emit a newline when you printf etc.");
-  }
 }
 
 var wasmExports;
