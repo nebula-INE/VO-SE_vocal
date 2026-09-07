@@ -40,12 +40,16 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # --- 古いビルドキャッシュを完全に削除 ---
-      - name: Clean CMake Cache
-        run: rm -rf juce_plugin/build
+      # --- リポジトリ内外の全ビルドキャッシュ・キャッシュディレクトリを完全に強制削除 ---
+      - name: Hard Clean All Hidden Caches
+        run: |
+          rm -rf juce_plugin/build
+          rm -rf build
+          rm -rf ../build
+          rm -rf ./*build*
         shell: bash
 
-      # --- CMake 設定（外部キャッシュの指定を削除） ---
+      # --- CMake 設定 ---
       - name: Configure CMake
         shell: bash
         run: |
