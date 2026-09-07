@@ -782,24 +782,53 @@ jobs:
             MAC_LABEL="AppleSilicon"
           fi
 
+          # --- 変数定義 ---
+          VOLUME_NAME="VO-SE vocal"
           APP_BUNDLE="dist/VO-SE_vocal_Mac.app"
+          OUTPUT_DIR="dist_out"
+          DMG_FILE="${OUTPUT_DIR}/VO-SE_vocal_Mac_${MAC_LABEL}.dmg"
+          ZIP_FILE="${OUTPUT_DIR}/VO-SE_vocal_Mac_${MAC_LABEL}_update.zip"
+
+          # --- 必須: クリーンアップ関数 (エラー時や終了時に必ず実行) ---
+          cleanup() {
+            if [ -d "/Volumes/${VOLUME_NAME}" ]; then
+              echo "🧹 クリーンアップ: 残留マウントを強制解除します..."
+              hdiutil detach "/Volumes/${VOLUME_NAME}" -force 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          # --- 1. 前回のビルド遺物を完全に削除 (Resource busy 対策) ---
+          echo "🧹 前回のビルド遺物を削除中..."
+          cleanup
+          if [ -f "$DMG_FILE" ]; then
+            chflags noschg "$DMG_FILE" 2>/dev/null || true
+            rm -f "$DMG_FILE"
+          fi
+          rm -f "$ZIP_FILE"
+
+          mkdir -p "$OUTPUT_DIR"
+
+          # --- 2. アプリバンドルの存在チェック ---
           if [ ! -d "$APP_BUNDLE" ]; then
             echo "Error: app bundle not found at $APP_BUNDLE"
             exit 1
           fi
 
-          mkdir -p dist_out
-
-          echo "🗜️ Creating DMG..."
+          # --- 3. DMG作成 (事前アンマウント + ファイル削除済みのため確実に成功) ---
+          echo "🗜️ Creating DMG (ボリューム名: ${VOLUME_NAME})..."
           hdiutil create \
-            -volname "VO-SE vocal" \
+            -volname "${VOLUME_NAME}" \
             -srcfolder "$APP_BUNDLE" \
             -ov \
             -format UDZO \
-            "dist_out/VO-SE_vocal_Mac_${MAC_LABEL}.dmg"
+            "$DMG_FILE"
 
+          # --- 4. ZIP作成 ---
           echo "🗜️ Creating update ZIP..."
-          (cd dist && zip -ry "../dist_out/VO-SE_vocal_Mac_${MAC_LABEL}_update.zip" VO-SE_vocal_Mac.app)
+          (cd dist && zip -ry "../${ZIP_FILE}" VO-SE_vocal_Mac.app)
+
+          echo "✅ パッケージング完了: ${DMG_FILE} と ${ZIP_FILE}"
 
       - name: 🐧 Package Linux artifacts
         if: matrix.os == 'ubuntu-latest'
