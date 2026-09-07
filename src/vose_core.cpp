@@ -1452,10 +1452,20 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                      p.global_time_sec, voice_seed);
 
     note_buf.assign(static_cast<size_t>(note_samples), 0.0);
-    VOSE_Synthesis(tl_scratch.f0.data(), output_frames,
-                   tl_scratch.spec_ptrs.data(), tl_scratch.ap_ptrs.data(),
-                   fft_size, kFramePeriod, pp.ev->fs,
-                   static_cast<int>(note_samples), note_buf.data());
+    try {
+        VOSE_Synthesis(tl_scratch.f0.data(), output_frames,
+                       tl_scratch.spec_ptrs.data(), tl_scratch.ap_ptrs.data(),
+                       fft_size, kFramePeriod, pp.ev->fs,
+                       static_cast<int>(note_samples), note_buf.data());
+    } catch (const std::exception& e) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "VOSE_Synthesis failed: note_samples=%lld note_ms=%.2f "
+                 "output_frames=%d fft_size=%d src_ms=%.2f fixed=%.2f : %s",
+                 static_cast<long long>(note_samples), note_ms, output_frames,
+                 fft_size, src_ms, current_oto.consonant, e.what());
+        throw std::runtime_error(buf);
+    }
 
     // ポストEQ: WORLD出力の金属的倍音・箱鳴り補正、高域補強
     //
@@ -1476,7 +1486,14 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     apply_post_eq(note_buf.data(), static_cast<int>(note_samples), high_shelf_scale);
 
     // シマー(振幅ゆらぎ)は出力波形に対して適用する
-    apply_shimmer(note_buf, pp.ev->fs, p.global_time_sec, voice_seed);
+    try {
+        apply_shimmer(note_buf, pp.ev->fs, p.global_time_sec, voice_seed);
+    } catch (const std::exception& e) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "apply_shimmer failed: note_samples=%lld : %s",
+                 static_cast<long long>(note_samples), e.what());
+        throw std::runtime_error(buf);
+    }
 }
 
 // ============================================================
