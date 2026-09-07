@@ -99,6 +99,21 @@ jobs:
           #   デバッグに必要な情報(未使用に見える中間変数等)が消えている
           #   おそれがあるため、-O0 に落として最大限の情報を残す。
           #   原因が特定できたら両方とも元に戻してよい。
+          # ★変更点12(一時的なデバッグ用): SAFE_HEAP=1 を
+          #   -fsanitize=address (AddressSanitizer) に差し替え。
+          #   段階別ログにより「execute_render_impl内のconstローカル変数
+          #   fft_size/spec_bins(GetFFTSizeForCheapTrickで1回だけ計算)が、
+          #   ノート417件目の処理時点でゴミ値(fft_size=2147483647等)に
+          #   化けている」ことが判明した。全ノート共通のはずの値が
+          #   後になって壊れているということは、スタック上の別の
+          #   ローカル配列が数バイトだけ隣を書き潰している可能性が高い。
+          #   SAFE_HEAP(ヒープのみ)やSTACK_OVERFLOW_CHECK(スタック
+          #   全体の枯渇のみ)ではこの種の「小さい書き込みオーバーラン」
+          #   は検出できないため、redzoneで隣接メモリへのはみ出しを
+          #   直接検出できるAddressSanitizerに切り替えた。
+          #   INITIAL_MEMORYはASanのシャドウメモリ分の余裕を持たせる
+          #   ため大きめに固定(512MB)。原因が特定できたら
+          #   -fsanitize=address と INITIAL_MEMORY の行は削除してよい。
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
@@ -122,7 +137,8 @@ jobs:
                -s ENVIRONMENT=web,worker \
                -s ASSERTIONS=2 \
                -s STACK_OVERFLOW_CHECK=2 \
-               -s SAFE_HEAP=1 \
+               -fsanitize=address \
+               -s INITIAL_MEMORY=536870912 \
                -s DISABLE_EXCEPTION_CATCHING=0 \
                -g2 \
                -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
