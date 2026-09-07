@@ -40,12 +40,12 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # --- 古いビルドキャッシュを完全に削除（パスを修正） ---
+      # --- 古いビルドキャッシュを完全に削除 ---
       - name: Clean CMake Cache
         run: rm -rf juce_plugin/build
         shell: bash
 
-      # --- CMake 設定（パスの修正と --fresh の位置変更） ---
+      # --- CMake 設定 ---
       - name: Configure CMake
         shell: bash
         run: |
@@ -63,7 +63,7 @@ jobs:
             cmake --fresh -B juce_plugin/build -S juce_plugin $COMMON_OPTS
           fi
 
-      # --- ビルド（対象ディレクトリを修正） ---
+      # --- ビルド ---
       - name: Build Plugin
         run: |
           if [ "${{ matrix.os }}" == "windows-latest" ]; then
@@ -73,9 +73,9 @@ jobs:
           fi
         shell: bash
 
-      # --- 成果物アップロード（パスを修正） ---
+      # --- 成果物アップロード（正しいアクション名に修正） ---
       - name: Upload Artifacts
-        uses: actions/artifacts/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: vose-plugin-${{ matrix.os }}
           path: |
