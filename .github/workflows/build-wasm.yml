@@ -88,6 +88,17 @@ jobs:
           #   構造体マーシャリング(NoteEvent/OtoEntry)を含め、実際の
           #   メモリ破壊の発生源を特定するために使う。原因が特定できたら
           #   外してよい(実行速度への影響が大きいため)。
+          # ★変更点11(一時的なデバッグ用): -O3 → -O0、および
+          #   -s STACK_OVERFLOW_CHECK=2 を追加。
+          #   SAFE_HEAP=1 を付けても "Aborted(segmentation fault)" としか
+          #   出ず、ヒープ範囲外アクセス特有の詳細アドレス情報が得られな
+          #   かった。SAFE_HEAPはヒープしか見ないため、これはスタック
+          #   オーバーフローの可能性が高い。STACK_OVERFLOW_CHECK=2は
+          #   スタックポインタを毎回チェックし、超過時に明示的な
+          #   "stack overflow!" メッセージを出す。また -O3 の最適化で
+          #   デバッグに必要な情報(未使用に見える中間変数等)が消えている
+          #   おそれがあるため、-O0 に落として最大限の情報を残す。
+          #   原因が特定できたら両方とも元に戻してよい。
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
@@ -100,7 +111,7 @@ jobs:
                src/world/stonemask.cpp \
                src/world/synthesis.cpp \
                -Iinclude \
-               -O3 \
+               -O0 \
                -fexceptions \
                -s WASM=1 \
                -s ALLOW_MEMORY_GROWTH=1 \
@@ -110,6 +121,7 @@ jobs:
                -s EXPORT_ES6=1 \
                -s ENVIRONMENT=web,worker \
                -s ASSERTIONS=2 \
+               -s STACK_OVERFLOW_CHECK=2 \
                -s SAFE_HEAP=1 \
                -s DISABLE_EXCEPTION_CATCHING=0 \
                -g2 \
