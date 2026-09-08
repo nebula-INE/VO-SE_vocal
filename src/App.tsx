@@ -23,8 +23,7 @@ import {
   decodeTextBuffer,
   ProjectData
 } from './utils/formatConverter';
-// vose_core WASM(本物のC++コア)経由でレンダリングし、失敗時は自動的に
-// wasmEngine.ts の JS実装(PSOLA版)へフォールバックする。
+// vose_core WASM(本物のC++コア)経由でレンダリング（例外発生時もスキップし、JSへのフォールバックは絶対に行わない）
 import { renderStudioCore as renderWasm } from './voseCoreClient';
 import PitchCurveOverlay from './components/PitchCurveOverlay';
 import PitchCurveMiniEditor from './components/PitchCurveMiniEditor';

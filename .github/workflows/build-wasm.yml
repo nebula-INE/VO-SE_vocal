@@ -126,7 +126,7 @@ jobs:
                src/world/stonemask.cpp \
                src/world/synthesis.cpp \
                -Iinclude \
-               -O0 \
+               -O3 \
                -fexceptions \
                -s WASM=1 \
                -s ALLOW_MEMORY_GROWTH=1 \
@@ -135,12 +135,10 @@ jobs:
                -s EXPORT_NAME="createVoseCoreModule" \
                -s EXPORT_ES6=1 \
                -s ENVIRONMENT=web,worker \
-               -s ASSERTIONS=2 \
-               -s STACK_OVERFLOW_CHECK=2 \
-               -fsanitize=address \
-               -s INITIAL_MEMORY=536870912 \
+               -s ASSERTIONS=1 \
+               -s INITIAL_MEMORY=268435456 \
+               -s MAXIMUM_MEMORY=2147483648 \
                -s DISABLE_EXCEPTION_CATCHING=0 \
-               -g2 \
                -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
                -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF64']" \
                -s DEFAULT_TO_CXX \

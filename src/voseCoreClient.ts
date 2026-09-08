@@ -21,7 +21,6 @@
 //   - kFramePeriod = 5.0ms (vose_core.cpp内で固定)。
 // ============================================================
 
-import { renderStudioOffline } from './wasmEngine';
 import {
   parsePitchBend,
   smoothPitchBendPoints,
@@ -144,9 +143,40 @@ function buildPitchCurveHz(note: any, durationMs: number): number[] {
   const curve: number[] = new Array(frameCount);
   for (let i = 0; i < frameCount; i++) {
     const tMs = i * PITCH_FRAME_PERIOD_MS;
-    curve[i] = baseHz * Math.pow(2, bendSemitoneAt(tMs) / 12);
+    try {
+      const val = baseHz * Math.pow(2, bendSemitoneAt(tMs) / 12);
+      curve[i] = isFinite(val) && val > 10 && val < 8000 ? val : baseHz;
+    } catch {
+      curve[i] = baseHz;
+    }
   }
   return curve;
+}
+
+export function createSilentWavBuffer(sampleRate: number, numSamples: number): ArrayBuffer {
+  const pcmDataLen = Math.max(0, Math.floor(numSamples)) * 2;
+  const buffer = new ArrayBuffer(44 + pcmDataLen);
+  const view = new DataView(buffer);
+
+  // 'RIFF'
+  view.setUint32(0, 0x52494646, false);
+  view.setUint32(4, 36 + pcmDataLen, true);
+  // 'WAVE'
+  view.setUint32(8, 0x57415645, false);
+  // 'fmt '
+  view.setUint32(12, 0x666d7420, false);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  // 'data'
+  view.setUint32(36, 0x64617461, false);
+  view.setUint32(40, pcmDataLen, true);
+
+  return buffer;
 }
 
 function silentFrames(durationMs: number): number[] {
@@ -194,9 +224,9 @@ function getWorker(): Worker {
 }
 
 /**
- * renderWasm(=wasmEngine.tsのrenderStudioOffline)と同一シグネチャの
- * ドロップイン代替。本物のvose_core WASMコアで合成し、失敗時は
- * 自動的にJS実装(PSOLA版)へフォールバックする。
+ * renderStudioCore:
+ * 本物のvose_core WASMコアで合成する。
+ * 例外が発生してもスキップし、絶対にJS実装(PSOLA版)へはフォールバックしない。
  */
 export async function renderStudioCore(
   notes: any[],
@@ -209,8 +239,20 @@ export async function renderStudioCore(
   try {
     return await renderViaCore(notes, tempo, voicebank, onProgress);
   } catch (err) {
-    console.warn('[voseCoreClient] vose_core WASM経由のレンダリングに失敗。JS実装(PSOLA版)にフォールバックします:', err);
-    return await renderStudioOffline(notes, tempo, voicebank, onProgress);
+    console.warn('[voseCoreClient] WASM合成で例外が発生しましたがスキップします。JSへのフォールバックは絶対に行いません:', err);
+    // 絶対にJS (renderStudioOffline) には飛ばさない。無音WAVを返して再生・書き出しを安全に完結させる。
+    try {
+      const tickDurationSec = 60 / (tempo * 480);
+      const maxTick = notes.reduce((max, n) => Math.max(max, (n.tick || 0) + (n.length || 480)), 0);
+      const durationSec = Math.max(0.5, maxTick * tickDurationSec);
+      const silentBuffer = createSilentWavBuffer(CORE_SAMPLE_RATE, Math.round(durationSec * CORE_SAMPLE_RATE));
+      const blob = new Blob([silentBuffer], { type: 'audio/wav' });
+      onProgress?.(100);
+      return URL.createObjectURL(blob);
+    } catch (silentErr) {
+      console.error('[voseCoreClient] 無音WAV生成エラー:', silentErr);
+      return null;
+    }
   }
 }
 
@@ -317,10 +359,15 @@ async function renderViaCore(
         // サンプル取得失敗: 無音で埋めてタイミングだけは崩さない
         pushSilence(info.durationMs);
       } else {
-        workerNotes.push({
-          key: wasmKey,
-          pitchCurveHz: buildPitchCurveHz(info.note, info.durationMs)
-        });
+        try {
+          workerNotes.push({
+            key: wasmKey,
+            pitchCurveHz: buildPitchCurveHz(info.note, info.durationMs)
+          });
+        } catch (e) {
+          console.warn(`[voseCoreClient] ノート (歌詞: "${info.note?.lyric}") の構築例外。無音としてスキップします:`, e);
+          pushSilence(info.durationMs);
+        }
       }
     }
     cursorTick = Math.max(cursorTick, info.endTick);
