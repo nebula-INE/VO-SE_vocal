@@ -1339,6 +1339,23 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
     if (pp.state != NoteState::RENDERABLE) return;
 
+    // [防御的チェック] ASanで確認された null-pointer-dereference 対策。
+    // パス1(NotePrepass構築)の時点では pp.ev は非null・有効だったはずだが、
+    // このノートの合成が実行される時点で null になっているケースが実際に
+    // 観測された(原因はまだ特定できていないメモリ破壊)。根本原因が
+    // 特定できるまでの間、このノート1つだけを例外として扱い(このノートは
+    // 無音として諦める)、曲全体のレンダリングが巻き込まれて中断される事態
+    // を防ぐ。
+    if (!pp.ev) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "pp.ev is null despite RENDERABLE state: wav_path=%s "
+                 "note_samples=%lld pitch_length=%d",
+                 n.wav_path ? n.wav_path : "(null)",
+                 static_cast<long long>(pp.note_samples), n.pitch_length);
+        throw std::runtime_error(buf);
+    }
+
     const int64_t note_samples  = pp.note_samples;
     const double  note_ms       = static_cast<double>(note_samples) / kFs * 1000.0;
     const double  src_ms        = get_source_ms(*pp.ev);
@@ -1783,6 +1800,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         std::atomic<bool> worker_failed{false};
         std::string       worker_error_msg;
         std::mutex        worker_error_mutex;
+        std::atomic<int>  failed_note_count{0};
 
         auto worker_fn = [&]() {
             for (;;) {
@@ -1798,37 +1816,37 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                                        note_global_time[idx] };
                     synthesize_note_impl(p, note_bufs[idx]);
                 } catch (const std::exception& e) {
-                    std::lock_guard<std::mutex> elg(worker_error_mutex);
-                    if (!worker_failed.exchange(true, std::memory_order_relaxed)) {
-                        // [デバッグ用] どのノートで失敗したかを特定するため、
-                        // note index / wav_path / pitch_length を含める。
-                        // e.what()だけだと(libc++の length_error 等は)
-                        // "vector" のような素っ気ない文字列しか出ず、
-                        // 原因の切り分けができないため。
-                        char buf[256];
-                        snprintf(buf, sizeof(buf),
-                                 "note idx=%d wav_path=%s pitch_length=%d : %s",
-                                 idx,
-                                 notes[idx].wav_path ? notes[idx].wav_path : "(null)",
-                                 notes[idx].pitch_length,
-                                 e.what());
-                        worker_error_msg = buf;
-                    }
-                    cancel_flag.store(true, std::memory_order_relaxed);
-                    return;
+                    // [修正] 以前はここで worker_failed を立てて曲全体の
+                    // レンダリングを中断していたが、原因不明のノート単位の
+                    // 例外(メモリ破壊の疑いあり、調査中)によって曲全体が
+                    // 巻き込まれるのを避けるため、このノート1つを無音として
+                    // 諦めて処理を続行するように変更した。曲全体の長さの
+                    // 帳尻を合わせるため、無音の長さは prepass[idx].note_samples
+                    // に正確に合わせる。失敗自体はログに残し、件数もカウントする。
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                             "note idx=%d wav_path=%s pitch_length=%d : %s (無音でスキップ)",
+                             idx,
+                             notes[idx].wav_path ? notes[idx].wav_path : "(null)",
+                             notes[idx].pitch_length,
+                             e.what());
+                    fprintf(stderr, "[Render] %s\n", buf);
+                    failed_note_count.fetch_add(1, std::memory_order_relaxed);
+                    note_bufs[idx].assign(
+                        static_cast<size_t>(std::max<int64_t>(0, prepass[idx].note_samples)),
+                        0.0);
                 } catch (...) {
-                    std::lock_guard<std::mutex> elg(worker_error_mutex);
-                    if (!worker_failed.exchange(true, std::memory_order_relaxed)) {
-                        char buf[256];
-                        snprintf(buf, sizeof(buf),
-                                 "note idx=%d wav_path=%s pitch_length=%d : unknown exception",
-                                 idx,
-                                 notes[idx].wav_path ? notes[idx].wav_path : "(null)",
-                                 notes[idx].pitch_length);
-                        worker_error_msg = buf;
-                    }
-                    cancel_flag.store(true, std::memory_order_relaxed);
-                    return;
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                             "note idx=%d wav_path=%s pitch_length=%d : unknown exception (無音でスキップ)",
+                             idx,
+                             notes[idx].wav_path ? notes[idx].wav_path : "(null)",
+                             notes[idx].pitch_length);
+                    fprintf(stderr, "[Render] %s\n", buf);
+                    failed_note_count.fetch_add(1, std::memory_order_relaxed);
+                    note_bufs[idx].assign(
+                        static_cast<size_t>(std::max<int64_t>(0, prepass[idx].note_samples)),
+                        0.0);
                 }
 
                 completed.fetch_add(1, std::memory_order_relaxed);
@@ -1894,8 +1912,16 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         if (worker_failed.load(std::memory_order_relaxed)) {
             failed_during_synth = true;
             fprintf(stderr, "[Render] Worker thread failed: %s\n", worker_error_msg.c_str());
-        } else if (!cancelled_during_synth) {
-            report_progress(80);
+        } else {
+            const int nfail = failed_note_count.load(std::memory_order_relaxed);
+            if (nfail > 0) {
+                fprintf(stderr,
+                        "[Render] %d note(s) failed and were skipped as silence "
+                        "(see individual [Render] logs above for detail)\n", nfail);
+            }
+            if (!cancelled_during_synth) {
+                report_progress(80);
+            }
         }
     }
 
