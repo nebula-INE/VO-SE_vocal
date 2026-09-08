@@ -76,44 +76,20 @@ jobs:
           #   個々のノート合成失敗時に例外がキャッチされ
           #   (worker_error_msgにe.what()が格納される)、曲全体がクラッシュ
           #   することなく処理を継続できる想定。
-          # ★変更点10(一時的なデバッグ用): -s SAFE_HEAP=1 を追加。
-          #   "Out of bounds memory access (evaluating
-          #   'getWasmTableEntry(index)(a1...a8)')" という、関数ポインタ
-          #   経由の間接呼び出しがWASMテーブル上の無効な場所を指す
-          #   エラーが発生した。これは典型的にどこかでメモリの範囲外
-          #   書き込みが起きて関数テーブル(あるいはそれを指すポインタ)を
-          #   破壊したことを示唆する。SAFE_HEAPは全てのヒープ読み書きに
-          #   境界・アライメントチェックを挟み、違反時に正確なアドレスと
-          #   型を報告してくれるため、voseCoreWorker.ts側の手組みの
-          #   構造体マーシャリング(NoteEvent/OtoEntry)を含め、実際の
-          #   メモリ破壊の発生源を特定するために使う。原因が特定できたら
-          #   外してよい(実行速度への影響が大きいため)。
-          # ★変更点11(一時的なデバッグ用): -O3 → -O0、および
-          #   -s STACK_OVERFLOW_CHECK=2 を追加。
-          #   SAFE_HEAP=1 を付けても "Aborted(segmentation fault)" としか
-          #   出ず、ヒープ範囲外アクセス特有の詳細アドレス情報が得られな
-          #   かった。SAFE_HEAPはヒープしか見ないため、これはスタック
-          #   オーバーフローの可能性が高い。STACK_OVERFLOW_CHECK=2は
-          #   スタックポインタを毎回チェックし、超過時に明示的な
-          #   "stack overflow!" メッセージを出す。また -O3 の最適化で
-          #   デバッグに必要な情報(未使用に見える中間変数等)が消えている
-          #   おそれがあるため、-O0 に落として最大限の情報を残す。
-          #   原因が特定できたら両方とも元に戻してよい。
-          # ★変更点12(一時的なデバッグ用): SAFE_HEAP=1 を
-          #   -fsanitize=address (AddressSanitizer) に差し替え。
-          #   段階別ログにより「execute_render_impl内のconstローカル変数
-          #   fft_size/spec_bins(GetFFTSizeForCheapTrickで1回だけ計算)が、
-          #   ノート417件目の処理時点でゴミ値(fft_size=2147483647等)に
-          #   化けている」ことが判明した。全ノート共通のはずの値が
-          #   後になって壊れているということは、スタック上の別の
-          #   ローカル配列が数バイトだけ隣を書き潰している可能性が高い。
-          #   SAFE_HEAP(ヒープのみ)やSTACK_OVERFLOW_CHECK(スタック
-          #   全体の枯渇のみ)ではこの種の「小さい書き込みオーバーラン」
-          #   は検出できないため、redzoneで隣接メモリへのはみ出しを
-          #   直接検出できるAddressSanitizerに切り替えた。
-          #   INITIAL_MEMORYはASanのシャドウメモリ分の余裕を持たせる
-          #   ため大きめに固定(512MB)。原因が特定できたら
-          #   -fsanitize=address と INITIAL_MEMORY の行は削除してよい。
+          # ★変更点10〜12(デバッグ用、解除済み): SAFE_HEAP=1 →
+          #   AddressSanitizerと段階を追い、execute_render_impl内の
+          #   const fft_size/spec_bins がノート417件目の処理時点で
+          #   ゴミ値化けしていること(get_or_analyzeに渡る手前で何かが
+          #   メモリを破壊している)までは特定できた。ただしASanの
+          #   エラーはC++のtry/catchで捕まえられない(検出したら即abort
+          #   する設計のため)ので、「ノート単位でスキップして続行する」
+          #   という今の設計とは相性が悪く、外した。今の設計(無音スキップ)
+          #   はASan無しでも機能する: 壊れた値はvector::resizeなどの
+          #   通常のC++例外として捕まえられる形で表面化し、それを
+          #   catchしてそのノートだけ無音にする、という流れで動く。
+          #   根本原因(何がfft_size/spec_binsを壊しているか)の追跡を
+          #   再開する際は、-fsanitize=address / -O0 / SAFE_HEAP=1 /
+          #   STACK_OVERFLOW_CHECK=2 を再度追加すること。
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
@@ -136,8 +112,6 @@ jobs:
                -s EXPORT_ES6=1 \
                -s ENVIRONMENT=web,worker \
                -s ASSERTIONS=1 \
-               -s INITIAL_MEMORY=268435456 \
-               -s MAXIMUM_MEMORY=2147483648 \
                -s DISABLE_EXCEPTION_CATCHING=0 \
                -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
                -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF64']" \
