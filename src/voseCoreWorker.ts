@@ -60,35 +60,6 @@ self.onerror = (e) => {
   console.error('[Worker Error]', e.message, e.filename, e.lineno);
 };
 
-const CORE_SAMPLE_RATE = 44100;
-const PITCH_FRAME_PERIOD_MS = 5;
-
-function createSilentWav(sampleRate: number, numSamples: number): ArrayBuffer {
-  const pcmDataLen = Math.max(0, Math.floor(numSamples)) * 2;
-  const buffer = new ArrayBuffer(44 + pcmDataLen);
-  const view = new DataView(buffer);
-
-  // 'RIFF'
-  view.setUint32(0, 0x52494646, false);
-  view.setUint32(4, 36 + pcmDataLen, true);
-  // 'WAVE'
-  view.setUint32(8, 0x57415645, false);
-  // 'fmt '
-  view.setUint32(12, 0x666d7420, false);
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // Mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  // 'data'
-  view.setUint32(36, 0x64617461, false);
-  view.setUint32(40, pcmDataLen, true);
-
-  return buffer;
-}
-
 // ------------------------------------------------------------
 // NoteEvent構造体レイアウト (vose_core.h より。wasm32=ポインタ4バイト前提。
 // 全フィールドが4バイト境界に収まるため、doubleを直接メンバに持たない
@@ -230,7 +201,7 @@ export interface RenderRequestMsg {
 
 export type RenderResponseMsg =
   | { type: 'progress'; requestId: number; percent: number }
-  | { type: 'done'; requestId: number; wav: ArrayBuffer }
+  | { type: 'done'; requestId: number; wav: ArrayBuffer; log?: string }
   | { type: 'error'; requestId: number; message: string };
 
 self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
@@ -249,45 +220,42 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
 
     // 1. サンプルをWASM側へ登録する(PCM)
     for (const s of samples) {
-      try {
-        const view = new Int16Array(s.pcm16);
-        const pcmPtr = mod._malloc(view.length * 2);
-        mod.HEAPU8.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength), pcmPtr);
-        mod.ccall('load_embedded_resource', null, ['string', 'number', 'number'], [s.key, pcmPtr, view.length]);
-        mod._free(pcmPtr);
-      } catch (sampleErr) {
-        console.warn(`[Worker] サンプル登録例外 (キー: ${s.key}) スキップ:`, sampleErr);
-      }
+      const view = new Int16Array(s.pcm16);
+      const pcmPtr = mod._malloc(view.length * 2);
+      mod.HEAPU8.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength), pcmPtr);
+      mod.ccall('load_embedded_resource', null, ['string', 'number', 'number'], [s.key, pcmPtr, view.length]);
+      mod._free(pcmPtr);
     }
 
     // 2. oto.iniデータをWASM側へ登録する(set_oto_data)
+    //    ※これが無いと execute_render_impl は kDefaultOto (全フィールド0)
+    //      でレンダリングしてしまい、preutterance/overlap/consonant/cutoffが
+    //      一切効かなくなる。
     if (samples.length > 0) {
-      try {
-        const otoPtr = mod._malloc(samples.length * OTO_ENTRY_SIZE);
-        allocatedPtrs.push(otoPtr);
+      const otoPtr = mod._malloc(samples.length * OTO_ENTRY_SIZE);
+      allocatedPtrs.push(otoPtr);
 
-        for (let i = 0; i < samples.length; i++) {
-          const { key, oto } = samples[i];
-          const base = otoPtr + i * OTO_ENTRY_SIZE;
+      for (let i = 0; i < samples.length; i++) {
+        const { key, oto } = samples[i];
+        const base = otoPtr + i * OTO_ENTRY_SIZE;
 
-          // filenameは未使用フィールド。ダングリングポインタを避けるため0固定。
-          mod.setValue(base + OFF_OTO_FILENAME, 0, 'i32');
-          mod.setValue(base + OFF_OTO_CUTOFF, oto.cutoffMs, 'double');
-          writeFixedString(mod, key, base + OFF_OTO_ALIAS, OTO_ALIAS_MAX_BYTES);
-          writeFixedString(mod, key, base + OFF_OTO_WAV_PATH, OTO_WAV_PATH_MAX_BYTES);
-          mod.setValue(base + OFF_OTO_OFFSET, oto.offsetMs, 'double');
-          mod.setValue(base + OFF_OTO_CONSONANT, oto.consonantMs, 'double');
-          mod.setValue(base + OFF_OTO_BLANK, 0, 'double'); // 未使用フィールド
-          mod.setValue(base + OFF_OTO_PREUTTERANCE, oto.preutteranceMs, 'double');
-          mod.setValue(base + OFF_OTO_OVERLAP, oto.overlapMs, 'double');
-        }
-
-        mod.ccall('set_oto_data', null, ['number', 'number'], [otoPtr, samples.length]);
-        mod._free(otoPtr);
-        allocatedPtrs.pop(); // 上で解放済みなのでfinallyでの二重freeを防ぐ
-      } catch (otoErr) {
-        console.warn('[Worker] oto.ini登録例外 スキップ:', otoErr);
+        // filenameは未使用フィールド。ダングリングポインタを避けるため0固定。
+        mod.setValue(base + OFF_OTO_FILENAME, 0, 'i32');
+        mod.setValue(base + OFF_OTO_CUTOFF, oto.cutoffMs, 'double');
+        writeFixedString(mod, key, base + OFF_OTO_ALIAS, OTO_ALIAS_MAX_BYTES);
+        writeFixedString(mod, key, base + OFF_OTO_WAV_PATH, OTO_WAV_PATH_MAX_BYTES);
+        mod.setValue(base + OFF_OTO_OFFSET, oto.offsetMs, 'double');
+        mod.setValue(base + OFF_OTO_CONSONANT, oto.consonantMs, 'double');
+        mod.setValue(base + OFF_OTO_BLANK, 0, 'double'); // 未使用フィールド
+        mod.setValue(base + OFF_OTO_PREUTTERANCE, oto.preutteranceMs, 'double');
+        mod.setValue(base + OFF_OTO_OVERLAP, oto.overlapMs, 'double');
       }
+
+      mod.ccall('set_oto_data', null, ['number', 'number'], [otoPtr, samples.length]);
+      // set_oto_data内部は g_oto_db[entries[i].alias] = entries[i] と値コピー
+      // するため、呼び出し後すぐ解放してよい。
+      mod._free(otoPtr);
+      allocatedPtrs.pop(); // 上で解放済みなのでfinallyでの二重freeを防ぐ
     }
 
     // 3. NoteEvent配列を構築する(休符/ギャップは key=null で無声ノートとして渡す)
@@ -295,34 +263,26 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     allocatedPtrs.push(notesPtr);
 
     for (let i = 0; i < notes.length; i++) {
-      try {
-        const { key, pitchCurveHz } = notes[i];
-        const base = notesPtr + i * NOTE_EVENT_SIZE;
+      const { key, pitchCurveHz } = notes[i];
+      const base = notesPtr + i * NOTE_EVENT_SIZE;
 
-        const isVoiced = key !== null;
-        const pitchCurvePtr = isVoiced ? allocDoubleArray(mod, pitchCurveHz) : 0;
-        if (pitchCurvePtr) allocatedPtrs.push(pitchCurvePtr);
-        const wavPathPtr = isVoiced ? allocCString(mod, key as string) : 0;
-        if (wavPathPtr) allocatedPtrs.push(wavPathPtr);
+      const isVoiced = key !== null;
+      const pitchCurvePtr = isVoiced ? allocDoubleArray(mod, pitchCurveHz) : 0;
+      if (pitchCurvePtr) allocatedPtrs.push(pitchCurvePtr);
+      const wavPathPtr = isVoiced ? allocCString(mod, key as string) : 0;
+      if (wavPathPtr) allocatedPtrs.push(wavPathPtr);
 
-        mod.setValue(base + OFF_WAV_PATH, wavPathPtr, 'i32');
-        mod.setValue(base + OFF_PITCH_CURVE, pitchCurvePtr, 'i32');
-        mod.setValue(base + OFF_PITCH_LENGTH, pitchCurveHz ? pitchCurveHz.length : 0, 'i32');
-        mod.setValue(base + OFF_GENDER_CURVE, 0, 'i32');
-        mod.setValue(base + OFF_TENSION_CURVE, 0, 'i32');
-        mod.setValue(base + OFF_BREATH_CURVE, 0, 'i32');
-        mod.setValue(base + OFF_VIBRATO_DEPTH_CURVE, 0, 'i32');
-        mod.setValue(base + OFF_VIBRATO_RATE_CURVE, 0, 'i32');
-        mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
-        mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
-        mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
-      } catch (noteErr) {
-        console.warn(`[Worker] ノート${i}構築例外 スキップ（無音ノートとして設定）:`, noteErr);
-        const base = notesPtr + i * NOTE_EVENT_SIZE;
-        mod.setValue(base + OFF_WAV_PATH, 0, 'i32');
-        mod.setValue(base + OFF_PITCH_CURVE, 0, 'i32');
-        mod.setValue(base + OFF_PITCH_LENGTH, notes[i]?.pitchCurveHz?.length || 0, 'i32');
-      }
+      mod.setValue(base + OFF_WAV_PATH, wavPathPtr, 'i32');
+      mod.setValue(base + OFF_PITCH_CURVE, pitchCurvePtr, 'i32');
+      mod.setValue(base + OFF_PITCH_LENGTH, pitchCurveHz.length, 'i32');
+      mod.setValue(base + OFF_GENDER_CURVE, 0, 'i32');
+      mod.setValue(base + OFF_TENSION_CURVE, 0, 'i32');
+      mod.setValue(base + OFF_BREATH_CURVE, 0, 'i32');
+      mod.setValue(base + OFF_VIBRATO_DEPTH_CURVE, 0, 'i32');
+      mod.setValue(base + OFF_VIBRATO_RATE_CURVE, 0, 'i32');
+      mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
+      mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
+      mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
     }
 
     // 4. レンダリング実行 (execute_render_cancelable で進捗をメインスレッドへ
@@ -333,57 +293,52 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       (self as unknown as Worker).postMessage(resp);
     }, 'vi');
 
-    try {
-      new Float64Array(mod.HEAPU8.buffer, 0, 1)[0] = 0.85;
-      mod.ccall(
-        'execute_render_cancelable',
-        null,
-        ['number', 'number', 'string', 'number', 'number', 'number'],
-        [notesPtr, notes.length, outputPath, modeFlag, progressFnPtr, 0] // cancel_cb=0(nullptr)=キャンセル無し
-      );
-    } catch (synthErr) {
-      console.warn('[Worker] execute_render_cancelable 例外発生（スキップして続行します）:', synthErr);
-    }
+    mod.ccall(
+      'execute_render_cancelable',
+      null,
+      ['number', 'number', 'string', 'number', 'number', 'number'],
+      [notesPtr, notes.length, outputPath, modeFlag, progressFnPtr, 0] // cancel_cb=0(nullptr)=キャンセル無し
+    );
 
     let wavBytes: Uint8Array;
     try {
       wavBytes = mod.FS.readFile(outputPath, { encoding: 'binary' }) as Uint8Array;
     } catch (readErr) {
-      // 出力ファイルが存在しない場合(合成で例外が発生してスキップされた場合など)
-      // JSにフォールバックせず、WASM処理として無音WAVを生成して返す
+      // vose_core.cpp側の設計: 1ノートでも例外が出たら
+      // failed_during_synth=true でWAVを書き出さずreturnする
+      // (「例外発生時はレンダリングを中断（wavwriteしない）」)。
+      // そのため出力ファイルが存在しない=中断されたケースがほとんど。
+      // 実際の失敗理由は fprintf(stderr, "[Render] Worker thread failed: %s") で
+      // 出力されているはずなので、捕まえたログを添えてエラーにする。
       const log = getCapturedLogText();
-      console.warn('[Worker] WAV出力が未生成です。例外をスキップし無音WAVを生成します。\n' + (log ? log : ''));
-      const totalFrames = notes.reduce((acc, n) => acc + (n.pitchCurveHz?.length || 0), 0);
-      const totalSamples = Math.max(
-        CORE_SAMPLE_RATE * 0.5,
-        Math.round(totalFrames * (PITCH_FRAME_PERIOD_MS / 1000) * CORE_SAMPLE_RATE)
+      throw new Error(
+        `WAV出力が見つかりません(レンダリングが中断された可能性が高いです)。` +
+        (log ? `\n--- vose_core ログ ---\n${log}` : '(vose_coreからのログ出力なし)')
       );
-      const silentBuf = createSilentWav(CORE_SAMPLE_RATE, totalSamples);
-      wavBytes = new Uint8Array(silentBuf);
     }
     const wavCopy = new Uint8Array(wavBytes); // WASMヒープ外へコピー
     try { mod.FS.unlink?.(outputPath); } catch (e) { /* ignore */ }
 
-    const resp: RenderResponseMsg = { type: 'done', requestId, wav: wavCopy.buffer };
+    // [修正] 以前は成功時(=無音スキップで最後まで書き出せた場合含む)は
+    // ログを一切送っていなかった。今は「1ノートでも失敗したら曲全体を
+    // 中断」ではなく「そのノートだけ無音にして続行」する設計なので、
+    // 見た目は成功していても実は大量のノートがスキップされている
+    // (=ほぼ無音になっている)ことがあり得る。捕まえたログを常に
+    // 添付し、アプリ側で気づけるようにする。
+    const log = getCapturedLogText();
+    const resp: RenderResponseMsg = { type: 'done', requestId, wav: wavCopy.buffer, log: log || undefined };
     (self as unknown as Worker).postMessage(resp, [wavCopy.buffer]);
   } catch (err: any) {
-    console.error('[Worker] Error caught (skipping, returning silent WAV):', err);
-    try {
-      const totalFrames = (notes || []).reduce((acc: number, n: any) => acc + (n.pitchCurveHz?.length || 0), 0);
-      const totalSamples = Math.max(
-        CORE_SAMPLE_RATE * 0.5,
-        Math.round(totalFrames * (PITCH_FRAME_PERIOD_MS / 1000) * CORE_SAMPLE_RATE)
-      );
-      const silentBuf = createSilentWav(CORE_SAMPLE_RATE, totalSamples);
-      const resp: RenderResponseMsg = { type: 'done', requestId, wav: silentBuf };
-      (self as unknown as Worker).postMessage(resp, [silentBuf]);
-    } catch (fallbackErr) {
-      const baseMsg = err?.message || String(err);
-      const log = getCapturedLogText();
-      const message = log ? `${baseMsg}\n--- vose_core ログ ---\n${log}` : baseMsg;
-      const resp: RenderResponseMsg = { type: 'error', requestId, message };
-      (self as unknown as Worker).postMessage(resp);
-    }
+    console.error('[Worker] Error caught:', err);
+    const baseMsg = err?.message || String(err);
+    // 既に上でログを埋め込んだメッセージ(WAV出力が見つかりません...)は
+    // 二重に付与しない。それ以外の一般的な例外(WASM側のAbort等)には
+    // 捕まえたログをここで添える。
+    const alreadyHasLog = typeof baseMsg === 'string' && baseMsg.includes('--- vose_core ログ ---');
+    const log = alreadyHasLog ? '' : getCapturedLogText();
+    const message = log ? `${baseMsg}\n--- vose_core ログ ---\n${log}` : baseMsg;
+    const resp: RenderResponseMsg = { type: 'error', requestId, message };
+    (self as unknown as Worker).postMessage(resp);
   } finally {
     // [修正] 以前はこのブロック全体が `if (progressFnPtr)` の中にあり、
     // addFunction()呼び出し前に例外が発生するとNoteEvent/oto用に確保した
