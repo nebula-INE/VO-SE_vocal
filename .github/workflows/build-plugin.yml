@@ -40,13 +40,11 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # --- リポジトリ内外の全ビルドキャッシュ・キャッシュディレクトリを完全に強制削除 ---
-      - name: Hard Clean All Hidden Caches
+      # --- 既存のビルドキャッシュを完全に削除 ---
+      - name: Clean build directory
         run: |
           rm -rf juce_plugin/build
-          rm -rf build
-          rm -rf ../build
-          rm -rf ./*build*
+          rm -rf juce_plugin/CMakeCache.txt
         shell: bash
 
       # --- CMake 設定 ---
@@ -56,15 +54,15 @@ jobs:
           COMMON_OPTS="-DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0"
 
           if [ "${{ matrix.os }}" == "macos-14" ]; then
-            cmake --fresh -B juce_plugin/build -S juce_plugin \
+            cmake -B juce_plugin/build -S juce_plugin \
               $COMMON_OPTS \
               -DCMAKE_MODULE_LINKER_FLAGS="-liconv" \
               -DCMAKE_SHARED_LINKER_FLAGS="-liconv" \
               -DCMAKE_EXE_LINKER_FLAGS="-liconv"
           elif [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cmake --fresh -B juce_plugin/build -S juce_plugin -G "Ninja" $COMMON_OPTS
+            cmake -B juce_plugin/build -S juce_plugin -G "Ninja" $COMMON_OPTS
           else
-            cmake --fresh -B juce_plugin/build -S juce_plugin $COMMON_OPTS
+            cmake -B juce_plugin/build -S juce_plugin $COMMON_OPTS
           fi
 
       # --- ビルド ---
