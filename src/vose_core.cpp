@@ -1392,8 +1392,14 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             ? resample_curve(n.tension_curve, n.pitch_length, j, output_frames) : 0.5;
         // デフォルト息パラメータは 0.0 (純粋な有声調波・息ノイズなし)
         // 0.5 だと意図しないヒスノイズが乗るため、明示的な指定がない限り息漏れは0とする
-        const double breath  = n.breath_curve
+        double breath  = n.breath_curve
             ? resample_curve(n.breath_curve,  n.pitch_length, j, output_frames) : 0.0;
+        // ★修正: breath は本来 0.0〜1.0 (0.5=無変化) の規約だが、上流 (UI/UST/レガシー
+        // パス) が 0〜100 スケールのままのカーブを渡してくるケースがあり、その場合
+        // breath_allowance が桁違いに膨張して下の max_ap クランプが事実上無効化され、
+        // 全ノートで高域ノイズ(「吐息みたいなノイズ」)が漏れる原因になっていた。
+        // どんな上流の値が来ても安全な範囲に丸める。
+        breath = clamp(breath, 0.0, 1.0);
 
         // ---- 4. フォルマント追従とテンション・ブレス ----
         const double f0_ratio = (base_f0 > 0.0) ? base_f0_val / base_f0 : 1.0;
@@ -1403,7 +1409,9 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
         // ---- 5. 非周期性(ar)の最適クランプ（謎のノイズ混じり吐息を完全に除去） ----
         // ユーザーが明示的に息パラメータ (breath > 0.5) を上げた場合のみ意図的な息漏れを許容
-        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 1.2 : 0.0;
+        // ★修正: 係数を 1.2 → 0.3 に縮小。breath=1.0 でも max_ap の底上げを +0.15 までに
+        // 抑え、意図的な息漏れ設定時でも高域が「サー」と鳴りすぎないようにする。
+        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.3 : 0.0;
         const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path);
         const double fixed_ms = std::max(0.0, current_oto.consonant);
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
