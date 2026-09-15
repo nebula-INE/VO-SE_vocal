@@ -24,7 +24,7 @@ import {
   ProjectData
 } from './utils/formatConverter';
 // vose_core WASM(本物のC++コア)経由でレンダリング（例外発生時もスキップし、JSへのフォールバックは絶対に行わない）
-import { renderStudioCore as renderWasm } from './voseCoreClient';
+import { renderStudioCore as renderWasm, lastUsedEngine } from './voseCoreClient';
 import PitchCurveOverlay from './components/PitchCurveOverlay';
 import PitchCurveMiniEditor from './components/PitchCurveMiniEditor';
 import MultiTrackPanel from './components/MultiTrackPanel';
@@ -76,11 +76,12 @@ interface PyStatus {
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-const REST_LYRICS_SET = new Set(['r', 'r_', '息', 'br', 'pau', 'sil', '吸', '', ' ', '　', '休', '・', '-', 'ー', '~']);
+const REST_LYRICS_SET = new Set(['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null']);
 export const isRestLyric = (lyric?: string): boolean => {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
-  return REST_LYRICS_SET.has(l);
+  if (REST_LYRICS_SET.has(l)) return true;
+  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l);
 };
 
 export const getSampleCacheKey = (vb: string, lyric: string, prevLyric?: string, noteNum?: number) => {
@@ -91,6 +92,48 @@ const getNoteName = (midiNum: number) => {
   const octave = Math.floor(midiNum / 12) - 1;
   const noteName = NOTE_NAMES[midiNum % 12];
   return `${noteName}${octave}`;
+};
+
+export const getLoopCrossfadedBuffer = (
+  ctx: AudioContext,
+  cached: any,
+  loopStartSec: number,
+  loopEndSec: number
+): AudioBuffer => {
+  const key = `${loopStartSec.toFixed(4)}_${loopEndSec.toFixed(4)}`;
+  if (!cached._loopXfadeCache) {
+    cached._loopXfadeCache = new Map<string, AudioBuffer>();
+  }
+  const existing = cached._loopXfadeCache.get(key);
+  if (existing) return existing;
+
+  const src: AudioBuffer = cached.buffer;
+  const sr = src.sampleRate;
+  const loopLenSec = Math.max(0.001, loopEndSec - loopStartSec);
+  const xfadeSec = Math.min(0.015, loopLenSec * 0.25); // 最大15ms、ループ幅の25%まで
+  const xfadeSamples = Math.max(1, Math.floor(xfadeSec * sr));
+  const loopStartSample = Math.max(0, Math.floor(loopStartSec * sr));
+  const loopEndSample = Math.min(src.length, Math.floor(loopEndSec * sr));
+
+  const newBuffer = ctx.createBuffer(src.numberOfChannels, src.length, sr);
+  for (let ch = 0; ch < src.numberOfChannels; ch++) {
+    const srcData = src.getChannelData(ch);
+    const dstData = newBuffer.getChannelData(ch);
+    dstData.set(srcData);
+
+    for (let i = 0; i < xfadeSamples; i++) {
+      const tailIdx = loopEndSample - xfadeSamples + i;
+      const headIdx = loopStartSample + i;
+      if (tailIdx < 0 || tailIdx >= src.length || headIdx >= src.length) continue;
+      const t = i / xfadeSamples;
+      const fadeOut = Math.cos((t * Math.PI) / 2);
+      const fadeIn = Math.sin((t * Math.PI) / 2);
+      dstData[tailIdx] = srcData[tailIdx] * fadeOut + srcData[headIdx] * fadeIn;
+    }
+  }
+
+  cached._loopXfadeCache.set(key, newBuffer);
+  return newBuffer;
 };
 
 const isBlackKey = (midiNum: number) => {
@@ -547,10 +590,13 @@ export default function App() {
       
       if (audioUrl) {
         const totalDurationSec = Math.round((performance.now() - startTime) / 1000);
+        const engineName = lastUsedEngine === 'wasm' 
+          ? '⚡ C++ WebAssembly (vose_core.wasm)' 
+          : '⚠️ JS/WebAudio (PSOLA フォールバック)';
         setToast({
           type: 'success',
           title: 'レンダリング完了',
-          desc: `ブラウザ内のWASMエンジンで高品質合成が完了しました。(処理時間: ${totalDurationSec}秒)`
+          desc: `エンジン: ${engineName} (処理時間: ${totalDurationSec}秒)`
         });
         
         const audio = new Audio(audioUrl);
@@ -654,6 +700,31 @@ export default function App() {
       const masterGain = ctx.createGain();
       masterGain.gain.setValueAtTime(0.85, ctx.currentTime);
 
+      // スタジオグレード 40Hz HPF (サブベース低域ノイズカット)
+      const hpf = ctx.createBiquadFilter();
+      hpf.type = 'highpass';
+      hpf.frequency.setValueAtTime(40, ctx.currentTime);
+      hpf.Q.setValueAtTime(0.707, ctx.currentTime);
+
+      // スタジオグレード De-Hiss & De-Breath フィルター (5.8kHz, -6.5dB)
+      const deHiss = ctx.createBiquadFilter();
+      deHiss.type = 'peaking';
+      deHiss.frequency.setValueAtTime(5800, ctx.currentTime);
+      deHiss.gain.setValueAtTime(-6.5, ctx.currentTime);
+      deHiss.Q.setValueAtTime(1.3, ctx.currentTime);
+
+      // 急峻な 4次 (24dB/oct) ボーカルローパスフィルター (6800Hz)
+      // 7kHz以上の耳障りな息漏れ・非調波ホワイトノイズをリアルタイムに完全遮断
+      const lpf1 = ctx.createBiquadFilter();
+      lpf1.type = 'lowpass';
+      lpf1.frequency.setValueAtTime(6800, ctx.currentTime);
+      lpf1.Q.setValueAtTime(0.707, ctx.currentTime);
+
+      const lpf2 = ctx.createBiquadFilter();
+      lpf2.type = 'lowpass';
+      lpf2.frequency.setValueAtTime(6800, ctx.currentTime);
+      lpf2.Q.setValueAtTime(0.707, ctx.currentTime);
+
       const limiter = ctx.createDynamicsCompressor();
       limiter.threshold.setValueAtTime(-1.0, ctx.currentTime); // -1.0 dBFS ceiling
       limiter.knee.setValueAtTime(3.0, ctx.currentTime);
@@ -661,7 +732,11 @@ export default function App() {
       limiter.attack.setValueAtTime(0.003, ctx.currentTime);
       limiter.release.setValueAtTime(0.050, ctx.currentTime);
 
-      masterGain.connect(limiter);
+      masterGain.connect(hpf);
+      hpf.connect(deHiss);
+      deHiss.connect(lpf1);
+      lpf1.connect(lpf2);
+      lpf2.connect(limiter);
       limiter.connect(ctx.destination);
 
       masterGainRef.current = masterGain;
@@ -1157,6 +1232,11 @@ export default function App() {
           source.loop = true;
           source.loopStart = loopStartSec;
           source.loopEnd = loopEndSec;
+          try {
+            source.buffer = getLoopCrossfadedBuffer(ctx, cached, loopStartSec, loopEndSec);
+          } catch (e) {
+            // 失敗しても元のバッファのまま続行
+          }
         }
       }
 
@@ -1851,10 +1931,14 @@ export default function App() {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        const engineName = lastUsedEngine === 'wasm' 
+          ? '⚡ C++ WebAssembly (vose_core.wasm)' 
+          : '⚠️ JS/WebAudio (PSOLA フォールバック)';
         setToast({
           type: 'success',
           title: 'WAV書き出し完了',
-          desc: `${projectName}_rendered.wav を書き出しました。(処理時間: ${totalDurationSec}秒)`
+          desc: `${projectName}_rendered.wav を書き出しました。[エンジン: ${engineName}] (処理時間: ${totalDurationSec}秒)`
         });
       } else {
         throw new Error('音声データの生成に失敗しました。');
@@ -1868,55 +1952,6 @@ export default function App() {
   };
 
   // Core Note Vocal Audio Node Scheduler (WAV Voicebank with Pitch Bends & Formant Synth Fallback)
-  // AudioBufferSourceNode.loop はサンプル単位のハードループで、クロスフェードを一切
-  // 行わない。UTAU系音源のサステイン区間（母音の伸ばし部分）を単純にループすると、
-  // loopStart/loopEnd がちょうど同じ位相・振幅で一致することはまず無いため、
-  // ループ1周ごとに波形が不連続にジャンプ＝「ブツッ」というクリック音が鳴り続ける。
-  // これを防ぐため、ループ終端の直前を、ループ始点直後の波形とイコールパワーで
-  // ブレンドした専用バッファを作る。alias+loop位置ごとに一度だけ計算してキャッシュに
-  // ぶら下げておく（毎ノート再計算しない）。共有キャッシュの元バッファ自体は書き換えない。
-  const getLoopCrossfadedBuffer = (
-    ctx: AudioContext,
-    cached: any,
-    loopStartSec: number,
-    loopEndSec: number
-  ): AudioBuffer => {
-    const key = `${loopStartSec.toFixed(4)}_${loopEndSec.toFixed(4)}`;
-    if (!cached._loopXfadeCache) {
-      cached._loopXfadeCache = new Map<string, AudioBuffer>();
-    }
-    const existing = cached._loopXfadeCache.get(key);
-    if (existing) return existing;
-
-    const src: AudioBuffer = cached.buffer;
-    const sr = src.sampleRate;
-    const loopLenSec = Math.max(0.001, loopEndSec - loopStartSec);
-    const xfadeSec = Math.min(0.015, loopLenSec * 0.25); // 最大15ms、ループ幅の25%まで
-    const xfadeSamples = Math.max(1, Math.floor(xfadeSec * sr));
-    const loopStartSample = Math.max(0, Math.floor(loopStartSec * sr));
-    const loopEndSample = Math.min(src.length, Math.floor(loopEndSec * sr));
-
-    const newBuffer = ctx.createBuffer(src.numberOfChannels, src.length, sr);
-    for (let ch = 0; ch < src.numberOfChannels; ch++) {
-      const srcData = src.getChannelData(ch);
-      const dstData = newBuffer.getChannelData(ch);
-      dstData.set(srcData);
-
-      for (let i = 0; i < xfadeSamples; i++) {
-        const tailIdx = loopEndSample - xfadeSamples + i;
-        const headIdx = loopStartSample + i;
-        if (tailIdx < 0 || tailIdx >= src.length || headIdx >= src.length) continue;
-        const t = i / xfadeSamples;
-        const fadeOut = Math.cos((t * Math.PI) / 2);
-        const fadeIn = Math.sin((t * Math.PI) / 2);
-        dstData[tailIdx] = srcData[tailIdx] * fadeOut + srcData[headIdx] * fadeIn;
-      }
-    }
-
-    cached._loopXfadeCache.set(key, newBuffer);
-    return newBuffer;
-  };
-
   const scheduleVocalNoteNode = (
     ctx: AudioContext,
     targetVb: string,
@@ -2547,7 +2582,7 @@ export default function App() {
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <h1 className="font-bold text-slate-100 tracking-wide text-base">VO-SE Pro Studio</h1>
+              <h1 className="font-bold text-slate-100 tracking-wide text-base">VO-SEvocal</h1>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/50">
                 v1.0.0
               </span>
@@ -3529,7 +3564,14 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {/* Custom Installed Voicebanks */}
                   {customVoicebanks
-                    .filter((vb) => vb.name.toLowerCase().includes(vbSearchQuery.toLowerCase()))
+                    .filter((vb) => {
+                      const matchesSearch = vb.name.toLowerCase().includes(vbSearchQuery.toLowerCase());
+                      if (!matchesSearch) return false;
+                      const isOfficial = vb.name.toLowerCase().includes('official') || vb.name.toLowerCase().includes('内蔵');
+                      if (vbCategoryFilter === 'official') return isOfficial;
+                      if (vbCategoryFilter === 'custom') return !isOfficial;
+                      return true;
+                    })
                     .map((vb) => {
                       const isSelected = selectedVoicebank === vb.name;
                       return (

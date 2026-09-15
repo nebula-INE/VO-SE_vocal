@@ -103,6 +103,7 @@ jobs:
                src/world/synthesis.cpp \
                -Iinclude \
                -O3 \
+               -std=c++17 \
                -fexceptions \
                -s WASM=1 \
                -s ALLOW_MEMORY_GROWTH=1 \

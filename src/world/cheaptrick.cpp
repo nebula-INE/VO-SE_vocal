@@ -189,8 +189,11 @@ static void CheapTrickGeneralBody(const double *x, int x_length, int fs,
 }  // namespace
 
 int GetFFTSizeForCheapTrick(int fs, const CheapTrickOption *option) {
+  const double f0_floor = (option != nullptr && option->f0_floor > 0.0)
+      ? option->f0_floor
+      : world::kFloorF0;
   return static_cast<int>(pow(2.0, 1.0 +
-      static_cast<int>(log(3.0 * fs / option->f0_floor + 1) / world::kLog2)));
+      static_cast<int>(log(3.0 * fs / f0_floor + 1) / world::kLog2)));
 }
 
 double GetF0FloorForCheapTrick(int fs, int fft_size) {
@@ -200,6 +203,11 @@ double GetF0FloorForCheapTrick(int fs, int fft_size) {
 void CheapTrick(const double *x, int x_length, int fs,
     const double *temporal_positions, const double *f0, int f0_length,
     const CheapTrickOption *option, double **spectrogram) {
+  CheapTrickOption default_option;
+  if (option == nullptr) {
+    InitializeCheapTrickOption(fs, &default_option);
+    option = &default_option;
+  }
   int fft_size = option->fft_size;
 
   RandnState randn_state = {};

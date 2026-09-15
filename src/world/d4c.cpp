@@ -342,6 +342,11 @@ static void GetAperiodicity(const double *coarse_frequency_axis,
 void D4C(const double *x, int x_length, int fs,
     const double *temporal_positions, const double *f0, int f0_length,
     int fft_size, const D4COption *option, double **aperiodicity) {
+  D4COption default_option;
+  if (option == nullptr) {
+    InitializeD4COption(&default_option);
+    option = &default_option;
+  }
   RandnState randn_state = {};
   randn_reseed(&randn_state);
 

@@ -28,6 +28,7 @@ import {
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
+import { cleanWavArrayBuffer } from './utils/wavCleaner';
 import { psolaPitchAndTimeShiftBuffer } from './psolaPitchShift';
 
 export interface FetchedSample {
@@ -42,13 +43,14 @@ export interface FetchedSample {
 }
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', '息', 'br', 'pau', 'sil', '吸', '', ' ', '　', '休', '・', '-', 'ー', '~'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
 ]);
 
 export function isRest(lyric?: string): boolean {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
-  return REST_LYRICS_SET.has(l);
+  if (REST_LYRICS_SET.has(l)) return true;
+  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l);
 }
 
 const sampleCache = new Map<string, FetchedSample | null>();
@@ -314,11 +316,44 @@ export async function renderStudioOffline(
   const masterGain = offlineCtx.createGain();
   masterGain.gain.setValueAtTime(0.95, 0);
 
-  // サブベースカット (30Hz HPF)
+  // サブベースカット (40Hz HPF)
   const masterHpf = offlineCtx.createBiquadFilter();
   masterHpf.type = 'highpass';
-  masterHpf.frequency.setValueAtTime(30, 0);
+  masterHpf.frequency.setValueAtTime(40, 0);
   masterHpf.Q.setValueAtTime(0.707, 0);
+
+  // [スタジオDe-Mud] 320Hz近傍の濁り・こもりをすっきりカット
+  const masterDeMud = offlineCtx.createBiquadFilter();
+  masterDeMud.type = 'peaking';
+  masterDeMud.frequency.setValueAtTime(320, 0);
+  masterDeMud.gain.setValueAtTime(-3.5, 0);
+  masterDeMud.Q.setValueAtTime(1.2, 0);
+
+  // [スタジオVocal Core] 2.8kHz声の芯・存在感をブースト
+  const masterCore = offlineCtx.createBiquadFilter();
+  masterCore.type = 'peaking';
+  masterCore.frequency.setValueAtTime(2800, 0);
+  masterCore.gain.setValueAtTime(3.5, 0);
+  masterCore.Q.setValueAtTime(1.1, 0);
+
+  // [スタジオArticulation] 4.8kHz子音・滑舌のキレを強調
+  const masterArtic = offlineCtx.createBiquadFilter();
+  masterArtic.type = 'peaking';
+  masterArtic.frequency.setValueAtTime(4800, 0);
+  masterArtic.gain.setValueAtTime(3.0, 0);
+  masterArtic.Q.setValueAtTime(1.2, 0);
+
+  // [スタジオAir] 10kHz抜け・エアー感
+  const masterAir = offlineCtx.createBiquadFilter();
+  masterAir.type = 'highshelf';
+  masterAir.frequency.setValueAtTime(10000, 0);
+  masterAir.gain.setValueAtTime(2.0, 0);
+
+  // [スタジオLPF] 14.5kHz以上の不要な超高域ノイズのみをスマートにカット
+  const masterLpf = offlineCtx.createBiquadFilter();
+  masterLpf.type = 'lowpass';
+  masterLpf.frequency.setValueAtTime(14500, 0);
+  masterLpf.Q.setValueAtTime(0.707, 0);
 
   // クリッピング防止コンプレッサー/リミッター
   const masterLimiter = offlineCtx.createDynamicsCompressor();
@@ -329,7 +364,12 @@ export async function renderStudioOffline(
   masterLimiter.release.setValueAtTime(0.08, 0);
 
   masterGain.connect(masterHpf);
-  masterHpf.connect(masterLimiter);
+  masterHpf.connect(masterDeMud);
+  masterDeMud.connect(masterCore);
+  masterCore.connect(masterArtic);
+  masterArtic.connect(masterAir);
+  masterAir.connect(masterLpf);
+  masterLpf.connect(masterLimiter);
   masterLimiter.connect(offlineCtx.destination);
 
   // 5. 各ノートの音響ノードをオフラインコンテキストにスケジュール (進捗: 32% -> 40%)
@@ -339,10 +379,10 @@ export async function renderStudioOffline(
   // 数ノートごとに1回、明示的にイベントループへ制御を返す(yield)ことで、
   // 処理時間そのものは変わらないが、ブラウザが固まらず(UIが反応し続け、
   // 進捗表示も更新され続ける)ようにする。
-  const YIELD_EVERY_N_NOTES = 4;
+  const YIELD_EVERY_N_NOTES = 2;
   for (let idx = 0; idx < schedulingInfos.length; idx++) {
     if (idx > 0 && idx % YIELD_EVERY_N_NOTES === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 8));
       onProgress?.(Math.round(32 + (idx / schedulingInfos.length) * 8));
     }
     const { note, startTimeSec, durationSec, cacheKey } = schedulingInfos[idx];
@@ -359,7 +399,8 @@ export async function renderStudioOffline(
         const offsetSec = Math.max(0, (cached.left_blank || 0) / 1000);
         const preuttSec = Math.max(0, (cached.preutterance || 0) / 1000);
         const fixedSec = Math.max(0, (cached.fixed_range || 0) / 1000);
-        const effectivePreuttSec = preuttSec / baseRate;
+        // PSOLAでは時間軸と音高が独立しているため、先行発音(子音)は自然な実時間で発音される
+        const effectivePreuttSec = preuttSec;
         const wavDuration = cached.buffer.duration;
 
         const rb = cached.right_blank || 0;
@@ -373,15 +414,18 @@ export async function renderStudioOffline(
 
         const actualStartTime = Math.max(0, startTimeSec - effectivePreuttSec);
         const timeDiff = actualStartTime - (startTimeSec - effectivePreuttSec);
-        const startOffsetInWav = Math.min(offsetSec + timeDiff * baseRate, cutoffEndSec - 0.02);
+        const startOffsetInWav = Math.min(offsetSec + timeDiff, cutoffEndSec - 0.02);
         const playLen = effectivePreuttSec + durationSec;
 
-        const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen * baseRate;
+        const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen;
 
         let loopRange: { loopStartSec: number; loopEndSec: number } | null = null;
         if (requiredSampleSec > maxSampleDur + 0.02) {
-          const loopStartSec = Math.min(cutoffEndSec - 0.06, offsetSec + Math.max(0.02, fixedSec || preuttSec || 0.05));
-          const loopEndSec = Math.min(wavDuration - 0.01, Math.max(loopStartSec + 0.04, cutoffEndSec - 0.01));
+          // 語尾の呼気・息漏れノイズがループに巻き込まれるのを防ぐため、末尾から十分手前(少なくとも40ms)でループ
+          const safeEndSec = Math.min(wavDuration - 0.04, cutoffEndSec - 0.04);
+          const safeStartSec = offsetSec + Math.max(0.04, fixedSec || preuttSec || 0.06);
+          const loopStartSec = Math.min(safeEndSec - 0.05, safeStartSec);
+          const loopEndSec = Math.max(loopStartSec + 0.04, safeEndSec);
           if (loopEndSec > loopStartSec + 0.03) {
             loopRange = { loopStartSec, loopEndSec };
           }
@@ -444,12 +488,13 @@ export async function renderStudioOffline(
         const tDecay = Math.max(tAttack + 0.003, noteEndTime - releaseDur);
         const tEnd = Math.min(tDecay + releaseDur, noteEndTime);
 
-        gain.gain.setValueAtTime(0.0001, tStart);
+        gain.gain.setValueAtTime(0.0, tStart);
         gain.gain.linearRampToValueAtTime(volGain, tAttack);
         if (tDecay > tAttack + 0.002) {
           gain.gain.setValueAtTime(volGain, tDecay);
         }
-        gain.gain.linearRampToValueAtTime(0.0001, tEnd);
+        gain.gain.linearRampToValueAtTime(0.0, tEnd);
+        gain.gain.setValueAtTime(0.0, tEnd + 0.001);
 
         const hpf = offlineCtx.createBiquadFilter();
         hpf.type = 'highpass';
@@ -541,13 +586,89 @@ export async function renderStudioOffline(
 
   onProgress?.(92);
 
-  // 7. AudioBuffer を高音質 16-bit PCM WAV Blob へエンコード (進捗: 92% -> 100%)
+  // 7. インテリジェント・ボーカルノイズゲート & ヒスクリーナー (進捗: 92% -> 96%)
+  // メモリ超軽量化: 全フレーム配列(数十MB)を生成せず、ブロック単位(数万要素/約120KB)で
+  // インプレースに処理し、長尺曲でもブラウザクラッシュ(OOM)を完全に防止。
+  const nCh = renderedBuffer.numberOfChannels;
+  const nFrames = renderedBuffer.length;
+  const gateWindow = Math.floor(sampleRate * 0.005); // 5ms (約220サンプル)
+  const numBlocks = Math.ceil(nFrames / gateWindow);
+  const noiseFloor = 0.012;
+  const microHissThresh = 0.0015;
+
+  const blockGains = new Float32Array(numBlocks);
+
+  for (let ch = 0; ch < nCh; ch++) {
+    const data = renderedBuffer.getChannelData(ch);
+    // DCオフセット除去
+    let sum = 0;
+    for (let i = 0; i < nFrames; i++) sum += data[i];
+    const dc = sum / Math.max(1, nFrames);
+    if (Math.abs(dc) > 1e-5) {
+      for (let i = 0; i < nFrames; i++) data[i] -= dc;
+    }
+
+    // ブロックごとのピーク検出
+    for (let b = 0; b < numBlocks; b++) {
+      const start = b * gateWindow;
+      const end = Math.min(nFrames, start + gateWindow);
+      let maxAmp = 0;
+      for (let j = start; j < end; j++) {
+        const abs = Math.abs(data[j]);
+        if (abs > maxAmp) maxAmp = abs;
+      }
+      if (maxAmp < noiseFloor) {
+        const atten = (maxAmp / noiseFloor) ** 3;
+        blockGains[b] = atten < 0.05 ? 0 : atten;
+      } else {
+        blockGains[b] = 1.0;
+      }
+    }
+
+    // ブロックゲインのスムージング（クリック音防止フェード）
+    for (let b = 1; b < numBlocks; b++) {
+      blockGains[b] = blockGains[b - 1] * 0.70 + blockGains[b] * 0.30;
+    }
+    for (let b = numBlocks - 2; b >= 0; b--) {
+      blockGains[b] = blockGains[b + 1] * 0.70 + blockGains[b] * 0.30;
+    }
+
+    // サンプル単位への滑らかな線形補間適用 & 微小ヒス抑制 (インプレース処理)
+    for (let b = 0; b < numBlocks; b++) {
+      const start = b * gateWindow;
+      const end = Math.min(nFrames, start + gateWindow);
+      const g0 = blockGains[b];
+      const g1 = b + 1 < numBlocks ? blockGains[b + 1] : g0;
+      const span = end - start;
+
+      for (let j = start; j < end; j++) {
+        const t = span > 0 ? (j - start) / span : 0;
+        const currentGain = g0 + (g1 - g0) * t;
+        let s = data[j] * currentGain;
+
+        // 発声中の微小非調波ゆらぎ・ヒス成分のソフトスレッショルディング
+        if (Math.abs(s) < microHissThresh) {
+          s *= Math.abs(s) / microHissThresh;
+        }
+        data[j] = s;
+      }
+    }
+  }
+
+  // 不要になった中間リソースを速やかに明示的解放
+  sampleDataMap.clear();
+  schedulingInfos.length = 0;
+
+  // 8. AudioBuffer を高音質 16-bit PCM WAV Blob へエンコード (進捗: 96% -> 100%)
   await new Promise((r) => setTimeout(r, 50)); // UI更新用yield
   const wavBlob = bufferToWav(renderedBuffer);
+  const ab = await wavBlob.arrayBuffer();
+  cleanWavArrayBuffer(ab);
+  const cleanBlob = new Blob([ab], { type: 'audio/wav' });
 
   onProgress?.(100);
 
-  return URL.createObjectURL(wavBlob);
+  return URL.createObjectURL(cleanBlob);
 }
 
 export const renderWasm = renderStudioOffline;

@@ -22,11 +22,30 @@
 #include <mutex>
 #include <condition_variable>
 #include <memory>
-#include <shared_mutex>
 #include <atomic>
 #include <chrono>
 #include <cctype>
 #include <functional>
+
+#if defined(__EMSCRIPTEN__)
+struct VoseSharedMutex {
+    void lock() {}
+    void unlock() {}
+    bool try_lock() { return true; }
+    void lock_shared() {}
+    void unlock_shared() {}
+    bool try_lock_shared() { return true; }
+};
+template <typename T>
+struct VoseSharedLock {
+    explicit VoseSharedLock(T&) {}
+};
+#else
+#include <shared_mutex>
+using VoseSharedMutex = std::shared_mutex;
+template <typename T>
+using VoseSharedLock = std::shared_lock<T>;
+#endif
 
 // --- clamp polyfill (for C++14/macOS libc++) ---
 // [修正] <algorithm> を読み込んだ「後」に判定する。
@@ -47,10 +66,6 @@ constexpr const T& clamp(const T& v, const T& lo, const T& hi) {
 // 先に型定義を完了させ、ONNXセッション側での未定義エラーを防ぐ
 using VoseMutex = std::mutex;
 using VoseUniqueLock = std::unique_lock<std::mutex>;
-// BigVGANセッションのポインタ差し替え（set_bigvgan_model）と
-// 推論実行（execute_render_impl内のRun呼び出し）を安全に共存させるための
-// 読み書きロック。差し替えは排他、推論実行時は共有ロックで読む。
-using VoseSharedMutex = std::shared_mutex;
 
 // --- Windows (MSVC) と POSIX (macOS/Linux) のクロスプラットフォーム吸収マクロ ---
 #if defined(_WIN32) || defined(_WIN64)
@@ -93,6 +108,7 @@ static VoseSharedMutex               g_bigvgan_mutex; // 前方で定義済み�
 #include "world/cheaptrick.h"
 #include "world/d4c.h"
 #include "world/harvest.h"
+#include "world/stonemask.h"
 #include "world/audioio.h"
 #include "world/constantnumbers.h"
 
@@ -177,15 +193,15 @@ class VoiceDbStore {
 
     // 音源1件あたりのサイズは波形長に依存し様々だが、通常の音源集
     // （数百〜数千音素）を想定した上限。必要ならビルド時に調整可能。
-    static constexpr size_t kMaxEntries = 256;
+    static constexpr size_t kMaxEntries = 4096;
 
-    mutable std::shared_mutex mtx;
+    mutable VoseSharedMutex mtx;
     std::list<std::pair<Key, Value>> lru_list;
     std::unordered_map<Key, std::list<std::pair<Key, Value>>::iterator> index;
 
 public:
     Value get(const Key& key) {
-        std::unique_lock<std::shared_mutex> lock(mtx); // splice は変更操作のため排他ロック
+        std::unique_lock<VoseSharedMutex> lock(mtx); // splice は変更操作のため排他ロック
         auto it = index.find(key);
         if (it == index.end()) return nullptr;
         lru_list.splice(lru_list.begin(), lru_list, it->second);
@@ -193,7 +209,7 @@ public:
     }
 
     void put(const Key& key, const Value& val) {
-        std::unique_lock<std::shared_mutex> lock(mtx);
+        std::unique_lock<VoseSharedMutex> lock(mtx);
         auto it = index.find(key);
         if (it != index.end()) {
             lru_list.erase(it->second);
@@ -210,7 +226,7 @@ public:
     }
 
     void erase(const Key& key) {
-        std::unique_lock<std::shared_mutex> lock(mtx);
+        std::unique_lock<VoseSharedMutex> lock(mtx);
         auto it = index.find(key);
         if (it == index.end()) return;
         lru_list.erase(it->second);
@@ -218,7 +234,7 @@ public:
     }
 
     void clear() {
-        std::unique_lock<std::shared_mutex> lock(mtx);
+        std::unique_lock<VoseSharedMutex> lock(mtx);
         lru_list.clear();
         index.clear();
     }
@@ -249,21 +265,21 @@ struct AnalysisCache {
 // VO-SE専用の型定義（既存の定義に合わせて調整してください）
 struct AnalysisCache; 
 
-static constexpr size_t kMaxCacheEntries = 64; // 約1GB上限（16MB × 64）
+static constexpr size_t kMaxCacheEntries = 1024; // キャッシュ上限を拡張
 
 class CacheStore {
     using Key   = std::string;
     using Value = std::shared_ptr<const AnalysisCache>;
 
 private:
-    mutable std::shared_mutex mtx;   // ← shared_mutex に変更
+    mutable VoseSharedMutex mtx;
     std::list<std::pair<Key, Value>> lru_list;
     std::unordered_map<Key, std::list<std::pair<Key, Value>>::iterator> index;
 
 public:
     // 読み取り（共有ロック＋MRU移動）
     Value get(const Key& key) {
-        std::unique_lock<std::shared_mutex> lock(mtx);  // splice は変更操作のため排他ロック
+        std::unique_lock<VoseSharedMutex> lock(mtx);  // splice は変更操作のため排他ロック
         auto it = index.find(key);
         if (it == index.end()) return nullptr;
         lru_list.splice(lru_list.begin(), lru_list, it->second);
@@ -272,7 +288,7 @@ public:
 
     // 書き込み（排他ロック）
     void put(const Key& key, const Value& val) {
-        std::unique_lock<std::shared_mutex> lock(mtx);
+        std::unique_lock<VoseSharedMutex> lock(mtx);
         auto it = index.find(key);
         if (it != index.end()) {
             lru_list.erase(it->second);
@@ -289,7 +305,7 @@ public:
     }
 
     void erase(const Key& key) {
-        std::unique_lock<std::shared_mutex> lock(mtx);
+        std::unique_lock<VoseSharedMutex> lock(mtx);
         auto it = index.find(key);
         if (it == index.end()) return;
         lru_list.erase(it->second);
@@ -297,12 +313,12 @@ public:
     }
 
     size_t size() const {
-        std::shared_lock<std::shared_mutex> lock(mtx);
+        VoseSharedLock<VoseSharedMutex> lock(mtx);
         return index.size();
     }
 
     void clear() {
-        std::unique_lock<std::shared_mutex> lock(mtx);
+        std::unique_lock<VoseSharedMutex> lock(mtx);
         lru_list.clear();
         index.clear();
     }
@@ -702,30 +718,49 @@ build_analysis_cache(const EmbeddedVoice& ev, int fft_size, int spec_bins)
     cache->time.resize(harvest_len);
     cache->length = harvest_len;
 
+    std::vector<double> raw_f0(harvest_len, 0.0);
     Harvest(ev.waveform.data(), wav_len, ev.fs, &opt,
-            cache->time.data(), cache->f0.data());
+            cache->time.data(), raw_f0.data());
 
-    // F0補完: 無声区間を前後の有声値で線形補間
+    // StoneMask による瞬時周波数ベースの高精度 F0 精緻化
+    StoneMask(ev.waveform.data(), wav_len, ev.fs,
+              cache->time.data(), raw_f0.data(), harvest_len, cache->f0.data());
+
+    // 孤立した1フレームの一時的なピッチドロップアウト（F0==0）を救済
+    for (int i = 1; i + 1 < harvest_len; ++i) {
+        if (cache->f0[i] == 0.0 && cache->f0[i - 1] > 0.0 && cache->f0[i + 1] > 0.0) {
+            cache->f0[i] = 0.5 * (cache->f0[i - 1] + cache->f0[i + 1]);
+        }
+    }
+
+    // CheapTrick と D4C は全区間で連続した F0 を必要とする。
+    // 無声区間を有声区間のピッチで滑らかに補間・外挿した解析専用 F0 を生成することで、
+    // スペクトル包絡の崩れや非周期性（ホワイトノイズ比率）の過大推定を防止する。
+    std::vector<double> continuous_f0 = cache->f0;
     {
         std::vector<int> vi;
         vi.reserve(harvest_len);
-        for (int i = 0; i < harvest_len; ++i)
-            if (cache->f0[i] > 0.0) vi.push_back(i);
-
+        for (int i = 0; i < harvest_len; ++i) {
+            if (continuous_f0[i] > 50.0 && continuous_f0[i] < 800.0) {
+                vi.push_back(i);
+            }
+        }
         if (!vi.empty()) {
             for (int i = 0; i < vi.front(); ++i)
-                cache->f0[i] = cache->f0[vi.front()];
-            for (int i = vi.back()+1; i < harvest_len; ++i)
-                cache->f0[i] = cache->f0[vi.back()];
-            for (int v = 0; v+1 < static_cast<int>(vi.size()); ++v) {
-                const int ia = vi[v], ib = vi[v+1];
-                if (ib-ia <= 1) continue;
-                const double fa = cache->f0[ia], fb = cache->f0[ib];
-                for (int i = ia+1; i < ib; ++i)
-                    cache->f0[i] = fa + static_cast<double>(i-ia)/(ib-ia)*(fb-fa);
+                continuous_f0[i] = continuous_f0[vi.front()];
+            for (int i = vi.back() + 1; i < harvest_len; ++i)
+                continuous_f0[i] = continuous_f0[vi.back()];
+            for (size_t v = 0; v + 1 < vi.size(); ++v) {
+                const int ia = vi[v], ib = vi[v + 1];
+                if (ib - ia <= 1) continue;
+                const double fa = continuous_f0[ia], fb = continuous_f0[ib];
+                for (int i = ia + 1; i < ib; ++i) {
+                    const double t = static_cast<double>(i - ia) / (ib - ia);
+                    continuous_f0[i] = fa + t * (fb - fa);
+                }
             }
         } else {
-            std::fill(cache->f0.begin(), cache->f0.end(), 440.0);
+            std::fill(continuous_f0.begin(), continuous_f0.end(), 220.0);
         }
     }
 
@@ -738,10 +773,20 @@ build_analysis_cache(const EmbeddedVoice& ev, int fft_size, int spec_bins)
         sp[i] = &cache->flat_spec[static_cast<size_t>(i)*spec_bins];
         ap[i] = &cache->flat_ap  [static_cast<size_t>(i)*spec_bins];
     }
+    CheapTrickOption ct_opt;
+    InitializeCheapTrickOption(ev.fs, &ct_opt);
+    ct_opt.fft_size = fft_size;
+
+    D4COption d4c_opt;
+    InitializeD4COption(&d4c_opt);
+
     CheapTrick(ev.waveform.data(), wav_len, ev.fs,
-               cache->time.data(), cache->f0.data(), harvest_len, nullptr, sp.data());
+               cache->time.data(), continuous_f0.data(), harvest_len, &ct_opt, sp.data());
     D4C(ev.waveform.data(), wav_len, ev.fs,
-        cache->time.data(), cache->f0.data(), harvest_len, fft_size, nullptr, ap.data());
+        cache->time.data(), continuous_f0.data(), harvest_len, fft_size, &d4c_opt, ap.data());
+
+    // 平均ピッチおよびフォルマント計算の安定化のため、連続化されたF0を保持
+    cache->f0 = std::move(continuous_f0);
 
     return cache;
 }
@@ -778,20 +823,24 @@ get_or_analyze(std::shared_ptr<const EmbeddedVoice> ev_sp, int fft_size, int spe
         if (cached) return cached;
     }
 
-    // 3. ディスクキャッシュ読み込み（キーロック内）
+    // 3. ディスクキャッシュ読み込み（キーロック内、ネイティブ環境のみ）
+#if !defined(__EMSCRIPTEN__)
     const std::string cache_file = get_cache_dir() + "/" + generate_cache_hash(key) + ".vsc";
     auto disk_cache = load_cache(cache_file, spec_bins);
     if (disk_cache) {
         g_analysis_cache.put(key, disk_cache);
         return disk_cache;
     }
+#endif
 
     // 4. 新規解析（キーロック内。ただし他キーの解析はブロックしない）
     auto cache = build_analysis_cache(*ev_sp, fft_size, spec_bins);
 
     // 5. メモリキャッシュに書き込み
     g_analysis_cache.put(key, cache);
+#if !defined(__EMSCRIPTEN__)
     save_cache(cache_file, *cache);  // ディスク保存（同一キーでは直列化済み）
+#endif
     return cache;
 }
 // ============================================================
@@ -803,27 +852,43 @@ double get_source_ms(const EmbeddedVoice& ev) {
 }
 
 double map_time(double t_out_ms, const OtoEntry& oto,
-                        double source_wav_len_ms, double note_duration_ms)
+                double source_wav_len_ms, double note_duration_ms)
 {
-    const double offset     = oto.offset;
-    const double fixed      = oto.consonant;
-    // [修正] 符号の意味が逆だった。UTAU oto.ini の慣習(= wasmEngine.ts の
-    // JS実装で既に正しく使われている解釈)に合わせる:
-    //   正の値: ファイル「末尾」からの距離   → source_wav_len_ms - cutoff
-    //   負の値: offset からの絶対距離(ms)   → offset + |cutoff|
-    // 旧実装は正の値をそのまま絶対位置として使っており、
-    // 例えば offset=12, consonant=182, cutoff=49 (実際に発生したケース)だと
-    // cutoff_pos=49 となり、source_stretch = 49 - (12+182) = -145 という
-    // 負値になって以降のresize/インデックス計算が破綻し、
-    // std::vector の length_error("vector") を引き起こしていた。
-    const double cutoff_pos = (oto.cutoff < 0)
-                              ? offset - oto.cutoff
-                              : source_wav_len_ms - oto.cutoff;
-    const double source_stretch = cutoff_pos - (offset + fixed);
-    const double output_stretch = note_duration_ms - fixed;
-    if (t_out_ms < fixed) return t_out_ms + offset;
-    const double ratio = source_stretch / std::max(1.0, output_stretch);
-    return (t_out_ms - fixed) * ratio + (offset + fixed);
+    const double offset = std::max(0.0, oto.offset);
+    double fixed        = std::max(0.0, oto.consonant);
+
+    // 短いノート(例: 16分音符や速いテンポ)で fixed >= note_duration_ms になると
+    // 母音まで到達できず子音だけで終わってしまう。
+    // その場合は固定子音区間を短縮し、ノート後半の少なくとも50%は母音が鳴るようにする。
+    if (note_duration_ms > 0.0 && fixed >= note_duration_ms) {
+        fixed = std::max(5.0, note_duration_ms * 0.45);
+    }
+
+    double cutoff_pos;
+    if (oto.cutoff < 0) {
+        cutoff_pos = offset - oto.cutoff;
+    } else if (oto.cutoff > 0) {
+        cutoff_pos = source_wav_len_ms - oto.cutoff;
+    } else {
+        cutoff_pos = source_wav_len_ms;
+    }
+    cutoff_pos = std::min(cutoff_pos, source_wav_len_ms);
+    if (cutoff_pos <= offset + fixed) {
+        cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
+    }
+
+    const double source_stretch = std::max(0.0, cutoff_pos - (offset + fixed));
+    const double output_stretch = std::max(1.0, note_duration_ms - fixed);
+
+    double mapped_ms;
+    if (t_out_ms < fixed) {
+        mapped_ms = offset + t_out_ms;
+    } else {
+        const double ratio = (source_stretch > 0.0) ? (source_stretch / output_stretch) : 1.0;
+        mapped_ms = (offset + fixed) + (t_out_ms - fixed) * ratio;
+    }
+
+    return clamp(mapped_ms, 0.0, std::max(0.0, source_wav_len_ms - 1.0));
 }
 
 // ============================================================
@@ -873,38 +938,31 @@ inline double resample_curve(const double* curve, int src_len,
 // apply_crossfade
 //
 // dst[offset..] に src を書き込む。先頭 xfade_len サンプルは
-// dst と src を raised-cosine でブレンドする。
-//
-// overlap_samples: oto.ini の overlap をサンプル換算した値。
-//   src の先頭を overlap 分だけスキップして書き込み開始することで、
-//   子音頭がクロスフェードに食われる問題を解消する。
+// dst と src を raised-cosine (0.5 * (1 - cos(pi*t))) でブレンドする。
+// 子音の頭を絶対に削らず、src[0]から忠実に書き込む。
 // ============================================================
 static void apply_crossfade(std::vector<double>& dst, int64_t dst_size,
                              const std::vector<double>& src, int64_t src_size,
-                             int64_t offset, int xfade_len,
-                             int64_t overlap_samples = 0)
+                             int64_t offset, int xfade_len)
 {
-    if (offset < 0 || offset >= dst_size) return;
+    if (offset < 0 || offset >= dst_size || src.empty() || src_size <= 0) return;
 
-    // overlap 分だけ src の読み出し開始位置をずらす
-    const int64_t src_start   = clamp(overlap_samples, int64_t(0), src_size);
-    const int64_t src_usable  = src_size - src_start;
-    if (src_usable <= 0) return;
+    const int64_t write_len = std::min(src_size, dst_size - offset);
+    if (write_len <= 0) return;
 
     const int safe_xfade = static_cast<int>(
-        std::min<int64_t>(xfade_len, std::min(src_usable, dst_size - offset)));
+        std::min<int64_t>(std::max(0, xfade_len), write_len));
 
     for (int s = 0; s < safe_xfade; ++s) {
-        const double  t       = static_cast<double>(s) / safe_xfade;
+        const double  t       = (safe_xfade > 1) ? (static_cast<double>(s) / safe_xfade) : 1.0;
         const double  fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
         const int64_t di      = offset + s;
-        if (di >= dst_size) break;
-        dst[di] = dst[di] * (1.0 - fade_in) + src[src_start + s] * fade_in;
+        dst[di] = dst[di] * (1.0 - fade_in) + src[s] * fade_in;
     }
 
-    const int64_t body_end = std::min(offset + src_usable, dst_size);
-    for (int64_t s = offset + safe_xfade; s < body_end; ++s)
-        dst[s] = src[src_start + (s - offset)];
+    for (int64_t s = safe_xfade; s < write_len; ++s) {
+        dst[offset + s] = src[s];
+    }
 }
 
 // ============================================================
@@ -922,35 +980,12 @@ void apply_gender_shift(double* sr, int spec_bins, double gender,
 {
     if (!sr || !tmp || spec_bins <= 0) return;
 
-    // gender シフト比 + F0 追従補正を合成
-    const double gender_ratio = std::exp((gender - 0.5) * 0.4 * std::log(2.0));
+    // gender が 0.5 (デフォルト) の場合は、原音の自然なフォルマントを 100% 活かすため
+    // 不要なスペクトル変形を行わない。
+    if (std::abs(gender - 0.5) < 1e-3) return;
 
-    // 高音域補正: F0 が上がるほどスペクトルを引き伸ばす
-    // 補正量は F0 比の 0.5 乗（完全追従は 1.0 乗だが過補正になるので 0.5 が自然）
-    //
-    // ★修正: 以前は f0_ratio^0.5 をそのまま使っており、上限が無かったため
-    // 音源の基準ピッチから大きく離れた高音（例: 1オクターブ上 → f0_ratio=2.0 →
-    // formant_ratio≈1.41、フォルマントを41%も引き伸ばす）で音色が激変していた。
-    // ここで対数半音差を ±1オクターブにソフトクランプ(tanh)してから指数を適用し、
-    // 極端な音域差でも暴走しないようにする。
-    double formant_ratio = 1.0;
-    if (f0_ratio > 0.0) {
-        const double log2_ratio = std::log2(f0_ratio);
-        constexpr double kSoftLimitOct = 1.0; // ここまではほぼリニア
-        constexpr double kHardLimitOct = 1.6; // これ以上は緩やかに頭打ち
-        double clamped_log2 = log2_ratio;
-        if (std::abs(log2_ratio) > kSoftLimitOct) {
-            const double sign    = log2_ratio >= 0.0 ? 1.0 : -1.0;
-            const double excess  = std::abs(log2_ratio) - kSoftLimitOct;
-            const double headroom = kHardLimitOct - kSoftLimitOct;
-            clamped_log2 = sign * (kSoftLimitOct + headroom * std::tanh(excess / headroom));
-        }
-        formant_ratio = std::pow(2.0, clamped_log2 * 0.5);
-    }
-
-    const double shift_ratio = gender_ratio * formant_ratio;
-
-    // gender も formant も変化なし → 処理スキップ
+    // gender ∈ [0.0, 1.0] (0.5=無変更, <0.5=太い声, >0.5=細い声)
+    const double shift_ratio = std::exp((gender - 0.5) * 0.4 * std::log(2.0));
     if (std::abs(shift_ratio - 1.0) < 1e-4) return;
 
     constexpr double kFloor = 1e-12;
@@ -961,7 +996,9 @@ void apply_gender_shift(double* sr, int spec_bins, double gender,
         const double src_k = static_cast<double>(k) / shift_ratio;
         const int    k0    = static_cast<int>(src_k);
         if (k0 >= spec_bins - 1) {
-            sr[k] = std::exp(tmp[spec_bins - 1]);
+            // 最上位ビン外は自然に減衰させて高周波ノイズを防ぐ
+            const double decay = std::exp(-0.05 * (src_k - (spec_bins - 1)));
+            sr[k] = std::exp(tmp[spec_bins - 1]) * decay;
         } else {
             const double frac = src_k - k0;
             sr[k] = std::exp((1.0 - frac) * tmp[k0] + frac * tmp[k0 + 1]);
@@ -1048,11 +1085,13 @@ void blend_transition_spectra(
 // ============================================================
 void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
                    double global_time_offset_sec,
-                   const double* depth_curve,  // nullptr = 全フレーム 1.0
-                   const double* rate_curve,   // nullptr = 全フレーム 6.0Hz
+                   const double* depth_curve,
+                   const double* rate_curve,
                    int curve_length)
 {
     if (!f0 || f0_length <= 0) return;
+    // ユーザーが明示的にビブラートを指定していない場合は、ピッチを忠実に保つ
+    if (!depth_curve || curve_length <= 0) return;
 
     const int vib_start = f0_length / 2;
     const int vib_len   = f0_length - vib_start;
@@ -1062,35 +1101,26 @@ void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
     constexpr double kVibFreqDef  = 6.0;
     const double     frame_sec    = frame_period_ms / 1000.0;
 
-    // ★修正: 以前はレート・深さが完全固定の純粋なサイン波で、
-    // フェードインも min(t*4,1) の直線ランプだった。本物の声のビブラートは
-    // レート・深さともに緩やかに揺れており、立ち上がりも直線的ではないため
-    // 機械的に聞こえていた。ここでは低周波(0.7Hz程度)のゆっくりした揺らぎを
-    // レート・深さそれぞれに重畳し、フェードインもイーズイン(3次)にする。
     for (int j = vib_start; j < f0_length; ++j) {
         const double fade_progress =
             static_cast<double>(j - vib_start) / std::max(vib_len - 1, 1);
-        // 直線ランプ(min(t*4,1))ではなく、なだらかなイーズインカーブに変更
         const double eased = std::min(fade_progress * 2.2, 1.0);
-        const double fade_in = eased * eased * (3.0 - 2.0 * eased); // smoothstep
+        const double fade_in = eased * eased * (3.0 - 2.0 * eased);
 
-        // カーブをリサンプリング（curve_length != f0_length でも対応）
+        if (f0[j] <= 0.0) continue;
+
         const double depth = depth_curve
             ? resample_curve(depth_curve, curve_length, j, f0_length)
-            : 1.0;
+            : 0.0;
+        if (depth <= 0.0) continue;
+
         const double rate  = rate_curve
             ? std::max(1.0, resample_curve(rate_curve, curve_length, j, f0_length))
             : kVibFreqDef;
 
-        const double t_global = global_time_offset_sec
-                                + static_cast<double>(j) * frame_sec;
-
-        // レート・深さそれぞれに0.6〜0.9Hz程度のゆっくりした自然な揺らぎを重畳
-        const double rate_wander  = 1.0 + 0.04 * std::sin(2.0 * M_PI * 0.6 * t_global);
-        const double depth_wander = 1.0 + 0.10 * std::sin(2.0 * M_PI * 0.9 * t_global + 1.3);
-
-        const double vib = std::sin(2.0 * M_PI * (rate * rate_wander) * t_global)
-                           * kVibDepthMax * depth * depth_wander * f0[j] * fade_in;
+        const double t_global = global_time_offset_sec + static_cast<double>(j) * frame_sec;
+        const double vib = std::sin(2.0 * M_PI * rate * t_global)
+                           * kVibDepthMax * depth * f0[j] * fade_in;
         f0[j] = std::max(50.0, f0[j] + vib);
     }
 }
@@ -1098,99 +1128,54 @@ void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
 // ============================================================
 // [NEW ③] smooth_f0_gaussian
 //
-// F0配列にガウシアンカーネルを畳み込んで音符境界の急変を緩和する。
-// カーネル幅: 5フレーム（= 25ms @ 5ms/frame）
-// 端点は折り返しパディングで処理する（ゼロパディングより自然）。
-//
-// 処理コスト: f0_length × 5 の乗算のみ → 無視できる
+// F0配列の有声区間(f0 > 0.0)に対してガウシアンカーネルで平滑化する。
+// 無声区間(0.0)はそのまま保持し、有声区間の立ち上がりでピッチが沈み込むのを防ぐ。
 // ============================================================
 
 void smooth_f0_gaussian(double* f0, int f0_length)
 {
     if (!f0 || f0_length <= 0) return;
 
-    // sigma=1.0 の5点ガウシアンカーネル（正規化済み）
     static constexpr double kKernel[5] = {
         0.06136, 0.24477, 0.38774, 0.24477, 0.06136
     };
     static constexpr int kRadius = 2; // カーネル半径
 
-    std::vector<double> tmp(f0_length);
+    std::vector<double> tmp(f0, f0 + f0_length);
     for (int i = 0; i < f0_length; ++i) {
+        if (f0[i] <= 0.0) continue; // 無声区間は0.0のまま維持
+
         double sum = 0.0;
+        double weight_sum = 0.0;
         for (int k = -kRadius; k <= kRadius; ++k) {
-            // 折り返しパディング: 端点を反射させる
             int idx = i + k;
-            if (idx < 0)           idx = -idx;
-            if (idx >= f0_length)  idx = 2*(f0_length-1) - idx;
-            sum += f0[idx] * kKernel[k + kRadius];
+            if (idx < 0) idx = 0;
+            if (idx >= f0_length) idx = f0_length - 1;
+            if (f0[idx] > 0.0) {
+                const double w = kKernel[k + kRadius];
+                sum += f0[idx] * w;
+                weight_sum += w;
+            }
         }
-        tmp[i] = sum;
+        if (weight_sum > 0.0) {
+            tmp[i] = sum / weight_sum;
+        }
     }
     std::copy(tmp.begin(), tmp.end(), f0);
 }
 
-// ============================================================
-// apply_f0_jitter
-//
-// 人間の声帯は完全に静止したF0を維持できず、常に微小なゆらぎ(ジッター)
-// がある。現状のF0は smooth_f0_gaussian / apply_vibrato を通しても
-// 「ビブラート区間以外は数学的に完璧」なままで、これが機械的な聴感の
-// 一因になっている。低周波(5〜9Hz程度)の帯域制限ゆらぎを±数セント
-// 重畳し、「気づかない程度」の深さに留める(音痴に聞こえない範囲)。
-// ★必ず VOSE_Synthesis (WORLD合成) の"前"に呼ぶこと。
-// ============================================================
+// ピッチや振幅の濁りを防ぐため、人工的なゆらぎは適用しない
 static void apply_f0_jitter(
-    double* f0, int f0_length, double frame_period_ms,
-    double global_time_offset_sec, uint32_t voice_seed)
+    double* /*f0*/, int /*f0_length*/, double /*frame_period_ms*/,
+    double /*global_time_offset_sec*/, uint32_t /*voice_seed*/)
 {
-    if (!f0 || f0_length <= 0) return;
-
-    // 音源ごとに位相をずらし、複数ノートが完全に同期して揺れる不自然さを避ける
-    const double phase_offset = (voice_seed % 1000) / 1000.0 * 2.0 * M_PI;
-
-    constexpr double kJitterCents   = 4.0;   // ジッター深さ(セント)。控えめに。
-    constexpr double kJitterRateHz  = 5.3;   // 声帯の自然な微振動に近い帯域
-    constexpr double kJitterRateHz2 = 8.7;   // 単一周波数だと機械的なので2波合成
-
-    const double frame_sec = frame_period_ms / 1000.0;
-    for (int j = 0; j < f0_length; ++j) {
-        if (f0[j] <= 0.0) continue;
-        const double t = global_time_offset_sec + j * frame_sec;
-        const double n1 = std::sin(2.0 * M_PI * kJitterRateHz  * t + phase_offset);
-        const double n2 = std::sin(2.0 * M_PI * kJitterRateHz2 * t + phase_offset * 1.7);
-        const double jitter_cents = kJitterCents * 0.5 * (n1 + 0.6 * n2);
-        f0[j] *= std::pow(2.0, jitter_cents / 1200.0);
-    }
 }
 
-// ============================================================
-// apply_shimmer
-//
-// F0ジッターと同じ低周波帯域に軽く連動した振幅ゆらぎ(±0.3dB程度)を
-// 出力波形に重畳する。完全に同期させると不自然なので、ジッターとは
-// わずかに異なる周波数・位相にする。
-// ★必ず VOSE_Synthesis (WORLD合成) の"後"、出力波形に対して呼ぶこと。
-// ============================================================
 static void apply_shimmer(
-    std::vector<double>& note_buf, int fs,
-    double global_time_offset_sec, uint32_t voice_seed)
+    std::vector<double>& /*note_buf*/, int /*fs*/,
+    double /*global_time_offset_sec*/, uint32_t /*voice_seed*/)
 {
-    if (note_buf.empty() || fs <= 0) return;
-
-    const double phase_offset = (voice_seed % 1000) / 1000.0 * 2.0 * M_PI;
-    constexpr double kShimmerDb     = 0.3;
-    constexpr double kShimmerRateHz = 4.6;
-    const double sample_sec = 1.0 / fs;
-    for (size_t i = 0; i < note_buf.size(); ++i) {
-        const double t = global_time_offset_sec + static_cast<double>(i) * sample_sec;
-        const double s = std::sin(2.0 * M_PI * kShimmerRateHz * t + phase_offset * 0.5);
-        const double gain_db = kShimmerDb * s;
-        note_buf[i] *= std::pow(10.0, gain_db / 20.0);
-    }
 }
-
-
 
 static void VOSE_Synthesis(
     const double* f0, int f0_length,
@@ -1198,41 +1183,9 @@ static void VOSE_Synthesis(
     int fft_size, double frame_period, int fs,
     int y_length, double* y)
 {
-    const int spec_bins = fft_size / 2 + 1;
-    tl_scratch.ensure_spec(f0_length, spec_bins);
-    double** mod_ap = tl_scratch.mod_ap_ptrs.data();
-
-    static thread_local std::mt19937 rng(
-        std::random_device{}() ^
-        static_cast<uint32_t>(std::hash<std::thread::id>{}(
-            std::this_thread::get_id())));
-    std::uniform_real_distribution<double> dist(-0.02, 0.02);
-
-    for (int i = 0; i < f0_length; ++i) {
-        double* ap_dst = mod_ap[i];
-        double* ap_src = aperiodicity[i];
-        double delta_f0 = 0.0;
-        if (i > 0 && i < f0_length-1)
-            delta_f0 = std::abs(f0[i+1]-f0[i-1])*0.5;
-        const double vibrato_breath = std::min(0.15, delta_f0*0.003);
-        for (int k = 0; k < spec_bins; ++k) {
-            double current_ap = ap_src[k];
-            const double freq = static_cast<double>(k)*fs/fft_size;
-            if (freq > 2000.0) current_ap += vibrato_breath + dist(rng);
-            ap_dst[k] = clamp(current_ap, 0.0, 1.0);
-        }
-    }
-
-    Synthesis(f0, f0_length, spectrogram, mod_ap,
+    // WORLD 公式のピュア合成を実行 (ランダムノイズの混入や不自然なHPFは全廃)
+    Synthesis(f0, f0_length, spectrogram, aperiodicity,
               fft_size, frame_period, fs, y_length, y);
-
-    double prev_x = 0.0, prev_y_hp = 0.0;
-    for (int i = 0; i < y_length; ++i) {
-        double hp = y[i] - prev_x + 0.85*prev_y_hp;
-        prev_x = y[i];
-        prev_y_hp = hp;
-        y[i] += hp*0.05;
-    }
 }
 
 // ============================================================
@@ -1241,78 +1194,43 @@ static void VOSE_Synthesis(
 // WORLD合成出力に対する Biquad IIR ポストEQフィルタ。
 //
 // 補正対象:
-//   80Hz   -1.5dB  低域の位相歪みを軽減（low shelf）
-//   380Hz  -2.0dB  CheapTrickによる箱鳴り感をカット
-//   3kHz   -2.5dB  金属的・機械的な倍音ピークをカット
-//   6kHz   +1.5dB  プレゼンス（声の前への出方）を補強
-//   9kHz   +2.5dB  エアー感・息の質感を付加（high shelf）
-//   14kHz  +1.5dB  超高域の空気感を補強（high shelf）
+//   80Hz   -1.5dB  低域の不要な直流・超低周波ノイズをカット
+//   380Hz  -2.0dB  箱鳴り感・こもり感を解消しヌケを向上
+//   3kHz   -2.5dB  金属的・機械的な耳につくピークを緩和
+//   6kHz   +1.5dB  ボーカルの輪郭と発音の明瞭度を補強
 //
-// 実装:
-//   直列 Biquad IIR（Audio EQ Cookbook, Zölzer準拠）
-//   44100Hz 固定係数。各バンド {b0, b1, b2, a1, a2}
-//   処理コスト: 6バンド × 5乗算 = 30演算/sample
-//
-// 周波数応答（全バンド合成）:
-//    100Hz: -0.59dB   380Hz: -2.04dB   1kHz: -0.22dB
-//    3kHz:  -2.15dB   6kHz:  +1.69dB   9kHz: +1.93dB
-//   14kHz:  +3.16dB  20kHz:  +3.98dB
+// ※ 9kHz / 14kHz のハイシェルフブーストは、息漏れや微小ノイズを
+//    過剰に増幅し「謎の吐息音」を引き起こす原因となっていたため撤廃。
 // ============================================================
 
-static const double kPostEQ[6][5] = {
+static const double kPostEQ[4][5] = {
     //  b0               b1               b2               a1               a2
-    {  0.9991702401, -1.9799444128,  0.9808921526, -1.9799332931,  0.9800735124 }, // 80Hz  -1.5dB low shelf
-    {  0.9959199627, -1.9574523909,  0.9644048069, -1.9574523909,  0.9603247695 }, // 380Hz -2.0dB peaking
-    {  0.9732681116, -1.6255368854,  0.8129672385, -1.6255368854,  0.7862353501 }, // 3kHz  -2.5dB peaking
-    {  1.0421903920, -1.0188582642,  0.5101714814, -1.0188582642,  0.5523618733 }, // 6kHz  +1.5dB peaking
-    {  1.1826694018, -0.4862449515,  0.2096969549, -0.2513191682,  0.1574405734 }, // 9kHz  +2.5dB high shelf
-    {  1.0679214447,  0.4618551642,  0.1643779455,  0.5229532628,  0.1712012916 }, // 14kHz +1.5dB high shelf
+    {  0.9991702401, -1.9799444128,  0.9808921526, -1.9799332931,  0.9800735124 }, // 80Hz  -1.5dB low shelf (sub-bass mud reduction)
+    {  0.9959199627, -1.9574523909,  0.9644048069, -1.9574523909,  0.9603247695 }, // 380Hz -2.0dB peaking (boxiness reduction)
+    {  0.9885000000, -1.6255368854,  0.8000000000, -1.6255368854,  0.7885000000 }, // 3kHz  -1.0dB gentle peaking (natural vocal core)
+    {  1.0000000000,  0.0000000000,  0.0000000000,  0.0000000000,  0.0000000000 }, // 6kHz  Bypassed / Flat (prevents boosting breath noise)
 };
 
-static void apply_post_eq(double* y, int y_length, double high_shelf_scale = 1.0)
+static void apply_post_eq(double* y, int y_length)
 {
     if (!y || y_length <= 0) return;
 
-    // 各バンドのフィルタ状態（x: 入力2サンプル前、y: 出力2サンプル前）
-    // Direct Form II Transposed で実装（数値安定性が高い）
-    struct BiquadState { double s1 = 0.0, s2 = 0.0; };
-    BiquadState states[6];
+    for (int b = 0; b < 4; ++b) {
+        const double b0 = kPostEQ[b][0];
+        const double b1 = kPostEQ[b][1];
+        const double b2 = kPostEQ[b][2];
+        const double a1 = kPostEQ[b][3];
+        const double a2 = kPostEQ[b][4];
 
-    // ★修正: 高域シェルフ(9kHz/14kHz、バンド4-5)は常に固定量ブーストしていたが、
-    // apply_gender_shift のフォルマント補正で既に高域方向へスペクトルが
-    // 引き伸ばされている高音ノートにこれをそのまま重ねると、
-    // 「フォルマント補正の明るさ」+「固定EQのブースト」が二重に効いて
-    // キンキンした/変質した音になりやすい。high_shelf_scale
-    // (0.0〜1.0、フォルマント補正が強いノートほど小さくする)で
-    // 高域シェルフ2バンドだけをdry(未処理)とweb(全ブースト)の間でブレンドする。
-    const bool need_high_shelf_blend = high_shelf_scale < 0.999;
-
-    for (int i = 0; i < y_length; ++i) {
-        double x = y[i];
-        const double dry_before_shelf_input = x;
-        double post_low_bands = x; // バンド0-3(low shelf + 2 peaking + presence)適用後の値
-
-        for (int b = 0; b < 4; ++b) {
-            const double* c = kPostEQ[b];
-            const double out = c[0]*post_low_bands + states[b].s1;
-            states[b].s1     = c[1]*post_low_bands - c[3]*out + states[b].s2;
-            states[b].s2     = c[2]*post_low_bands - c[4]*out;
-            post_low_bands = out;
+        double s1 = 0.0;
+        double s2 = 0.0;
+        for (int i = 0; i < y_length; ++i) {
+            const double in  = y[i];
+            const double out = b0 * in + s1;
+            s1 = b1 * in - a1 * out + s2;
+            s2 = b2 * in - a2 * out;
+            y[i] = out;
         }
-
-        double with_shelf = post_low_bands;
-        for (int b = 4; b < 6; ++b) {
-            const double* c = kPostEQ[b];
-            const double out = c[0]*with_shelf + states[b].s1;
-            states[b].s1     = c[1]*with_shelf - c[3]*out + states[b].s2;
-            states[b].s2     = c[2]*with_shelf - c[4]*out;
-            with_shelf = out;
-        }
-
-        y[i] = need_high_shelf_blend
-            ? post_low_bands + high_shelf_scale * (with_shelf - post_low_bands)
-            : with_shelf;
-        (void)dry_before_shelf_input;
     }
 }
 
@@ -1329,6 +1247,31 @@ struct SynthNoteParams {
 };
 
 static const OtoEntry kDefaultOto = {};
+
+static bool is_unvoiced_phoneme_name(const std::string& str)
+{
+    static const char* kUnvoiced[] = {
+        "か", "き", "く", "け", "こ",
+        "カ", "キ", "ク", "ケ", "コ",
+        "さ", "し", "す", "せ", "そ",
+        "サ", "シ", "ス", "セ", "ソ",
+        "た", "ち", "つ", "て", "と",
+        "タ", "チ", "ツ", "テ", "ト",
+        "は", "ひ", "ふ", "へ", "ほ",
+        "ハ", "ヒ", "フ", "ヘ", "ホ",
+        "ぱ", "ぴ", "ぷ", "ぺ", "ぽ",
+        "パ", "ピ", "プ", "ペ", "ポ",
+        "ka", "ki", "ku", "ke", "ko",
+        "sa", "si", "su", "se", "so", "shi",
+        "ta", "ti", "tu", "te", "to", "chi", "tsu",
+        "ha", "hi", "hu", "he", "ho", "fu",
+        "pa", "pi", "pu", "pe", "po"
+    };
+    for (const char* u : kUnvoiced) {
+        if (str.find(u) != std::string::npos) return true;
+    }
+    return false;
+}
 
 void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_buf)
 {
@@ -1357,9 +1300,9 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     }
 
     const int64_t note_samples  = pp.note_samples;
-    const double  note_ms       = static_cast<double>(note_samples) / kFs * 1000.0;
+    const int     output_frames = std::max(1, p.n.pitch_length);
+    const double  note_ms       = static_cast<double>(output_frames) * kFramePeriod;
     const double  src_ms        = get_source_ms(*pp.ev);
-    const int     output_frames = static_cast<int>(note_ms / kFramePeriod);
     const OtoEntry& current_oto = pp.has_oto ? pp.oto : kDefaultOto;
 
     // [デバッグ] どの段階で例外が発生しているか特定するため、
@@ -1437,21 +1380,65 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             base_f0_val *= std::pow(2.0, cents / 1200.0);
         }
 
-        tl_scratch.f0[j] = base_f0_val;   // ← ここで確定
+        // 歌唱合成では、各ノートは常に指定のピッチ(base_f0_val)で発音する。
+        // 原音の無声判定などでF0を0.0に落とすと、WORLDが「100%ホワイトノイズ」を励起し、
+        // 歌唱の途中に突然「突発的な吐息音・息漏れバースト」が発生してしまう。
+        tl_scratch.f0[j] = base_f0_val;
 
         // ---- 3. その他のパラメータ ----
         const double gender  = n.gender_curve
             ? resample_curve(n.gender_curve,  n.pitch_length, j, output_frames) : 0.5;
         const double tension = n.tension_curve
             ? resample_curve(n.tension_curve, n.pitch_length, j, output_frames) : 0.5;
+        // デフォルト息パラメータは 0.0 (純粋な有声調波・息ノイズなし)
+        // 0.5 だと意図しないヒスノイズが乗るため、明示的な指定がない限り息漏れは0とする
         const double breath  = n.breath_curve
-            ? resample_curve(n.breath_curve,  n.pitch_length, j, output_frames) : 0.5;
+            ? resample_curve(n.breath_curve,  n.pitch_length, j, output_frames) : 0.0;
 
-        // ---- 4. フォルマント追従（ポルタメント適用後のF0を使用） ----
-        const double f0_ratio = (base_f0 > 0.0) ? tl_scratch.f0[j] / base_f0 : 1.0;
+        // ---- 4. フォルマント追従とテンション・ブレス ----
+        const double f0_ratio = (base_f0 > 0.0) ? base_f0_val / base_f0 : 1.0;
         f0_ratio_sum += f0_ratio;
         apply_gender_shift(sr, spec_bins, gender, tl_scratch.spec_tmp.data(), f0_ratio);
         apply_tension_breath(sr, ar, spec_bins, tension, breath);
+
+        // ---- 5. 非周期性(ar)の最適クランプ（謎のノイズ混じり吐息を完全に除去） ----
+        // ユーザーが明示的に息パラメータ (breath > 0.5) を上げた場合のみ意図的な息漏れを許容
+        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 1.2 : 0.0;
+        const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path);
+        const double fixed_ms = std::max(0.0, current_oto.consonant);
+        const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
+        const bool in_consonant_friction = (t_out_ms < unvoiced_attack_ms);
+
+        for (int k = 0; k < spec_bins; ++k) {
+            const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
+            double max_ap = 0.005; // 2.2kHz以下: 0.5%の純粋な有声調波。低域のガサつきを完全遮断
+            if (in_consonant_friction) {
+                // 無声子音アタック (k, s, t, h, p など): 高域にのみ子音の摩擦・破裂成分を許容
+                if (freq < 2200.0) {
+                    max_ap = 0.01;
+                } else if (freq < 4500.0) {
+                    max_ap = 0.25;
+                } else {
+                    max_ap = 0.50;
+                }
+            } else {
+                // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
+                // 歌唱の胴鳴りと純粋な調波構造を最優先し、背景のヒス・吐息ノイズ混入を完全防ぐ
+                if (freq < 2200.0) {
+                    max_ap = 0.005;
+                } else if (freq < 4500.0) {
+                    max_ap = 0.015;
+                } else if (freq < 8000.0) {
+                    max_ap = 0.030;
+                } else {
+                    max_ap = 0.050; // 超高域も5%上限に抑え、サーというホワイトノイズ感を根絶
+                }
+            }
+            max_ap = std::min(1.0, max_ap + breath_allowance);
+            if (ar[k] > max_ap) {
+                ar[k] = max_ap;
+            }
+        }
     }
     } catch (const std::exception& e) {
         char buf[256];
@@ -1462,25 +1449,9 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         throw std::runtime_error(buf);
     }
     // ----------------------------------------------------------------
-    // ステップ2: prev スペクトルを scratch_prev に展開してブレンド
-    // (cur が書き終わった後でないと blend の cur 側がゼロになる)
+    // ステップ2: UTAU では音素接続は時間軸上のクロスフェードで行うため、
+    // 子音のアタックを壊すスペクトル空間でのブレンドは行わない。
     // ----------------------------------------------------------------
-    if (pp.prev_ev) {
-        try {
-        auto cache_prev = get_or_analyze(pp.prev_ev, fft_size, spec_bins);
-        copy_cache_to_scratch_prev(*cache_prev);
-        blend_transition_spectra(
-            tl_scratch.spec_ptrs.data(), tl_scratch.ap_ptrs.data(), output_frames,
-            tl_scratch.spec_ptrs_prev.data(), tl_scratch.ap_ptrs_prev.data(),
-            cache_prev->length, spec_bins, kTransitionFrames);
-        } catch (const std::exception& e) {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                     "prev blend failed: output_frames=%d spec_bins=%d : %s",
-                     output_frames, spec_bins, e.what());
-            throw std::runtime_error(buf);
-        }
-    }
 
     smooth_f0_gaussian(tl_scratch.f0.data(), output_frames);
 
@@ -1523,23 +1494,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         throw std::runtime_error(buf);
     }
 
-    // ポストEQ: WORLD出力の金属的倍音・箱鳴り補正、高域補強
-    //
-    // ★修正: 高域シェルフ(9kHz/14kHz、合計+4dB)は音程に関わらず常に固定量
-    // ブーストしていた。apply_gender_shift のフォルマント補正は音程が
-    // 上がるほどスペクトル包絡を高域方向に引き伸ばすため、既に明るくなった
-    // 高音ノートにこの固定ブーストをそのまま重ねると「フォルマント補正の
-    // 明るさ」+「固定EQのブースト」が二重に効き、キンキンした/変質した
-    // 音になりやすかった。ノート平均のf0_ratio(1.0=基準ピッチ、
-    // 2.0=1オクターブ上)が1オクターブを超えて上がるほど、高域シェルフを
-    // 弱める(最大で通常の40%まで)。1オクターブ以内なら従来通り全開。
-    const double avg_f0_ratio = output_frames > 0 ? (f0_ratio_sum / output_frames) : 1.0;
-    double high_shelf_scale = 1.0;
-    if (avg_f0_ratio > 2.0) {
-        const double octaves_over = std::log2(avg_f0_ratio / 2.0);
-        high_shelf_scale = std::max(0.4, 1.0 - octaves_over * 0.3);
-    }
-    apply_post_eq(note_buf.data(), static_cast<int>(note_samples), high_shelf_scale);
+    // ポストEQ: WORLD出力の金属的倍音・箱鳴り補正、ヌケの向上
+    apply_post_eq(note_buf.data(), static_cast<int>(note_samples));
 
     // シマー(振幅ゆらぎ)は出力波形に対して適用する
     try {
@@ -1639,7 +1595,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // 最後の wavwrite 前にリサンプリング処理を挟みます。
     int out_fs = kFs; 
 
-    const int fft_size  = GetFFTSizeForCheapTrick(kFs, nullptr);
+    CheapTrickOption ct_opt;
+    InitializeCheapTrickOption(kFs, &ct_opt);
+    const int fft_size  = ct_opt.fft_size;
     const int spec_bins = fft_size / 2 + 1;
 
     // ----------------------------------------------------------------
@@ -1650,7 +1608,6 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     int64_t total_samples    = 0;
     int     xfade_count      = 0;
     bool    prev_renderable  = false;
-    double  max_preutterance = 0.0;
     std::shared_ptr<const EmbeddedVoice> last_ev;
 
     for (int i = 0; i < note_count; ++i) {
@@ -1686,8 +1643,6 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             if (oto_it != g_oto_db.end()) {
                 found_oto     = oto_it->second;   // 値コピー（ロック内で確定）
                 has_found_oto = true;
-                max_preutterance = std::max(max_preutterance,
-                                            found_oto.preutterance);
             }
         }
 
@@ -1709,24 +1664,13 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         total_samples += ns;
     }
 
-    total_samples -= static_cast<int64_t>(kCrossfadeSamples) * xfade_count;
     if (total_samples <= 0) return;
 
     report_progress(2);
     if (is_cancelled()) return;
 
-    const int64_t pre_buffer_samples =
-        static_cast<int64_t>(max_preutterance * kFs / 1000.0);
-    const int64_t buffer_total = total_samples + pre_buffer_samples;
-
-    // [修正] 以前ここで tl_scratch.ensure_spec(max_harvest_len, spec_bins) を
-    // 呼んでいたが、これはメインスレッド自身の thread_local スクラッチを
-    // 事前確保するだけで、実際の合成は常にワーカースレッド側で行われるため
-    // 効果がなかった（呼び出し元スレッドは合成に参加しない）。無意味な
-    // 呼び出しだったため削除した。max_harvest_len 自体は今後デバッグ/
-    // ログ用途で使う可能性があるため計算だけ残す。
     (void)max_harvest_len;
-    std::vector<double> full_song_buffer(buffer_total, 0.0);
+    std::vector<double> full_song_buffer(total_samples, 0.0);
 
     // ----------------------------------------------------------------
     // パス2-A: 各ノートの note_buf を並列合成
@@ -1849,36 +1793,30 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         0.0);
                 }
 
-                completed.fetch_add(1, std::memory_order_relaxed);
+                const int done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+                if (is_cancelled()) {
+                    cancel_flag.store(true, std::memory_order_relaxed);
+                    cancelled_during_synth = true;
+                    return;
+                }
+                const int pct = 2 + static_cast<int>(
+                    (static_cast<double>(done) / total_renderable) * 78.0);
+                report_progress(std::min(pct, 80));
+                if (done == 1 || done % 5 == 0 || done == total_renderable) {
+                    fprintf(stdout, "[Render] Note %d/%d completed (progress=%d%%)\n", done, total_renderable, pct);
+                }
+#endif
             }
         };
 
         const int worker_count = std::min(max_threads, total_renderable);
 
-        // ★修正: Emscripten(WASM)を -pthread 無しでビルドした場合、
-        // std::thread は実スレッドとしてスケジューリングされない。
-        // その状態で以下のように「別スレッドが completed をインクリメントし、
-        // メインスレッドは while(completed < total) { sleep_for(30ms); } で
-        // 待つ」設計だと、completed が永遠に増えずメインスレッドが無限ループに
-        // 陥る（ブラウザの書き出しが完了しないまま固まる）。
-        // __EMSCRIPTEN_PTHREADS__ は -pthread 有効時にのみ定義されるマクロなので、
-        // これが無い場合（＝Emscriptenのシングルスレッドビルド）は
-        // ワーカープールを使わずメインスレッドで逐次実行する。
-        // ネイティブビルド、および -pthread 有効なEmscriptenビルドでは
-        // 従来通りマルチスレッドで動作する。
 #if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
-        for (int i = 0; i < worker_count; ++i) {
-            worker_fn();
-            if (worker_failed.load(std::memory_order_relaxed)) break;
-            if (is_cancelled()) {
-                cancel_flag.store(true, std::memory_order_relaxed);
-                cancelled_during_synth = true;
-                break;
-            }
-            const int done = completed.load(std::memory_order_relaxed);
-            const int pct  = 2 + static_cast<int>(
-                (static_cast<double>(done) / total_renderable) * 78.0);
-            report_progress(std::min(pct, 80));
+        worker_fn();
+        if (is_cancelled()) {
+            cancel_flag.store(true, std::memory_order_relaxed);
+            cancelled_during_synth = true;
         }
 #else
         std::vector<std::thread> workers;
@@ -1931,49 +1869,83 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // ----------------------------------------------------------------
     // パス2-B: 書き込みフェーズ
     // ----------------------------------------------------------------
-    int64_t current_offset     = pre_buffer_samples;
+    int64_t timeline_offset    = 0;
     bool    last_note_rendered = false;
+
     for (int idx = 0; idx < note_count; ++idx) {
         const NotePrepass& pp = prepass[idx];
-        switch (pp.state) {
-        case NoteState::INVALID:
-        case NoteState::NO_VOICE:
-            last_note_rendered = false;
-            if (pp.state == NoteState::NO_VOICE) current_offset += pp.note_samples;
-            continue;
-        case NoteState::RENDERABLE:
-            break;
-        }
         const int64_t note_samples = pp.note_samples;
-        const OtoEntry& current_oto = pp.has_oto ? pp.oto : kDefaultOto;
-        const int64_t pre_samples     =
-            static_cast<int64_t>(current_oto.preutterance * kFs / 1000.0);
-        // overlap: oto.ini の overlap フィールドが存在する場合に有効。
-        // vose_core.h の OtoEntry に overlap メンバがなければ 0 に変更すること。
-        // (UTAUの標準的な OtoEntry には overlap が存在する)
-        const int64_t overlap_samples =
-            static_cast<int64_t>(current_oto.overlap * kFs / 1000.0);
-        const int64_t base_offset  = last_note_rendered
-                                     ? current_offset - kCrossfadeSamples
-                                     : current_offset;
-        const int64_t write_offset = std::max<int64_t>(0, base_offset - pre_samples);
 
-        // [FIX] 実際にどれだけ前方へ後退したか（= 本当にブレンドすべき幅）を計算する。
-        //       preutteranceが長い音素ほど後退量が増えるので、xfadeもそれに追従させる。
-        //       note_samplesを超えないようクランプ（apply_crossfade側の安全策と二重に保護）。
-        const int64_t actual_overlap = last_note_rendered
-                                       ? (current_offset - write_offset)
-                                       : 0;
-        const int     xfade = last_note_rendered
-                             ? static_cast<int>(std::min<int64_t>(actual_overlap, note_samples))
-                             : 0;
+        if (pp.state != NoteState::RENDERABLE) {
+            last_note_rendered = false;
+            timeline_offset += note_samples;
+            continue;
+        }
 
-        apply_crossfade(full_song_buffer, buffer_total,
-                        note_bufs[idx], note_samples,
-                        write_offset, xfade, overlap_samples);
-        current_offset += last_note_rendered
-                          ? note_samples - kCrossfadeSamples
-                          : note_samples;
+        // ノート境界での滑らかな接続
+        if (last_note_rendered) {
+            // 直前ノートと連続している場合:
+            // 2ms(88サンプル)のマイクロスムージングを行い、子音アタック(k, s, t 等)を損なわずに
+            // 境界での波形不連続によるクリックノイズのみを除去する
+            const int declick = static_cast<int>(std::min<int64_t>(88, note_samples / 8));
+            for (int s = 0; s < declick; ++s) {
+                const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 1.0;
+                const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
+                const int64_t di = timeline_offset + s;
+                if (di < total_samples && s < note_samples) {
+                    full_song_buffer[di] = note_bufs[idx][s] * fade_in;
+                }
+            }
+            for (int64_t s = declick; s < note_samples; ++s) {
+                const int64_t di = timeline_offset + s;
+                if (di < total_samples) {
+                    full_song_buffer[di] = note_bufs[idx][s];
+                }
+            }
+            // 直前ノートの末尾2msも同様にデクリック・フェードアウト
+            for (int s = 0; s < declick; ++s) {
+                const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 1.0;
+                const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
+                const int64_t di = timeline_offset - declick + s;
+                if (di >= 0 && di < total_samples) {
+                    full_song_buffer[di] *= fade_out;
+                }
+            }
+        } else {
+            // 休符明けの立ち上がり: 3msのデクリック・フェードイン
+            const int fade_in_samples = static_cast<int>(std::min<int64_t>(132, note_samples / 4));
+            for (int s = 0; s < fade_in_samples; ++s) {
+                const double t = (fade_in_samples > 1) ? (static_cast<double>(s) / fade_in_samples) : 1.0;
+                const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
+                const int64_t di = timeline_offset + s;
+                if (di < total_samples && s < note_samples) {
+                    full_song_buffer[di] = note_bufs[idx][s] * fade_in;
+                }
+            }
+            for (int64_t s = fade_in_samples; s < note_samples; ++s) {
+                const int64_t di = timeline_offset + s;
+                if (di < total_samples) {
+                    full_song_buffer[di] = note_bufs[idx][s];
+                }
+            }
+        }
+
+        // 次のノートがRENDERABLEでない、または曲末尾の場合: 5msのデクリック・フェードアウト
+        const bool next_rendered = (idx + 1 < note_count && prepass[idx + 1].state == NoteState::RENDERABLE);
+        if (!next_rendered) {
+            const int fade_out_samples = static_cast<int>(std::min<int64_t>(220, note_samples / 4));
+            for (int s = 0; s < fade_out_samples; ++s) {
+                const double t = (fade_out_samples > 1) ? (static_cast<double>(s) / fade_out_samples) : 1.0;
+                const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
+                const int64_t src_idx = note_samples - fade_out_samples + s;
+                const int64_t di = timeline_offset + src_idx;
+                if (di >= 0 && di < total_samples && src_idx >= 0 && src_idx < note_samples) {
+                    full_song_buffer[di] *= fade_out;
+                }
+            }
+        }
+
+        timeline_offset += note_samples;
         last_note_rendered = true;
     }
     report_progress(85);
@@ -1999,7 +1971,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // BigVGANが無効なら従来通り WORLD出力をそのまま wavwrite する。
     // ----------------------------------------------------------------
 {
-        const double* src   = full_song_buffer.data() + pre_buffer_samples;
+        const double* src   = full_song_buffer.data();
         const int     n_src = static_cast<int>(total_samples);
 
 #ifdef VOSE_PRO

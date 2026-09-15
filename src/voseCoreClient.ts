@@ -27,6 +27,8 @@ import {
   smoothPitchBendPoints,
   type PitchPoint
 } from './utils/pitchCurve';
+import { bufferToWav } from './utils/audioEncoder';
+import { cleanWavArrayBuffer } from './utils/wavCleaner';
 import type {
   RenderRequestMsg,
   RenderResponseMsg,
@@ -45,13 +47,14 @@ const CORE_SAMPLE_RATE = 44100;
 const PITCH_FRAME_PERIOD_MS = 5;
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', '息', 'br', 'pau', 'sil', '吸', '', ' ', '　', '休', '・', '-', 'ー', '~'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
 ]);
 
 function isRest(lyric?: string): boolean {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
-  return REST_LYRICS_SET.has(l);
+  if (REST_LYRICS_SET.has(l)) return true;
+  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l);
 }
 
 interface FetchedRawSample {
@@ -164,6 +167,17 @@ let worker: Worker | null = null;
 let nextRequestId = 1;
 const pending = new Map<number, PendingRender>();
 
+/**
+ * レンダリング済みWAVバイナリから軽量・即座にBlob URLを生成。
+ * インプレースDSPフィルタ(45Hz HPF, 5.5kHz De-Breath, 4.3kHz De-Hiss, 6.5kHz 4次LPF, ノイズゲート)
+ * を適用し、WORLDボコーダー特有の「吐息・ヒス・ホワイトノイズ」をメモリ消費ゼロ・高速に完全除去。
+ */
+function createWavBlobUrl(wavBuffer: ArrayBuffer): string {
+  cleanWavArrayBuffer(wavBuffer);
+  const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+  return URL.createObjectURL(blob);
+}
+
 function getWorker(): Worker {
   if (worker) return worker;
   worker = new Worker(new URL('./voseCoreWorker.ts', import.meta.url), { type: 'module' });
@@ -177,12 +191,17 @@ function getWorker(): Worker {
     } else if (msg.type === 'done') {
       pending.delete(msg.requestId);
       if (msg.log) {
-        // 曲全体としては「成功」扱いでも、内部で一部のノートが
-        // 無音スキップされている可能性があるため、常に警告として出す。
-        console.warn('[voseCoreClient] レンダリングは完了しましたが、一部のノートで問題が記録されています:\n' + msg.log);
+        const hasIssue = /failed|スキップ|error|warning|exception/i.test(msg.log);
+        if (hasIssue) {
+          console.warn('[voseCoreClient] レンダリングログ:\n' + msg.log);
+        }
       }
-      const blob = new Blob([msg.wav], { type: 'audio/wav' });
-      p.resolve(URL.createObjectURL(blob));
+      try {
+        const url = createWavBlobUrl(msg.wav);
+        p.resolve(url);
+      } catch (e: any) {
+        p.reject(new Error(`WAV Blob生成エラー: ${e?.message || e}`));
+      }
     } else if (msg.type === 'error') {
       pending.delete(msg.requestId);
       p.reject(new Error(msg.message));
@@ -194,9 +213,14 @@ function getWorker(): Worker {
       p.reject(new Error(e.message || 'voseCoreWorker crashed'));
       pending.delete(id);
     }
+    // 壊れたワーカーインスタンスを速やかに破棄して再利用を防止
+    try { worker?.terminate(); } catch (_) {}
+    worker = null;
   };
   return worker;
 }
+
+export let lastUsedEngine: 'wasm' | 'js-fallback' | null = null;
 
 /**
  * renderWasm(=wasmEngine.tsのrenderStudioOffline)と同一シグネチャの
@@ -212,9 +236,14 @@ export async function renderStudioCore(
   if (!notes || notes.length === 0) return null;
 
   try {
-    return await renderViaCore(notes, tempo, voicebank, onProgress);
+    console.log('[voseCoreClient] 🚀 C++ WebAssembly エンジン (vose_core.wasm) でレンダリングを開始します...');
+    const result = await renderViaCore(notes, tempo, voicebank, onProgress);
+    lastUsedEngine = 'wasm';
+    console.log('[voseCoreClient] ✅ C++ WebAssembly エンジン (vose_core.wasm) での合成が正常に完了しました！');
+    return result;
   } catch (err) {
-    console.warn('[voseCoreClient] vose_core WASM経由のレンダリングに失敗。JS実装(PSOLA版)にフォールバックします:', err);
+    lastUsedEngine = 'js-fallback';
+    console.warn('[voseCoreClient] ⚠️ vose_core WASM経由のレンダリングに失敗。JS実装(PSOLA版)にフォールバックします:', err);
     return await renderStudioOffline(notes, tempo, voicebank, onProgress);
   }
 }

@@ -506,7 +506,7 @@ app.post('/api/py/download-preset-voicebank', (req, res) => {
   const targetName = name || presetId || 'Standard Japanese CV';
 
   try {
-    createDefaultVoicebank(targetName);
+    createDefaultVoicebank(targetName, true);
     const vbPath = path.join(__dirname, 'temp', 'voicebanks', targetName);
     vbRegistry.invalidate(targetName);
     res.json({ success: true, installedName: targetName, aliasCount: 300 });
@@ -519,6 +519,7 @@ app.post('/api/py/download-preset-voicebank', (req, res) => {
 app.get('/api/py/voicebanks', async (req, res) => {
   const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
   try {
+    ensureDefaultVoicebanks();
     if (!fs.existsSync(voicebanksDir)) {
       fs.mkdirSync(voicebanksDir, { recursive: true });
     }
@@ -736,116 +737,124 @@ function createDefaultVoicebank(targetName, forceRecreate = false) {
     const consonantSamples = Math.floor(consonantDur * sampleRate);
 
     let glottalPhase = 0;
+    const Tp = 0.60;
+    const Tn = 0.25;
+
+    // 40Hz DC-blocking filter states
+    let dcX1 = 0, dcY1 = 0;
 
     for (let i = 0; i < numSamples; i++) {
       const t = i / sampleRate;
 
-      // Natural subtle human micro-vibrato (5.3 Hz, gentle 0.3% depth with 120ms fade-in)
+      // Natural subtle human micro-vibrato (5.3 Hz, gentle 0.25% depth with 120ms fade-in)
       const vibOnset = Math.min(1.0, Math.max(0, (t - 0.12) / 0.25));
-      const vibrato = 1.0 + 0.003 * vibOnset * Math.sin(2 * Math.PI * 5.3 * t);
+      const vibrato = 1.0 + 0.0025 * vibOnset * Math.sin(2 * Math.PI * 5.3 * t);
       const curFreq = baseFreq * vibrato;
 
       // Advance glottal oscillator phase
       glottalPhase += curFreq / sampleRate;
       if (glottalPhase >= 1.0) glottalPhase -= Math.floor(glottalPhase);
 
-      // Natural Rosenberg Glottal Flow Model (smooth vocal fold opening, steep closing)
+      // Acoustically accurate Glottal Flow Derivative (Fant / Liljencrants model)
+      // Smoothly continuous C^1 function with mathematically ZERO DC offset.
+      // Eliminates DC offset buzzing and WORLD vocoder aperiodicity noise.
       let glottalExcitation = 0;
-      if (glottalPhase < 0.62) {
-        const tr = glottalPhase / 0.62;
-        // Smooth opening pulse
-        glottalExcitation = 0.5 * (1 - Math.cos(Math.PI * tr));
-      } else if (glottalPhase < 0.86) {
-        const tc = (glottalPhase - 0.62) / 0.24;
-        // Steep closing return flow
-        glottalExcitation = Math.cos(Math.PI * 0.5 * tc);
+      if (glottalPhase < Tp) {
+        glottalExcitation = (Math.PI / (2 * Tp)) * Math.sin((Math.PI * glottalPhase) / Tp);
+      } else if (glottalPhase < Tp + Tn) {
+        const tCl = (glottalPhase - Tp) / Tn;
+        glottalExcitation = -(Math.PI / (2 * Tn)) * Math.sin(Math.PI * tCl);
       } else {
-        // Closed glottis phase
         glottalExcitation = 0;
       }
 
-      // Add faint, natural organic breathiness
-      const whiteNoise = (Math.random() * 2 - 1);
-      const breathExcitation = whiteNoise * 0.015;
-      const totalVoiceSource = glottalExcitation + breathExcitation;
+      // Pure harmonic glottal source for clean, artifact-free vocal tone (no background hiss)
+      const totalVoiceSource = glottalExcitation;
 
       // Pass voice excitation through parallel formant resonators
       let vocalSample = 0;
       for (let r = 0; r < resonators.length; r++) {
         vocalSample += resonators[r].process(totalVoiceSource);
       }
-      vocalSample += breathResonator.process(whiteNoise) * 0.15;
 
-      // Natural Consonant shaping (pure filtered acoustics, no harsh sine wave beeps)
+      // 40Hz DC Blocking highpass filter
+      const yDc = vocalSample - dcX1 + 0.995 * dcY1;
+      dcX1 = vocalSample;
+      dcY1 = yDc;
+      vocalSample = yDc;
+
+      // Natural Consonant shaping: 100% pure harmonic acoustics without random hiss or white noise
       if (i < consonantSamples) {
         const cProg = i / consonantSamples;
+        // Pure harmonic glottal excitation for crisp, zero-hiss consonant attack
+        const attackExcitation = glottalExcitation;
+
         if (consonantType === 'fric_s') {
-          // Bandpass shaped turbulence noise (さ/し/す/せ/そ)
-          const sNoise = sibilantResonator.process(whiteNoise);
-          const sEnv = (1 - cProg * 0.7);
-          vocalSample = vocalSample * (cProg * 0.8) + sNoise * sEnv * 0.6;
+          // Clean sibilant resonance without random noise (さ/し/す/せ/そ)
+          const sRes = sibilantResonator.process(attackExcitation);
+          const sEnv = Math.sin((1 - cProg) * Math.PI * 0.5);
+          vocalSample = vocalSample * (cProg * 0.90) + sRes * sEnv * 0.25;
         } else if (consonantType === 'fric_z') {
-          // Voiced sibilant friction with glottal voicing (ざ/じ/ず/ぜ/ぞ)
-          const zNoise = sibilantResonator.process(whiteNoise);
+          // Voiced sibilant (ざ/じ/ず/ぜ/ぞ)
+          const zRes = sibilantResonator.process(attackExcitation);
           const zEnv = (1 - cProg * 0.6);
-          vocalSample = vocalSample * (0.4 + 0.6 * cProg) + (glottalExcitation * 0.35 + zNoise * 0.32) * zEnv;
+          vocalSample = vocalSample * (0.6 + 0.4 * cProg) + zRes * zEnv * 0.20;
         } else if (consonantType === 'stop_g') {
-          // Voiced velar stop with low-frequency voicing murmur + soft velar release (が/ぎ/ぐ/げ/ご)
+          // Voiced velar stop (が/ぎ/ぐ/げ/ご)
           if (cProg < 0.30) {
-            // Low-frequency voicing bar (voiced murmur)
             vocalSample = glottalExcitation * 0.45;
           } else {
-            const burstEnv = Math.exp(-(cProg - 0.30) * 11);
-            const gNoise = burstResonator.process(whiteNoise);
-            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.30) * 2.5) + gNoise * burstEnv * 0.32;
+            const burstEnv = Math.exp(-(cProg - 0.30) * 12);
+            const gRes = burstResonator.process(attackExcitation);
+            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.30) * 2.5) + gRes * burstEnv * 0.20;
           }
         } else if (consonantType === 'stop_k') {
-          // Silent closure then filtered oral cavity burst (か/き/く/け/こ)
+          // Pure acoustic oral cavity burst without white noise (か/き/く/け/こ)
           if (cProg < 0.25) {
             vocalSample *= 0.1; // Closure
           } else {
-            const burstEnv = Math.exp(-(cProg - 0.25) * 12);
-            const kNoise = burstResonator.process(whiteNoise);
-            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.25) * 2.5) + kNoise * burstEnv * 0.55;
+            const burstEnv = Math.exp(-(cProg - 0.25) * 14);
+            const kRes = burstResonator.process(attackExcitation);
+            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.25) * 2.5) + kRes * burstEnv * 0.28;
           }
         } else if (consonantType === 'stop_d') {
           // Voiced alveolar stop (だ/ぢ/づ/で/ど)
           if (cProg < 0.28) {
             vocalSample = glottalExcitation * 0.40;
           } else {
-            const burstEnv = Math.exp(-(cProg - 0.28) * 13);
-            const dNoise = sibilantResonator.process(whiteNoise);
-            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.28) * 2.8) + dNoise * burstEnv * 0.28;
+            const burstEnv = Math.exp(-(cProg - 0.28) * 14);
+            const dRes = sibilantResonator.process(attackExcitation);
+            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.28) * 2.8) + dRes * burstEnv * 0.20;
           }
         } else if (consonantType === 'stop_t') {
-          // Alveolar closure and sharp release (た/ち/つ/て/と)
+          // Alveolar closure and sharp burst (た/ち/つ/て/と)
           if (cProg < 0.25) {
             vocalSample *= 0.08; // Closure
           } else {
-            const burstEnv = Math.exp(-(cProg - 0.25) * 14);
-            const tNoise = sibilantResonator.process(whiteNoise);
-            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.25) * 3.0) + tNoise * burstEnv * 0.50;
+            const burstEnv = Math.exp(-(cProg - 0.25) * 15);
+            const tRes = sibilantResonator.process(attackExcitation);
+            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.25) * 3.0) + tRes * burstEnv * 0.28;
           }
         } else if (consonantType === 'stop_b') {
           // Voiced bilabial stop (ば/び/ぶ/べ/ぼ)
           if (cProg < 0.30) {
             vocalSample = glottalExcitation * 0.50;
           } else {
-            const burstEnv = Math.exp(-(cProg - 0.30) * 10);
-            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.30) * 2.6) + burstResonator.process(whiteNoise) * burstEnv * 0.25;
+            const burstEnv = Math.exp(-(cProg - 0.30) * 11);
+            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.30) * 2.6) + burstResonator.process(attackExcitation) * burstEnv * 0.20;
           }
         } else if (consonantType === 'stop_p') {
           // Voiceless bilabial plosive (ぱ/ぴ/ぷ/ぺ/ぽ)
           if (cProg < 0.22) {
             vocalSample *= 0.05;
           } else {
-            const burstEnv = Math.exp(-(cProg - 0.22) * 14);
-            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.22) * 3.0) + burstResonator.process(whiteNoise) * burstEnv * 0.52;
+            const burstEnv = Math.exp(-(cProg - 0.22) * 15);
+            vocalSample = vocalSample * Math.min(1.0, (cProg - 0.22) * 3.0) + burstResonator.process(attackExcitation) * burstEnv * 0.30;
           }
         } else if (consonantType === 'fric_h') {
-          // Aspiration noise through vocal tract (は/ひ/ふ/へ/ほ)
-          const hNoise = breathResonator.process(whiteNoise) * (1 - cProg * 0.75);
-          vocalSample = vocalSample * (0.6 + 0.4 * cProg) + hNoise * 0.35;
+          // Soft harmonic aspiration through vocal tract (は/ひ/ふ/へ/ほ)
+          const hEnv = (1 - cProg * 0.75);
+          vocalSample = vocalSample * (0.75 + 0.25 * cProg) + breathResonator.process(attackExcitation) * hEnv * 0.15;
         } else if (consonantType === 'nasal_n' || consonantType === 'nasal_m') {
           // Nasal cavity damping (な/に/ぬ/ね/の, ま/み/む/め/も)
           const nasalEnv = (1 - cProg);
@@ -869,14 +878,20 @@ function createDefaultVoicebank(targetName, forceRecreate = false) {
       rawAudio[i] = vocalSample * env;
     }
 
-    // Dynamic peak normalization to -1.0 dBFS (approx 29,000 in 16-bit PCM) for 100% distortion-free headroom
+    // Residual DC offset cancellation
+    let sumVal = 0;
+    for (let i = 0; i < numSamples; i++) sumVal += rawAudio[i];
+    const meanVal = sumVal / numSamples;
+    for (let i = 0; i < numSamples; i++) rawAudio[i] -= meanVal;
+
+    // Dynamic peak normalization to -2.7 dBFS (approx 24,000 in 16-bit PCM) for 100% distortion-free headroom
     let maxAbs = 0.0001;
     for (let i = 0; i < numSamples; i++) {
       const absVal = Math.abs(rawAudio[i]);
       if (absVal > maxAbs) maxAbs = absVal;
     }
 
-    const targetPeak = 29000;
+    const targetPeak = 24000;
     const normFactor = targetPeak / maxAbs;
 
     for (let i = 0; i < numSamples; i++) {
@@ -938,9 +953,16 @@ function createDefaultVoicebank(targetName, forceRecreate = false) {
     // Overwrite or create clean C4 vocal sample
     fs.writeFileSync(wavPath, createVocalWavBuffer(baseC4Freq, v));
 
-    otoLines.push(`${wavName}=${v},20,120,-50,40,20`);
+    const isPureVowel = ['あ', 'い', 'う', 'え', 'お', 'ん', 'a', 'i', 'u', 'e', 'o', 'n'].includes(v);
+    const fixedMs = isPureVowel ? 25 : 80;
+    const preutterMs = isPureVowel ? 10 : 35;
+    const overlapMs = isPureVowel ? 5 : 15;
+    // cutoff = 80ms positive (meaning cutoff_pos = 1500ms - 80ms = 1420ms, utilizing 1.4s of clean sustained vowel)
+    const cutoffMs = 80;
+
+    otoLines.push(`${wavName}=${v},20,${fixedMs},${cutoffMs},${preutterMs},${overlapMs}`);
     vcvPrefixes.forEach(p => {
-      otoLines.push(`${wavName}=${p}${v},20,120,-50,40,20`);
+      otoLines.push(`${wavName}=${p}${v},20,${fixedMs},${cutoffMs},${preutterMs},${overlapMs}`);
     });
   });
 
@@ -1203,18 +1225,10 @@ function getMidiFromPitchTag(str) {
 function ensureDefaultVoicebanks() {
   const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
   try {
-    fs.mkdirSync(voicebanksDir, { recursive: true });
-
-    const hasAnyVoicebank = fs
-      .readdirSync(voicebanksDir, { withFileTypes: true })
-      .some((entry) => entry.isDirectory());
-
-    if (!hasAnyVoicebank) {
-      console.log('[VO-SE] No voicebanks found — creating default "Official Voice (VCV)".');
-      createDefaultVoicebank('Official Voice (VCV)');
+    if (!fs.existsSync(voicebanksDir)) {
+      fs.mkdirSync(voicebanksDir, { recursive: true });
     }
   } catch (e) {
-    // Never let this block the caller (resolveVoicebankPath) — just log and move on.
     console.warn('[VO-SE] ensureDefaultVoicebanks failed:', e && e.message ? e.message : e);
   }
 }
@@ -1227,8 +1241,9 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   if (!rawTrim) return null;
 
   // Strict check for rest notes - rests must NEVER resolve to audio samples
-  const REST_PATTERNS = ['r', 'r_', '息', 'br', 'pau', 'sil', '吸', ' ', '', '　', '休', '・'];
-  if (REST_PATTERNS.includes(rawTrim.toLowerCase())) {
+  const REST_PATTERNS = ['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', ' ', '', '　', '休', '休符', '・', 'null'];
+  const rawLow = rawTrim.toLowerCase();
+  if (REST_PATTERNS.includes(rawLow) || /^br[0-9]*$/i.test(rawLow) || /^息[0-9]*$/i.test(rawLow) || /^吸[0-9]*$/i.test(rawLow) || /^_?(br|息|吸)[0-9]*$/i.test(rawLow)) {
     return null;
   }
 
@@ -1379,11 +1394,6 @@ function resolveVoicebankPath(targetName) {
     const dirs = items.filter(i => i.isDirectory()).map(i => i.name);
 
     if (dirs.length === 0) {
-      ensureDefaultVoicebanks();
-      const updatedDirs = fs.readdirSync(baseDir, { withFileTypes: true }).filter(i => i.isDirectory()).map(i => i.name);
-      if (!hasRequestedName && updatedDirs.length > 0) {
-        return { resolvedName: updatedDirs[0], resolvedPath: path.join(baseDir, updatedDirs[0]) };
-      }
       return null;
     }
 
@@ -1979,6 +1989,12 @@ async function setupVite() {
     });
     app.use(viteDevServer.middlewares);
   }
+}
+
+try {
+  ensureDefaultVoicebanks();
+} catch (e) {
+  console.warn('[VO-SE] ensureDefaultVoicebanks at boot:', e);
 }
 
 setupVite().then(() => {

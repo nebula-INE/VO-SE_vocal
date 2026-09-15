@@ -120,7 +120,7 @@ void push(const VoseStreamNote& n) {
     fill(n.pitch_curve,   qn.pitch_curve,   440.0);
     fill(n.gender_curve,  qn.gender_curve,  0.5);
     fill(n.tension_curve, qn.tension_curve, 0.5);
-    fill(n.breath_curve,  qn.breath_curve,  0.5);
+    fill(n.breath_curve,  qn.breath_curve,  0.0);
 
     // ★ ポルタメントカーブのコピー（データがあれば）
     if (n.portamento_offsets && n.portamento_length > 0) {
@@ -195,7 +195,9 @@ private:
     //     → 再生カーソルに対して常に ~N ms 先行して PCM を供給
     // ============================================================
     void synth_loop() {
-        const int fft_size  = GetFFTSizeForCheapTrick(kFs_internal, nullptr);
+        CheapTrickOption ct_opt;
+        InitializeCheapTrickOption(kFs_internal, &ct_opt);
+        const int fft_size  = ct_opt.fft_size;
         const int spec_bins = fft_size / 2 + 1;
 
         std::shared_ptr<const EmbeddedVoice> prev_ev = nullptr;

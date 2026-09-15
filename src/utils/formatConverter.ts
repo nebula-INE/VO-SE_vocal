@@ -197,17 +197,28 @@ export function parseUstText(text: string): ProjectData {
       return;
     }
 
-    // In UTAU, Rest notes are strictly R, r, 休符, null or empty. Note: "ー" is NOT a rest in UTAU songs!
+    // In UTAU, Rest and Breath notes are strictly R, r, 休符, br, 息, 吸, pau, sil, etc.
+    const lLower = trimmedLyric.toLowerCase();
     const isRest = (
-      trimmedLyric === 'R' ||
-      trimmedLyric === 'r' ||
-      trimmedLyric === '休符' ||
-      trimmedLyric === '[R]' ||
-      trimmedLyric === '[r]' ||
-      trimmedLyric === 'R_0' ||
-      trimmedLyric === 'r_0' ||
-      trimmedLyric === 'null' ||
-      trimmedLyric === ''
+      lLower === 'r' ||
+      lLower === 'r_' ||
+      lLower === 'r_0' ||
+      lLower === '[r]' ||
+      lLower === '休' ||
+      lLower === '休符' ||
+      lLower === 'null' ||
+      lLower === '' ||
+      lLower === 'pau' ||
+      lLower === 'sil' ||
+      lLower === 'br' ||
+      lLower === '息' ||
+      lLower === '吸' ||
+      lLower === '吸気' ||
+      lLower === '息吸い' ||
+      /^br[0-9]*$/i.test(lLower) ||
+      /^息[0-9]*$/i.test(lLower) ||
+      /^吸[0-9]*$/i.test(lLower) ||
+      /^_?(br|息|吸)[0-9]*$/i.test(lLower)
     );
 
     if (!isRest) {

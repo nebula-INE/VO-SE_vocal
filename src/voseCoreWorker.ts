@@ -148,10 +148,25 @@ async function getModule(): Promise<VoseCoreModule> {
   return modPromise;
 }
 
-function allocDoubleArray(mod: VoseCoreModule, values: number[] | null): number {
+function allocDoubleArray(mod: VoseCoreModule, values: number[] | Float64Array | null): number {
   if (!values || values.length === 0) return 0;
   const ptr = mod._malloc(values.length * 8);
-  mod.HEAPF64.set(Float64Array.from(values), ptr / 8);
+  if (values instanceof Float64Array) {
+    mod.HEAPF64.set(values, ptr / 8);
+  } else {
+    const heap = mod.HEAPF64;
+    const base = ptr / 8;
+    for (let i = 0; i < values.length; i++) {
+      heap[base + i] = values[i];
+    }
+  }
+  return ptr;
+}
+
+function allocZeroDoubleArray(mod: VoseCoreModule, length: number): number {
+  if (length <= 0) return 0;
+  const ptr = mod._malloc(length * 8);
+  mod.HEAPU8.fill(0, ptr, ptr + length * 8);
   return ptr;
 }
 
@@ -272,12 +287,19 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       const wavPathPtr = isVoiced ? allocCString(mod, key as string) : 0;
       if (wavPathPtr) allocatedPtrs.push(wavPathPtr);
 
+      // 息パラメータ: 0(nullptr)を渡すと C++ コア側でデフォルト値 0.5 (50%の息漏れノイズ)
+      // が補完されてしまい、激しいヒスノイズが乗る。
+      // 明示的に 0.0 (純粋な有声調波・息ノイズ0) のカーブを渡すことで、
+      // apply_tension_breath が非周期成分を積極的に抑制するようにする。
+      const breathCurvePtr = isVoiced ? allocZeroDoubleArray(mod, pitchCurveHz.length) : 0;
+      if (breathCurvePtr) allocatedPtrs.push(breathCurvePtr);
+
       mod.setValue(base + OFF_WAV_PATH, wavPathPtr, 'i32');
       mod.setValue(base + OFF_PITCH_CURVE, pitchCurvePtr, 'i32');
       mod.setValue(base + OFF_PITCH_LENGTH, pitchCurveHz.length, 'i32');
       mod.setValue(base + OFF_GENDER_CURVE, 0, 'i32');
       mod.setValue(base + OFF_TENSION_CURVE, 0, 'i32');
-      mod.setValue(base + OFF_BREATH_CURVE, 0, 'i32');
+      mod.setValue(base + OFF_BREATH_CURVE, breathCurvePtr, 'i32');
       mod.setValue(base + OFF_VIBRATO_DEPTH_CURVE, 0, 'i32');
       mod.setValue(base + OFF_VIBRATO_RATE_CURVE, 0, 'i32');
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
