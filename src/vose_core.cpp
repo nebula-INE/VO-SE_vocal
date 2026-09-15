@@ -1273,6 +1273,29 @@ static bool is_unvoiced_phoneme_name(const std::string& str)
     return false;
 }
 
+// ★追加: max_ap の帯域境界 (2200/4500/8000Hz) が階段状(ステップ関数)になっていると、
+// その周波数ビンで ar[k] が強制的に折れ曲がり、非周期成分スペクトルに急激な段差が
+// 生じる。この段差付きスペクトルを逆FFTすると各ピッチパルスの合間に高周波のリンギング
+// ("トゲトゲしたノイズ")が発生する。境界の前後 kTransHz 幅を smoothstep で
+// クロスフェードし、段差を無くすことでリンギングを解消する。
+static double smooth_band_value(double freq, const double* bfreqs, const double* bvals, int n_bounds)
+{
+    constexpr double kTransHz = 400.0;
+    auto smoothstep = [](double x) {
+        x = clamp(x, 0.0, 1.0);
+        return x * x * (3.0 - 2.0 * x);
+    };
+    for (int i = 0; i < n_bounds; ++i) {
+        const double b = bfreqs[i];
+        if (freq < b - kTransHz) return bvals[i];
+        if (freq < b + kTransHz) {
+            const double t = smoothstep((freq - (b - kTransHz)) / (2.0 * kTransHz));
+            return bvals[i] + (bvals[i + 1] - bvals[i]) * t;
+        }
+    }
+    return bvals[n_bounds];
+}
+
 void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_buf)
 {
     const NotePrepass& pp    = p.pp;
@@ -1419,28 +1442,19 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
         for (int k = 0; k < spec_bins; ++k) {
             const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
-            double max_ap = 0.005; // 2.2kHz以下: 0.5%の純粋な有声調波。低域のガサつきを完全遮断
+            double max_ap;
             if (in_consonant_friction) {
                 // 無声子音アタック (k, s, t, h, p など): 高域にのみ子音の摩擦・破裂成分を許容
-                if (freq < 2200.0) {
-                    max_ap = 0.01;
-                } else if (freq < 4500.0) {
-                    max_ap = 0.25;
-                } else {
-                    max_ap = 0.50;
-                }
+                static const double bfreqs[2] = {2200.0, 4500.0};
+                static const double bvals[3]  = {0.01, 0.25, 0.50};
+                max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
             } else {
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
                 // 歌唱の胴鳴りと純粋な調波構造を最優先し、背景のヒス・吐息ノイズ混入を完全防ぐ
-                if (freq < 2200.0) {
-                    max_ap = 0.005;
-                } else if (freq < 4500.0) {
-                    max_ap = 0.015;
-                } else if (freq < 8000.0) {
-                    max_ap = 0.030;
-                } else {
-                    max_ap = 0.050; // 超高域も5%上限に抑え、サーというホワイトノイズ感を根絶
-                }
+                // 超高域も5%上限に抑え、サーというホワイトノイズ感を根絶
+                static const double bfreqs[3] = {2200.0, 4500.0, 8000.0};
+                static const double bvals[4]  = {0.005, 0.015, 0.030, 0.050};
+                max_ap = smooth_band_value(freq, bfreqs, bvals, 3);
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
             if (ar[k] > max_ap) {
