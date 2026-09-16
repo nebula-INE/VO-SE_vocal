@@ -124,6 +124,41 @@ async function fetchSampleWithMeta(
   return promise;
 }
 
+// ループ境界のクリック音を除去するゼロクロス検出＆シームレス・クロスフェード
+function findZeroCrossing(channelData: Float32Array, targetSample: number, searchRadius = 120): number {
+  const maxIdx = channelData.length - 2;
+  const minIdx = 1;
+  const clampedTarget = Math.max(minIdx, Math.min(maxIdx, targetSample));
+  let bestIdx = clampedTarget;
+  let minVal = Math.abs(channelData[clampedTarget]);
+
+  for (let r = 1; r <= searchRadius; r++) {
+    const left = clampedTarget - r;
+    if (left >= minIdx) {
+      if (channelData[left] <= 0 && channelData[left + 1] > 0) {
+        return left;
+      }
+      const v = Math.abs(channelData[left]);
+      if (v < minVal) {
+        minVal = v;
+        bestIdx = left;
+      }
+    }
+    const right = clampedTarget + r;
+    if (right <= maxIdx) {
+      if (channelData[right] <= 0 && channelData[right + 1] > 0) {
+        return right;
+      }
+      const v = Math.abs(channelData[right]);
+      if (v < minVal) {
+        minVal = v;
+        bestIdx = right;
+      }
+    }
+  }
+  return bestIdx;
+}
+
 // ループ境界のクリック音を除去するクロスフェードバッファ生成
 function getLoopCrossfadedBuffer(
   ctx: BaseAudioContext,
@@ -140,11 +175,17 @@ function getLoopCrossfadedBuffer(
 
   const src = cached.buffer;
   const sr = src.sampleRate;
-  const loopLenSec = Math.max(0.001, loopEndSec - loopStartSec);
-  const xfadeSec = Math.min(0.015, loopLenSec * 0.25);
-  const xfadeSamples = Math.max(1, Math.floor(xfadeSec * sr));
-  const loopStartSample = Math.max(0, Math.floor(loopStartSec * sr));
-  const loopEndSample = Math.min(src.length, Math.floor(loopEndSec * sr));
+  const ch0 = src.getChannelData(0);
+
+  let loopStartSample = Math.max(0, Math.floor(loopStartSec * sr));
+  let loopEndSample = Math.min(src.length, Math.floor(loopEndSec * sr));
+
+  // ゼロ交差点へスナップして位相とオフセットの急峻な段差を防止
+  loopStartSample = findZeroCrossing(ch0, loopStartSample);
+  loopEndSample = findZeroCrossing(ch0, loopEndSample);
+
+  const loopLenSamples = Math.max(100, loopEndSample - loopStartSample);
+  const xfadeSamples = Math.max(1, Math.min(Math.floor(0.020 * sr), Math.floor(loopLenSamples * 0.25)));
 
   const newBuffer = ctx.createBuffer(src.numberOfChannels, src.length, sr);
   for (let ch = 0; ch < src.numberOfChannels; ch++) {
@@ -152,6 +193,7 @@ function getLoopCrossfadedBuffer(
     const dstData = newBuffer.getChannelData(ch);
     dstData.set(srcData);
 
+    // ループ末尾 xfadeSamples 期間を、ループ先頭と滑らかにクロスフェード
     for (let i = 0; i < xfadeSamples; i++) {
       const tailIdx = loopEndSample - xfadeSamples + i;
       const headIdx = loopStartSample + i;
@@ -169,9 +211,6 @@ function getLoopCrossfadedBuffer(
 
 // ------------------------------------------------------------
 // 生波形(未ピッチシフト)のセグメントを組み立てる。
-// PSOLAへ渡す「素材」はここで作る: ピッチも速度もまだ元のまま、
-// 必要な長さ(requiredSampleSec)ぶんだけ、ループが必要ならクロス
-// フェード領域を周回させて敷き詰める。
 // ------------------------------------------------------------
 function buildRawSegment(
   ctx: BaseAudioContext,
@@ -198,22 +237,27 @@ function buildRawSegment(
     return outBuffer;
   }
 
-  // ループが必要な場合: loopEndSecまでは通常再生、それ以降は
-  // [loopStartSec, loopEndSec) のクロスフェード済み区間を周回させる。
+  // ループ区間のシームレス周回
   const xfaded = getLoopCrossfadedBuffer(ctx, cached, loopRange.loopStartSec, loopRange.loopEndSec);
   const loopStartSample = Math.max(0, Math.floor(loopRange.loopStartSec * sr));
   const loopEndSample = Math.min(xfaded.length, Math.floor(loopRange.loopEndSec * sr));
-  const loopLenSamples = Math.max(1, loopEndSample - loopStartSample);
+  const loopLenSec = Math.max(0.001, loopRange.loopEndSec - loopRange.loopStartSec);
+  const xfadeSamples = Math.max(1, Math.min(Math.floor(0.020 * sr), Math.floor((loopEndSample - loopStartSample) * 0.25)));
+  // クロスフェード完了後の実効ループ周回長
+  const effectiveLoopLen = Math.max(1, (loopEndSample - xfadeSamples) - loopStartSample);
 
   for (let ch = 0; ch < src.numberOfChannels; ch++) {
     const s = xfaded.getChannelData(ch % xfaded.numberOfChannels);
     const d = outBuffer.getChannelData(ch);
     for (let i = 0; i < outLen; i++) {
       const absIdx = startSample + i;
-      const idx =
-        absIdx < loopEndSample
-          ? absIdx
-          : loopStartSample + ((absIdx - loopEndSample) % loopLenSamples);
+      let idx: number;
+      if (absIdx < loopEndSample) {
+        idx = absIdx;
+      } else {
+        const loopOffset = (absIdx - loopEndSample) % effectiveLoopLen;
+        idx = loopStartSample + xfadeSamples + loopOffset;
+      }
       d[i] = idx < s.length ? s[idx] : 0;
     }
   }
@@ -591,10 +635,10 @@ export async function renderStudioOffline(
   // インプレースに処理し、長尺曲でもブラウザクラッシュ(OOM)を完全に防止。
   const nCh = renderedBuffer.numberOfChannels;
   const nFrames = renderedBuffer.length;
-  const gateWindow = Math.floor(sampleRate * 0.005); // 5ms (約220サンプル)
+  const gateWindow = Math.floor(sampleRate * 0.010); // 10ms ブロック
   const numBlocks = Math.ceil(nFrames / gateWindow);
-  const noiseFloor = 0.012;
-  const microHissThresh = 0.0015;
+  const noiseFloor = 0.008; // 約 -42dB
+  const holdBlocks = 5; // 50ms ホールド
 
   const blockGains = new Float32Array(numBlocks);
 
@@ -608,7 +652,8 @@ export async function renderStudioOffline(
       for (let i = 0; i < nFrames; i++) data[i] -= dc;
     }
 
-    // ブロックごとのピーク検出
+    // ブロックごとのピーク検出 & ホールド制御
+    let holdCounter = 0;
     for (let b = 0; b < numBlocks; b++) {
       const start = b * gateWindow;
       const end = Math.min(nFrames, start + gateWindow);
@@ -617,11 +662,15 @@ export async function renderStudioOffline(
         const abs = Math.abs(data[j]);
         if (abs > maxAmp) maxAmp = abs;
       }
-      if (maxAmp < noiseFloor) {
-        const atten = (maxAmp / noiseFloor) ** 3;
-        blockGains[b] = atten < 0.05 ? 0 : atten;
-      } else {
+      if (maxAmp >= noiseFloor) {
+        holdCounter = holdBlocks;
         blockGains[b] = 1.0;
+      } else if (holdCounter > 0) {
+        holdCounter--;
+        blockGains[b] = 1.0;
+      } else {
+        const atten = maxAmp / noiseFloor;
+        blockGains[b] = atten < 0.05 ? 0 : atten * atten;
       }
     }
 
@@ -633,7 +682,7 @@ export async function renderStudioOffline(
       blockGains[b] = blockGains[b + 1] * 0.70 + blockGains[b] * 0.30;
     }
 
-    // サンプル単位への滑らかな線形補間適用 & 微小ヒス抑制 (インプレース処理)
+    // サンプル単位への滑らかな線形補間適用 (インプレース処理・波形自体の非線形変形は行わない)
     for (let b = 0; b < numBlocks; b++) {
       const start = b * gateWindow;
       const end = Math.min(nFrames, start + gateWindow);
@@ -644,13 +693,7 @@ export async function renderStudioOffline(
       for (let j = start; j < end; j++) {
         const t = span > 0 ? (j - start) / span : 0;
         const currentGain = g0 + (g1 - g0) * t;
-        let s = data[j] * currentGain;
-
-        // 発声中の微小非調波ゆらぎ・ヒス成分のソフトスレッショルディング
-        if (Math.abs(s) < microHissThresh) {
-          s *= Math.abs(s) / microHissThresh;
-        }
-        data[j] = s;
+        data[j] = data[j] * currentGain;
       }
     }
   }

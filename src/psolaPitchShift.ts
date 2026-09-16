@@ -69,10 +69,10 @@ function declickBuffer(out: Float32Array, sampleRate: number): void {
   if (n < 8) return;
 
   const localWindow = Math.max(8, Math.round(sampleRate * 0.003)); // ~3ms
-  const jumpThresholdFactor = 6; // 局所平均振幅の何倍のジャンプを異常とみなすか
-  const minAbsJump = 0.02; // 無音に近い区間で過検出しないための下限(フルスケール比)
-  const maxBurstSamples = Math.round(sampleRate * 0.003); // 1バーストの最大幅(~3ms)
-  const mergeGapSamples = Math.round(sampleRate * 0.0005); // 近接した異常点は1つのバーストにまとめる
+  const jumpThresholdFactor = 12; // 局所平均の12倍以上の明らかなスパイクのみ対象
+  const minAbsJump = 0.15; // 正常な高周波成分を誤って潰さないための安全閾値
+  const maxBurstSamples = Math.round(sampleRate * 0.001); // 1バーストの最大幅(~1ms)
+  const mergeGapSamples = Math.round(sampleRate * 0.0003);
 
   // 局所平均振幅(簡易移動平均)を計算
   const localAbsAvg = new Float32Array(n);
@@ -85,7 +85,7 @@ function declickBuffer(out: Float32Array, sampleRate: number): void {
     localAbsAvg[Math.max(0, i - half)] = runningSum / count;
   }
 
-  // 異常なサンプル間ジャンプを検出
+  // 異常な孤立スパイクを検出
   const flagged = new Uint8Array(n);
   for (let i = 1; i < n; i++) {
     const jump = Math.abs(out[i] - out[i - 1]);
@@ -96,9 +96,7 @@ function declickBuffer(out: Float32Array, sampleRate: number): void {
     }
   }
 
-  // 連続した異常点を1つのバーストにまとめ、短い区間だけ線形補間で置き換える。
-  // 幅が広すぎる場合(maxBurstSamples超)は誤検出の可能性が高いので触らない
-  // (本当に大きな正当な音量変化を誤って潰さないための安全策)。
+  // 短い孤立スパイクのみ線形補間
   let i = 0;
   while (i < n) {
     if (!flagged[i]) { i++; continue; }
@@ -135,7 +133,8 @@ function hannWindow(length: number): Float32Array {
   if (cached) return cached;
 
   const w = new Float32Array(length);
-  const factor = (2 * Math.PI) / (length - 1);
+  // 50%オーバーラップ時に窓の総和が厳密に1.0フラットになる周期性窓（Periodic Hann Window）
+  const factor = (2 * Math.PI) / length;
   for (let i = 0; i < length; i++) {
     w[i] = 0.5 - 0.5 * Math.cos(factor * i);
   }

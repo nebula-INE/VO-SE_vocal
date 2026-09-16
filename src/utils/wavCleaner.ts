@@ -1,19 +1,20 @@
 /**
- * 高音質スタジオ・ボーカル明瞭化 DSPプロセッサー (Studio Vocal Clarity & Presence Engine)
+ * 高音質スタジオ・ボーカルマスタリング DSPプロセッサー
  * 
- * 【音をハッキリと明瞭にする7段シグナルチェーン】
- * 1. 【Sub-bass Cut】70Hz HPF (Q=0.707): 超低域のモタつき・風圧ノイズをカット
- * 2. 【De-Mud (こもり解消)】320Hz Peaking (-3.5dB, Q=1.2): 
- *    モコモコした箱鳴り・濁りを除去し、声の輪郭をタイトに引き締め
- * 3. 【Vocal Core (声の芯・存在感)】2.8kHz Peaking (+3.5dB, Q=1.1):
- *    声のフォルマントとアタック感を強力に前へ押し出し、ハッキリとした芯を確立
- * 4. 【Articulation (子音・滑舌のキレ)】4.8kHz Peaking (+3.0dB, Q=1.2):
- *    サ行・タ行・カ行など子音の立ち上がりを鮮明にし、歌詞の聞き取りやすさを劇的向上
- * 5. 【Vocal Air (エアー・抜け感)】10.0kHz High-Shelf (+2.0dB, Q=0.707):
- *    こもり感を完全に払拭し、スタジオレコーディングのような透き通った抜け感を付加
- * 6. 【Clean High Cut】14.5kHz LPF (Q=0.707):
- *    可聴域の抜けと明るさは100%保持したまま、超高域の不要なヒスノイズのみをスマートにカット
- * 7. 【Smart Zero-Noise Gate】休符・ノート間の微小な背景息ノイズフロアを完全無音化
+ * 【ギザギザ・金属バズ音を解消し、温かみと滑らかさ・太さを実現するシグナルチェーン】
+ * 1. 【Sub-bass Cut】75Hz HPF (Q=0.707): 超低域のモタつき・DCドリフトをカット
+ * 2. 【Vocal Warmth / Body (温かみ・芯)】280Hz Peaking (+1.0dB, Q=1.0): 
+ *    声の胴鳴りとチェスト共鳴を豊かに保ち、ペラペラで乾いた質感を解消
+ * 3. 【De-Harsh / Anti-Metallic (金属音・トゲ除去)】3400Hz Peaking (-2.5dB, Q=1.4):
+ *    合成音声特有の耳に刺さる金属的ピーク・ブザー音（ノコギリ波のトゲ）を穏やかに除去
+ * 4. 【Natural Presence (滑舌・明瞭度)】5200Hz Peaking (+0.8dB, Q=1.2):
+ *    子音の聞き取りやすさを自然にサポートしつつ、刺々しさは出さない適正ゲイン
+ * 5. 【Silk Top (高域の滑らかさ)】11.0kHz High-Shelf (-1.5dB, Q=0.707):
+ *    高周波のチリチリした粗さを抑え、スタジオ録音のシルキーで耳に優しいトップエンドを実現
+ * 6. 【Clean High Cut】15.0kHz LPF (Q=0.707):
+ *    不要な高周波エイリアシング・ヒスのみをカット
+ * 7. 【Analog Soft Saturation】デジタル波形の尖った角を滑らかに丸めるソフトニー飽和
+ * 8. 【Smart Envelope Gate】ゼロクロス歪みゼロの超平滑ボーカルゲート（50msホールド）
  */
 
 interface BiquadCoeffs {
@@ -95,41 +96,54 @@ class BiquadStage {
 
 class VocalClarityChannel {
   private sHpf = new BiquadStage();
-  private sDeMud = new BiquadStage();
-  private sCore = new BiquadStage();
-  private sArtic = new BiquadStage();
+  private sWarmth = new BiquadStage();
+  private sDeHarsh = new BiquadStage();
+  private sPresence = new BiquadStage();
   private sAir = new BiquadStage();
   private sLpf = new BiquadStage();
 
   process(
     s: number,
     hpf: BiquadCoeffs,
-    deMud: BiquadCoeffs,
-    core: BiquadCoeffs,
-    artic: BiquadCoeffs,
+    warmth: BiquadCoeffs,
+    deHarsh: BiquadCoeffs,
+    presence: BiquadCoeffs,
     air: BiquadCoeffs,
     lpf: BiquadCoeffs
   ): number {
-    // 1. HPF (70Hz: 低域の不要なもたつきをカット)
+    // 1. HPF (75Hz: サブベースの超低域ゴロゴロ・DCドリフト除去)
     let y = this.sHpf.process(s, hpf);
 
-    // 2. De-Mud (320Hz, -3.5dB: 箱鳴り・こもり感を解消し、クリアな抜けを確保)
-    y = this.sDeMud.process(y, deMud);
+    // 2. Vocal Warmth / Body (280Hz, +1.0dB: 胸声・胴鳴りの温かみを維持し、ペラペラ感を解消)
+    y = this.sWarmth.process(y, warmth);
 
-    // 3. Vocal Core (2800Hz, +3.5dB: 声の芯とアタック感を強力に前へ)
-    y = this.sCore.process(y, core);
+    // 3. De-Harsh (3400Hz, -2.5dB: 合成音声特有の金属的共鳴・ブザー音・トゲトゲしたピークを除去)
+    y = this.sDeHarsh.process(y, deHarsh);
 
-    // 4. Articulation (4800Hz, +3.0dB: 子音・滑舌のキレを強調)
-    y = this.sArtic.process(y, artic);
+    // 4. Natural Presence (5200Hz, +0.8dB: 子音と発音の明瞭度を自然にサポート)
+    y = this.sPresence.process(y, presence);
 
-    // 5. Vocal Air (10000Hz, +2.0dB High-Shelf: 透き通った明るさとエアー感)
+    // 5. Silk Top (11000Hz, -1.5dB High-Shelf: 刺々しい高域のチリチリ感を抑えシルキーに)
     y = this.sAir.process(y, air);
 
-    // 6. LPF (14500Hz: 超高周波ヒスのみをカットし、ボーカル本来の輝きはフルに保つ)
+    // 6. LPF (15000Hz: 超高周波エイリアシング・ヒスノイズ除去)
     y = this.sLpf.process(y, lpf);
 
     return y;
   }
+}
+
+/**
+ * デジタル合成音声の鋭利なインパルス・ノコギリ波ピークを滑らかに丸め、
+ * アナログテープや真空管を通したような温かみと滑らかさを与えるソフトニー飽和
+ */
+function smoothWaveform(x: number): number {
+  const absX = Math.abs(x);
+  if (absX <= 0.55) return x; // 振幅が中程度以下は完全リニア（歪みゼロ・原音透明度維持）
+  const sign = x < 0 ? -1 : 1;
+  const excess = absX - 0.55;
+  const compressed = 0.55 + 0.45 * Math.tanh(excess / 0.45);
+  return sign * compressed;
 }
 
 /**
@@ -182,36 +196,42 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
   const numSamples = Math.floor(dataSize / 2);
   const pcm = new Int16Array(wavBuffer, dataOffset, numSamples);
 
-  // 音をハッキリ・クリアにするスタジオEQ設計
-  const hpf = makeBiquad('hpf', 70, sampleRate, 0.707);
-  const deMud = makeBiquad('peaking', 320, sampleRate, 1.2, -3.5); // こもり除去
-  const core = makeBiquad('peaking', 2800, sampleRate, 1.1, 3.5);  // 声の芯・存在感
-  const artic = makeBiquad('peaking', 4800, sampleRate, 1.2, 3.0); // 子音・滑舌
-  const air = makeBiquad('highshelf', 10000, sampleRate, 0.707, 2.0); // 抜け・エアー感
-  const lpf = makeBiquad('lpf', 14500, sampleRate, 0.707);         // 超高域ノイズカット
+  // 自然で温かみのあるボーカルサウンドに整えるスタジオEQ設計
+  const hpf = makeBiquad('hpf', 75, sampleRate, 0.707);
+  const warmth = makeBiquad('peaking', 280, sampleRate, 1.0, 1.0);     // 胴鳴り・温かみ (+1.0dB)
+  const deHarsh = makeBiquad('peaking', 3400, sampleRate, 1.4, -2.5);  // 金属音・ギザギザトゲ除去 (-2.5dB)
+  const presence = makeBiquad('peaking', 5200, sampleRate, 1.2, 0.8);  // 自然な発音明瞭度 (+0.8dB)
+  const air = makeBiquad('highshelf', 11000, sampleRate, 0.707, -1.5); // 高域シルキートーン (-1.5dB)
+  const lpf = makeBiquad('lpf', 15000, sampleRate, 0.707);            // 超高周波カット
 
   const channels: VocalClarityChannel[] = [];
   for (let c = 0; c < numChannels; c++) {
     channels.push(new VocalClarityChannel());
   }
 
-  // 1. インプレース IIR フィルタリング
+  // 1. インプレース IIR フィルタリング & アナログ波形スムージング
   const inv32768 = 1.0 / 32768.0;
   for (let i = 0; i < numSamples; i++) {
     const ch = i % numChannels;
     const sNorm = pcm[i] * inv32768;
-    const processed = channels[ch].process(sNorm, hpf, deMud, core, artic, air, lpf);
-    const clamped = Math.max(-1.0, Math.min(1.0, processed));
+    const processed = channels[ch].process(sNorm, hpf, warmth, deHarsh, presence, air, lpf);
+    const smoothed = smoothWaveform(processed);
+    const clamped = Math.max(-1.0, Math.min(1.0, smoothed));
     pcm[i] = Math.round(clamped * 32767.0);
   }
 
-  // 2. ブリージング（吐息ノイズ）ゼロの超平滑ボーカルソフトゲート
-  // ブロック境界で矩形波カットせず、時定数（アタック2ms、リリース12ms）で
-  // 滑らかにゲインを減衰させることで、息継ぎや休符の頭・末尾で「スッ」「フッ」という
-  // 突発的な吐息ノイズ（Breathing/Pumping）が発生する現象を完全に解消します。
-  const attackAlpha = 1.0 - Math.exp(-1.0 / (sampleRate * 0.002));
-  const releaseAlpha = 1.0 - Math.exp(-1.0 / (sampleRate * 0.012));
-  const noiseFloorPcm = 180; // 約 -45dB
+  // 2. エンベロープ追従型・ゼロクロス歪みゼロの超平滑ボーカルソフトゲート
+  // 単一サンプルの瞬時振幅ではなく、ピーク追従エンベロープとホールド時間（50ms）
+  // を採用することで、波形のゼロ交差（ゼロクロス）時にゲインが勝手に閉じて
+  // チクチク・プチプチした矩形波歪み（クロスオーバー歪み）が発生する現象を完全に防止します。
+  const attackAlpha = 1.0 - Math.exp(-1.0 / (sampleRate * 0.004));
+  const releaseAlpha = 1.0 - Math.exp(-1.0 / (sampleRate * 0.040));
+  const envDecayAlpha = 1.0 - Math.exp(-1.0 / (sampleRate * 0.030));
+  const holdSamples = Math.round(sampleRate * 0.050); // 50ms ホールド
+  const noiseFloorPcm = 160; // 約 -46dB (休符の微小ノイズフロア)
+
+  let envelope = 0.0;
+  let holdCounter = 0;
   let smoothGain = 1.0;
 
   for (let i = 0; i < numSamples; i += numChannels) {
@@ -221,7 +241,21 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
       if (a > maxAmp) maxAmp = a;
     }
 
-    const targetGain = maxAmp < noiseFloorPcm ? 0.0 : 1.0;
+    // ピーク追従エンベロープ計算 (立ち上がりは即時、立下がりは緩やか)
+    if (maxAmp > envelope) {
+      envelope = maxAmp;
+    } else {
+      envelope += envDecayAlpha * (maxAmp - envelope);
+    }
+
+    // 有声判定とホールド制御
+    if (envelope >= noiseFloorPcm) {
+      holdCounter = holdSamples;
+    } else if (holdCounter > 0) {
+      holdCounter--;
+    }
+
+    const targetGain = holdCounter > 0 ? 1.0 : 0.0;
     const alpha = targetGain > smoothGain ? attackAlpha : releaseAlpha;
     smoothGain += alpha * (targetGain - smoothGain);
 

@@ -1450,10 +1450,11 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
             } else {
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
-                // 歌唱の胴鳴りと純粋な調波構造を最優先し、背景のヒス・吐息ノイズ混入を完全防ぐ
-                // 超高域も5%上限に抑え、サーというホワイトノイズ感を根絶
-                static const double bfreqs[3] = {2200.0, 4500.0, 8000.0};
-                static const double bvals[4]  = {0.005, 0.015, 0.030, 0.050};
+                // 非周期性（ar）を極小に抑えすぎると100%電子的なインパルス列（ブザー音・のこぎり波）
+                // に化けてギザギザした金属バズ音になるため、人間の歌声本来の自然な息感・位相の拡散
+                // (8%〜35%) を適正に残して滑らかで温かみのある肉声感を再現する
+                static const double bfreqs[3] = {2500.0, 5000.0, 8000.0};
+                static const double bvals[4]  = {0.08, 0.16, 0.25, 0.35};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 3);
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
