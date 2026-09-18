@@ -7,6 +7,12 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  # ★ キャッシュキーに焼き込む JUCE バージョン（CMakeLists.txt と必ず同期させる）
+  JUCE_VERSION: "8.0.5"
+  # ★ キャッシュのスキーマバージョン（path や構造を変えたら上げる）
+  CACHE_SCHEMA: "v3"
+
 jobs:
   build:
     name: Build Plugin on ${{ matrix.os }}
@@ -55,74 +61,60 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # --- 既存のビルドキャッシュを完全に削除 ---
-      - name: Clean build directory
-        shell: bash
-        run: |
-          # コミット済みキャッシュ / 前回実行の残骸 / キャッシュ復元のいずれも確実に消す
-          rm -rf juce_plugin/build
-          find . -name "CMakeCache.txt" -delete 2>/dev/null || true
-          find . -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
-          echo "Remaining cache files: $(find . -name CMakeCache.txt | wc -l)"
+      # ============================================================
+      # ★ キャッシュ復元（新ロケーション: ~/.cache/juce-fetchcontent）
+      #   CMakeLists.txt の FETCHCONTENT_BASE_DIR と一致させること。
+      #   キーには JUCE バージョンと CACHE_SCHEMA を含め、バージョン
+      #   が上がったら自動的に別キャッシュになるようにする。
+      # ============================================================
+      - name: Cache JUCE FetchContent
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/juce-fetchcontent
+          key: juce-fetchcontent-${{ matrix.os }}-${{ env.JUCE_VERSION }}-${{ env.CACHE_SCHEMA }}
+          restore-keys: |
+            juce-fetchcontent-${{ matrix.os }}-${{ env.JUCE_VERSION }}-
 
       # ============================================================
-      # ★ 解決策 A: キャッシュ復元後に残る stale な CMake 状態を削除
-      # ------------------------------------------------------------
-      # 背景:
-      #   actions/cache は juce-fetchcontent-<OS>-<JUCE版>-v2 のような
-      #   キーでキャッシュを復元するが、CMakeCache.txt には
-      #   「その時のワークスペース絶対パス」が焼き込まれている。
-      #   リポジトリ名が VO-SE6 → VO-SE_vocal のように変わると
-      #   FetchContent の subbuild がパス不一致で必ず失敗する。
-      #
-      # 対処:
-      #   ソース (juce-src/) は活かしつつ、パス依存のビルド状態
-      #   (CMakeCache.txt / CMakeFiles / *.cmake.stamp) のみ破棄する。
-      #   JUCE の再ダウンロードは発生しないため、キャッシュの旨味は残る。
-      #
-      # 注意:
-      #   このステップは「actions/cache の復元より後」に実行される必要がある。
-      #   もし actions/cache ステップが別ワークフロー / reusable workflow
-      #   から呼ばれており、それが Configure CMake より前に実行されるなら
-      #   ここで問題ない。もし後から復元される場合は、このステップを
-      #   その復元ステップの直後に移動すること。
+      # ★ 解決策 A: 復元された stale な CMake 状態を必ず破棄
+      #   ソース (juce-src/) は活かしつつ、絶対パス焼き込み済みの
+      #   CMakeCache.txt / CMakeFiles / *.cmake.stamp を削除する。
       # ============================================================
       - name: Purge stale FetchContent CMake state
         shell: bash
         run: |
           set -euo pipefail
 
-          TARGET_DIR="juce_plugin/build"
-          if [ ! -d "$TARGET_DIR" ]; then
-            echo "(no build dir, nothing to purge)"
+          BASE_DIR="$HOME/.cache/juce-fetchcontent"
+          if [ ! -d "$BASE_DIR" ]; then
+            echo "(no fetchcontent cache dir, nothing to purge)"
             exit 0
           fi
 
-          before=$(find "$TARGET_DIR" -name CMakeCache.txt 2>/dev/null | wc -l | tr -d ' ')
+          before=$(find "$BASE_DIR" -name CMakeCache.txt 2>/dev/null | wc -l | tr -d ' ')
 
-          # 絶対パス焼き込み済みの CMakeCache.txt を全削除
-          find "$TARGET_DIR" -name "CMakeCache.txt" -delete 2>/dev/null || true
+          find "$BASE_DIR" -name "CMakeCache.txt" -delete 2>/dev/null || true
+          find "$BASE_DIR" -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+          find "$BASE_DIR" -name "*.cmake.stamp" -delete 2>/dev/null || true
+          find "$BASE_DIR" -maxdepth 3 -type d -name "*-subbuild" -exec rm -rf {} + 2>/dev/null || true
 
-          # 生成済みの CMake 内部ディレクトリを削除
-          find "$TARGET_DIR" -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
-
-          # FetchContent のスタンプ（再 configure を防ぐ）を削除
-          find "$TARGET_DIR" -name "*.cmake.stamp" -delete 2>/dev/null || true
-
-          # juce-subbuild の subbuild キャッシュも明示的に掃除
-          rm -rf "$TARGET_DIR/_deps/juce-subbuild/CMakeCache.txt" \
-                 "$TARGET_DIR/_deps/juce-subbuild/CMakeFiles" \
-                 2>/dev/null || true
-
-          after=$(find "$TARGET_DIR" -name CMakeCache.txt 2>/dev/null | wc -l | tr -d ' ')
+          after=$(find "$BASE_DIR" -name CMakeCache.txt 2>/dev/null | wc -l | tr -d ' ')
           echo "Purged CMakeCache.txt: before=$before, after=$after"
 
-          # juce-src が残っているか（= 再ダウンロード不要か）を確認
-          if [ -d "$TARGET_DIR/_deps/juce-src" ]; then
+          if [ -d "$BASE_DIR/juce-src" ] || find "$BASE_DIR" -maxdepth 2 -type d -name "juce-src" | grep -q .; then
             echo "juce-src is present (cache reused, no re-download needed)"
           else
             echo "juce-src is absent (will be re-fetched by FetchContent)"
           fi
+
+      # --- 既存のビルドディレクトリを完全に削除 ---
+      - name: Clean build directory
+        shell: bash
+        run: |
+          rm -rf juce_plugin/build
+          find . -name "CMakeCache.txt" -delete 2>/dev/null || true
+          find . -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+          echo "Remaining cache files: $(find . -name CMakeCache.txt | wc -l)"
 
       # --- CMake 設定 ---
       - name: Configure CMake
