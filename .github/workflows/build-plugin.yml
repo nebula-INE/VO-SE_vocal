@@ -40,12 +40,15 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # --- 既存のビルドキャッシュを完全に削除 ---
+      # --- 既存のビルドキャッシュを完全に削除 ---      
       - name: Clean build directory
-        run: |
-          rm -rf juce_plugin/build
-          rm -rf juce_plugin/CMakeCache.txt
         shell: bash
+        run: |
+          # コミット済みキャッシュ / 前回実行の残骸 / キャッシュ復元のいずれも確実に消す
+          rm -rf juce_plugin/build
+          find . -name "CMakeCache.txt" -delete 2>/dev/null || true
+          find . -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+          echo "Remaining cache files: $(find . -name CMakeCache.txt | wc -l)"
 
       # --- CMake 設定 ---
       - name: Configure CMake
