@@ -22,6 +22,21 @@ jobs:
         with:
           submodules: recursive
 
+      # --- Debug: 古いキャッシュの出所を調査 ---
+      - name: Debug: where does the stale cache come from?
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          echo "=== 1. build dir right after checkout ==="
+          ls -la juce_plugin/build/ 2>/dev/null || echo "(no build dir)"
+          echo "=== 2. Is it committed in git? ==="
+          git ls-files | grep -i cmakecache || echo "(none committed)"
+          git ls-files juce_plugin/build | head -20
+          echo "=== 3. Submodules? ==="
+          git submodule status
+          echo "=== 4. Cache steps in workflows? ==="
+          grep -rn "actions/cache" .github/workflows/ || echo "(no cache actions)"
+
       # --- Linux 依存関係 ---
       - name: Install Linux Dependencies
         if: matrix.os == 'ubuntu-latest'
