@@ -1450,11 +1450,10 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
             } else {
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
-                // 非周期性（ar）を極小に抑えすぎると100%電子的なインパルス列（ブザー音・のこぎり波）
-                // に化けてギザギザした金属バズ音になるため、人間の歌声本来の自然な息感・位相の拡散
-                // (8%〜35%) を適正に残して滑らかで温かみのある肉声感を再現する
-                static const double bfreqs[3] = {2500.0, 5000.0, 8000.0};
-                static const double bvals[4]  = {0.08, 0.16, 0.25, 0.35};
+                // 非周期性（ar）を適切に抑制し、背後に乗る不快な「サー」というホワイトノイズ・ヒスノイズを一掃。
+                // 人間の純粋な歌声の調波構造を優先し、高域の必要最小限の自然な空気感(1%〜10%)のみに制限する。
+                static const double bfreqs[3] = {3000.0, 6000.0, 10000.0};
+                static const double bvals[4]  = {0.01, 0.03, 0.06, 0.10};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 3);
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
@@ -1908,32 +1907,28 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         // ノート境界での滑らかな接続
         if (last_note_rendered) {
             // 直前ノートと連続している場合:
-            // 2ms(88サンプル)のマイクロスムージングを行い、子音アタック(k, s, t 等)を損なわずに
-            // 境界での波形不連続によるクリックノイズのみを除去する
+            // 直前ノートの末尾と現在ノートの先頭を 2ms (88サンプル) でオーバーラップ・クロスフェード接続する。
+            // 以前のような「直前ノートを0にフェードアウトしてから次ノートを0からフェードインする」処理だと
+            // 境界で4msの完全な無音の谷間（振幅ディップ）が生じ、プチプチ・ガタガタというノイズの原因になっていた。
+            // fade_out + fade_in = 1.0 の定ゲイン・クロスフェードにより、音圧の落ち込みやクリックのない
+            // シームレスで滑らかなレガート接続を実現する。
             const int declick = static_cast<int>(std::min<int64_t>(88, note_samples / 8));
             for (int s = 0; s < declick; ++s) {
-                const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 1.0;
-                const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
-                const int64_t di = timeline_offset + s;
-                if (di < total_samples && s < note_samples) {
-                    full_song_buffer[di] = note_bufs[idx][s] * fade_in;
+                const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 0.5;
+                const double fade_in  = 0.5 * (1.0 - std::cos(M_PI * t));
+                const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
+                const int64_t di = timeline_offset - declick + s;
+                if (di >= 0 && di < total_samples && s < note_samples) {
+                    full_song_buffer[di] = full_song_buffer[di] * fade_out + note_bufs[idx][s] * fade_in;
                 }
             }
             for (int64_t s = declick; s < note_samples; ++s) {
-                const int64_t di = timeline_offset + s;
-                if (di < total_samples) {
+                const int64_t di = timeline_offset - declick + s;
+                if (di >= 0 && di < total_samples) {
                     full_song_buffer[di] = note_bufs[idx][s];
                 }
             }
-            // 直前ノートの末尾2msも同様にデクリック・フェードアウト
-            for (int s = 0; s < declick; ++s) {
-                const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 1.0;
-                const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
-                const int64_t di = timeline_offset - declick + s;
-                if (di >= 0 && di < total_samples) {
-                    full_song_buffer[di] *= fade_out;
-                }
-            }
+            timeline_offset += (note_samples - declick);
         } else {
             // 休符明けの立ち上がり: 3msのデクリック・フェードイン
             const int fade_in_samples = static_cast<int>(std::min<int64_t>(132, note_samples / 4));
@@ -1951,6 +1946,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                     full_song_buffer[di] = note_bufs[idx][s];
                 }
             }
+            timeline_offset += note_samples;
         }
 
         // 次のノートがRENDERABLEでない、または曲末尾の場合: 5msのデクリック・フェードアウト
@@ -1960,15 +1956,13 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             for (int s = 0; s < fade_out_samples; ++s) {
                 const double t = (fade_out_samples > 1) ? (static_cast<double>(s) / fade_out_samples) : 1.0;
                 const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
-                const int64_t src_idx = note_samples - fade_out_samples + s;
-                const int64_t di = timeline_offset + src_idx;
-                if (di >= 0 && di < total_samples && src_idx >= 0 && src_idx < note_samples) {
+                const int64_t di = timeline_offset - fade_out_samples + s;
+                if (di >= 0 && di < total_samples) {
                     full_song_buffer[di] *= fade_out;
                 }
             }
         }
 
-        timeline_offset += note_samples;
         last_note_rendered = true;
     }
     report_progress(85);

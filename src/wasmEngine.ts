@@ -630,17 +630,9 @@ export async function renderStudioOffline(
 
   onProgress?.(92);
 
-  // 7. インテリジェント・ボーカルノイズゲート & ヒスクリーナー (進捗: 92% -> 96%)
-  // メモリ超軽量化: 全フレーム配列(数十MB)を生成せず、ブロック単位(数万要素/約120KB)で
-  // インプレースに処理し、長尺曲でもブラウザクラッシュ(OOM)を完全に防止。
+  // 7. DCオフセットの除去とリソース解放
   const nCh = renderedBuffer.numberOfChannels;
   const nFrames = renderedBuffer.length;
-  const gateWindow = Math.floor(sampleRate * 0.010); // 10ms ブロック
-  const numBlocks = Math.ceil(nFrames / gateWindow);
-  const noiseFloor = 0.008; // 約 -42dB
-  const holdBlocks = 5; // 50ms ホールド
-
-  const blockGains = new Float32Array(numBlocks);
 
   for (let ch = 0; ch < nCh; ch++) {
     const data = renderedBuffer.getChannelData(ch);
@@ -650,51 +642,6 @@ export async function renderStudioOffline(
     const dc = sum / Math.max(1, nFrames);
     if (Math.abs(dc) > 1e-5) {
       for (let i = 0; i < nFrames; i++) data[i] -= dc;
-    }
-
-    // ブロックごとのピーク検出 & ホールド制御
-    let holdCounter = 0;
-    for (let b = 0; b < numBlocks; b++) {
-      const start = b * gateWindow;
-      const end = Math.min(nFrames, start + gateWindow);
-      let maxAmp = 0;
-      for (let j = start; j < end; j++) {
-        const abs = Math.abs(data[j]);
-        if (abs > maxAmp) maxAmp = abs;
-      }
-      if (maxAmp >= noiseFloor) {
-        holdCounter = holdBlocks;
-        blockGains[b] = 1.0;
-      } else if (holdCounter > 0) {
-        holdCounter--;
-        blockGains[b] = 1.0;
-      } else {
-        const atten = maxAmp / noiseFloor;
-        blockGains[b] = atten < 0.05 ? 0 : atten * atten;
-      }
-    }
-
-    // ブロックゲインのスムージング（クリック音防止フェード）
-    for (let b = 1; b < numBlocks; b++) {
-      blockGains[b] = blockGains[b - 1] * 0.70 + blockGains[b] * 0.30;
-    }
-    for (let b = numBlocks - 2; b >= 0; b--) {
-      blockGains[b] = blockGains[b + 1] * 0.70 + blockGains[b] * 0.30;
-    }
-
-    // サンプル単位への滑らかな線形補間適用 (インプレース処理・波形自体の非線形変形は行わない)
-    for (let b = 0; b < numBlocks; b++) {
-      const start = b * gateWindow;
-      const end = Math.min(nFrames, start + gateWindow);
-      const g0 = blockGains[b];
-      const g1 = b + 1 < numBlocks ? blockGains[b + 1] : g0;
-      const span = end - start;
-
-      for (let j = start; j < end; j++) {
-        const t = span > 0 ? (j - start) / span : 0;
-        const currentGain = g0 + (g1 - g0) * t;
-        data[j] = data[j] * currentGain;
-      }
     }
   }
 
