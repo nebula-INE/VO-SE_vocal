@@ -177,15 +177,44 @@ function getLoopCrossfadedBuffer(
   const sr = src.sampleRate;
   const ch0 = src.getChannelData(0);
 
-  let loopStartSample = Math.max(0, Math.floor(loopStartSec * sr));
-  let loopEndSample = Math.min(src.length, Math.floor(loopEndSec * sr));
+  const rawStart = Math.max(0, Math.floor(loopStartSec * sr));
+  const rawEnd = Math.min(src.length, Math.floor(loopEndSec * sr));
 
-  // ゼロ交差点へスナップして位相とオフセットの急峻な段差を防止
-  loopStartSample = findZeroCrossing(ch0, loopStartSample);
-  loopEndSample = findZeroCrossing(ch0, loopEndSample);
+  // 1. 正のゼロ交差点検出 (loopStartSample)
+  let loopStartSample = rawStart;
+  let minStartDist = 999999;
+  const searchStartRad = Math.min(400, Math.floor(sr * 0.010));
+  for (let i = Math.max(1, rawStart - searchStartRad); i < Math.min(src.length - 1, rawStart + searchStartRad); i++) {
+    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
+      const dist = Math.abs(i - rawStart);
+      if (dist < minStartDist) {
+        minStartDist = dist;
+        loopStartSample = i;
+      }
+    }
+  }
+
+  // 2. 位相・波形相関が最大となる正のゼロ交差点検出 (loopEndSample)
+  const corrLen = Math.min(180, Math.floor(sr * 0.004));
+  let loopEndSample = rawEnd;
+  let bestCorr = -Infinity;
+  const searchEndRad = Math.min(500, Math.floor(sr * 0.012));
+  for (let i = Math.max(1, rawEnd - searchEndRad); i < Math.min(src.length - 1 - corrLen, rawEnd + searchEndRad); i++) {
+    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
+      let corr = 0;
+      for (let k = 0; k < corrLen; k++) {
+        corr += ch0[loopStartSample + k] * ch0[i + k];
+      }
+      if (corr > bestCorr) {
+        bestCorr = corr;
+        loopEndSample = i;
+      }
+    }
+  }
 
   const loopLenSamples = Math.max(100, loopEndSample - loopStartSample);
-  const xfadeSamples = Math.max(1, Math.min(Math.floor(0.020 * sr), Math.floor(loopLenSamples * 0.25)));
+  const xfadeSec = Math.min(0.010, (loopLenSamples / sr) * 0.25);
+  const xfadeSamples = Math.max(1, Math.floor(xfadeSec * sr));
 
   const newBuffer = ctx.createBuffer(src.numberOfChannels, src.length, sr);
   for (let ch = 0; ch < src.numberOfChannels; ch++) {
@@ -193,11 +222,11 @@ function getLoopCrossfadedBuffer(
     const dstData = newBuffer.getChannelData(ch);
     dstData.set(srcData);
 
-    // ループ末尾 xfadeSamples 期間を、ループ先頭と滑らかにクロスフェード
+    // 位相連続クロスフェード: loopEnd の手前 xfadeSamples を loopStart の手前波形と滑らかにブレンド
     for (let i = 0; i < xfadeSamples; i++) {
       const tailIdx = loopEndSample - xfadeSamples + i;
-      const headIdx = loopStartSample + i;
-      if (tailIdx < 0 || tailIdx >= src.length || headIdx >= src.length) continue;
+      const headIdx = loopStartSample - xfadeSamples + i;
+      if (tailIdx < 0 || tailIdx >= src.length || headIdx < 0 || headIdx >= src.length) continue;
       const t = i / xfadeSamples;
       const fadeOut = Math.cos((t * Math.PI) / 2);
       const fadeIn = Math.sin((t * Math.PI) / 2);
@@ -244,7 +273,7 @@ function buildRawSegment(
   const loopLenSec = Math.max(0.001, loopRange.loopEndSec - loopRange.loopStartSec);
   const xfadeSamples = Math.max(1, Math.min(Math.floor(0.020 * sr), Math.floor((loopEndSample - loopStartSample) * 0.25)));
   // クロスフェード完了後の実効ループ周回長
-  const effectiveLoopLen = Math.max(1, (loopEndSample - xfadeSamples) - loopStartSample);
+  const loopLen = Math.max(1, loopEndSample - loopStartSample);
 
   for (let ch = 0; ch < src.numberOfChannels; ch++) {
     const s = xfaded.getChannelData(ch % xfaded.numberOfChannels);
@@ -255,8 +284,8 @@ function buildRawSegment(
       if (absIdx < loopEndSample) {
         idx = absIdx;
       } else {
-        const loopOffset = (absIdx - loopEndSample) % effectiveLoopLen;
-        idx = loopStartSample + xfadeSamples + loopOffset;
+        const loopOffset = (absIdx - loopEndSample) % loopLen;
+        idx = loopStartSample + loopOffset;
       }
       d[i] = idx < s.length ? s[idx] : 0;
     }
@@ -370,33 +399,27 @@ export async function renderStudioOffline(
   const masterDeMud = offlineCtx.createBiquadFilter();
   masterDeMud.type = 'peaking';
   masterDeMud.frequency.setValueAtTime(320, 0);
-  masterDeMud.gain.setValueAtTime(-3.5, 0);
+  masterDeMud.gain.setValueAtTime(-2.5, 0);
   masterDeMud.Q.setValueAtTime(1.2, 0);
 
-  // [スタジオVocal Core] 2.8kHz声の芯・存在感をブースト
+  // [スタジオVocal Core] 2.2kHz声の芯・存在感を自然に保持
   const masterCore = offlineCtx.createBiquadFilter();
   masterCore.type = 'peaking';
-  masterCore.frequency.setValueAtTime(2800, 0);
-  masterCore.gain.setValueAtTime(3.5, 0);
-  masterCore.Q.setValueAtTime(1.1, 0);
+  masterCore.frequency.setValueAtTime(2200, 0);
+  masterCore.gain.setValueAtTime(1.0, 0);
+  masterCore.Q.setValueAtTime(1.0, 0);
 
-  // [スタジオArticulation] 4.8kHz子音・滑舌のキレを強調
-  const masterArtic = offlineCtx.createBiquadFilter();
-  masterArtic.type = 'peaking';
-  masterArtic.frequency.setValueAtTime(4800, 0);
-  masterArtic.gain.setValueAtTime(3.0, 0);
-  masterArtic.Q.setValueAtTime(1.2, 0);
+  // [スタジオDe-Hiss] 5.8kHzの耳障りなヒス・息漏れノイズを自然に抑制
+  const masterDeHiss = offlineCtx.createBiquadFilter();
+  masterDeHiss.type = 'peaking';
+  masterDeHiss.frequency.setValueAtTime(5800, 0);
+  masterDeHiss.gain.setValueAtTime(-5.0, 0);
+  masterDeHiss.Q.setValueAtTime(1.3, 0);
 
-  // [スタジオAir] 10kHz抜け・エアー感
-  const masterAir = offlineCtx.createBiquadFilter();
-  masterAir.type = 'highshelf';
-  masterAir.frequency.setValueAtTime(10000, 0);
-  masterAir.gain.setValueAtTime(2.0, 0);
-
-  // [スタジオLPF] 14.5kHz以上の不要な超高域ノイズのみをスマートにカット
+  // [スタジオLPF] 13.5kHz以上の不要な超高域ノイズ・折り返しをカット
   const masterLpf = offlineCtx.createBiquadFilter();
   masterLpf.type = 'lowpass';
-  masterLpf.frequency.setValueAtTime(14500, 0);
+  masterLpf.frequency.setValueAtTime(13500, 0);
   masterLpf.Q.setValueAtTime(0.707, 0);
 
   // クリッピング防止コンプレッサー/リミッター
@@ -410,9 +433,8 @@ export async function renderStudioOffline(
   masterGain.connect(masterHpf);
   masterHpf.connect(masterDeMud);
   masterDeMud.connect(masterCore);
-  masterCore.connect(masterArtic);
-  masterArtic.connect(masterAir);
-  masterAir.connect(masterLpf);
+  masterCore.connect(masterDeHiss);
+  masterDeHiss.connect(masterLpf);
   masterLpf.connect(masterLimiter);
   masterLimiter.connect(offlineCtx.destination);
 

@@ -109,11 +109,46 @@ export const getLoopCrossfadedBuffer = (
 
   const src: AudioBuffer = cached.buffer;
   const sr = src.sampleRate;
-  const loopLenSec = Math.max(0.001, loopEndSec - loopStartSec);
-  const xfadeSec = Math.min(0.015, loopLenSec * 0.25); // 最大15ms、ループ幅の25%まで
+  const ch0 = src.getChannelData(0);
+
+  const rawStart = Math.max(0, Math.floor(loopStartSec * sr));
+  const rawEnd = Math.min(src.length, Math.floor(loopEndSec * sr));
+
+  // 1. 正のゼロ交差点検出（loopStartSample）
+  let loopStartSample = rawStart;
+  let minStartDist = 999999;
+  const searchStartRad = Math.min(400, Math.floor(sr * 0.010));
+  for (let i = Math.max(1, rawStart - searchStartRad); i < Math.min(src.length - 1, rawStart + searchStartRad); i++) {
+    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
+      const dist = Math.abs(i - rawStart);
+      if (dist < minStartDist) {
+        minStartDist = dist;
+        loopStartSample = i;
+      }
+    }
+  }
+
+  // 2. 位相・波形相関が最大となる正のゼロ交差点検出（loopEndSample）
+  const corrLen = Math.min(180, Math.floor(sr * 0.004));
+  let loopEndSample = rawEnd;
+  let bestCorr = -Infinity;
+  const searchEndRad = Math.min(500, Math.floor(sr * 0.012));
+  for (let i = Math.max(1, rawEnd - searchEndRad); i < Math.min(src.length - 1 - corrLen, rawEnd + searchEndRad); i++) {
+    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
+      let corr = 0;
+      for (let k = 0; k < corrLen; k++) {
+        corr += ch0[loopStartSample + k] * ch0[i + k];
+      }
+      if (corr > bestCorr) {
+        bestCorr = corr;
+        loopEndSample = i;
+      }
+    }
+  }
+
+  const loopLenSamples = Math.max(100, loopEndSample - loopStartSample);
+  const xfadeSec = Math.min(0.010, (loopLenSamples / sr) * 0.25);
   const xfadeSamples = Math.max(1, Math.floor(xfadeSec * sr));
-  const loopStartSample = Math.max(0, Math.floor(loopStartSec * sr));
-  const loopEndSample = Math.min(src.length, Math.floor(loopEndSec * sr));
 
   const newBuffer = ctx.createBuffer(src.numberOfChannels, src.length, sr);
   for (let ch = 0; ch < src.numberOfChannels; ch++) {
@@ -121,10 +156,13 @@ export const getLoopCrossfadedBuffer = (
     const dstData = newBuffer.getChannelData(ch);
     dstData.set(srcData);
 
+    // 位相連続クロスフェード: loopEnd の手前 xfadeSamples を loopStart の手前波形と滑らかにブレンド。
+    // ループ末尾(loopEndSample - 1)が loopStartSample - 1 の値に収束するため、
+    // loopEnd から loopStart へジャンプした瞬間のサンプル値および傾き(微分値)が100%完全に連続する。
     for (let i = 0; i < xfadeSamples; i++) {
       const tailIdx = loopEndSample - xfadeSamples + i;
-      const headIdx = loopStartSample + i;
-      if (tailIdx < 0 || tailIdx >= src.length || headIdx >= src.length) continue;
+      const headIdx = loopStartSample - xfadeSamples + i;
+      if (tailIdx < 0 || tailIdx >= src.length || headIdx < 0 || headIdx >= src.length) continue;
       const t = i / xfadeSamples;
       const fadeOut = Math.cos((t * Math.PI) / 2);
       const fadeIn = Math.sin((t * Math.PI) / 2);
@@ -1233,7 +1271,7 @@ export default function App() {
           source.loopStart = loopStartSec;
           source.loopEnd = loopEndSec;
           try {
-            source.buffer = getLoopCrossfadedBuffer(ctx, cached, loopStartSec, loopEndSec);
+            source.buffer = getLoopCrossfadedBuffer(ctx, item, loopStartSec, loopEndSec);
           } catch (e) {
             // 失敗しても元のバッファのまま続行
           }

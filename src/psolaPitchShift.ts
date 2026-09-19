@@ -177,8 +177,8 @@ interface PeriodEstimate {
 }
 
 /**
- * 高速 Coarse-to-Fine 正規化自己相関による基本周期(サンプル数)推定。
- * 計算量を従来比 75% 以上削減し、CPUスパイクとブラウザクラッシュを防止。
+ * 高速 YIN / 差分正規化法による精密な基本周期(サンプル数)推定。
+ * 従来の相関窓長不一致バグを解消し、有声母音のピッチ周期を確実に検出。
  */
 function estimatePeriod(
   data: Float32Array,
@@ -192,66 +192,58 @@ function estimatePeriod(
   const minPeriod = Math.max(2, Math.floor(sampleRate / maxF0));
   const maxPeriod = Math.max(minPeriod + 1, Math.floor(sampleRate / minF0));
 
-  // 窓サイズを適正範囲(最大 512 サンプル)に制限して無駄な内積計算を防止
-  const effectiveWindow = Math.min(512, windowSamples);
-  const start = Math.max(0, centerSample - Math.floor(effectiveWindow / 2));
-  const end = Math.min(data.length, start + effectiveWindow);
-  const n = end - start;
-  if (n < maxPeriod * 2) {
+  const winLen = Math.min(1024, Math.max(512, windowSamples));
+  const start = Math.max(0, centerSample - Math.floor(winLen / 2));
+  if (start + winLen + maxPeriod > data.length) {
     return { period: fallbackPeriod, score: 0 };
   }
 
+  // 累積正規化差分関数 (YIN アルゴリズム)
+  const d = new Float32Array(maxPeriod + 1);
+  d[0] = 0;
+  let runningSum = 0;
+
+  for (let tau = 1; tau <= maxPeriod; tau++) {
+    let diff = 0;
+    // 2サンプル間引きで高速化 (計算量半減)
+    for (let i = 0; i < winLen; i += 2) {
+      const delta = data[start + i] - data[start + i + tau];
+      diff += delta * delta;
+    }
+    runningSum += diff;
+    d[tau] = runningSum > 0 ? (diff * tau) / runningSum : 1.0;
+  }
+
+  // 第1極小点探索 (閾値 0.22 以下の最初のローカルミニマム)
+  const THRESHOLD = 0.22;
   let bestPeriod = fallbackPeriod;
-  let bestScore = 0;
+  let minDiff = 1.0;
 
-  // 1. 粗探索 (Coarse Pass: 3サンプル飛びでピーク候補を絞り込み)
-  const COARSE_STEP = 3;
-  for (let period = minPeriod; period <= maxPeriod; period += COARSE_STEP) {
-    let sum = 0;
-    let normA = 0;
-    let normB = 0;
-    const count = n - period;
-    // 2サンプル飛びで内積計算
-    for (let i = 0; i < count; i += 2) {
-      const a = data[start + i];
-      const b = data[start + i + period];
-      sum += a * b;
-      normA += a * a;
-      normB += b * b;
-    }
-    const denom = Math.sqrt(normA * normB) + 1e-9;
-    const score = sum / denom;
-    if (score > bestScore) {
-      bestScore = score;
-      bestPeriod = period;
+  for (let tau = minPeriod; tau <= maxPeriod; tau++) {
+    if (d[tau] < THRESHOLD) {
+      while (tau + 1 <= maxPeriod && d[tau + 1] < d[tau]) {
+        tau++;
+      }
+      bestPeriod = tau;
+      minDiff = d[tau];
+      break;
     }
   }
 
-  // 2. 詳細探索 (Fine Pass: 最良候補の前後 ±3 サンプルを1ステップで精密測定)
-  const fineStart = Math.max(minPeriod, bestPeriod - COARSE_STEP);
-  const fineEnd = Math.min(maxPeriod, bestPeriod + COARSE_STEP);
-  for (let period = fineStart; period <= fineEnd; period++) {
-    if (period === bestPeriod) continue;
-    let sum = 0;
-    let normA = 0;
-    let normB = 0;
-    const count = n - period;
-    for (let i = 0; i < count; i++) {
-      const a = data[start + i];
-      const b = data[start + i + period];
-      sum += a * b;
-      normA += a * a;
-      normB += b * b;
+  // 閾値を下回る谷が無かった場合は全体最小値を採用
+  if (minDiff >= THRESHOLD) {
+    let absMin = 1.0;
+    for (let tau = minPeriod; tau <= maxPeriod; tau++) {
+      if (d[tau] < absMin) {
+        absMin = d[tau];
+        bestPeriod = tau;
+      }
     }
-    const denom = Math.sqrt(normA * normB) + 1e-9;
-    const score = sum / denom;
-    if (score > bestScore) {
-      bestScore = score;
-      bestPeriod = period;
-    }
+    minDiff = absMin;
   }
 
-  return { period: bestPeriod, score: bestScore };
+  const score = Math.max(0, 1.0 - minDiff);
+  return { period: bestPeriod, score };
 }
 
 /**
