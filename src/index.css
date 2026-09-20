@@ -32,18 +32,21 @@
   transform: translateZ(0);
 }
 
-/* Custom scrollbars for piano roll grid */
+/* VO-SE Pro Desktop Theme Match:
+   bg-base: #18181a, bg-panel: #1f1f22, bg-elevated: #2a2a2e,
+   border: #3a3a40, accent: #0a84ff, danger: #ff453a, success: #34c759
+*/
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #18181a;
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #3a3a40;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #4a4a52;
 }

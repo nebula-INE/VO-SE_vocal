@@ -9,13 +9,22 @@ import { PitchPoint, parsePitchBend, serializePitchBend } from '../utils/pitchCu
 import { ZoomIn, ZoomOut, RotateCcw, Maximize2, Minimize2, ChevronDown, Plus } from 'lucide-react';
 
 interface PitchCurveMiniEditorProps {
-  pbs: string;
-  pbw: string;
-  pby: string;
+  pbs?: string;
+  pbw?: string;
+  pby?: string;
   /** ノートの長さ(ticks)。横軸の表示範囲を決めるのに使う */
-  noteLengthTicks: number;
-  tempo: number;
-  onChange: (next: { pbs: string; pbw: string; pby: string }) => void;
+  noteLengthTicks?: number;
+  tempo?: number;
+  onChange?: (next: { pbs: string; pbw: string; pby: string }) => void;
+  /** Alternative Note-object interface */
+  note?: {
+    pbs?: string;
+    pbw?: string;
+    pby?: string;
+    length?: number;
+    [key: string]: any;
+  } | null;
+  onUpdate?: (pbs: string, pbw: string, pby: string) => void;
 }
 
 const BASE_WIDTH = 252;
@@ -27,14 +36,25 @@ function roundTo(v: number, decimals: number): number {
   return Math.round(v * f) / f;
 }
 
-export default function PitchCurveMiniEditor({
-  pbs,
-  pbw,
-  pby,
-  noteLengthTicks,
-  tempo,
-  onChange,
-}: PitchCurveMiniEditorProps) {
+export default function PitchCurveMiniEditor(props: PitchCurveMiniEditorProps) {
+  const {
+    pbs: directPbs,
+    pbw: directPbw,
+    pby: directPby,
+    noteLengthTicks: directTicks,
+    tempo: propTempo,
+    onChange,
+    note,
+    onUpdate,
+  } = props;
+
+  const rawPbs = directPbs !== undefined ? directPbs : (note?.pbs || '');
+  const rawPbw = directPbw !== undefined ? directPbw : (note?.pbw || '');
+  const rawPby = directPby !== undefined ? directPby : (note?.pby || '');
+  const rawTicks = directTicks !== undefined ? directTicks : (note?.length ?? 480);
+  const safeTicks = typeof rawTicks === 'number' && !isNaN(rawTicks) && rawTicks > 0 ? rawTicks : 480;
+  const safeTempo = typeof propTempo === 'number' && !isNaN(propTempo) && propTempo > 0 ? propTempo : 120;
+
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -61,26 +81,29 @@ export default function PitchCurveMiniEditor({
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
 
-  const points = useMemo(() => parsePitchBend(pbs, pbw, pby), [pbs, pbw, pby]);
+  const points = useMemo(() => parsePitchBend(rawPbs, rawPbw, rawPby), [rawPbs, rawPbw, rawPby]);
 
   const noteLengthMs = useMemo(() => {
-    const msPerTick = 60000 / (tempo || 120) / 480;
-    return Math.max(200, noteLengthTicks * msPerTick);
-  }, [noteLengthTicks, tempo]);
+    const msPerTick = 60000 / safeTempo / 480;
+    const calculated = safeTicks * msPerTick;
+    return Math.max(200, isNaN(calculated) ? 200 : calculated);
+  }, [safeTicks, safeTempo]);
 
   // アスペクト比計算用の実効サイズ
-  const actualWidth = Math.round(BASE_WIDTH * zoomX);
+  const actualWidth = Math.round(BASE_WIDTH * (isNaN(zoomX) || zoomX <= 0 ? 1.0 : zoomX));
   const actualHeight = isExpandedHeight ? 180 : BASE_HEIGHT;
 
   // 表示範囲: 全ノードおよびノート長さに応じて自動動的拡張
   const maxNodeMs = useMemo(() => {
     if (points.length === 0) return 0;
-    return Math.max(...points.map((p) => p.offsetMs));
+    const val = Math.max(...points.map((p) => p.offsetMs));
+    return isNaN(val) ? 0 : val;
   }, [points]);
 
   const minNodeMs = useMemo(() => {
     if (points.length === 0) return 0;
-    return Math.min(...points.map((p) => p.offsetMs));
+    const val = Math.min(...points.map((p) => p.offsetMs));
+    return isNaN(val) ? 0 : val;
   }, [points]);
 
   const effectiveMaxMs = Math.max(noteLengthMs, maxNodeMs);
@@ -90,25 +113,51 @@ export default function PitchCurveMiniEditor({
   const viewMaxMs = effectiveMaxMs + Math.max(100, noteLengthMs * 0.2);
 
   const msToX = useCallback(
-    (ms: number) => PAD_X + ((ms - viewMinMs) / (viewMaxMs - viewMinMs)) * (actualWidth - PAD_X * 2),
+    (ms: number) => {
+      const span = viewMaxMs - viewMinMs;
+      if (!span || isNaN(span) || span <= 0) return PAD_X;
+      const res = PAD_X + ((ms - viewMinMs) / span) * (actualWidth - PAD_X * 2);
+      return isNaN(res) ? PAD_X : res;
+    },
     [viewMinMs, viewMaxMs, actualWidth]
   );
   const xToMs = useCallback(
-    (x: number) => viewMinMs + ((x - PAD_X) / (actualWidth - PAD_X * 2)) * (viewMaxMs - viewMinMs),
+    (x: number) => {
+      const span = actualWidth - PAD_X * 2;
+      if (!span || isNaN(span) || span <= 0) return viewMinMs;
+      const res = viewMinMs + ((x - PAD_X) / span) * (viewMaxMs - viewMinMs);
+      return isNaN(res) ? viewMinMs : res;
+    },
     [viewMinMs, viewMaxMs, actualWidth]
   );
   const semitoneToY = useCallback(
-    (s: number) => actualHeight / 2 - (s / semitoneRange) * (actualHeight / 2 - 8),
+    (s: number) => {
+      const range = semitoneRange || 6;
+      const res = actualHeight / 2 - (s / range) * (actualHeight / 2 - 8);
+      return isNaN(res) ? actualHeight / 2 : res;
+    },
     [actualHeight, semitoneRange]
   );
   const yToSemitone = useCallback(
-    (y: number) => (-(y - actualHeight / 2) / (actualHeight / 2 - 8)) * semitoneRange,
+    (y: number) => {
+      const range = semitoneRange || 6;
+      const denom = actualHeight / 2 - 8;
+      if (!denom || isNaN(denom)) return 0;
+      const res = (-(y - actualHeight / 2) / denom) * range;
+      return isNaN(res) ? 0 : res;
+    },
     [actualHeight, semitoneRange]
   );
 
   const commit = (next: PitchPoint[]) => {
     const sorted = [...next].sort((a, b) => a.offsetMs - b.offsetMs);
-    onChange(serializePitchBend(sorted));
+    const serialized = serializePitchBend(sorted);
+    if (onChange) {
+      onChange(serialized);
+    }
+    if (onUpdate) {
+      onUpdate(serialized.pbs, serialized.pbw, serialized.pby);
+    }
   };
 
   // ズーム操作ハンドラ
@@ -341,18 +390,40 @@ export default function PitchCurveMiniEditor({
   const activePoint = selectedPointIndex !== null && points[selectedPointIndex] ? points[selectedPointIndex] : null;
 
   const renderCanvasContent = (modalMode: boolean = false) => {
-    const curWidth = modalMode ? 460 : actualWidth;
-    const curHeight = modalMode ? 260 : actualHeight;
-    const curMsToX = (ms: number) => PAD_X + ((ms - viewMinMs) / (viewMaxMs - viewMinMs)) * (curWidth - PAD_X * 2);
-    const curSemitoneToY = (s: number) => curHeight / 2 - (s / semitoneRange) * (curHeight / 2 - 12);
-    const curPathD = points
-      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${curMsToX(p.offsetMs).toFixed(1)} ${curSemitoneToY(p.semitone).toFixed(1)}`)
-      .join(' ');
+    const curWidth = Math.max(100, modalMode ? 460 : actualWidth);
+    const curHeight = Math.max(60, modalMode ? 260 : actualHeight);
+    const curSpan = (viewMaxMs - viewMinMs) > 0 ? (viewMaxMs - viewMinMs) : 1000;
+    const curMsToX = (ms: number) => {
+      const safeMs = typeof ms === 'number' && !isNaN(ms) ? ms : 0;
+      const res = PAD_X + ((safeMs - viewMinMs) / curSpan) * (curWidth - PAD_X * 2);
+      return typeof res === 'number' && !isNaN(res) && isFinite(res) ? res : PAD_X;
+    };
+    const curSemitoneToY = (s: number) => {
+      const safeS = typeof s === 'number' && !isNaN(s) ? s : 0;
+      const range = (typeof semitoneRange === 'number' && !isNaN(semitoneRange) && semitoneRange > 0) ? semitoneRange : 6;
+      const denom = curHeight / 2 - 12;
+      const safeDenom = denom > 0 ? denom : curHeight / 2;
+      const res = curHeight / 2 - (safeS / range) * safeDenom;
+      return typeof res === 'number' && !isNaN(res) && isFinite(res) ? res : curHeight / 2;
+    };
+    const curPathD = points.length > 0
+      ? points
+          .map((p, i) => `${i === 0 ? 'M' : 'L'} ${curMsToX(p.offsetMs).toFixed(1)} ${curSemitoneToY(p.semitone).toFixed(1)}`)
+          .join(' ')
+      : `M ${PAD_X} ${(curHeight / 2).toFixed(1)} L ${curWidth - PAD_X} ${(curHeight / 2).toFixed(1)}`;
+
+    const rawStartX = curMsToX(0);
+    const noteStartX = typeof rawStartX === 'number' && !isNaN(rawStartX) && isFinite(rawStartX) ? rawStartX : PAD_X;
+    const rawEndX = curMsToX(noteLengthMs);
+    const safeEndX = typeof rawEndX === 'number' && !isNaN(rawEndX) && isFinite(rawEndX) ? rawEndX : (PAD_X + 100);
+    const noteWidth = Math.max(0, safeEndX - noteStartX);
+    const rawZeroY = curSemitoneToY(0);
+    const zeroLineY = typeof rawZeroY === 'number' && !isNaN(rawZeroY) && isFinite(rawZeroY) ? rawZeroY : (curHeight / 2);
 
     return (
       <div
         ref={modalMode ? undefined : containerRef}
-        className="relative bg-slate-950 border border-slate-800 rounded-md select-none touch-none overflow-hidden cursor-crosshair shrink-0"
+        className="relative bg-[#18181a] border border-[#3a3a40] rounded-md select-none touch-none overflow-hidden cursor-crosshair shrink-0"
         style={{ width: `${curWidth}px`, height: `${curHeight}px` }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
@@ -371,20 +442,21 @@ export default function PitchCurveMiniEditor({
       >
         <svg width={curWidth} height={curHeight} viewBox={`0 0 ${curWidth} ${curHeight}`} className="w-full h-full pointer-events-none">
           {/* 0半音の基準線 */}
-          <line x1={0} y1={curSemitoneToY(0)} x2={curWidth} y2={curSemitoneToY(0)} stroke="#334155" strokeWidth={1} strokeDasharray="3,3" />
+          <line x1={0} y1={zeroLineY} x2={curWidth} y2={zeroLineY} stroke="#3a3a40" strokeWidth={1} strokeDasharray="3,3" />
           {/* ノートの範囲を示す帯 */}
           <rect
-            x={curMsToX(0)}
+            x={noteStartX}
             y={0}
-            width={Math.max(0, curMsToX(noteLengthMs) - curMsToX(0))}
+            width={noteWidth}
             height={curHeight}
-            fill="#22d3ee"
-            fillOpacity={0.06}
+            fill="#0a84ff"
+            fillOpacity={0.08}
           />
-          <line x1={curMsToX(0)} y1={0} x2={curMsToX(0)} y2={curHeight} stroke="#0e7490" strokeWidth={1} strokeDasharray="2,2" />
+          <line x1={noteStartX} y1={0} x2={noteStartX} y2={curHeight} stroke="#0a84ff" strokeWidth={1} strokeDasharray="2,2" strokeOpacity={0.5} />
 
-          {/* カーブ本体 */}
-          <path d={curPathD} fill="none" stroke="#22d3ee" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          {/* カーブ本体 (発光グロー層 + コア層) */}
+          <path d={curPathD} fill="none" stroke="#0a84ff" strokeWidth={5} strokeOpacity={0.3} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={curPathD} fill="none" stroke="#2997ff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
 
         {/* 制御ノード */}
@@ -411,12 +483,12 @@ export default function PitchCurveMiniEditor({
               <div
                 className={`rounded-full transition-transform duration-75 shadow-md border ${
                   isDragging
-                    ? 'w-4 h-4 bg-white border-cyan-400 ring-4 ring-cyan-400/50 scale-125'
+                    ? 'w-4 h-4 bg-white border-[#0a84ff] ring-4 ring-[#0a84ff]/50 scale-125'
                     : isSelected
-                    ? 'w-3.5 h-3.5 bg-cyan-300 border-cyan-500 ring-2 ring-cyan-400/50'
+                    ? 'w-3.5 h-3.5 bg-[#2997ff] border-white ring-2 ring-[#0a84ff]/60'
                     : i === 0
-                    ? 'w-2.5 h-2.5 bg-slate-100 border border-cyan-600'
-                    : 'w-2 h-2 bg-slate-200 border-slate-600'
+                    ? 'w-2.5 h-2.5 bg-[#f0f0f2] border border-[#0a84ff]'
+                    : 'w-2 h-2 bg-[#9a9aa2] border-[#3a3a40]'
                 }`}
               />
             </div>
@@ -444,7 +516,7 @@ export default function PitchCurveMiniEditor({
                 if (newIndex >= 0) setSelectedPointIndex(newIndex);
                 setAddNodeMenu(null);
               }}
-              className="bg-cyan-400 hover:bg-cyan-300 active:scale-95 text-slate-950 font-bold px-3 py-1.5 rounded-full shadow-2xl border border-white text-[11px] flex items-center space-x-1.5 whitespace-nowrap cursor-pointer transition ring-2 ring-cyan-500/50"
+              className="bg-[#0a84ff] hover:bg-[#2997ff] active:scale-95 text-white font-bold px-3 py-1.5 rounded-full shadow-2xl border border-white text-[11px] flex items-center space-x-1.5 whitespace-nowrap cursor-pointer transition ring-2 ring-[#0a84ff]/50"
             >
               <Plus className="w-3.5 h-3.5 stroke-[3]" />
               <span>ノードを追加 ({addNodeMenu.semitone >= 0 ? `+${addNodeMenu.semitone.toFixed(2)}` : addNodeMenu.semitone.toFixed(2)}st)</span>
@@ -461,9 +533,9 @@ export default function PitchCurveMiniEditor({
               top: `${Math.max(22, curSemitoneToY(activePoint.semitone))}px`,
             }}
           >
-            <div className="bg-slate-900/95 border border-cyan-500/60 text-cyan-200 text-[10px] font-mono px-1.5 py-0.5 rounded shadow backdrop-blur-sm flex items-center space-x-1 whitespace-nowrap">
+            <div className="bg-[#1f1f22]/95 border border-[#0a84ff]/60 text-[#2997ff] text-[10px] font-mono px-1.5 py-0.5 rounded shadow backdrop-blur-sm flex items-center space-x-1 whitespace-nowrap">
               <span>{activePoint.semitone >= 0 ? `+${activePoint.semitone.toFixed(2)}` : activePoint.semitone.toFixed(2)}st</span>
-              <span className="text-slate-500">|</span>
+              <span className="text-[#7d7d86]">|</span>
               <span>{activePoint.offsetMs}ms</span>
             </div>
           </div>
@@ -475,26 +547,26 @@ export default function PitchCurveMiniEditor({
   return (
     <div className="space-y-2">
       {/* ズーム＆表示制御ツールバー */}
-      <div className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[10px]">
+      <div className="flex items-center justify-between bg-[#18181a] border border-[#3a3a40] rounded px-2 py-1 text-[10px]">
         {/* 時間軸ズーム (横) */}
         <div className="flex items-center space-x-1">
           <button
             type="button"
             onClick={handleZoomOut}
             disabled={zoomX <= 1.0}
-            className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 disabled:opacity-30"
+            className="p-1 rounded bg-[#2a2a2e] hover:bg-[#34343a] text-[#d5d5da] border border-[#3a3a40] disabled:opacity-30"
             title="時間軸を縮小"
           >
             <ZoomOut className="w-3 h-3" />
           </button>
-          <span className="font-mono text-cyan-400 font-bold min-w-[34px] text-center">
+          <span className="font-mono text-[#2997ff] font-bold min-w-[34px] text-center">
             {Math.round(zoomX * 100)}%
           </span>
           <button
             type="button"
             onClick={handleZoomIn}
             disabled={zoomX >= 3.5}
-            className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 disabled:opacity-30"
+            className="p-1 rounded bg-[#2a2a2e] hover:bg-[#34343a] text-[#d5d5da] border border-[#3a3a40] disabled:opacity-30"
             title="時間軸を拡大"
           >
             <ZoomIn className="w-3 h-3" />
@@ -503,11 +575,11 @@ export default function PitchCurveMiniEditor({
 
         {/* 縦軸レンジ選択 */}
         <div className="flex items-center space-x-1">
-          <span className="text-slate-500">レンジ:</span>
+          <span className="text-[#9a9aa2]">レンジ:</span>
           <select
             value={semitoneRange}
             onChange={(e) => setSemitoneRange(parseFloat(e.target.value))}
-            className="bg-slate-900 border border-slate-700 text-cyan-300 rounded px-1 py-0.5 text-[10px]"
+            className="bg-[#2a2a2e] border border-[#3a3a40] text-[#2997ff] rounded px-1 py-0.5 text-[10px]"
           >
             <option value={1.5}>±1.5st (超精密)</option>
             <option value={3}>±3st (精密)</option>
@@ -522,19 +594,19 @@ export default function PitchCurveMiniEditor({
           <button
             type="button"
             onClick={handleAddNodeFromToolbar}
-            className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-700/60 text-cyan-300 hover:bg-cyan-900 active:scale-95 transition"
+            className="flex items-center space-x-1 px-1.5 py-0.5 rounded bg-[#0a84ff]/20 border border-[#0a84ff]/60 text-[#2997ff] hover:bg-[#0a84ff]/30 active:scale-95 transition"
             title="ノードを追加"
           >
             <Plus className="w-3 h-3 stroke-[3]" />
             <span className="font-bold text-[9px]">ノード</span>
           </button>
-          <div className="flex items-center space-x-0.5 bg-slate-900 border border-slate-800 rounded px-1">
+          <div className="flex items-center space-x-0.5 bg-[#2a2a2e] border border-[#3a3a40] rounded px-1">
             <button
               type="button"
               onClick={() => {
                 if (scrollContainerRef.current) scrollContainerRef.current.scrollBy({ left: -150, behavior: 'smooth' });
               }}
-              className="px-1 text-[10px] text-slate-300 hover:text-white"
+              className="px-1 text-[10px] text-[#d5d5da] hover:text-white"
               title="左へスクロール"
             >
               ◀
@@ -544,7 +616,7 @@ export default function PitchCurveMiniEditor({
               onClick={() => {
                 if (scrollContainerRef.current) scrollContainerRef.current.scrollBy({ left: 150, behavior: 'smooth' });
               }}
-              className="px-1 text-[10px] text-slate-300 hover:text-white"
+              className="px-1 text-[10px] text-[#d5d5da] hover:text-white"
               title="右へスクロール"
             >
               ▶
@@ -553,7 +625,7 @@ export default function PitchCurveMiniEditor({
           <button
             type="button"
             onClick={handleResetZoom}
-            className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200"
+            className="p-1 rounded bg-[#2a2a2e] hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] border border-[#3a3a40]"
             title="ズームリセット"
           >
             <RotateCcw className="w-3 h-3" />
@@ -561,7 +633,7 @@ export default function PitchCurveMiniEditor({
           <button
             type="button"
             onClick={() => setIsModalOpen(true)}
-            className="p-1 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-900"
+            className="p-1 rounded bg-[#0a84ff]/20 border border-[#0a84ff]/50 text-[#2997ff] hover:bg-[#0a84ff]/30"
             title="全画面拡大表示"
           >
             <Maximize2 className="w-3 h-3" />
@@ -572,22 +644,22 @@ export default function PitchCurveMiniEditor({
       {/* スクロール可能キャンバスエリア */}
       <div
         ref={scrollContainerRef}
-        className="w-full overflow-x-auto overflow-y-hidden border border-slate-800 rounded-md bg-slate-950 scrollbar-thin scrollbar-thumb-slate-700"
+        className="w-full overflow-x-auto overflow-y-hidden border border-[#3a3a40] rounded-md bg-[#18181a]"
       >
         {renderCanvasContent(false)}
       </div>
 
       {/* タップ補助・高さ切替・ワンタップ削除操作エリア */}
-      <div className="flex items-center justify-between text-[10px] text-slate-400">
+      <div className="flex items-center justify-between text-[10px] text-[#9a9aa2]">
         <button
           type="button"
           onClick={() => setIsExpandedHeight(!isExpandedHeight)}
-          className="text-cyan-400 hover:text-cyan-300 underline"
+          className="text-[#2997ff] hover:text-[#0a84ff] underline"
         >
           {isExpandedHeight ? '標準の高さに戻す (108px)' : 'キャンバス高さを拡大 (180px)'}
         </button>
 
-        <span className="text-[9px] text-slate-500 hidden sm:inline">
+        <span className="text-[9px] text-[#7d7d86] hidden sm:inline">
           💡 2本指ピンチ / ダブルタップで拡大縮小
         </span>
 
@@ -595,7 +667,7 @@ export default function PitchCurveMiniEditor({
           <button
             type="button"
             onClick={handleDeletePoint(selectedPointIndex)}
-            className="px-2 py-0.5 bg-red-950/60 hover:bg-red-900/80 border border-red-500/40 text-red-300 rounded text-[10px] transition"
+            className="px-2 py-0.5 bg-[#ff453a]/20 hover:bg-[#ff453a]/40 border border-[#ff453a]/50 text-[#ff453a] rounded text-[10px] transition"
           >
             選択中の点を削除
           </button>
@@ -604,35 +676,35 @@ export default function PitchCurveMiniEditor({
 
       {/* 全画面/大画面モーダル拡大表示 */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-cyan-500/40 rounded-xl p-4 max-w-lg w-full space-y-3 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <h3 className="text-xs font-bold text-cyan-300 flex items-center space-x-1.5">
-                <Maximize2 className="w-4 h-4 text-cyan-400" />
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-4 max-w-lg w-full space-y-3 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#303034] pb-2">
+              <h3 className="text-xs font-bold text-[#f0f0f2] flex items-center space-x-1.5">
+                <Maximize2 className="w-4 h-4 text-[#0a84ff]" />
                 <span>ピッチカーブ高精度拡大編集</span>
               </h3>
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded bg-slate-800"
+                className="text-[#9a9aa2] hover:text-[#f0f0f2] p-1 rounded bg-[#2a2a2e] border border-[#3a3a40]"
               >
                 ✕
               </button>
             </div>
 
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] text-[#9a9aa2]">
               画面全体でノード（制御点）をタップ・ドラッグして微調整できます。
             </p>
 
-            <div className="flex justify-center bg-slate-950 p-2 rounded-lg border border-slate-800">
+            <div className="flex justify-center bg-[#18181a] p-2 rounded-lg border border-[#3a3a40]">
               {renderCanvasContent(true)}
             </div>
 
-            <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
+            <div className="flex justify-end space-x-2 pt-2 border-t border-[#303034]">
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold rounded-md text-xs shadow"
+                className="px-4 py-1.5 bg-[#0a84ff] hover:bg-[#2997ff] text-white font-bold rounded-md text-xs shadow"
               >
                 完了
               </button>

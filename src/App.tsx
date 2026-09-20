@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   Play, Pause, Square, Music, Upload, Download, Settings, RefreshCw,
   Monitor, Cpu, Volume2, Sliders, Layers, Sparkles, FileText, CheckCircle2,
-  AlertCircle, ChevronRight, AudioWaveform, Plus, Trash2, Edit3, HelpCircle, Loader2,
+  AlertCircle, ChevronRight, ChevronDown, ChevronUp, AudioWaveform, Plus, Trash2, Edit3, HelpCircle, Loader2,
   Activity, Zap, X, Library, DownloadCloud, HardDrive, Check, Search, FolderPlus, Star, ShieldAlert, ZoomIn, ZoomOut, RotateCcw, Maximize2,
-  Type
+  Type, PanelRight, Menu
 } from 'lucide-react';
 import { bufferToWav } from './utils/audioEncoder';
 import {
@@ -32,6 +32,16 @@ import GhostTrackOverlay from './components/GhostTrackOverlay';
 import realtimeEngine from './utils/realtimeAudioEngine';
 import BatchLyricModal from './components/BatchLyricModal';
 import UstImportModal from './components/UstImportModal';
+import { useResponsive } from './utils/useResponsive';
+import BottomSheet from './components/BottomSheet';
+import MobileQuickControls from './components/MobileQuickControls';
+import InspectorPanel from './components/InspectorPanel';
+import FloatingLyricInput from './components/FloatingLyricInput';
+import NoteContextMenu from './components/NoteContextMenu';
+import TracksSheet from './components/TracksSheet';
+import VoicebankSheet from './components/VoicebankSheet';
+import PitchParamsSheet from './components/PitchParamsSheet';
+import ProjectSheet from './components/ProjectSheet';
 
 interface Note {
   id: string;
@@ -225,6 +235,28 @@ export default function App() {
   const [isBatchLyricModalOpen, setIsBatchLyricModalOpen] = useState<boolean>(false);
   const [isUstImportModalOpen, setIsUstImportModalOpen] = useState<boolean>(false);
   const projectFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Responsive & Mobile State
+  const responsive = useResponsive();
+  const [activeMobileSheet, setActiveMobileSheet] = useState<'tracks' | 'voice' | 'inspector' | 'params' | 'project' | null>(null);
+  const [isTracksCollapsed, setIsTracksCollapsed] = useState<boolean>(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(true);
+  const [inlineLyricNote, setInlineLyricNote] = useState<Note | null>(null);
+  const [contextMenuNote, setContextMenuNote] = useState<Note | null>(null);
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const longPressTimerRef = useRef<number | null>(null);
+
+  // Update collapsed/inspector defaults when deviceType changes
+  useEffect(() => {
+    if (responsive.isPhone) {
+      setIsTracksCollapsed(true);
+      setIsInspectorOpen(false);
+    } else {
+      setIsTracksCollapsed(false);
+      setIsInspectorOpen(true);
+    }
+  }, [responsive.isPhone]);
 
   // Batch lyric apply handler
   const handleApplyBatchLyrics = (newLyrics: string[]) => {
@@ -2570,7 +2602,7 @@ export default function App() {
 
   return (
     <div
-      className="flex flex-col h-screen w-full bg-slate-950 text-slate-100 overflow-hidden select-none relative"
+      className="flex flex-col h-screen w-full bg-[#18181a] text-[#f0f0f2] overflow-hidden select-none relative"
       onDragOver={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -2601,59 +2633,124 @@ export default function App() {
     >
       {/* Drag & Drop Visual Overlay */}
       {isDraggingFile && (
-        <div className="absolute inset-0 z-50 bg-slate-950/85 backdrop-blur-sm border-2 border-dashed border-cyan-400 flex flex-col items-center justify-center p-8 pointer-events-none animate-in fade-in duration-150">
-          <div className="w-16 h-16 rounded-2xl bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center mb-4 text-cyan-400 shadow-lg shadow-cyan-500/20">
+        <div className="absolute inset-0 z-50 bg-[#18181a]/90 backdrop-blur-sm border-2 border-dashed border-[#0a84ff] flex flex-col items-center justify-center p-8 pointer-events-none animate-in fade-in duration-150">
+          <div className="w-16 h-16 rounded-2xl bg-[#0a84ff]/20 border border-[#0a84ff]/50 flex items-center justify-center mb-4 text-[#0a84ff] shadow-lg shadow-[#0a84ff]/20">
             <Upload className="w-8 h-8 animate-bounce" />
           </div>
-          <h3 className="text-xl font-bold text-slate-100 mb-2">ファイルをドロップしてインポート</h3>
-          <p className="text-sm text-slate-400 text-center max-w-md">
+          <h3 className="text-xl font-bold text-[#f0f0f2] mb-2">ファイルをドロップしてインポート</h3>
+          <p className="text-sm text-[#9a9aa2] text-center max-w-md">
             UST / VSQX / SVP / MIDI プロジェクトファイル、または UTAU音源ZIP (.zip) を自動認識して読み込みます
           </p>
         </div>
       )}
 
       {/* --- Top Navigation Header --- */}
-      <header className="h-14 border-b border-slate-800 bg-slate-900/90 px-4 flex items-center justify-between shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+      <header className="h-14 border-b border-[#3a3a40] bg-[#1f1f22] px-3 sm:px-4 flex items-center justify-between shrink-0 select-none z-30">
+        <div className="flex items-center space-x-2 sm:space-x-3">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-[#0a84ff] to-[#0071e3] flex items-center justify-center shadow-lg shadow-[#0a84ff]/20 shrink-0">
             <Music className="w-5 h-5 text-white" />
           </div>
           <div>
-            <div className="flex items-center space-x-2">
-              <h1 className="font-bold text-slate-100 tracking-wide text-base">VO-SEvocal</h1>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/50">
+            <div className="flex items-center space-x-1.5 sm:space-x-2">
+              <h1 className="font-bold text-[#f0f0f2] tracking-wide text-sm sm:text-base">VO-SEvocal</h1>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-[#0a84ff]/20 text-[#2997ff] border border-[#0a84ff]/40">
                 v1.0.0
               </span>
             </div>
-            <p className="text-xs text-slate-400">Vocal Synthesizer Engine & Editor</p>
+            <p className="text-[10px] sm:text-xs text-[#9a9aa2] hidden sm:block">Vocal Synthesizer Engine & Editor</p>
           </div>
         </div>
 
         {/* Voicebank Selector / Active Status */}
-        <div className="hidden sm:flex items-center space-x-2">
+        <div className="flex items-center space-x-1.5 sm:space-x-2">
           <button
-            onClick={() => setActiveTab('voicebanks')}
-            className="flex items-center space-x-1.5 text-xs text-cyan-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer"
+            onClick={() => {
+              if (responsive.isPhone) {
+                setActiveMobileSheet('voice');
+              } else {
+                setActiveTab('voicebanks');
+              }
+            }}
+            className="flex items-center space-x-1.5 text-xs text-[#2997ff] hover:text-white bg-[#2a2a2e] hover:bg-[#34343a] px-2.5 py-1.5 rounded-lg border border-[#3a3a40] transition cursor-pointer"
             title="UTAU音源ライブラリを開く"
           >
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            <span className="text-slate-400">選択音源:</span>
-            <span className="truncate max-w-[140px] font-semibold text-cyan-200">{selectedVoicebank}</span>
-            <span className="text-[10px] bg-cyan-900/60 text-cyan-300 px-1.5 py-0.5 rounded font-mono border border-cyan-700/50">管理</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-[#30d158] shrink-0" />
+            <span className="text-[#9a9aa2] hidden md:inline">選択音源:</span>
+            <span className="truncate max-w-[90px] sm:max-w-[140px] font-semibold text-[#f0f0f2]">{selectedVoicebank}</span>
+            <span className="text-[10px] bg-[#0a84ff]/20 text-[#2997ff] px-1.5 py-0.5 rounded font-mono border border-[#0a84ff]/40 hidden sm:inline">管理</span>
           </button>
         </div>
 
         {/* Right Toolbar Actions */}
-        <div className="flex items-center space-x-2">
-          {/* Universal Project Import */}
+        <div className="flex items-center space-x-1.5 sm:space-x-2">
+          {/* Desktop Full Actions */}
+          {!responsive.isPhone && (
+            <>
+              {/* Universal Project Import */}
+              <button
+                onClick={() => setIsUstImportModalOpen(true)}
+                className="flex items-center space-x-1.5 text-xs bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] hover:text-white px-2.5 py-1.5 rounded-md cursor-pointer transition border border-[#3a3a40] shadow-sm"
+                title="対応フォーマット: UST, VSQX, SVP, Standard MIDI"
+              >
+                <Upload className="w-3.5 h-3.5 text-[#0a84ff]" />
+                <span className="font-medium hidden lg:inline">インポート (UST/VSQX/SVP/MIDI)</span>
+                <span className="font-medium lg:hidden">読込</span>
+              </button>
+
+              {/* UTAU Voicebank Zip Upload */}
+              <label className="flex items-center space-x-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] text-white font-medium px-2.5 py-1.5 rounded-md cursor-pointer transition border border-[#0a84ff] shadow-sm shadow-[#0a84ff]/30">
+                {isUploadingVb ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                <span className="hidden lg:inline">{isUploadingVb ? '音源解凍中...' : 'UTAU音源(.zip) 追加'}</span>
+                <span className="lg:hidden">音源+</span>
+                <input type="file" accept=".zip,application/zip,application/x-zip,application/x-zip-compressed,multipart/x-zip,application/octet-stream" onChange={handleVoicebankZipUpload} disabled={isUploadingVb} className="hidden" />
+              </label>
+
+              {/* Export Format Select & Download Button */}
+              <div className="flex items-center space-x-1 bg-[#2a2a2e] border border-[#3a3a40] rounded-md px-2 py-1">
+                <Download className="w-3.5 h-3.5 text-[#9a9aa2] shrink-0" />
+                <span className="text-[11px] text-[#9a9aa2] font-medium hidden lg:inline">書き出し:</span>
+                <select
+                  onChange={(e) => {
+                    const val = e.target.value as 'ust' | 'vsqx' | 'svp' | 'midi';
+                    if (val) {
+                      handleExportProject(val);
+                      e.target.value = ''; // Reset select
+                    }
+                  }}
+                  defaultValue=""
+                  className="bg-[#18181a] text-[#2997ff] text-xs font-bold rounded px-1.5 py-0.5 border border-[#3a3a40] cursor-pointer focus:outline-none focus:border-[#0a84ff]"
+                >
+                  <option value="" disabled>形式を選択...</option>
+                  <option value="ust">.ust (UTAU)</option>
+                  <option value="vsqx">.vsqx (VOCALOID)</option>
+                  <option value="svp">.svp (Synthesizer V)</option>
+                  <option value="midi">.mid (MIDI)</option>
+                </select>
+              </div>
+            </>
+          )}
+
+          {/* Quick Render WAV Button (Both Desktop and Mobile) */}
           <button
-            onClick={() => setIsUstImportModalOpen(true)}
-            className="flex items-center space-x-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white px-3 py-1.5 rounded-md cursor-pointer transition border border-slate-700 shadow-sm"
-            title="対応フォーマット: UST, VSQX, SVP, Standard MIDI"
+            onClick={handleExportWav}
+            disabled={isRenderingWav}
+            className="flex items-center space-x-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] disabled:opacity-50 text-white font-medium px-2.5 sm:px-3 py-1.5 rounded-md transition shadow-md shadow-[#0a84ff]/30 font-sans cursor-pointer"
+            title="WAV音声ファイルをレンダリングしてダウンロードします"
           >
-            <Upload className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="font-medium">インポート (UST/VSQX/SVP/MIDI)</span>
+            {isRenderingWav ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+            ) : (
+              <Download className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="font-bold">
+              {isRenderingWav
+                ? `${renderProgress?.pct ?? 0}%`
+                : <span className="hidden sm:inline">WAV 音声書き出し</span>}
+              {!isRenderingWav && <span className="sm:hidden">WAV</span>}
+            </span>
           </button>
+
+          {/* Hidden File Input for Project Upload */}
           <input
             ref={projectFileInputRef}
             type="file"
@@ -2662,128 +2759,170 @@ export default function App() {
             className="hidden"
           />
 
-          {/* UTAU Voicebank Zip Upload */}
-          <label className="flex items-center space-x-1.5 text-xs bg-cyan-700 hover:bg-cyan-600 text-white font-medium px-3 py-1.5 rounded-md cursor-pointer transition border border-cyan-600 shadow-sm shadow-cyan-900/30">
-            {isUploadingVb ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-            <span>{isUploadingVb ? '音源解凍中...' : 'UTAU音源(.zip) 追加'}</span>
-            <input type="file" accept=".zip,application/zip,application/x-zip,application/x-zip-compressed,multipart/x-zip,application/octet-stream" onChange={handleVoicebankZipUpload} disabled={isUploadingVb} className="hidden" />
-          </label>
-
-          {/* Export Format Select & Download Button */}
-          <div className="flex items-center space-x-1 bg-slate-800 border border-slate-700 rounded-md px-2 py-1">
-            <Download className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="text-[11px] text-slate-400 font-medium">書き出し:</span>
-            <select
-              onChange={(e) => {
-                const val = e.target.value as 'ust' | 'vsqx' | 'svp' | 'midi';
-                if (val) {
-                  handleExportProject(val);
-                  e.target.value = ''; // Reset select
-                }
-              }}
-              defaultValue=""
-              className="bg-slate-950 text-cyan-300 text-xs font-bold rounded px-1.5 py-0.5 border border-slate-700 cursor-pointer focus:outline-none focus:border-cyan-500"
+          {/* Mobile Project Sheet Button */}
+          {responsive.isPhone && (
+            <button
+              onClick={() => setActiveMobileSheet('project')}
+              className="p-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] border border-[#3a3a40] transition cursor-pointer"
+              title="プロジェクト設定・読込・書出"
             >
-              <option value="" disabled>形式を選択...</option>
-              <option value="ust">.ust (UTAU Project)</option>
-              <option value="vsqx">.vsqx (VOCALOID 3/4)</option>
-              <option value="svp">.svp (Synthesizer V)</option>
-              <option value="midi">.mid (Standard MIDI)</option>
-            </select>
-          </div>
+              <FileText className="w-4 h-4" />
+            </button>
+          )}
 
-          <button
-            onClick={handleExportWav}
-            disabled={isRenderingWav}
-            className="flex items-center space-x-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-medium px-3 py-1.5 rounded-md transition shadow-md shadow-cyan-600/20 font-sans"
-            title="WAV音声ファイルをレンダリングしてダウンロードします"
-          >
-            {isRenderingWav ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-            ) : (
-              <Download className="w-3.5 h-3.5 shrink-0" />
-            )}
-            <span>
-              {isRenderingWav
-                ? `WAV 書き出し中... ${renderProgress?.pct ?? 0}% (${
-                    renderProgress?.remainingSec !== null && renderProgress?.remainingSec !== undefined
-                      ? `残${formatEta(renderProgress.remainingSec)}`
-                      : '計算中'
-                  })`
-                : 'WAV 音声書き出し'}
-            </span>
-          </button>
+          {/* Mobile Navigation Menu Toggle */}
+          {responsive.isPhone && (
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="p-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] transition cursor-pointer"
+              title="メニュー"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </header>
 
+      {/* Mobile Navigation Drawer / Menu Modal */}
+      {isMobileMenuOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex flex-col justify-start p-4 select-none"
+          onClick={() => setIsMobileMenuOpen(false)}
+        >
+          <div
+            className="w-full max-w-xs bg-[#1f1f22] border border-[#3a3a40] rounded-2xl shadow-2xl p-4 space-y-2 text-xs ml-auto animate-in slide-in-from-top-4 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-[#3a3a40] text-[#f0f0f2]">
+              <span className="font-bold text-sm">Navigation</span>
+              <button onClick={() => setIsMobileMenuOpen(false)} className="p-1 rounded-lg hover:bg-[#2a2a2e] text-[#9a9aa2]">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <button
+              onClick={() => { setActiveTab('editor'); setIsMobileMenuOpen(false); }}
+              className={`w-full p-2.5 rounded-xl flex items-center space-x-3 text-left transition ${
+                activeTab === 'editor' ? 'bg-[#0a84ff]/20 text-[#2997ff] font-bold border border-[#0a84ff]/40' : 'hover:bg-[#2a2a2e] text-[#9a9aa2]'
+              }`}
+            >
+              <Sliders className="w-4 h-4 text-[#0a84ff]" />
+              <span>ピアノロール・エディタ</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('voicebanks'); setIsMobileMenuOpen(false); }}
+              className={`w-full p-2.5 rounded-xl flex items-center space-x-3 text-left transition ${
+                activeTab === 'voicebanks' ? 'bg-[#0a84ff]/20 text-[#2997ff] font-bold border border-[#0a84ff]/40' : 'hover:bg-[#2a2a2e] text-[#9a9aa2]'
+              }`}
+            >
+              <Library className="w-4 h-4 text-[#0a84ff]" />
+              <span>UTAU音源ライブラリ</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('oto'); setIsMobileMenuOpen(false); }}
+              className={`w-full p-2.5 rounded-xl flex items-center space-x-3 text-left transition ${
+                activeTab === 'oto' ? 'bg-[#0a84ff]/20 text-[#2997ff] font-bold border border-[#0a84ff]/40' : 'hover:bg-[#2a2a2e] text-[#9a9aa2]'
+              }`}
+            >
+              <Layers className="w-4 h-4 text-[#0a84ff]" />
+              <span>音源原音設定 (oto.ini)</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('tests'); setIsMobileMenuOpen(false); }}
+              className={`w-full p-2.5 rounded-xl flex items-center space-x-3 text-left transition ${
+                activeTab === 'tests' ? 'bg-[#0a84ff]/20 text-[#2997ff] font-bold border border-[#0a84ff]/40' : 'hover:bg-[#2a2a2e] text-[#9a9aa2]'
+              }`}
+            >
+              <Cpu className="w-4 h-4 text-[#0a84ff]" />
+              <span>システム検証・評価</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveTab('desktop'); setIsMobileMenuOpen(false); }}
+              className={`w-full p-2.5 rounded-xl flex items-center space-x-3 text-left transition ${
+                activeTab === 'desktop' ? 'bg-[#0a84ff]/20 text-[#2997ff] font-bold border border-[#0a84ff]/40' : 'hover:bg-[#2a2a2e] text-[#9a9aa2]'
+              }`}
+            >
+              <Monitor className="w-4 h-4 text-[#0a84ff]" />
+              <span>Desktop (PySide6) ガイド</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* --- Main Workspace Layout --- */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar Menu */}
-        <div className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-4 space-y-4 shrink-0">
-          <button
-            onClick={() => setActiveTab('editor')}
-            className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 ${
-              activeTab === 'editor' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-            }`}
-            title="Piano Roll Editor"
-          >
-            <Sliders className="w-5 h-5" />
-            <span className="text-[10px]">エディタ</span>
-          </button>
+        {/* Left Sidebar Menu (Hidden on Phone to maximize editing space) */}
+        {!responsive.isPhone && (
+          <div className="w-16 bg-[#1f1f22] border-r border-[#3a3a40] flex flex-col items-center py-4 space-y-4 shrink-0 select-none z-10">
+            <button
+              onClick={() => setActiveTab('editor')}
+              className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 cursor-pointer ${
+                activeTab === 'editor' ? 'bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/40' : 'text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e]'
+              }`}
+              title="Piano Roll Editor"
+            >
+              <Sliders className="w-5 h-5" />
+              <span className="text-[10px]">エディタ</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('voicebanks')}
-            className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 relative ${
-              activeTab === 'voicebanks' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-            }`}
-            title="UTAU Voicebanks Library"
-          >
-            <Library className="w-5 h-5" />
-            <span className="text-[10px]">音源ライブラリ</span>
-            {customVoicebanks.length > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            )}
-          </button>
+            <button
+              onClick={() => setActiveTab('voicebanks')}
+              className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 relative cursor-pointer ${
+                activeTab === 'voicebanks' ? 'bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/40' : 'text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e]'
+              }`}
+              title="UTAU Voicebanks Library"
+            >
+              <Library className="w-5 h-5" />
+              <span className="text-[10px]">音源ライブラリ</span>
+              {customVoicebanks.length > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#0a84ff] animate-pulse" />
+              )}
+            </button>
 
-          <button
-            onClick={() => setActiveTab('oto')}
-            className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 ${
-              activeTab === 'oto' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-            }`}
-            title="Oto Database & Voicebank"
-          >
-            <Layers className="w-5 h-5" />
-            <span className="text-[10px]">音源原音</span>
-          </button>
+            <button
+              onClick={() => setActiveTab('oto')}
+              className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 cursor-pointer ${
+                activeTab === 'oto' ? 'bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/40' : 'text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e]'
+              }`}
+              title="Oto Database & Voicebank"
+            >
+              <Layers className="w-5 h-5" />
+              <span className="text-[10px]">音源原音</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('tests')}
-            className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 ${
-              activeTab === 'tests' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-            }`}
-            title="System Tests & Evaluation"
-          >
-            <Cpu className="w-5 h-5" />
-            <span className="text-[10px]">テスト検証</span>
-          </button>
+            <button
+              onClick={() => setActiveTab('tests')}
+              className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 cursor-pointer ${
+                activeTab === 'tests' ? 'bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/40' : 'text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e]'
+              }`}
+              title="System Tests & Evaluation"
+            >
+              <Cpu className="w-5 h-5" />
+              <span className="text-[10px]">テスト検証</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('desktop')}
-            className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 ${
-              activeTab === 'desktop' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-            }`}
-            title="PySide6 Desktop App Info"
-          >
-            <Monitor className="w-5 h-5" />
-            <span className="text-[10px]">PySide6</span>
-          </button>
-        </div>
+            <button
+              onClick={() => setActiveTab('desktop')}
+              className={`p-2.5 rounded-xl transition flex flex-col items-center space-y-1 cursor-pointer ${
+                activeTab === 'desktop' ? 'bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/40' : 'text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e]'
+              }`}
+              title="PySide6 Desktop App Info"
+            >
+              <Monitor className="w-5 h-5" />
+              <span className="text-[10px]">PySide6</span>
+            </button>
+          </div>
+        )}
 
         {/* Central Active View Content */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-slate-950">
+        <div className="flex-1 flex flex-col overflow-hidden bg-[#18181a]">
           {activeTab === 'editor' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Multi-Track Mixer Panel */}
+            <div className="flex-1 flex flex-col overflow-hidden relative">
+              {/* Multi-Track Mixer Panel (Collapsible) */}
               <MultiTrackPanel
                 tracks={tracks}
                 currentTrackId={currentTrackId}
@@ -2796,17 +2935,19 @@ export default function App() {
                 setShowGhostNotes={setShowGhostNotes}
                 customVoicebanks={customVoicebanks}
                 onImportProject={() => setIsUstImportModalOpen(true)}
+                isCollapsed={isTracksCollapsed}
+                onToggleCollapse={() => setIsTracksCollapsed(!isTracksCollapsed)}
               />
 
               {/* Transport Control Bar */}
-              <div className="h-12 bg-slate-900/60 border-b border-slate-800 px-4 flex items-center justify-between shrink-0">
+              <div className="h-12 bg-[#1f1f22] border-b border-[#3a3a40] px-4 flex items-center justify-between shrink-0">
                 <div className="flex items-center space-x-3">
                   <button
                     onClick={togglePlay}
                     className={`w-9 h-9 rounded-full flex items-center justify-center transition shadow-md ${
                       isPlaying
-                        ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
-                        : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold'
+                        ? 'bg-[#ff9f0a] hover:bg-[#ffb340] text-black'
+                        : 'bg-[#0a84ff] hover:bg-[#2997ff] text-white font-bold'
                     }`}
                   >
                     {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
@@ -2817,32 +2958,32 @@ export default function App() {
                       setIsPlaying(false);
                       seekToTick(0);
                     }}
-                    className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition"
+                    className="w-8 h-8 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] flex items-center justify-center transition border border-[#3a3a40]"
                   >
                     <Square className="w-3.5 h-3.5 fill-current" />
                   </button>
 
-                  <div className="h-4 w-px bg-slate-800" />
+                  <div className="h-4 w-px bg-[#3a3a40]" />
 
                   {/* Tempo & Settings */}
                   <div className="flex items-center space-x-2 text-xs">
-                    <span className="text-slate-400 font-medium">BPM:</span>
+                    <span className="text-[#9a9aa2] font-medium">BPM:</span>
                     <input
                       type="number"
                       value={tempo}
                       onChange={(e) => setTempo(parseFloat(e.target.value) || 120)}
-                      className="w-16 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-cyan-300 font-mono text-center font-bold"
+                      className="w-16 bg-[#18181a] border border-[#3a3a40] rounded px-2 py-1 text-[#2997ff] font-mono text-center font-bold focus:outline-none focus:border-[#0a84ff]"
                     />
                   </div>
 
-                  <div className="h-4 w-px bg-slate-800" />
+                  <div className="h-4 w-px bg-[#3a3a40]" />
 
                   <div className="flex items-center space-x-2 text-xs">
-                    <span className="text-slate-400 font-medium">Voicebank:</span>
+                    <span className="text-[#9a9aa2] font-medium">Voicebank:</span>
                     <select
                       value={selectedVoicebank}
                       onChange={(e) => setSelectedVoicebank(e.target.value)}
-                      className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs font-medium"
+                      className="bg-[#18181a] border border-[#3a3a40] rounded px-2 py-1 text-[#f0f0f2] text-xs font-medium focus:outline-none focus:border-[#0a84ff]"
                     >
                       <option value="" disabled>音源を選択...</option>
                       {customVoicebanks.map((vb) => (
@@ -2856,49 +2997,49 @@ export default function App() {
 
                 <div className="flex items-center space-x-3">
                   {/* Piano Roll Zoom Controls */}
-                  <div className="flex items-center space-x-2 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs">
-                    <span className="text-slate-400 text-[10px] font-bold">ロールズーム:</span>
+                  <div className="flex items-center space-x-2 bg-[#18181a] border border-[#3a3a40] rounded px-2 py-1 text-xs">
+                    <span className="text-[#9a9aa2] text-[10px] font-bold">ロールズーム:</span>
                     <div className="flex items-center space-x-1">
                       <button
                         onClick={() => setPianoRollZoomX((prev) => Math.max(1.0, Math.round((prev - 0.25) * 100) / 100))}
                         disabled={pianoRollZoomX <= 1.0}
-                        className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded disabled:opacity-30"
+                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-30 border border-[#3a3a40]"
                         title="時間軸を縮小"
                       >
                         <ZoomOut className="w-3 h-3" />
                       </button>
-                      <span className="font-mono text-cyan-400 font-bold min-w-[36px] text-center text-[11px]">
+                      <span className="font-mono text-[#2997ff] font-bold min-w-[36px] text-center text-[11px]">
                         {Math.round(pianoRollZoomX * 100)}%
                       </span>
                       <button
                         onClick={() => setPianoRollZoomX((prev) => Math.min(4.0, Math.round((prev + 0.25) * 100) / 100))}
                         disabled={pianoRollZoomX >= 4.0}
-                        className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded disabled:opacity-30"
+                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-30 border border-[#3a3a40]"
                         title="時間軸を拡大"
                       >
                         <ZoomIn className="w-3 h-3" />
                       </button>
                     </div>
 
-                    <div className="w-px h-3 bg-slate-800" />
+                    <div className="w-px h-3 bg-[#3a3a40]" />
 
                     <div className="flex items-center space-x-1">
-                      <span className="text-slate-500 text-[10px]">鍵盤高:</span>
+                      <span className="text-[#9a9aa2] text-[10px]">鍵盤高:</span>
                       <button
                         onClick={() => setPianoRollRowHeight((prev) => Math.max(20, prev - 4))}
                         disabled={pianoRollRowHeight <= 20}
-                        className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-bold disabled:opacity-30"
+                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-30 border border-[#3a3a40]"
                         title="鍵盤高さを縮小"
                       >
                         -
                       </button>
-                      <span className="font-mono text-cyan-400 font-bold min-w-[28px] text-center text-[11px]">
+                      <span className="font-mono text-[#2997ff] font-bold min-w-[28px] text-center text-[11px]">
                         {pianoRollRowHeight}px
                       </span>
                       <button
                         onClick={() => setPianoRollRowHeight((prev) => Math.min(64, prev + 4))}
                         disabled={pianoRollRowHeight >= 64}
-                        className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-bold disabled:opacity-30"
+                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-30 border border-[#3a3a40]"
                         title="鍵盤高さを拡大"
                       >
                         +
@@ -2910,41 +3051,41 @@ export default function App() {
                         setPianoRollZoomX(1.0);
                         setPianoRollRowHeight(28);
                       }}
-                      className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded"
+                      className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] rounded border border-[#3a3a40]"
                       title="ズームリセット"
                     >
                       <RotateCcw className="w-3 h-3" />
                     </button>
 
-                    <div className="w-px h-3 bg-slate-800" />
+                    <div className="w-px h-3 bg-[#3a3a40]" />
 
                     {/* Horizontal Scroll Quick Buttons */}
                     <div className="flex items-center space-x-1">
-                      <span className="text-slate-500 text-[10px] hidden sm:inline">横移動:</span>
+                      <span className="text-[#9a9aa2] text-[10px] hidden sm:inline">横移動:</span>
                       <button
                         onClick={scrollPianoRollToStart}
-                        className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono"
+                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40]"
                         title="曲頭へスクロール"
                       >
                         ◀◀
                       </button>
                       <button
                         onClick={() => scrollPianoRollHorizontal(-300)}
-                        className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono"
+                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40]"
                         title="左へスクロール"
                       >
                         ◀
                       </button>
                       <button
                         onClick={() => scrollPianoRollHorizontal(300)}
-                        className="px-1.5 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded text-[10px] font-mono"
+                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40]"
                         title="右へスクロール"
                       >
                         ▶
                       </button>
                       <button
                         onClick={scrollPianoRollToPlayhead}
-                        className="px-1.5 py-0.5 bg-cyan-950 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 rounded text-[10px]"
+                        className="px-1.5 py-0.5 bg-[#0a84ff]/20 hover:bg-[#0a84ff]/30 border border-[#0a84ff]/50 text-[#2997ff] rounded text-[10px]"
                         title="再生バー位置へスクロール"
                       >
                         📍
@@ -2952,43 +3093,60 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-1.5">
+                  <div className="hidden sm:flex items-center space-x-1.5">
                     <button
                       onClick={() => setIsUstImportModalOpen(true)}
-                      className="flex items-center space-x-1 text-xs bg-slate-800 hover:bg-cyan-950/80 text-cyan-300 hover:text-cyan-200 px-2.5 py-1.5 rounded border border-slate-700 hover:border-cyan-600/60 transition shadow-sm"
+                      className="flex items-center space-x-1 text-xs bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] hover:text-white px-2.5 py-1.5 rounded border border-[#3a3a40] transition shadow-sm cursor-pointer"
                       title="UST / VSQX / SVP / MIDI プロジェクトを読み込み"
                     >
-                      <Upload className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>UST読込</span>
+                      <Upload className="w-3.5 h-3.5 text-[#0a84ff]" />
+                      <span className="hidden lg:inline">UST読込</span>
                     </button>
                     <button
                       onClick={() => setIsBatchLyricModalOpen(true)}
-                      className="flex items-center space-x-1 text-xs bg-slate-800 hover:bg-cyan-950/80 text-cyan-300 hover:text-cyan-200 px-2.5 py-1.5 rounded border border-slate-700 hover:border-cyan-600/60 transition shadow-sm"
+                      className="flex items-center space-x-1 text-xs bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] hover:text-white px-2.5 py-1.5 rounded border border-[#3a3a40] transition shadow-sm cursor-pointer"
                       title="トラック内の全ノートに歌詞を一括で流し込みます"
                     >
-                      <Type className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>歌詞一括入力</span>
+                      <Type className="w-3.5 h-3.5 text-[#0a84ff]" />
+                      <span>歌詞一括</span>
                     </button>
                     <button
                       onClick={addNote}
-                      className="flex items-center space-x-1 text-xs bg-slate-800 hover:bg-slate-700 text-cyan-300 px-2.5 py-1.5 rounded border border-slate-700 transition"
+                      className="flex items-center space-x-1 text-xs bg-[#0a84ff] hover:bg-[#2997ff] text-white font-medium px-2.5 py-1.5 rounded border border-[#0a84ff] transition shadow-sm cursor-pointer shadow-[#0a84ff]/30"
+                      title="ノート追加"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      <span>ノート追加</span>
+                      <span>+ ノート</span>
                     </button>
                   </div>
-                  <div className="text-xs text-slate-500 font-mono">
-                    Tick: <span ref={tickDisplayRef} className="text-slate-300 font-bold">{Math.round(currentTick)}</span> / {totalTicks}
+
+                  <div className="text-xs text-[#9a9aa2] font-mono hidden sm:block">
+                    Tick: <span ref={tickDisplayRef} className="text-[#f0f0f2] font-bold">{Math.round(currentTick)}</span> / {totalTicks}
                   </div>
+
+                  {/* Inspector Toggle Button (Desktop & Tablet) */}
+                  {!responsive.isPhone && (
+                    <button
+                      onClick={() => setIsInspectorOpen(!isInspectorOpen)}
+                      className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                        isInspectorOpen
+                          ? 'bg-[#0a84ff]/20 text-[#2997ff] border-[#0a84ff]/50'
+                          : 'bg-[#2a2a2e] text-[#9a9aa2] hover:text-[#f0f0f2] border-[#3a3a40]'
+                      }`}
+                      title={isInspectorOpen ? 'Inspector パネルを隠す' : 'Inspector パネルを表示'}
+                    >
+                      <PanelRight className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
 
               {/* Piano Roll Workspace Canvas */}
               <div className="flex-1 flex overflow-hidden">
                 {/* Left Keybed Column */}
-                <div className="w-20 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 select-none">
-                  <div className="h-7 border-b border-slate-800 bg-slate-950 text-[10px] text-slate-500 flex items-center justify-center font-mono shrink-0">
-                    Measure
+                <div className="w-14 sm:w-20 bg-[#1f1f22] border-r border-[#3a3a40] flex flex-col shrink-0 select-none">
+                  <div className="h-7 border-b border-[#3a3a40] bg-[#18181a] text-[10px] text-[#9a9aa2] flex items-center justify-center font-mono shrink-0">
+                    Key
                   </div>
                   <div className="flex-1 overflow-y-auto flex flex-col" ref={keybedScrollRef}>
                       {Array.from({ length: 37 }).map((_, i) => {
@@ -3000,14 +3158,14 @@ export default function App() {
                             onClick={() => playVocalNote(midiNum, selectedNote?.lyric || 'あ', 0.5)}
                             onTouchStart={() => playVocalNote(midiNum, selectedNote?.lyric || 'あ', 0.5)}
                             style={{ height: `${pianoRollRowHeight}px` }}
-                            className={`border-b flex items-center justify-between px-2 text-[10px] font-mono cursor-pointer transition select-none active:bg-cyan-600 shrink-0 ${
+                            className={`border-b flex items-center justify-between px-1.5 sm:px-2 text-[9px] sm:text-[10px] font-mono cursor-pointer transition select-none active:bg-[#0a84ff] shrink-0 ${
                               isBlack
-                                ? 'bg-slate-950 text-slate-400 border-slate-900 hover:bg-slate-800'
-                                : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                                ? 'bg-[#18181a] text-[#9a9aa2] border-[#2a2a2e] hover:bg-[#222226]'
+                                : 'bg-[#2a2a2e] text-[#f0f0f2] border-[#3a3a40] hover:bg-[#34343a]'
                             }`}
                           >
                             <span>{getNoteName(midiNum)}</span>
-                            <span className="text-[9px] opacity-40">{midiNum}</span>
+                            <span className="text-[9px] opacity-40 hidden sm:inline">{midiNum}</span>
                           </div>
                         );
                       })}
@@ -3019,7 +3177,7 @@ export default function App() {
                     {/* Timeline Ruler Header Bar */}
                     <div
                       ref={rulerScrollRef}
-                      className="h-7 bg-slate-900 border-b border-slate-800 relative cursor-pointer overflow-x-auto overflow-y-hidden scrollbar-none flex items-center shrink-0 select-none"
+                      className="h-7 bg-[#1f1f22] border-b border-[#3a3a40] relative cursor-pointer overflow-x-auto overflow-y-hidden scrollbar-none flex items-center shrink-0 select-none"
                       onClick={(e) => {
                         const rect = e.currentTarget.getBoundingClientRect();
                         const clickX = e.clientX - rect.left;
@@ -3040,13 +3198,13 @@ export default function App() {
                           const mEndTick = mStartTick + 480;
                           const isMeasureVisible = totalMeasures <= 60 || (mEndTick >= visibleTickRange.startTick && mStartTick <= visibleTickRange.endTick);
                           return (
-                            <div key={mIdx} className="flex-1 border-r border-slate-700/60 flex items-center justify-between px-1 text-[10px] text-slate-400 font-mono">
+                            <div key={mIdx} className="flex-1 border-r border-[#3a3a40]/80 flex items-center justify-between px-1 text-[10px] text-[#9a9aa2] font-mono">
                               {isMeasureVisible ? (
                                 <>
-                                  <span className="font-bold text-cyan-400">{mIdx + 1}</span>
-                                  <span className="text-[9px] text-slate-600">.</span>
-                                  <span className="text-[9px] text-slate-600">.</span>
-                                  <span className="text-[9px] text-slate-600">.</span>
+                                  <span className="font-bold text-[#2997ff]">{mIdx + 1}</span>
+                                  <span className="text-[9px] text-[#606068]">.</span>
+                                  <span className="text-[9px] text-[#606068]">.</span>
+                                  <span className="text-[9px] text-[#606068]">.</span>
                                 </>
                               ) : null}
                             </div>
@@ -3057,10 +3215,10 @@ export default function App() {
                       {/* Ruler Playhead Handle */}
                       <div
                         ref={rulerPlayheadRef}
-                        className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none"
+                        className="absolute top-0 bottom-0 w-0.5 bg-[#ff453a] z-20 pointer-events-none"
                         style={{ left: `${(currentTick / totalTicks) * 100 * pianoRollZoomX}%` }}
                       >
-                        <div className="w-3 h-3 bg-red-500 rounded-b -ml-[5px] shadow flex items-center justify-center">
+                        <div className="w-3 h-3 bg-[#ff453a] rounded-b -ml-[5px] shadow flex items-center justify-center">
                           <div className="w-1 h-1 bg-white rounded-full" />
                         </div>
                       </div>
@@ -3073,7 +3231,7 @@ export default function App() {
                       onTouchStart={handlePianoRollTouchStart}
                       onTouchMove={handlePianoRollTouchMove}
                       onTouchEnd={handlePianoRollTouchEnd}
-                      className="flex-1 relative overflow-auto bg-slate-950 touch-grid no-scroll-chain"
+                      className="flex-1 relative overflow-auto bg-[#18181a] touch-grid no-scroll-chain"
                       onClick={(e) => {
                         // Check if click was on grid background (not on a note)
                         if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('border-r')) {
@@ -3126,21 +3284,21 @@ export default function App() {
                         {/* Playhead indicator bar */}
                         <div
                           ref={gridPlayheadRef}
-                          className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none shadow-sm shadow-red-500"
+                          className="absolute top-0 bottom-0 w-0.5 bg-[#ff453a] z-30 pointer-events-none shadow-sm shadow-[#ff453a]"
                           style={{
                             left: `${(currentTick / totalTicks) * 100}%`
                           }}
                         >
-                          <div className="w-2.5 h-2.5 bg-red-500 rounded-full -ml-[4px] -mt-1 shadow" />
+                          <div className="w-2.5 h-2.5 bg-[#ff453a] rounded-full -ml-[4px] -mt-1 shadow" />
                         </div>
 
                         {/* Grid lines background */}
                         <div className="absolute inset-0 flex">
                           {Array.from({ length: totalMeasures }).map((_, bIdx) => (
-                            <div key={bIdx} className="flex-1 border-r border-slate-800/80 flex">
-                              <div className="flex-1 border-r border-slate-900/40" />
-                              <div className="flex-1 border-r border-slate-900/40" />
-                              <div className="flex-1 border-r border-slate-900/40" />
+                            <div key={bIdx} className="flex-1 border-r border-[#3a3a40]/60 flex">
+                              <div className="flex-1 border-r border-[#2a2a2e]/40" />
+                              <div className="flex-1 border-r border-[#2a2a2e]/40" />
+                              <div className="flex-1 border-r border-[#2a2a2e]/40" />
                             </div>
                           ))}
                         </div>
@@ -3168,12 +3326,27 @@ export default function App() {
                             const startTick = note.tick;
                             const startNoteNum = note.noteNum;
 
+                            // Long-press detection for touch context menu
+                            let isLongPressed = false;
+                            const longPressTimer = window.setTimeout(() => {
+                              isLongPressed = true;
+                              setContextMenuNote(note);
+                              setContextMenuPos({ x: e.clientX, y: e.clientY });
+                            }, 450);
+
                             const onPointerMove = (moveEvent: PointerEvent) => {
                               if (!gridRef.current) return;
-                              const rect = gridRef.current.getBoundingClientRect();
                               const deltaX = moveEvent.clientX - startX;
                               const deltaY = moveEvent.clientY - startY;
 
+                              // If moved significantly, cancel long press
+                              if (Math.hypot(deltaX, deltaY) > 8) {
+                                window.clearTimeout(longPressTimer);
+                              }
+
+                              if (isLongPressed) return;
+
+                              const rect = gridRef.current.getBoundingClientRect();
                               const ticksPerPx = totalTicks / rect.width;
                               let newTick = Math.max(0, startTick + deltaX * ticksPerPx);
                               newTick = Math.round(newTick / 60) * 60; // Snap to 32nd notes
@@ -3185,6 +3358,7 @@ export default function App() {
                             };
 
                             const onPointerUp = () => {
+                              window.clearTimeout(longPressTimer);
                               window.removeEventListener('pointermove', onPointerMove);
                               window.removeEventListener('pointerup', onPointerUp);
                             };
@@ -3226,10 +3400,21 @@ export default function App() {
                             <div
                               key={note.id}
                               onPointerDown={handleNotePointerDown}
-                              className={`absolute rounded-md px-2 flex items-center justify-between text-xs font-bold cursor-pointer transition shadow border gpu-accelerated group ${
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                setInlineLyricNote(note);
+                              }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setSelectedNoteId(note.id);
+                                setContextMenuNote(note);
+                                setContextMenuPos({ x: e.clientX, y: e.clientY });
+                              }}
+                              className={`absolute rounded-md px-2 flex items-center justify-between text-xs font-bold cursor-pointer transition shadow border gpu-accelerated group select-none touch-none ${
                                 isSelected
-                                  ? 'bg-cyan-500 text-slate-950 border-white ring-2 ring-cyan-400/50 z-20'
-                                  : 'bg-indigo-600/90 hover:bg-indigo-500 text-white border-indigo-400/30 z-10'
+                                  ? 'bg-[#ff9f0a] text-black border-white ring-2 ring-[#ff9f0a]/60 z-20 shadow-lg shadow-[#ff9f0a]/30'
+                                  : 'bg-[#0a84ff] hover:bg-[#2997ff] text-white border-[#5ac8fa]/40 z-10 shadow-sm'
                               }`}
                               style={{
                                 top: `${topPos + 1}px`,
@@ -3241,11 +3426,17 @@ export default function App() {
                               <span className="truncate pointer-events-none">{note.lyric}</span>
                               <span className="text-[9px] font-mono opacity-80 pl-1 pointer-events-none">{getNoteName(note.noteNum)}</span>
                               
-                              {/* Resize Handle */}
+                              {/* Resize Handle (Adaptive to touch vs mouse) */}
                               <div 
-                                className="resize-handle absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-black/20 hover:bg-black/40 rounded-r-md"
+                                className={`resize-handle absolute right-0 top-0 bottom-0 flex items-center justify-center cursor-ew-resize rounded-r-md ${
+                                  responsive.isTouch
+                                    ? 'w-5 bg-white/20 active:bg-white/40 text-[#f0f0f2]'
+                                    : 'w-3 opacity-0 group-hover:opacity-100 bg-black/20 hover:bg-black/40'
+                                }`}
                                 onPointerDown={handleResizePointerDown}
-                              />
+                              >
+                                {responsive.isTouch && <span className="text-[8px] opacity-60">|</span>}
+                              </div>
                             </div>
                           );
                         })}
@@ -3283,153 +3474,180 @@ export default function App() {
                     </div>
                   </div>
 
-                {/* Right Parameter Inspector Panel */}
-                <div className="w-72 bg-slate-900 border-l border-slate-800 p-4 flex flex-col space-y-4 shrink-0 overflow-y-auto">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                    <h3 className="font-semibold text-xs text-slate-200 flex items-center space-x-1.5">
-                      <Edit3 className="w-4 h-4 text-cyan-400" />
-                      <span>ノートパラメータ設定</span>
-                    </h3>
-                    {selectedNote && (
-                      <button
-                        onClick={() => deleteNote(selectedNote.id)}
-                        className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-slate-800"
-                        title="ノート削除"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                {/* Right Parameter Inspector Panel (Desktop & Tablet collapsible) */}
+                {!responsive.isPhone && isInspectorOpen && (
+                  <div className="w-72 sm:w-80 bg-[#1f1f22] border-l border-[#3a3a40] flex flex-col shrink-0 overflow-y-auto">
+                    <InspectorPanel
+                      selectedNote={selectedNote}
+                      onUpdateNote={updateSelectedNote}
+                      onDeleteNote={deleteNote}
+                      onOpenBatchLyrics={() => setIsBatchLyricModalOpen(true)}
+                      tempo={tempo}
+                      getNoteName={getNoteName}
+                      isCompact={false}
+                    />
                   </div>
-
-                  {selectedNote ? (
-                    <div className="space-y-3 text-xs">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-slate-400">歌詞 / 音素 (Lyric / Phoneme):</label>
-                          <button
-                            type="button"
-                            onClick={() => setIsBatchLyricModalOpen(true)}
-                            className="text-[10px] text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-0.5"
-                          >
-                            <Type className="w-2.5 h-2.5" />
-                            <span>一括入力</span>
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          value={selectedNote.lyric}
-                          onChange={(e) => updateSelectedNote('lyric', e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-cyan-300 font-bold"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-slate-400 block mb-1">音高 (MIDI Note):</label>
-                        <div className="flex space-x-2">
-                          <input
-                            type="number"
-                            min="36"
-                            max="84"
-                            value={selectedNote.noteNum}
-                            onChange={(e) => updateSelectedNote('noteNum', parseInt(e.target.value) || 60)}
-                            className="w-1/2 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 font-mono"
-                          />
-                          <div className="w-1/2 bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-cyan-400 font-mono font-bold flex items-center justify-center">
-                            {getNoteName(selectedNote.noteNum)}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="text-slate-400 block mb-1">長さ (Length Ticks):</label>
-                        <input
-                          type="number"
-                          step="60"
-                          value={selectedNote.length}
-                          onChange={(e) => updateSelectedNote('length', parseInt(e.target.value) || 480)}
-                          className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 font-mono"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-slate-400 block mb-1">音量強度 (Intensity): {selectedNote.intensity}</label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="150"
-                          value={selectedNote.intensity}
-                          onChange={(e) => updateSelectedNote('intensity', parseFloat(e.target.value))}
-                          className="w-full accent-cyan-400"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-slate-400 block mb-1">フラグ (Flags, e.g. g-5B50):</label>
-                        <input
-                          type="text"
-                          value={selectedNote.flags}
-                          onChange={(e) => updateSelectedNote('flags', e.target.value)}
-                          placeholder="g-5B50"
-                          className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-slate-200 font-mono"
-                        />
-                      </div>
-
-                      <div className="border-t border-slate-800 pt-3">
-                        <label className="text-slate-300 font-medium block mb-2 flex items-center space-x-1">
-                          <AudioWaveform className="w-3.5 h-3.5 text-cyan-400" />
-                          <span>ピッチカーブ (PBS/PBW/PBY)</span>
-                        </label>
-
-                        <PitchCurveMiniEditor
-                          pbs={selectedNote.pbs}
-                          pbw={selectedNote.pbw}
-                          pby={selectedNote.pby}
-                          noteLengthTicks={selectedNote.length}
-                          tempo={tempo}
-                          onChange={({ pbs, pbw, pby }) => {
-                            updateSelectedNote('pbs', pbs);
-                            updateSelectedNote('pbw', pbw);
-                            updateSelectedNote('pby', pby);
-                          }}
-                        />
-
-                        <details className="mt-2">
-                          <summary className="text-[10px] text-slate-500 cursor-pointer select-none">
-                            生の値を直接編集 (詳細)
-                          </summary>
-                          <div className="space-y-2 mt-2">
-                            <input
-                              type="text"
-                              value={selectedNote.pbs}
-                              onChange={(e) => updateSelectedNote('pbs', e.target.value)}
-                              placeholder="PBS (e.g. -20;0)"
-                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-300 font-mono text-[11px]"
-                            />
-                            <input
-                              type="text"
-                              value={selectedNote.pbw}
-                              onChange={(e) => updateSelectedNote('pbw', e.target.value)}
-                              placeholder="PBW (e.g. 50,100)"
-                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-300 font-mono text-[11px]"
-                            />
-                            <input
-                              type="text"
-                              value={selectedNote.pby}
-                              onChange={(e) => updateSelectedNote('pby', e.target.value)}
-                              placeholder="PBY (e.g. 0,5)"
-                              className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-300 font-mono text-[11px]"
-                            />
-                          </div>
-                        </details>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-8 text-slate-500 text-xs">
-                      ピアノロール上のノートを選択してください
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
+
+              {/* Mobile Quick Navigation & Editing Bar */}
+              <MobileQuickControls
+                isPlaying={isPlaying}
+                onTogglePlay={togglePlay}
+                onStop={() => {
+                  setIsPlaying(false);
+                  seekToTick(0);
+                }}
+                zoomX={pianoRollZoomX}
+                onZoomIn={() => setPianoRollZoomX((prev) => Math.min(4.0, Math.round((prev + 0.25) * 100) / 100))}
+                onZoomOut={() => setPianoRollZoomX((prev) => Math.max(1.0, Math.round((prev - 0.25) * 100) / 100))}
+                onResetZoom={() => {
+                  setPianoRollZoomX(1.0);
+                  setPianoRollRowHeight(28);
+                }}
+                onAddNote={addNote}
+                activeSheet={activeMobileSheet}
+                onOpenSheet={setActiveMobileSheet}
+                selectedNote={selectedNote}
+                tracksCount={tracks.length}
+              />
+
+              {/* Mobile Bottom Sheets */}
+              {/* 1. Tracks Management Sheet */}
+              <TracksSheet
+                isOpen={activeMobileSheet === 'tracks'}
+                onClose={() => setActiveMobileSheet(null)}
+                tracks={tracks}
+                currentTrackId={currentTrackId}
+                onSelectTrack={setCurrentTrackId}
+                onAddTrack={handleAddTrack}
+                onDuplicateTrack={handleDuplicateTrack}
+                onDeleteTrack={handleDeleteTrack}
+                onUpdateTrack={handleUpdateTrack}
+                showGhostNotes={showGhostNotes}
+                setShowGhostNotes={setShowGhostNotes}
+              />
+
+              {/* 2. Voicebank Selection & Upload Sheet */}
+              <VoicebankSheet
+                isOpen={activeMobileSheet === 'voice'}
+                onClose={() => setActiveMobileSheet(null)}
+                selectedVoicebank={selectedVoicebank}
+                onSelectVoicebank={setSelectedVoicebank}
+                customVoicebanks={customVoicebanks}
+                onUploadZip={handleVoicebankZipUpload}
+                isUploading={isUploadingVb}
+              />
+
+              {/* 3. Note Inspector Sheet (Mobile) */}
+              <BottomSheet
+                isOpen={activeMobileSheet === 'inspector'}
+                onClose={() => setActiveMobileSheet(null)}
+                title="ノート設定 (Inspector)"
+                snapPoints={['half', 'full']}
+              >
+                <div className="p-4">
+                  <InspectorPanel
+                    selectedNote={selectedNote}
+                    onUpdateNote={updateSelectedNote}
+                    onDeleteNote={(id) => {
+                      deleteNote(id);
+                      setActiveMobileSheet(null);
+                    }}
+                    onOpenBatchLyrics={() => {
+                      setActiveMobileSheet(null);
+                      setIsBatchLyricModalOpen(true);
+                    }}
+                    tempo={tempo}
+                    getNoteName={getNoteName}
+                    isCompact={true}
+                  />
+                </div>
+              </BottomSheet>
+
+              {/* 4. Pitch Parameters Sheet */}
+              <PitchParamsSheet
+                isOpen={activeMobileSheet === 'params'}
+                onClose={() => setActiveMobileSheet(null)}
+                selectedNote={selectedNote}
+                onUpdatePitch={(pbs, pbw, pby) => {
+                  updateSelectedNote('pbs', pbs);
+                  updateSelectedNote('pbw', pbw);
+                  updateSelectedNote('pby', pby);
+                }}
+                tempo={tempo}
+                getNoteName={getNoteName}
+              />
+
+              {/* 5. Project & File Operations Sheet */}
+              <ProjectSheet
+                isOpen={activeMobileSheet === 'project'}
+                onClose={() => setActiveMobileSheet(null)}
+                onImport={() => setIsUstImportModalOpen(true)}
+                onExportProject={handleExportProject}
+                onExportWav={handleExportWav}
+                isRenderingWav={isRenderingWav}
+                renderProgress={renderProgress}
+                formatEta={formatEta}
+                tempo={tempo}
+                onUpdateTempo={setTempo}
+              />
+
+              {/* Floating Inline Lyric Input */}
+              {inlineLyricNote && (
+                <FloatingLyricInput
+                  isOpen={true}
+                  initialLyric={inlineLyricNote.lyric || ''}
+                  noteNum={inlineLyricNote.noteNum}
+                  noteName={getNoteName(inlineLyricNote.noteNum)}
+                  onConfirm={(newLyric) => {
+                    setNotes((prev) =>
+                      prev.map((n) => (n.id === inlineLyricNote.id ? { ...n, lyric: newLyric } : n))
+                    );
+                    setInlineLyricNote(null);
+                  }}
+                  onCancel={() => setInlineLyricNote(null)}
+                />
+              )}
+
+              {/* Context Menu for Long-press or Right-click on Notes */}
+              {contextMenuNote && (
+                <NoteContextMenu
+                  x={contextMenuPos.x}
+                  y={contextMenuPos.y}
+                  noteId={contextMenuNote.id}
+                  noteLyric={contextMenuNote.lyric}
+                  noteName={getNoteName(contextMenuNote.noteNum)}
+                  onClose={() => setContextMenuNote(null)}
+                  onEditLyric={() => {
+                    setInlineLyricNote(contextMenuNote);
+                    setContextMenuNote(null);
+                  }}
+                  onOpenPitch={() => {
+                    setSelectedNoteId(contextMenuNote.id);
+                    setContextMenuNote(null);
+                    if (responsive.isPhone) {
+                      setActiveMobileSheet('params');
+                    } else {
+                      setIsInspectorOpen(true);
+                    }
+                  }}
+                  onDuplicate={() => {
+                    const newNote: Note = {
+                      ...contextMenuNote,
+                      id: String(Date.now()),
+                      tick: contextMenuNote.tick + contextMenuNote.length,
+                    };
+                    setNotes((prev) => [...prev, newNote]);
+                    setSelectedNoteId(newNote.id);
+                    setContextMenuNote(null);
+                  }}
+                  onDelete={() => {
+                    deleteNote(contextMenuNote.id);
+                    setContextMenuNote(null);
+                  }}
+                />
+              )}
 
               {/* 歌詞一括入力モーダル (Batch Lyric Input Modal) */}
               <BatchLyricModal
@@ -3442,22 +3660,22 @@ export default function App() {
           )}
 
           {activeTab === 'voicebanks' && (
-            <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-slate-950">
+            <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-[#18181a]">
               {/* Header & Metric Banner */}
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between border-b border-slate-800 pb-5 gap-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between border-b border-[#3a3a40] pb-5 gap-4">
                 <div>
                   <div className="flex items-center space-x-3">
-                    <div className="p-2.5 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-500/20">
+                    <div className="p-2.5 rounded-xl bg-[#0a84ff] text-white shadow-lg shadow-[#0a84ff]/20">
                       <Library className="w-6 h-6" />
                     </div>
                     <div>
-                      <h2 className="text-xl font-bold text-slate-100 tracking-wide flex items-center space-x-2">
+                      <h2 className="text-xl font-bold text-[#f0f0f2] tracking-wide flex items-center space-x-2">
                         <span>UTAU 音源ライブラリ・マネージャー</span>
-                        <span className="text-xs font-mono font-normal px-2.5 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800/60">
+                        <span className="text-xs font-mono font-normal px-2.5 py-0.5 rounded-full bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/40">
                           {customVoicebanks.length} 個の音源が利用可能
                         </span>
                       </h2>
-                      <p className="text-xs text-slate-400 mt-1">
+                      <p className="text-xs text-[#9a9aa2] mt-1">
                         ZIP音源の追加・削除・原音設定 (oto.ini) 確認・アクティブ選択
                       </p>
                     </div>
@@ -3466,25 +3684,25 @@ export default function App() {
 
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="relative">
-                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                    <Search className="w-4 h-4 text-[#9a9aa2] absolute left-3 top-2.5" />
                     <input
                       type="text"
                       placeholder="音源名で検索..."
                       value={vbSearchQuery}
                       onChange={(e) => setVbSearchQuery(e.target.value)}
-                      className="pl-9 pr-4 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-48 sm:w-60"
+                      className="pl-9 pr-4 py-1.5 bg-[#1f1f22] border border-[#3a3a40] rounded-lg text-xs text-[#f0f0f2] placeholder-[#9a9aa2] focus:outline-none focus:border-[#0a84ff] w-48 sm:w-60"
                     />
                   </div>
 
-                  <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1">
+                  <div className="flex items-center gap-1 bg-[#1f1f22] border border-[#3a3a40] rounded-lg p-1">
                     {(['all', 'official', 'custom'] as const).map((key) => (
                       <button
                         key={key}
                         onClick={() => setVbCategoryFilter(key)}
                         className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${
                           vbCategoryFilter === key
-                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                            : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                            ? 'bg-[#0a84ff]/20 text-[#2997ff] border border-[#0a84ff]/50'
+                            : 'text-[#9a9aa2] hover:text-[#f0f0f2] border border-transparent'
                         }`}
                       >
                         {key === 'all' ? 'すべて' : key === 'official' ? '内蔵' : 'カスタム'}
@@ -3497,22 +3715,22 @@ export default function App() {
                       fetchVoicebanks();
                       setToast({ type: 'info', title: 'ライブラリ更新', desc: '最新の登録音源状態を取得しました。' });
                     }}
-                    className="flex items-center space-x-1.5 text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 px-3 py-2 rounded-lg border border-slate-800 transition cursor-pointer"
+                    className="flex items-center space-x-1.5 text-xs bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] px-3 py-2 rounded-lg border border-[#3a3a40] transition cursor-pointer"
                     title="音源ライブラリの最新状態を取得"
                   >
-                    <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                    <RefreshCw className="w-3.5 h-3.5 text-[#0a84ff]" />
                     <span>更新</span>
                   </button>
 
                   {isUploadingVb ? (
                     <div className="flex items-center gap-2">
-                      <div className="flex items-center space-x-2 text-xs bg-slate-900 border border-cyan-500/50 text-cyan-300 font-semibold px-3 py-2 rounded-lg shadow-sm">
-                        <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                      <div className="flex items-center space-x-2 text-xs bg-[#1f1f22] border border-[#0a84ff]/50 text-[#2997ff] font-semibold px-3 py-2 rounded-lg shadow-sm">
+                        <Loader2 className="w-4 h-4 animate-spin text-[#0a84ff]" />
                         <span>アップロード中 ({uploadProgress}%)</span>
                       </div>
                       <button
                         onClick={handleCancelVoicebankUpload}
-                        className="flex items-center space-x-1.5 text-xs bg-rose-600 hover:bg-rose-500 text-white font-semibold px-3.5 py-2 rounded-lg cursor-pointer transition shadow-md shadow-rose-900/40"
+                        className="flex items-center space-x-1.5 text-xs bg-[#ff453a] hover:bg-[#ff5b50] text-white font-semibold px-3.5 py-2 rounded-lg cursor-pointer transition shadow-md shadow-[#ff453a]/30"
                         title="アップロードを中断"
                       >
                         <X className="w-4 h-4" />
@@ -3520,7 +3738,7 @@ export default function App() {
                       </button>
                     </div>
                   ) : (
-                    <label className="flex items-center space-x-2 text-xs bg-cyan-600 hover:bg-cyan-500 text-white font-semibold px-4 py-2 rounded-lg cursor-pointer transition shadow-lg shadow-cyan-900/40">
+                    <label className="flex items-center space-x-2 text-xs bg-[#0a84ff] hover:bg-[#2997ff] text-white font-semibold px-4 py-2 rounded-lg cursor-pointer transition shadow-lg shadow-[#0a84ff]/30">
                       <Upload className="w-4 h-4" />
                       <span>UTAU音源(.zip) 追加</span>
                       <input ref={fileInputRef1} type="file" accept=".zip,application/zip,application/x-zip,application/x-zip-compressed,multipart/x-zip,application/octet-stream" onChange={handleVoicebankZipUpload} className="hidden" />
@@ -3531,40 +3749,40 @@ export default function App() {
 
               {/* Status Overview Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
-                  <div className="p-3 bg-cyan-950 rounded-lg border border-cyan-800/50 text-cyan-400">
+                <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-4 flex items-center space-x-4 shadow-sm">
+                  <div className="p-3 bg-[#0a84ff]/15 rounded-lg border border-[#0a84ff]/30 text-[#0a84ff]">
                     <CheckCircle2 className="w-6 h-6" />
                   </div>
                   <div>
-                    <div className="text-[11px] text-slate-400 font-medium">現在選択中のアクティブ音源</div>
-                    <div className="text-sm font-bold text-cyan-300 truncate max-w-[180px]">{selectedVoicebank || '未設定'}</div>
-                    <div className={`text-[10px] font-mono mt-0.5 ${selectedVoicebank ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <div className="text-[11px] text-[#9a9aa2] font-medium">現在選択中のアクティブ音源</div>
+                    <div className="text-sm font-bold text-[#2997ff] truncate max-w-[180px]">{selectedVoicebank || '未設定'}</div>
+                    <div className={`text-[10px] font-mono mt-0.5 ${selectedVoicebank ? 'text-[#34c759]' : 'text-[#ff9f0a]'}`}>
                       {selectedVoicebank ? '● 合成可能・準備完了' : '○ 音源ZIPを追加してください'}
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
-                  <div className="p-3 bg-blue-950 rounded-lg border border-blue-800/50 text-blue-400">
+                <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-4 flex items-center space-x-4 shadow-sm">
+                  <div className="p-3 bg-[#0a84ff]/15 rounded-lg border border-[#0a84ff]/30 text-[#0a84ff]">
                     <HardDrive className="w-6 h-6" />
                   </div>
                   <div>
-                    <div className="text-[11px] text-slate-400 font-medium">ダウンロード済み・追加音源</div>
-                    <div className="text-sm font-bold text-slate-100 font-mono">{customVoicebanks.length} 個</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">ZIP自動解凍 & oto.ini 解析済</div>
+                    <div className="text-[11px] text-[#9a9aa2] font-medium">ダウンロード済み・追加音源</div>
+                    <div className="text-sm font-bold text-[#f0f0f2] font-mono">{customVoicebanks.length} 個</div>
+                    <div className="text-[10px] text-[#9a9aa2] mt-0.5">ZIP自動解凍 & oto.ini 解析済</div>
                   </div>
                 </div>
 
-                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex items-center space-x-4 shadow-sm">
-                  <div className="p-3 bg-amber-950 rounded-lg border border-amber-800/50 text-amber-400">
+                <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-4 flex items-center space-x-4 shadow-sm">
+                  <div className="p-3 bg-[#ff9f0a]/15 rounded-lg border border-[#ff9f0a]/30 text-[#ff9f0a]">
                     <AudioWaveform className="w-6 h-6" />
                   </div>
                   <div>
-                    <div className="text-[11px] text-slate-400 font-medium">総登録原音・エイリアス数</div>
-                    <div className="text-sm font-bold text-amber-300 font-mono">
+                    <div className="text-[11px] text-[#9a9aa2] font-medium">総登録原音・エイリアス数</div>
+                    <div className="text-sm font-bold text-[#ff9f0a] font-mono">
                       {customVoicebanks.reduce((acc, v) => acc + (v.aliasCount || 0), 0)} 件
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">連続音 (VCV) & 単独音 (CV)</div>
+                    <div className="text-[10px] text-[#9a9aa2] mt-0.5">連続音 (VCV) & 単独音 (CV)</div>
                   </div>
                 </div>
               </div>
@@ -3572,27 +3790,27 @@ export default function App() {
               {/* Section 1: Installed Voicebanks */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
-                    <HardDrive className="w-4 h-4 text-cyan-400" />
+                  <h3 className="text-sm font-bold text-[#f0f0f2] uppercase tracking-wider flex items-center space-x-2">
+                    <HardDrive className="w-4 h-4 text-[#0a84ff]" />
                     <span>登録済みUTAU音源一覧</span>
                   </h3>
-                  <span className="text-xs text-slate-400 font-mono">
+                  <span className="text-xs text-[#9a9aa2] font-mono">
                     {customVoicebanks.length} 音源登録中
                   </span>
                 </div>
 
                 {customVoicebanks.length === 0 ? (
-                  <div className="bg-slate-900/60 border border-dashed border-slate-800 rounded-2xl p-10 text-center flex flex-col items-center justify-center space-y-4">
-                    <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center text-slate-400">
-                      <HardDrive className="w-8 h-8 text-cyan-400/80" />
+                  <div className="bg-[#1f1f22] border border-dashed border-[#3a3a40] rounded-2xl p-10 text-center flex flex-col items-center justify-center space-y-4">
+                    <div className="w-16 h-16 rounded-full bg-[#2a2a2e] flex items-center justify-center text-[#9a9aa2]">
+                      <HardDrive className="w-8 h-8 text-[#0a84ff]" />
                     </div>
                     <div className="max-w-md">
-                      <h4 className="text-base font-bold text-slate-200">音源が登録されていません</h4>
-                      <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                      <h4 className="text-base font-bold text-[#f0f0f2]">音源が登録されていません</h4>
+                      <p className="text-xs text-[#9a9aa2] mt-1.5 leading-relaxed">
                         UTAU音源（単独音・連続音・VCV）のZIPファイルをアップロードしてください。自動で展開され、oto.iniの原音設定がインデックスされます。
                       </p>
                     </div>
-                    <label className="flex items-center space-x-2 text-xs bg-cyan-600 hover:bg-cyan-500 text-white font-semibold px-5 py-2.5 rounded-xl cursor-pointer transition shadow-lg shadow-cyan-950/50">
+                    <label className="flex items-center space-x-2 text-xs bg-[#0a84ff] hover:bg-[#2997ff] text-white font-semibold px-5 py-2.5 rounded-xl cursor-pointer transition shadow-lg shadow-[#0a84ff]/30">
                       <Upload className="w-4 h-4" />
                       <span>UTAU音源(.zip)をアップロード</span>
                       <input ref={fileInputRef2} type="file" accept=".zip,application/zip,application/x-zip,application/x-zip-compressed,multipart/x-zip,application/octet-stream" onChange={handleVoicebankZipUpload} className="hidden" />
@@ -3615,52 +3833,52 @@ export default function App() {
                       return (
                         <div
                           key={vb.name}
-                          className={`bg-slate-900 rounded-xl border p-4 transition-all flex flex-col justify-between space-y-4 relative ${
+                          className={`bg-[#1f1f22] rounded-xl border p-4 transition-all flex flex-col justify-between space-y-4 relative ${
                             isSelected
-                              ? 'border-cyan-500 bg-cyan-950/20 shadow-lg shadow-cyan-500/10'
-                              : 'border-slate-800 hover:border-slate-700'
+                              ? 'border-[#0a84ff] bg-[#0a84ff]/10 shadow-lg shadow-[#0a84ff]/10 ring-1 ring-[#0a84ff]/40'
+                              : 'border-[#3a3a40] hover:border-[#4a4a52]'
                           }`}
                         >
                           <div>
                             <div className="flex items-start justify-between">
                               <div className="flex items-center space-x-3">
-                                <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center font-bold text-white shadow shrink-0">
+                                <div className="w-10 h-10 rounded-lg bg-[#34c759] flex items-center justify-center font-bold text-white shadow shrink-0">
                                   {vb.hasVcv ? 'VCV' : 'CV'}
                                 </div>
                                 <div className="overflow-hidden">
-                                  <h4 className="font-bold text-slate-100 text-sm truncate" title={vb.name}>
+                                  <h4 className="font-bold text-[#f0f0f2] text-sm truncate" title={vb.name}>
                                     {vb.name}
                                   </h4>
-                                  <p className="text-[11px] text-emerald-400 flex items-center space-x-1">
+                                  <p className="text-[11px] text-[#34c759] flex items-center space-x-1">
                                     <CheckCircle2 className="w-3 h-3" />
                                     <span>インストール済み (解凍完了)</span>
                                   </p>
                                 </div>
                               </div>
                               {isSelected && (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800 shrink-0">
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#34c759]/20 text-[#34c759] border border-[#34c759]/40 shrink-0">
                                   使用中
                                 </span>
                               )}
                             </div>
 
-                            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-mono bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-mono bg-[#18181a] p-2.5 rounded-lg border border-[#3a3a40]">
                               <div>
-                                <span className="text-slate-500">方式:</span>{' '}
-                                <span className="text-cyan-300 font-bold">{vb.hasVcv ? '連続音 (VCV)' : '単独音 (CV)'}</span>
+                                <span className="text-[#9a9aa2]">方式:</span>{' '}
+                                <span className="text-[#2997ff] font-bold">{vb.hasVcv ? '連続音 (VCV)' : '単独音 (CV)'}</span>
                               </div>
                               <div>
-                                <span className="text-slate-500">原音数:</span>{' '}
-                                <span className="text-amber-300 font-bold">{vb.aliasCount}</span>
+                                <span className="text-[#9a9aa2]">原音数:</span>{' '}
+                                <span className="text-[#ff9f0a] font-bold">{vb.aliasCount}</span>
                               </div>
                               <div className="col-span-2 flex items-center space-x-1">
-                                <span className="text-slate-500">エイリアス試聴:</span>
+                                <span className="text-[#9a9aa2]">エイリアス試聴:</span>
                                 <div className="flex items-center space-x-1 overflow-x-auto">
                                   {['あ', 'い', 'う'].map((vowel) => (
                                     <button
                                       key={vowel}
                                       onClick={() => playSampleAudio(vb.name, vowel, 60, 0.8)}
-                                      className="px-1.5 py-0.5 bg-cyan-950 hover:bg-cyan-600 text-cyan-300 hover:text-white rounded text-[10px] font-bold transition border border-cyan-800/60"
+                                      className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#0a84ff] text-[#2997ff] hover:text-white rounded text-[10px] font-bold transition border border-[#3a3a40]"
                                     >
                                       {vowel}
                                     </button>
@@ -3670,14 +3888,14 @@ export default function App() {
                             </div>
                           </div>
 
-                          <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 gap-2">
+                          <div className="flex items-center justify-between pt-2 border-t border-[#3a3a40] gap-2">
                             <button
                               onClick={() => setSelectedVoicebank(vb.name)}
                               disabled={isSelected}
                               className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition flex items-center justify-center space-x-1 ${
                                 isSelected
-                                  ? 'bg-slate-800 text-slate-500 cursor-default'
-                                  : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md'
+                                  ? 'bg-[#2a2a2e] text-[#9a9aa2] cursor-default border border-[#3a3a40]'
+                                  : 'bg-[#34c759] hover:bg-[#30b34f] text-white shadow-md'
                               }`}
                             >
                               <Check className="w-3.5 h-3.5" />
@@ -3689,16 +3907,16 @@ export default function App() {
                                 setSelectedVoicebank(vb.name);
                                 setActiveTab('oto');
                               }}
-                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition border border-slate-700 flex items-center space-x-1"
+                              className="px-3 py-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded-lg text-xs font-medium transition border border-[#3a3a40] flex items-center space-x-1"
                               title="原音設定 (oto.ini) インスペクタを開く"
                             >
-                              <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                              <Layers className="w-3.5 h-3.5 text-[#0a84ff]" />
                               <span>原音設定</span>
                             </button>
 
                             <button
                               onClick={() => deleteVoicebank(vb.name)}
-                              className="p-1.5 bg-rose-950/60 hover:bg-rose-900 text-rose-300 rounded-lg transition border border-rose-800/50"
+                              className="p-1.5 bg-[#ff453a]/20 hover:bg-[#ff453a]/30 text-[#ff453a] rounded-lg transition border border-[#ff453a]/40"
                               title="ライブラリから削除"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -3714,14 +3932,14 @@ export default function App() {
           )}
 
           {activeTab === 'oto' && (
-            <div className="p-6 overflow-y-auto space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-4 gap-4">
+            <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-[#18181a]">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#3a3a40] pb-4 gap-4">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-100 flex items-center space-x-2">
-                    <Layers className="w-5 h-5 text-cyan-400" />
+                  <h2 className="text-lg font-bold text-[#f0f0f2] flex items-center space-x-2">
+                    <Layers className="w-5 h-5 text-[#0a84ff]" />
                     <span>UTAU 原音設定 (Oto Database Inspector)</span>
                   </h2>
-                  <p className="text-xs text-slate-400 mt-1">
+                  <p className="text-xs text-[#9a9aa2] mt-1">
                     oto.ini エイリアス解析、オフセット、先行発声、オーバーラップの視覚化 & アップロード管理
                   </p>
                 </div>
@@ -3729,13 +3947,13 @@ export default function App() {
                 <div className="flex items-center space-x-3">
                   {isUploadingVb ? (
                     <div className="flex items-center gap-2">
-                      <div className="flex items-center space-x-2 text-xs bg-slate-900 border border-cyan-500/50 text-cyan-300 font-medium px-3 py-2 rounded-lg shadow-sm">
-                        <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                      <div className="flex items-center space-x-2 text-xs bg-[#1f1f22] border border-[#0a84ff]/50 text-[#2997ff] font-medium px-3 py-2 rounded-lg shadow-sm">
+                        <Loader2 className="w-4 h-4 animate-spin text-[#0a84ff]" />
                         <span>アップロード中 ({uploadProgress}%)</span>
                       </div>
                       <button
                         onClick={handleCancelVoicebankUpload}
-                        className="flex items-center space-x-1 text-xs bg-rose-600 hover:bg-rose-500 text-white font-medium px-3 py-2 rounded-lg cursor-pointer transition shadow-md shadow-rose-900/40"
+                        className="flex items-center space-x-1 text-xs bg-[#ff453a] hover:bg-[#ff5b50] text-white font-medium px-3 py-2 rounded-lg cursor-pointer transition shadow-md shadow-[#ff453a]/30"
                         title="アップロードを中断"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -3743,7 +3961,7 @@ export default function App() {
                       </button>
                     </div>
                   ) : (
-                    <label className="flex items-center space-x-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white font-medium px-3.5 py-2 rounded-lg cursor-pointer transition shadow-md shadow-cyan-900/40">
+                    <label className="flex items-center space-x-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] text-white font-medium px-3.5 py-2 rounded-lg cursor-pointer transition shadow-md shadow-[#0a84ff]/30">
                       <Upload className="w-4 h-4" />
                       <span>UTAU音源(.zip) アップロード</span>
                       <input ref={fileInputRef2} type="file" accept=".zip" onChange={handleVoicebankZipUpload} className="hidden" />
@@ -3753,20 +3971,20 @@ export default function App() {
               </div>
 
               {/* Voicebank Info Summary Header */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col space-y-4 shadow-lg">
+              <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-4 flex flex-col space-y-4 shadow-lg">
                 <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                   <div className="flex items-center space-x-3">
-                    <div className="p-3 bg-cyan-950/80 rounded-lg border border-cyan-800/40 text-cyan-400 relative">
+                    <div className="p-3 bg-[#0a84ff]/15 rounded-lg border border-[#0a84ff]/30 text-[#0a84ff] relative">
                       <AudioWaveform className="w-6 h-6" />
-                      <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full border-2 border-slate-900 animate-pulse" />
+                      <span className="absolute -top-1 -right-1 w-3 h-3 bg-[#34c759] rounded-full border-2 border-[#1f1f22] animate-pulse" />
                     </div>
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs text-slate-400 font-medium">選択中音源:</span>
+                        <span className="text-xs text-[#9a9aa2] font-medium">選択中音源:</span>
                         <select
                           value={selectedVoicebank}
                           onChange={(e) => setSelectedVoicebank(e.target.value)}
-                          className="bg-slate-950 border border-cyan-800/60 text-cyan-300 font-bold rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-cyan-400 shadow-inner"
+                          className="bg-[#18181a] border border-[#3a3a40] text-[#2997ff] font-bold rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#0a84ff] shadow-inner"
                         >
                           <option value="" disabled>音源を選択...</option>
                           {customVoicebanks.map((vb) => (
@@ -3776,12 +3994,12 @@ export default function App() {
                           ))}
                         </select>
 
-                        <span className="text-[11px] font-mono px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800/60 flex items-center space-x-1">
+                        <span className="text-[11px] font-mono px-2.5 py-1 rounded-full bg-[#34c759]/15 text-[#34c759] border border-[#34c759]/40 flex items-center space-x-1">
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           <span>アクティブ音源 (準備完了)</span>
                         </span>
                       </div>
-                      <p className="text-xs text-slate-300 mt-1.5 flex flex-wrap items-center gap-2">
+                      <p className="text-xs text-[#f0f0f2] mt-1.5 flex flex-wrap items-center gap-2">
                         <span>
                           {customVoicebanks.find((v) => v.name === selectedVoicebank)
                             ? `解析済みエイリアス: ${customVoicebanks.find((v) => v.name === selectedVoicebank)?.aliasCount} 件 (${
@@ -3790,12 +4008,12 @@ export default function App() {
                             : '音源が選択されていません'}
                         </span>
                         {selectedVbDetails && (
-                          <span className="text-[10px] bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800/60 font-mono">
+                          <span className="text-[10px] bg-[#34c759]/15 text-[#34c759] px-2 py-0.5 rounded border border-[#34c759]/40 font-mono">
                             WAV実音声ファイル: {selectedVbDetails.entries.filter((e) => e.wav_exists !== false).length} / {selectedVbDetails.entries.length} 検出済み
                           </span>
                         )}
                         {customVoicebanks.find((v) => v.name === selectedVoicebank) && (
-                          <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded border border-slate-700">
+                          <span className="text-[10px] bg-[#2a2a2e] text-[#9a9aa2] px-2 py-0.5 rounded border border-[#3a3a40]">
                             ZIP全サブフォルダ自動解凍・パース済み
                           </span>
                         )}
@@ -3806,13 +4024,13 @@ export default function App() {
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
                     {/* Live WAV Sample Test buttons */}
                     {customVoicebanks.some((v) => v.name === selectedVoicebank) && (
-                      <div className="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-800">
-                        <span className="text-[10px] text-cyan-400 font-bold px-1">生WAVテスト試聴:</span>
+                      <div className="flex items-center space-x-1.5 bg-[#18181a] p-1.5 rounded-lg border border-[#3a3a40]">
+                        <span className="text-[10px] text-[#0a84ff] font-bold px-1">生WAVテスト試聴:</span>
                         {['あ', 'い', 'う', 'え', 'お'].map((vowel) => (
                           <button
                             key={vowel}
                             onClick={() => playSampleAudio(selectedVoicebank, vowel, 60, 1.0, true)}
-                            className="px-2 py-1 bg-cyan-950 hover:bg-cyan-600 text-cyan-300 hover:text-white rounded text-xs font-bold transition border border-cyan-800/60 flex items-center space-x-1"
+                            className="px-2 py-1 bg-[#2a2a2e] hover:bg-[#0a84ff] text-[#2997ff] hover:text-white rounded text-xs font-bold transition border border-[#3a3a40] flex items-center space-x-1"
                           >
                             <Play className="w-2.5 h-2.5 fill-current" />
                             <span>{vowel}</span>
@@ -3827,7 +4045,7 @@ export default function App() {
                         placeholder="エイリアス検索 (例: あ, a い, - か)..."
                         value={selectedAliasSearch}
                         onChange={(e) => setSelectedAliasSearch(e.target.value)}
-                        className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-200 placeholder-slate-500 w-52 focus:outline-none focus:border-cyan-500"
+                        className="bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 py-1.5 text-[#f0f0f2] placeholder-[#9a9aa2] w-52 focus:outline-none focus:border-[#0a84ff]"
                       />
                     </div>
                   </div>
@@ -3835,17 +4053,17 @@ export default function App() {
 
                 {/* Upload & Unzip Progress Indicator */}
                 {(isUploadingVb || uploadProgress > 0) && (
-                  <div className="bg-slate-950/80 rounded-xl p-3 border border-cyan-800/50 space-y-2 animate-pulse">
+                  <div className="bg-[#18181a] rounded-xl p-3 border border-[#0a84ff]/40 space-y-2 animate-pulse">
                     <div className="flex items-center justify-between text-xs font-mono">
-                      <span className="text-cyan-300 font-bold flex items-center space-x-2">
-                        <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                      <span className="text-[#2997ff] font-bold flex items-center space-x-2">
+                        <Loader2 className="w-3.5 h-3.5 text-[#0a84ff] animate-spin" />
                         <span>UTAU音源ZIP転送 & 解凍・パース進行中</span>
                       </span>
-                      <span className="text-emerald-400 font-bold text-sm">{uploadProgress}%</span>
+                      <span className="text-[#34c759] font-bold text-sm">{uploadProgress}%</span>
                     </div>
-                    <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden border border-slate-800 p-0.5">
+                    <div className="w-full bg-[#2a2a2e] rounded-full h-2.5 overflow-hidden border border-[#3a3a40] p-0.5">
                       <div
-                        className="bg-gradient-to-r from-cyan-500 via-teal-400 to-emerald-400 h-full rounded-full transition-all duration-300"
+                        className="bg-gradient-to-r from-[#0a84ff] to-[#34c759] h-full rounded-full transition-all duration-300"
                         style={{ width: `${Math.max(5, uploadProgress)}%` }}
                       />
                     </div>
@@ -3854,11 +4072,11 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-                  <h3 className="text-sm font-semibold text-slate-200 flex items-center justify-between">
+                <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-5 space-y-4">
+                  <h3 className="text-sm font-semibold text-[#f0f0f2] flex items-center justify-between">
                     <span>原音パラメータ設定 (Oto Parameters)</span>
                     {selectedOtoEntry && (
-                      <span className="text-xs font-mono text-cyan-400 bg-cyan-950 border border-cyan-800/60 px-2 py-0.5 rounded">
+                      <span className="text-xs font-mono text-[#2997ff] bg-[#0a84ff]/15 border border-[#0a84ff]/40 px-2 py-0.5 rounded">
                         {selectedOtoEntry.alias} ({selectedOtoEntry.filename})
                       </span>
                     )}
@@ -3867,8 +4085,8 @@ export default function App() {
                   <div className="space-y-3 text-xs">
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className="text-slate-400">オフセット (Offset ms):</span>
-                        <span className="text-cyan-400 font-mono">{otoOffset} ms</span>
+                        <span className="text-[#9a9aa2]">オフセット (Offset ms):</span>
+                        <span className="text-[#2997ff] font-mono">{otoOffset} ms</span>
                       </div>
                       <input
                         type="range"
@@ -3876,14 +4094,14 @@ export default function App() {
                         max="200"
                         value={otoOffset}
                         onChange={(e) => setOtoOffset(Number(e.target.value))}
-                        className="w-full accent-cyan-400"
+                        className="w-full accent-[#0a84ff]"
                       />
                     </div>
 
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className="text-slate-400">オーバーラップ (Overlap ms):</span>
-                        <span className="text-cyan-400 font-mono">{otoOverlap} ms</span>
+                        <span className="text-[#9a9aa2]">オーバーラップ (Overlap ms):</span>
+                        <span className="text-[#2997ff] font-mono">{otoOverlap} ms</span>
                       </div>
                       <input
                         type="range"
@@ -3891,14 +4109,14 @@ export default function App() {
                         max="100"
                         value={otoOverlap}
                         onChange={(e) => setOtoOverlap(Number(e.target.value))}
-                        className="w-full accent-cyan-400"
+                        className="w-full accent-[#0a84ff]"
                       />
                     </div>
 
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className="text-slate-400">先行発声 (Preutterance ms):</span>
-                        <span className="text-cyan-400 font-mono">{otoPreutterance} ms</span>
+                        <span className="text-[#9a9aa2]">先行発声 (Preutterance ms):</span>
+                        <span className="text-[#2997ff] font-mono">{otoPreutterance} ms</span>
                       </div>
                       <input
                         type="range"
@@ -3906,14 +4124,14 @@ export default function App() {
                         max="150"
                         value={otoPreutterance}
                         onChange={(e) => setOtoPreutterance(Number(e.target.value))}
-                        className="w-full accent-cyan-400"
+                        className="w-full accent-[#0a84ff]"
                       />
                     </div>
 
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className="text-slate-400">ブランク (Cutoff ms):</span>
-                        <span className="text-cyan-400 font-mono">{otoBlank} ms</span>
+                        <span className="text-[#9a9aa2]">ブランク (Cutoff ms):</span>
+                        <span className="text-[#2997ff] font-mono">{otoBlank} ms</span>
                       </div>
                       <input
                         type="range"
@@ -3921,14 +4139,14 @@ export default function App() {
                         max="300"
                         value={otoBlank}
                         onChange={(e) => setOtoBlank(Number(e.target.value))}
-                        className="w-full accent-cyan-400"
+                        className="w-full accent-[#0a84ff]"
                       />
                     </div>
 
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className="text-slate-400">固定範囲 (Consonant Velocity):</span>
-                        <span className="text-cyan-400 font-mono">{otoConsonant} ms</span>
+                        <span className="text-[#9a9aa2]">固定範囲 (Consonant Velocity):</span>
+                        <span className="text-[#2997ff] font-mono">{otoConsonant} ms</span>
                       </div>
                       <input
                         type="range"
@@ -3936,14 +4154,14 @@ export default function App() {
                         max="200"
                         value={otoConsonant}
                         onChange={(e) => setOtoConsonant(Number(e.target.value))}
-                        className="w-full accent-cyan-400"
+                        className="w-full accent-[#0a84ff]"
                       />
                     </div>
 
                     <div className="pt-2 flex space-x-2">
                       <button
                         onClick={() => playVocalNote(60, selectedOtoEntry?.alias || 'あ', 0.8)}
-                        className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2 rounded-lg transition text-center flex items-center justify-center space-x-1.5 shadow"
+                        className="flex-1 bg-[#0a84ff] hover:bg-[#2997ff] text-white font-medium py-2 rounded-lg transition text-center flex items-center justify-center space-x-1.5 shadow"
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
                         <span>原音パラメータ テスト再生</span>
@@ -3952,50 +4170,50 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+                <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-5 flex flex-col justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-200 mb-2">波形エンベロープ プレビュー</h3>
-                    <p className="text-xs text-slate-400 mb-4">
+                    <h3 className="text-sm font-semibold text-[#f0f0f2] mb-2">波形エンベロープ プレビュー</h3>
+                    <p className="text-xs text-[#9a9aa2] mb-4">
                       VSE-vocal の音源エンジン (VCV Resolver & World Synthesizer) による合成タイミング視覚化
                     </p>
 
-                    <div className="h-40 bg-slate-950 border border-slate-800 rounded-lg relative overflow-hidden flex items-center justify-center p-4">
+                    <div className="h-40 bg-[#18181a] border border-[#3a3a40] rounded-lg relative overflow-hidden flex items-center justify-center p-4">
                       {/* Envelope SVG lines */}
-                      <svg className="w-full h-full text-cyan-400 stroke-current fill-none stroke-2" viewBox="0 0 300 100">
+                      <svg className="w-full h-full text-[#0a84ff] stroke-current fill-none stroke-2" viewBox="0 0 300 100">
                         <path d="M 10 90 L 40 20 L 120 20 L 260 90" />
-                        <line x1="40" y1="0" x2="40" y2="100" className="stroke-rose-500 stroke-1 stroke-dasharray-2" />
-                        <line x1="80" y1="0" x2="80" y2="100" className="stroke-amber-400 stroke-1 stroke-dasharray-2" />
+                        <line x1="40" y1="0" x2="40" y2="100" className="stroke-[#ff453a] stroke-1 stroke-dasharray-2" />
+                        <line x1="80" y1="0" x2="80" y2="100" className="stroke-[#ff9f0a] stroke-1 stroke-dasharray-2" />
                       </svg>
-                      <div className="absolute top-2 left-2 text-[10px] text-rose-400 font-mono">
+                      <div className="absolute top-2 left-2 text-[10px] text-[#ff453a] font-mono">
                         Preutterance: {otoPreutterance}ms
                       </div>
-                      <div className="absolute top-2 left-28 text-[10px] text-amber-300 font-mono">
+                      <div className="absolute top-2 left-28 text-[10px] text-[#ff9f0a] font-mono">
                         Overlap: {otoOverlap}ms
                       </div>
                     </div>
                   </div>
 
-                  <div className="text-xs text-slate-400 bg-slate-950/60 p-3 rounded-lg border border-slate-800 mt-4">
-                    <span className="text-cyan-400 font-bold">ヒント:</span> ZIP形式でアップロードされた UTAU
-                    音源は自動的に解凍され、<code className="text-slate-200 font-mono">oto.ini</code> が Shift-JIS / UTF-8
+                  <div className="text-xs text-[#9a9aa2] bg-[#18181a] p-3 rounded-lg border border-[#3a3a40] mt-4">
+                    <span className="text-[#0a84ff] font-bold">ヒント:</span> ZIP形式でアップロードされた UTAU
+                    音源は自動的に解凍され、<code className="text-[#f0f0f2] font-mono">oto.ini</code> が Shift-JIS / UTF-8
                     両対応で全サブフォルダ再帰ロードされます。
                   </div>
                 </div>
               </div>
 
               {/* Oto Entries Database Table */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-5 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-200 flex items-center space-x-2">
+                    <h3 className="text-sm font-semibold text-[#f0f0f2] flex items-center space-x-2">
                       <span>ロード済み oto.ini エントリ一覧</span>
-                      {isLoadingDetails && <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
+                      {isLoadingDetails && <Loader2 className="w-3.5 h-3.5 text-[#0a84ff] animate-spin" />}
                     </h3>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
+                    <p className="text-[11px] text-[#9a9aa2] mt-0.5">
                       クリックでパラメータを編集、または「▶ 試聴」で音源の実WAVサンプル音声を試聴できます。
                     </p>
                   </div>
-                  <span className="text-xs text-slate-400 font-mono bg-slate-950 px-3 py-1 rounded-lg border border-slate-800">
+                  <span className="text-xs text-[#9a9aa2] font-mono bg-[#18181a] px-3 py-1 rounded-lg border border-[#3a3a40]">
                     {
                       ((selectedVbDetails && selectedVbDetails.entries) ||
                         customVoicebanks.find((v) => v.name === selectedVoicebank)?.entries || []
@@ -4005,9 +4223,9 @@ export default function App() {
                   </span>
                 </div>
 
-                <div className="overflow-x-auto max-h-80 border border-slate-800 rounded-lg bg-slate-950/50">
+                <div className="overflow-x-auto max-h-80 border border-[#3a3a40] rounded-lg bg-[#18181a]">
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead className="bg-slate-950 text-slate-400 font-mono border-b border-slate-800 sticky top-0 z-10">
+                    <thead className="bg-[#18181a] text-[#9a9aa2] font-mono border-b border-[#3a3a40] sticky top-0 z-10">
                       <tr>
                         <th className="py-2.5 px-3">エイリアス (Alias)</th>
                         <th className="py-2.5 px-3">WAVファイル</th>
@@ -4019,7 +4237,7 @@ export default function App() {
                         <th className="py-2.5 px-3 text-right">実音試聴</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-800/60 font-mono text-slate-300">
+                    <tbody className="divide-y divide-[#2a2a2e] font-mono text-[#f0f0f2]">
                       {((selectedVbDetails && selectedVbDetails.entries) ||
                         customVoicebanks.find((v) => v.name === selectedVoicebank)?.entries || [
                           { alias: '- あ', filename: '_a.wav', wav_exists: true, left_blank: 10, fixed_range: 80, preutterance: 30, overlap: 10 },
@@ -4042,22 +4260,22 @@ export default function App() {
                                 if (entry.preutterance !== undefined) setOtoPreutterance(Math.round(entry.preutterance));
                                 if (entry.fixed_range !== undefined) setOtoConsonant(Math.round(entry.fixed_range));
                               }}
-                              className={`hover:bg-slate-800/70 transition cursor-pointer ${
-                                selectedOtoEntry?.alias === entry.alias ? 'bg-cyan-950/60 text-cyan-200' : ''
+                              className={`hover:bg-[#2a2a2e] transition cursor-pointer ${
+                                selectedOtoEntry?.alias === entry.alias ? 'bg-[#0a84ff]/15 text-[#2997ff]' : ''
                               }`}
                             >
-                              <td className="py-2 px-3 font-bold text-cyan-400 flex items-center space-x-1.5">
+                              <td className="py-2 px-3 font-bold text-[#0a84ff] flex items-center space-x-1.5">
                                 <span>{entry.alias}</span>
                               </td>
-                              <td className="py-2 px-3 text-slate-400">{entry.filename}</td>
+                              <td className="py-2 px-3 text-[#9a9aa2]">{entry.filename}</td>
                               <td className="py-2 px-3">
                                 {entry.wav_exists !== false ? (
-                                  <span className="inline-flex items-center space-x-1 text-[10px] text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/60">
+                                  <span className="inline-flex items-center space-x-1 text-[10px] text-[#34c759] bg-[#34c759]/15 px-2 py-0.5 rounded border border-[#34c759]/40">
                                     <CheckCircle2 className="w-3 h-3" />
                                     <span>検出OK</span>
                                   </span>
                                 ) : (
-                                  <span className="inline-flex items-center space-x-1 text-[10px] text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-800/60">
+                                  <span className="inline-flex items-center space-x-1 text-[10px] text-[#ff9f0a] bg-[#ff9f0a]/15 px-2 py-0.5 rounded border border-[#ff9f0a]/40">
                                     <span>WAV未検出</span>
                                   </span>
                                 )}
@@ -4074,14 +4292,14 @@ export default function App() {
                                   }}
                                   className={`px-2.5 py-1 rounded text-xs font-sans font-medium transition flex items-center space-x-1 ml-auto ${
                                     isThisPlaying
-                                      ? 'bg-emerald-600 text-white animate-pulse'
-                                      : 'bg-cyan-900/80 hover:bg-cyan-600 text-cyan-200 hover:text-white border border-cyan-700/60'
+                                      ? 'bg-[#34c759] text-white animate-pulse'
+                                      : 'bg-[#2a2a2e] hover:bg-[#0a84ff] text-[#2997ff] hover:text-white border border-[#3a3a40]'
                                   }`}
                                   title="実WAVサンプルの再生"
                                 >
                                   {isThisPlaying ? (
                                     <>
-                                      <Volume2 className="w-3.5 h-3.5 animate-bounce" />
+                                      <Volume2 className="w-3 h-3 animate-bounce" />
                                       <span>再生中</span>
                                     </>
                                   ) : (
@@ -4103,20 +4321,20 @@ export default function App() {
           )}
 
           {activeTab === 'tests' && (
-            <div className="p-6 overflow-y-auto space-y-6">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+            <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-[#18181a]">
+              <div className="flex items-center justify-between border-b border-[#3a3a40] pb-4">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-100 flex items-center space-x-2">
-                    <Cpu className="w-5 h-5 text-cyan-400" />
+                  <h2 className="text-lg font-bold text-[#f0f0f2] flex items-center space-x-2">
+                    <Cpu className="w-5 h-5 text-[#0a84ff]" />
                     <span>システム統合テスト & コード評価 (System Verification)</span>
                   </h2>
-                  <p className="text-xs text-slate-400 mt-1">Pythonバックエンド、USTパーサー、 timelineモジュールの動作検証</p>
+                  <p className="text-xs text-[#9a9aa2] mt-1">Pythonバックエンド、USTパーサー、 timelineモジュールの動作検証</p>
                 </div>
 
                 <button
                   onClick={handleRunTests}
                   disabled={isRunningTests}
-                  className="flex items-center space-x-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition shadow-md disabled:opacity-50"
+                  className="flex items-center space-x-2 bg-[#0a84ff] hover:bg-[#2997ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition shadow-md disabled:opacity-50 cursor-pointer"
                 >
                   <RefreshCw className={`w-4 h-4 ${isRunningTests ? 'animate-spin' : ''}`} />
                   <span>{isRunningTests ? 'テスト実行中...' : 'テスト実行 (python -m unittest)'}</span>
@@ -4124,22 +4342,22 @@ export default function App() {
               </div>
 
               {testResult && (
-                <div className={`p-4 rounded-xl border ${testResult.success ? 'bg-emerald-950/30 border-emerald-800/50' : 'bg-slate-900 border-slate-800'}`}>
+                <div className={`p-4 rounded-xl border ${testResult.success ? 'bg-[#34c759]/10 border-[#34c759]/40' : 'bg-[#1f1f22] border-[#3a3a40]'}`}>
                   <div className="flex items-center space-x-2 mb-2">
                     {testResult.success ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                      <CheckCircle2 className="w-5 h-5 text-[#34c759]" />
                     ) : (
-                      <AlertCircle className="w-5 h-5 text-amber-400" />
+                      <AlertCircle className="w-5 h-5 text-[#ff9f0a]" />
                     )}
-                    <span className="font-semibold text-sm text-slate-200">
+                    <span className="font-semibold text-sm text-[#f0f0f2]">
                       {testResult.success ? '全テストパス成功' : 'テスト完了 (レポート出力あり)'}
                     </span>
                   </div>
 
                   {testResult.stdout && (
                     <div className="mt-3">
-                      <span className="text-xs text-slate-400 block mb-1 font-mono">STDOUT:</span>
-                      <pre className="bg-slate-950 p-3 rounded-lg text-xs font-mono text-slate-300 overflow-x-auto max-h-48 border border-slate-800">
+                      <span className="text-xs text-[#9a9aa2] block mb-1 font-mono">STDOUT:</span>
+                      <pre className="bg-[#18181a] p-3 rounded-lg text-xs font-mono text-[#f0f0f2] overflow-x-auto max-h-48 border border-[#3a3a40]">
                         {testResult.stdout}
                       </pre>
                     </div>
@@ -4147,8 +4365,8 @@ export default function App() {
 
                   {testResult.stderr && (
                     <div className="mt-3">
-                      <span className="text-xs text-amber-400 block mb-1 font-mono">STDERR:</span>
-                      <pre className="bg-slate-950 p-3 rounded-lg text-xs font-mono text-amber-200/90 overflow-x-auto max-h-48 border border-slate-800">
+                      <span className="text-xs text-[#ff9f0a] block mb-1 font-mono">STDERR:</span>
+                      <pre className="bg-[#18181a] p-3 rounded-lg text-xs font-mono text-[#ff9f0a] overflow-x-auto max-h-48 border border-[#3a3a40]">
                         {testResult.stderr}
                       </pre>
                     </div>
@@ -4159,53 +4377,53 @@ export default function App() {
           )}
 
           {activeTab === 'desktop' && (
-            <div className="p-6 overflow-y-auto space-y-6">
-              <div className="border-b border-slate-800 pb-4">
-                <h2 className="text-lg font-bold text-slate-100 flex items-center space-x-2">
-                  <Monitor className="w-5 h-5 text-emerald-400" />
+            <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-[#18181a]">
+              <div className="border-b border-[#3a3a40] pb-4">
+                <h2 className="text-lg font-bold text-[#f0f0f2] flex items-center space-x-2">
+                  <Monitor className="w-5 h-5 text-[#34c759]" />
                   <span>PySide6 デスクトップ環境情報 (Desktop Native Integration)</span>
                 </h2>
-                <p className="text-xs text-slate-400 mt-1">
+                <p className="text-xs text-[#9a9aa2] mt-1">
                   ユーザー様の要求通り PySide6 デスクトップアプリケーション (main.py) は完全に固定・併用維持されています。
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-                  <h3 className="text-sm font-semibold text-slate-200 flex items-center space-x-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-5 space-y-3">
+                  <h3 className="text-sm font-semibold text-[#f0f0f2] flex items-center space-x-2">
+                    <CheckCircle2 className="w-4 h-4 text-[#34c759]" />
                     <span>PySide6 環境ステータス</span>
                   </h3>
                   <div className="space-y-2 text-xs">
-                    <div className="flex justify-between py-1.5 border-b border-slate-800">
-                      <span className="text-slate-400">エントリポイント:</span>
-                      <span className="text-cyan-400 font-mono font-bold">{pyStatus?.desktopEntryPoint || 'main.py'}</span>
+                    <div className="flex justify-between py-1.5 border-b border-[#3a3a40]">
+                      <span className="text-[#9a9aa2]">エントリポイント:</span>
+                      <span className="text-[#2997ff] font-mono font-bold">{pyStatus?.desktopEntryPoint || 'main.py'}</span>
                     </div>
-                    <div className="flex justify-between py-1.5 border-b border-slate-800">
-                      <span className="text-slate-400">Python バージョン:</span>
-                      <span className="text-slate-200 font-mono">{pyStatus?.pythonVersion || 'Python 3.10'}</span>
+                    <div className="flex justify-between py-1.5 border-b border-[#3a3a40]">
+                      <span className="text-[#9a9aa2]">Python バージョン:</span>
+                      <span className="text-[#f0f0f2] font-mono">{pyStatus?.pythonVersion || 'Python 3.10'}</span>
                     </div>
-                    <div className="flex justify-between py-1.5 border-b border-slate-800">
-                      <span className="text-slate-400">PySide6 モジュール:</span>
-                      <span className="text-emerald-400 font-bold">インストール済み (固定維持)</span>
+                    <div className="flex justify-between py-1.5 border-b border-[#3a3a40]">
+                      <span className="text-[#9a9aa2]">PySide6 モジュール:</span>
+                      <span className="text-[#34c759] font-bold">インストール済み (固定維持)</span>
                     </div>
                     <div className="flex justify-between py-1.5">
-                      <span className="text-slate-400">動作モード:</span>
-                      <span className="text-cyan-300 font-medium">{pyStatus?.mode || 'Dual (Web + PySide6)'}</span>
+                      <span className="text-[#9a9aa2]">動作モード:</span>
+                      <span className="text-[#2997ff] font-medium">{pyStatus?.mode || 'Dual (Web + PySide6)'}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-                  <h3 className="text-sm font-semibold text-slate-200">ローカルでの起動方法</h3>
-                  <p className="text-xs text-slate-400">
+                <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl p-5 space-y-3">
+                  <h3 className="text-sm font-semibold text-[#f0f0f2]">ローカルでの起動方法</h3>
+                  <p className="text-xs text-[#9a9aa2]">
                     デスクトップ環境 (Windows / Mac / Linux) でネイティブ PySide6 GUI アプリケーションを直接起動する場合:
                   </p>
-                  <pre className="bg-slate-950 p-3 rounded-lg text-xs font-mono text-cyan-300 border border-slate-800">
+                  <pre className="bg-[#18181a] p-3 rounded-lg text-xs font-mono text-[#2997ff] border border-[#3a3a40]">
                     python3 main.py
                   </pre>
-                  <p className="text-xs text-slate-400">
-                    PyInstallerビルドスペック: <code className="text-slate-300 font-mono">vose_pro.spec</code>
+                  <p className="text-xs text-[#9a9aa2]">
+                    PyInstallerビルドスペック: <code className="text-[#f0f0f2] font-mono">vose_pro.spec</code>
                   </p>
                 </div>
               </div>
@@ -4220,32 +4438,32 @@ export default function App() {
           <div
             className={`p-4 rounded-xl border shadow-2xl backdrop-blur-md flex flex-col space-y-2 ${
               toast.type === 'success'
-                ? 'bg-slate-900/95 border-emerald-500/80 text-emerald-300 shadow-emerald-950/50'
+                ? 'bg-[#1f1f22]/95 border-[#34c759]/80 text-[#34c759] shadow-black/60'
                 : toast.type === 'error'
-                ? 'bg-slate-900/95 border-rose-500/80 text-rose-300 shadow-rose-950/50'
-                : 'bg-slate-900/95 border-cyan-500/80 text-cyan-300 shadow-cyan-950/50'
+                ? 'bg-[#1f1f22]/95 border-[#ff453a]/80 text-[#ff453a] shadow-black/60'
+                : 'bg-[#1f1f22]/95 border-[#0a84ff]/80 text-[#2997ff] shadow-black/60'
             }`}
           >
             <div className="flex items-start space-x-3">
               <div className="shrink-0 mt-0.5">
-                {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400" />}
-                {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400" />}
-                {toast.type === 'info' && <Loader2 className="w-5 h-5 text-cyan-400 animate-spin" />}
+                {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-[#34c759]" />}
+                {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-[#ff453a]" />}
+                {toast.type === 'info' && <Loader2 className="w-5 h-5 text-[#0a84ff] animate-spin" />}
               </div>
               <div className="flex-1">
-                <h4 className="font-bold text-xs text-white flex items-center justify-between">
+                <h4 className="font-bold text-xs text-[#f0f0f2] flex items-center justify-between">
                   <span>{toast.title}</span>
                   {uploadProgress > 0 && uploadProgress < 100 && (
-                    <span className="font-mono text-cyan-400 font-bold ml-2 text-[11px]">
+                    <span className="font-mono text-[#2997ff] font-bold ml-2 text-[11px]">
                       {uploadProgress}%
                     </span>
                   )}
                 </h4>
-                <p className="text-xs mt-0.5 text-slate-300 leading-relaxed">{toast.desc}</p>
+                <p className="text-xs mt-0.5 text-[#9a9aa2] leading-relaxed">{toast.desc}</p>
               </div>
               <button
                 onClick={() => setToast(null)}
-                className="shrink-0 p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white transition"
+                className="shrink-0 p-1 rounded-md hover:bg-[#2a2a2e] text-[#9a9aa2] hover:text-[#f0f0f2] transition"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -4253,10 +4471,10 @@ export default function App() {
 
             {/* Graphical Progress Bar for Upload / Extract */}
             {uploadProgress > 0 && (
-              <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800 p-0.5">
+              <div className="w-full bg-[#18181a] rounded-full h-2 overflow-hidden border border-[#3a3a40] p-0.5">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${
-                    uploadProgress >= 100 ? 'bg-emerald-500' : 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                    uploadProgress >= 100 ? 'bg-[#34c759]' : 'bg-[#0a84ff]'
                   }`}
                   style={{ width: `${uploadProgress}%` }}
                 />
@@ -4267,19 +4485,19 @@ export default function App() {
             {isRenderingWav && renderProgress && (
               <div className="space-y-1.5 pt-1">
                 <div className="flex items-center justify-between text-[11px] font-mono">
-                  <span className="text-cyan-300 font-bold">進捗: {renderProgress.pct}%</span>
-                  <span className="text-emerald-300 font-semibold bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/60">
+                  <span className="text-[#2997ff] font-bold">進捗: {renderProgress.pct}%</span>
+                  <span className="text-[#34c759] font-semibold bg-[#34c759]/15 px-2 py-0.5 rounded border border-[#34c759]/40">
                     残り: {formatEta(renderProgress.remainingSec)}
                   </span>
                 </div>
-                <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800 p-0.5">
+                <div className="w-full bg-[#18181a] rounded-full h-2 overflow-hidden border border-[#3a3a40] p-0.5">
                   <div
-                    className="h-full rounded-full transition-all duration-200 bg-gradient-to-r from-cyan-500 via-teal-400 to-emerald-400"
+                    className="h-full rounded-full transition-all duration-200 bg-gradient-to-r from-[#0a84ff] to-[#34c759]"
                     style={{ width: `${Math.max(2, renderProgress.pct)}%` }}
                   />
                 </div>
                 {renderProgress.elapsedSec > 0 && (
-                  <div className="text-[10px] text-slate-400 text-right font-mono">
+                  <div className="text-[10px] text-[#9a9aa2] text-right font-mono">
                     経過時間: {renderProgress.elapsedSec}秒
                   </div>
                 )}
@@ -4291,7 +4509,7 @@ export default function App() {
               <div className="pt-1 flex justify-end">
                 <button
                   onClick={handleCancelVoicebankUpload}
-                  className="flex items-center space-x-1.5 text-[11px] font-semibold bg-rose-950/90 hover:bg-rose-900 text-rose-300 hover:text-white border border-rose-700/70 px-2.5 py-1 rounded-md transition shadow-sm"
+                  className="flex items-center space-x-1.5 text-[11px] font-semibold bg-[#ff453a]/20 hover:bg-[#ff453a]/30 text-[#ff453a] hover:text-white border border-[#ff453a]/40 px-2.5 py-1 rounded-md transition shadow-sm"
                 >
                   <X className="w-3.5 h-3.5" />
                   <span>アップロードを中止する</span>

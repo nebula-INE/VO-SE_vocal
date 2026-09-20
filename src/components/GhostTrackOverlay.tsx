@@ -14,7 +14,7 @@ export interface GhostTrackOverlayProps {
   visibleEndTick?: number;
 }
 
-const DEFAULT_GHOST_COLORS = ['#ec4899', '#8b5cf6', '#10b981', '#f59e0b', '#3b82f6'];
+const DEFAULT_GHOST_COLORS = ['#0a84ff', '#ff9f0a', '#34c759', '#af52de', '#5ac8fa', '#ff375f'];
 
 export const GhostTrackOverlay: React.FC<GhostTrackOverlayProps> = ({
   ghostTracks,

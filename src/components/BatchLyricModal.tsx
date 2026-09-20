@@ -114,25 +114,25 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-150">
+      <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-150">
         {/* Header */}
-        <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+        <div className="px-5 py-3.5 bg-[#18181a] border-b border-[#303034] flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <div className="p-1.5 bg-cyan-950/80 border border-cyan-500/40 rounded-lg text-cyan-400">
+            <div className="p-1.5 bg-[#0a84ff]/20 border border-[#0a84ff]/40 rounded-lg text-[#0a84ff]">
               <Type className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-bold text-sm text-slate-100 flex items-center gap-1.5">
+              <h2 className="font-bold text-sm text-[#f0f0f2] flex items-center gap-1.5">
                 歌詞一括入力 (Batch Lyric Input)
               </h2>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-[#9a9aa2]">
                 トラック内の全 {sortedNotes.length} 個の音符に歌詞を順番に割り当てます
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-200 p-1 rounded-lg hover:bg-slate-800 transition"
+            className="text-[#9a9aa2] hover:text-[#f0f0f2] p-1 rounded-lg hover:bg-[#2a2a2e] transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -142,14 +142,14 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
         <div className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
           {/* Preset Buttons */}
           <div>
-            <span className="text-slate-400 text-[11px] font-medium block mb-1.5">クイック入力プリセット:</span>
+            <span className="text-[#9a9aa2] text-[11px] font-medium block mb-1.5">クイック入力プリセット:</span>
             <div className="flex flex-wrap gap-1.5">
               {samplePresets.map((preset) => (
                 <button
                   key={preset.label}
                   type="button"
                   onClick={() => setInputText(preset.text)}
-                  className="px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-cyan-300 border border-slate-700 rounded text-[11px] transition"
+                  className="px-2.5 py-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] hover:text-[#2997ff] border border-[#3a3a40] rounded text-[11px] transition cursor-pointer"
                 >
                   {preset.label}
                 </button>
@@ -160,11 +160,11 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
           {/* Input Area */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-slate-300 font-bold flex items-center gap-1">
+              <label className="text-[#f0f0f2] font-bold flex items-center gap-1">
                 <span>歌詞テキストを入力:</span>
-                <span className="text-slate-500 font-normal">(ひらがな・空白区切り・改行など)</span>
+                <span className="text-[#9a9aa2] font-normal">(ひらがな・空白区切り・改行など)</span>
               </label>
-              <span className="text-cyan-400 font-mono text-[11px]">
+              <span className="text-[#2997ff] font-mono text-[11px]">
                 {parsedTokens.length} 文字 / {sortedNotes.length} ノート
               </span>
             </div>
@@ -173,19 +173,19 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               placeholder="例: さ く ら さ く ら や よ い の そ ら は (スペース区切りまたは連続入力)"
-              className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 rounded-lg p-3 text-slate-100 placeholder-slate-600 font-mono text-sm leading-relaxed resize-none"
+              className="w-full bg-[#18181a] border border-[#3a3a40] focus:border-[#0a84ff] focus:ring-1 focus:ring-[#0a84ff] rounded-lg p-3 text-[#f0f0f2] placeholder-[#7d7d86] font-mono text-sm leading-relaxed resize-none focus:outline-none"
               autoFocus
             />
           </div>
 
           {/* Options Grid */}
-          <div className="grid grid-cols-2 gap-3 bg-slate-950/60 p-3 rounded-lg border border-slate-800">
+          <div className="grid grid-cols-2 gap-3 bg-[#18181a] p-3 rounded-lg border border-[#303034]">
             <div>
-              <label className="text-slate-400 font-medium block mb-1">区切り方法:</label>
+              <label className="text-[#9a9aa2] font-medium block mb-1">区切り方法:</label>
               <select
                 value={delimiterMode}
                 onChange={(e) => setDelimiterMode(e.target.value as any)}
-                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-slate-200"
+                className="w-full bg-[#2a2a2e] border border-[#3a3a40] rounded px-2 py-1.5 text-[#f0f0f2] focus:border-[#0a84ff] focus:outline-none"
               >
                 <option value="auto">自動判別 (スペース区切り / 1文字ごと)</option>
                 <option value="space">空白・スペース区切り (「か え る」)</option>
@@ -195,11 +195,11 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
             </div>
 
             <div>
-              <label className="text-slate-400 font-medium block mb-1">歌詞が足りない場合:</label>
+              <label className="text-[#9a9aa2] font-medium block mb-1">歌詞が足りない場合:</label>
               <select
                 value={fillMode}
                 onChange={(e) => setFillMode(e.target.value as any)}
-                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-slate-200"
+                className="w-full bg-[#2a2a2e] border border-[#3a3a40] rounded px-2 py-1.5 text-[#f0f0f2] focus:border-[#0a84ff] focus:outline-none"
               >
                 <option value="all">足りない分は元の歌詞を維持</option>
                 <option value="loop">歌詞を繰り返して全音符に適用 (ループ)</option>
@@ -209,10 +209,10 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
 
           {/* Live Preview of Note Assignment */}
           <div>
-            <label className="text-slate-400 font-medium block mb-1.5">適用プレビュー (先頭12音符):</label>
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-2.5 max-h-36 overflow-x-auto">
+            <label className="text-[#9a9aa2] font-medium block mb-1.5">適用プレビュー (先頭12音符):</label>
+            <div className="bg-[#18181a] border border-[#303034] rounded-lg p-2.5 max-h-36 overflow-x-auto">
               {sortedNotes.length === 0 ? (
-                <div className="text-slate-600 text-center py-4">トラックにノートがありません</div>
+                <div className="text-[#7d7d86] text-center py-4">トラックにノートがありません</div>
               ) : (
                 <div className="flex gap-1.5 min-w-max">
                   {sortedNotes.slice(0, 16).map((note, idx) => {
@@ -229,11 +229,11 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
                         key={note.id}
                         className={`flex flex-col items-center justify-between p-1.5 rounded border text-center w-14 shrink-0 transition ${
                           isChanged
-                            ? 'bg-cyan-950/60 border-cyan-500/60 text-cyan-200'
-                            : 'bg-slate-900 border-slate-800 text-slate-400'
+                            ? 'bg-[#0a84ff]/20 border-[#0a84ff]/80 text-[#2997ff]'
+                            : 'bg-[#2a2a2e] border-[#3a3a40] text-[#9a9aa2]'
                         }`}
                       >
-                        <span className="text-[9px] text-slate-500 font-mono">#{idx + 1}</span>
+                        <span className="text-[9px] text-[#7d7d86] font-mono">#{idx + 1}</span>
                         <span className="text-sm font-bold my-0.5 truncate max-w-full">
                           {assignedLyric || 'あ'}
                         </span>
@@ -244,7 +244,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
                     );
                   })}
                   {sortedNotes.length > 16 && (
-                    <div className="flex items-center justify-center px-2 text-slate-500 font-mono text-[10px]">
+                    <div className="flex items-center justify-center px-2 text-[#7d7d86] font-mono text-[10px]">
                       +{sortedNotes.length - 16} more
                     </div>
                   )}
@@ -255,8 +255,8 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
-          <span className="text-[11px] text-slate-500">
+        <div className="px-5 py-3 bg-[#18181a] border-t border-[#303034] flex items-center justify-between">
+          <span className="text-[11px] text-[#9a9aa2]">
             {parsedTokens.length > 0
               ? `${Math.min(parsedTokens.length, sortedNotes.length)} 音符の歌詞を更新します`
               : '歌詞を入力してください'}
@@ -265,7 +265,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
+              className="px-3 py-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] rounded-lg text-xs font-medium transition cursor-pointer"
             >
               キャンセル
             </button>
@@ -273,7 +273,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
               type="button"
               onClick={handleApply}
               disabled={parsedTokens.length === 0 || sortedNotes.length === 0}
-              className="px-4 py-1.5 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 font-bold rounded-lg text-xs flex items-center space-x-1.5 shadow-lg shadow-cyan-950/50 disabled:opacity-40 disabled:pointer-events-none transition"
+              className="px-4 py-1.5 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-bold rounded-lg text-xs flex items-center space-x-1.5 shadow-lg shadow-[#0a84ff]/30 disabled:opacity-40 disabled:pointer-events-none transition cursor-pointer"
             >
               <Check className="w-3.5 h-3.5" />
               <span>一括適用する</span>

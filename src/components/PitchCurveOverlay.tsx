@@ -400,8 +400,19 @@ export default function PitchCurveOverlay({
               <path
                 d={pathD}
                 fill="none"
-                stroke={isSelected ? '#22d3ee' : '#38bdf8'}
-                strokeOpacity={isSelected ? 1 : 0.7}
+                stroke={isSelected ? '#0a84ff' : '#0a84ff'}
+                strokeOpacity={isSelected ? 0.35 : 0.15}
+                strokeWidth={isSelected ? 5 : 3}
+                vectorEffect="non-scaling-stroke"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="pointer-events-none"
+              />
+              <path
+                d={pathD}
+                fill="none"
+                stroke={isSelected ? '#2997ff' : '#5ac8fa'}
+                strokeOpacity={isSelected ? 1 : 0.75}
                 strokeWidth={isSelected ? 2 : 1.2}
                 vectorEffect="non-scaling-stroke"
                 strokeLinecap="round"
@@ -450,15 +461,15 @@ export default function PitchCurveOverlay({
               <div
                 className={`rounded-full transition-transform duration-75 shadow-md flex items-center justify-center border ${
                   isDraggingThis
-                    ? 'w-3 h-3 bg-white border-cyan-400 ring-2 ring-cyan-400/50 scale-110'
+                    ? 'w-3 h-3 bg-white border-[#0a84ff] ring-2 ring-[#0a84ff]/60 scale-110'
                     : isSelected
-                    ? 'w-2.5 h-2.5 bg-cyan-300 border-cyan-500 ring-1 ring-cyan-400/40'
-                    : 'w-2 h-2 bg-slate-100 border-cyan-600'
+                    ? 'w-2.5 h-2.5 bg-[#2997ff] border-white ring-1 ring-[#0a84ff]/50'
+                    : 'w-2 h-2 bg-[#f0f0f2] border-[#0a84ff]'
                 }`}
               >
                 <div
                   className={`rounded-full ${
-                    i === 0 ? 'w-1 h-1 bg-cyan-700' : 'w-0.5 h-0.5 bg-slate-700'
+                    i === 0 ? 'w-1 h-1 bg-[#0051a8]' : 'w-0.5 h-0.5 bg-[#3a3a40]'
                   }`}
                 />
               </div>
@@ -489,7 +500,7 @@ export default function PitchCurveOverlay({
               }
               setAddNodePopup(null);
             }}
-            className="bg-cyan-400 hover:bg-cyan-300 active:scale-95 text-slate-950 font-bold px-3 py-1.5 rounded-full shadow-2xl border border-white text-[11px] flex items-center space-x-1.5 whitespace-nowrap cursor-pointer transition ring-2 ring-cyan-500/50"
+            className="bg-[#0a84ff] hover:bg-[#2997ff] active:scale-95 text-white font-bold px-3 py-1.5 rounded-full shadow-2xl border border-white text-[11px] flex items-center space-x-1.5 whitespace-nowrap cursor-pointer transition ring-2 ring-[#0a84ff]/50"
           >
             <Plus className="w-3.5 h-3.5 stroke-[3]" />
             <span>ノードを追加 ({addNodePopup.semitone >= 0 ? `+${addNodePopup.semitone.toFixed(2)}` : addNodePopup.semitone.toFixed(2)}st)</span>
@@ -506,12 +517,12 @@ export default function PitchCurveOverlay({
             top: `${activeTooltip.yPx}px`,
           }}
         >
-          <div className="bg-slate-900/95 border border-cyan-500/50 text-cyan-200 text-[11px] font-mono px-2 py-1 rounded-md shadow-xl flex items-center space-x-1.5 backdrop-blur-sm">
-            <span className="font-bold text-cyan-300">
+          <div className="bg-[#1f1f22]/95 border border-[#0a84ff]/60 text-[#2997ff] text-[11px] font-mono px-2 py-1 rounded-md shadow-xl flex items-center space-x-1.5 backdrop-blur-sm">
+            <span className="font-bold text-[#f0f0f2]">
               {activeTooltip.semitone >= 0 ? `+${activeTooltip.semitone.toFixed(2)}` : activeTooltip.semitone.toFixed(2)} st
             </span>
-            <span className="text-slate-400">|</span>
-            <span className="text-slate-300">{activeTooltip.offsetMs}ms</span>
+            <span className="text-[#7d7d86]">|</span>
+            <span className="text-[#9a9aa2]">{activeTooltip.offsetMs}ms</span>
 
             {/* 先頭以外のノードにはクイック削除ボタンを表示 */}
             {activeTooltip.pointIndex > 0 && (
@@ -523,7 +534,7 @@ export default function PitchCurveOverlay({
                     handleDeletePoint(activeTooltip.noteId, pts, activeTooltip.pointIndex)(e);
                   }
                 }}
-                className="ml-1 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded p-0.5"
+                className="ml-1 text-[#9a9aa2] hover:text-[#ff453a] hover:bg-[#2a2a2e] rounded p-0.5 transition"
                 title="このノードを削除"
               >
                 ✕

@@ -123,38 +123,38 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+      <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden">
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+        <div className="px-5 py-4 border-b border-[#303034] flex items-center justify-between bg-[#18181a]">
           <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+            <div className="w-8 h-8 rounded-lg bg-[#0a84ff]/20 border border-[#0a84ff]/40 flex items-center justify-center text-[#0a84ff]">
               <Upload className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-100">プロジェクト / USTファイルの読み込み</h2>
-              <p className="text-xs text-slate-400">UST, VSQX, SVP, MIDI ファイルまたはテキストをインポート</p>
+              <h2 className="text-sm font-bold text-[#f0f0f2]">プロジェクト / USTファイルの読み込み</h2>
+              <p className="text-xs text-[#9a9aa2]">UST, VSQX, SVP, MIDI ファイルまたはテキストをインポート</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-200 rounded-lg hover:bg-slate-800 transition"
+            className="p-1.5 text-[#9a9aa2] hover:text-[#f0f0f2] rounded-lg hover:bg-[#2a2a2e] transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-800 bg-slate-900 px-5 pt-3 space-x-4 text-xs font-semibold">
+        <div className="flex border-b border-[#303034] bg-[#18181a] px-5 pt-3 space-x-4 text-xs font-semibold">
           <button
             onClick={() => {
               setActiveTab('file');
               setErrorMsg(null);
             }}
-            className={`pb-2.5 flex items-center space-x-1.5 border-b-2 transition ${
+            className={`pb-2.5 flex items-center space-x-1.5 border-b-2 transition cursor-pointer ${
               activeTab === 'file'
-                ? 'border-cyan-400 text-cyan-300'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
+                ? 'border-[#0a84ff] text-[#2997ff]'
+                : 'border-transparent text-[#9a9aa2] hover:text-[#f0f0f2]'
             }`}
           >
             <FolderOpen className="w-3.5 h-3.5" />
@@ -166,10 +166,10 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
               setActiveTab('paste');
               setErrorMsg(null);
             }}
-            className={`pb-2.5 flex items-center space-x-1.5 border-b-2 transition ${
+            className={`pb-2.5 flex items-center space-x-1.5 border-b-2 transition cursor-pointer ${
               activeTab === 'paste'
-                ? 'border-cyan-400 text-cyan-300'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
+                ? 'border-[#0a84ff] text-[#2997ff]'
+                : 'border-transparent text-[#9a9aa2] hover:text-[#f0f0f2]'
             }`}
           >
             <Clipboard className="w-3.5 h-3.5" />
@@ -180,26 +180,26 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
         {/* Modal Body */}
         <div className="p-5 space-y-4">
           {/* Target Track Mode Option */}
-          <div className="flex items-center justify-between bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs">
-            <span className="text-slate-300 font-medium">読み込み先:</span>
+          <div className="flex items-center justify-between bg-[#18181a] p-3 rounded-lg border border-[#303034] text-xs">
+            <span className="text-[#f0f0f2] font-medium">読み込み先:</span>
             <div className="flex items-center space-x-3">
-              <label className="flex items-center space-x-1.5 cursor-pointer text-slate-300 hover:text-white">
+              <label className="flex items-center space-x-1.5 cursor-pointer text-[#d5d5da] hover:text-[#f0f0f2]">
                 <input
                   type="radio"
                   name="importMode"
                   checked={importMode === 'replace'}
                   onChange={() => setImportMode('replace')}
-                  className="accent-cyan-400"
+                  className="accent-[#0a84ff]"
                 />
                 <span>現在の選択トラックに上書き</span>
               </label>
-              <label className="flex items-center space-x-1.5 cursor-pointer text-slate-300 hover:text-white">
+              <label className="flex items-center space-x-1.5 cursor-pointer text-[#d5d5da] hover:text-[#f0f0f2]">
                 <input
                   type="radio"
                   name="importMode"
                   checked={importMode === 'new_track'}
                   onChange={() => setImportMode('new_track')}
-                  className="accent-cyan-400"
+                  className="accent-[#0a84ff]"
                 />
                 <span>新規ボーカルトラックとして追加</span>
               </label>
@@ -220,24 +220,24 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
             <div className="space-y-3">
               <div
                 onClick={handleTriggerFileInput}
-                className="border-2 border-dashed border-slate-700 hover:border-cyan-500/70 bg-slate-950/60 hover:bg-slate-950/90 rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition group"
+                className="border-2 border-dashed border-[#3a3a40] hover:border-[#0a84ff]/70 bg-[#18181a]/80 hover:bg-[#18181a] rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition group"
               >
-                <div className="w-12 h-12 rounded-full bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 group-hover:scale-110 transition mb-3">
+                <div className="w-12 h-12 rounded-full bg-[#0a84ff]/10 border border-[#0a84ff]/30 flex items-center justify-center text-[#0a84ff] group-hover:scale-110 transition mb-3">
                   <Upload className="w-6 h-6" />
                 </div>
-                <p className="text-sm font-bold text-slate-200 group-hover:text-cyan-300 transition mb-1">
+                <p className="text-sm font-bold text-[#f0f0f2] group-hover:text-[#2997ff] transition mb-1">
                   クリックしてファイルを選択
                 </p>
-                <p className="text-xs text-slate-400 text-center max-w-sm">
+                <p className="text-xs text-[#9a9aa2] text-center max-w-sm">
                   UTAU (*.ust), VOCALOID (*.vsqx), Synthesizer V (*.svp), MIDI (*.mid)
                 </p>
-                <span className="mt-3 text-[11px] bg-slate-800 text-slate-300 px-3 py-1 rounded-full border border-slate-700">
+                <span className="mt-3 text-[11px] bg-[#2a2a2e] text-[#d5d5da] px-3 py-1 rounded-full border border-[#3a3a40]">
                   またはファイルを画面上に直接ドラッグ＆ドロップ
                 </span>
               </div>
 
-              <div className="text-[11px] text-slate-500 leading-relaxed space-y-1">
-                <p>💡 <span className="text-slate-400 font-semibold">ヒント:</span> 日本語Windowsで保存されたShift_JIS / CP932形式のUSTファイルも自動で文字コード判別して読み込みます。</p>
+              <div className="text-[11px] text-[#7d7d86] leading-relaxed space-y-1">
+                <p>💡 <span className="text-[#9a9aa2] font-semibold">ヒント:</span> 日本語Windowsで保存されたShift_JIS / CP932形式のUSTファイルも自動で文字コード判別して読み込みます。</p>
               </div>
             </div>
           )}
@@ -246,7 +246,7 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
           {activeTab === 'paste' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                <label className="block text-xs font-semibold text-[#f0f0f2] mb-1.5">
                   UST または VSQX / SVP のテキストを貼り付け:
                 </label>
                 <textarea
@@ -254,17 +254,17 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
                   onChange={(e) => handlePasteChange(e.target.value)}
                   placeholder="[#SETTING]&#10;Tempo=120.00&#10;ProjectName=MySong&#10;&#10;[#0000]&#10;Length=480&#10;Lyric=あ&#10;NoteNum=60&#10;&#10;[#0001]&#10;Length=480&#10;Lyric=い&#10;NoteNum=62"
                   rows={8}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 resize-none"
+                  className="w-full bg-[#18181a] border border-[#3a3a40] rounded-lg p-3 text-xs font-mono text-[#f0f0f2] placeholder-[#7d7d86] focus:outline-none focus:border-[#0a84ff] resize-none"
                 />
               </div>
 
               {previewData && (
-                <div className="bg-cyan-950/40 border border-cyan-800/60 rounded-lg p-3 text-xs text-cyan-300 flex items-center justify-between">
+                <div className="bg-[#0a84ff]/15 border border-[#0a84ff]/50 rounded-lg p-3 text-xs text-[#2997ff] flex items-center justify-between">
                   <div className="flex items-center space-x-2">
-                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <Check className="w-4 h-4 text-[#30d158] shrink-0" />
                     <span>検出: <strong>{previewData.notes.length} 音符</strong> (BPM: {previewData.tempo || 120} / 曲名: {previewData.projectName || 'なし'})</span>
                   </div>
-                  <span className="text-[10px] bg-cyan-900/80 px-2 py-0.5 rounded font-mono">OK</span>
+                  <span className="text-[10px] bg-[#0a84ff]/30 px-2 py-0.5 rounded font-mono text-[#2997ff]">OK</span>
                 </div>
               )}
             </div>
@@ -272,18 +272,18 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
 
           {/* Error Message */}
           {errorMsg && (
-            <div className="bg-red-950/50 border border-red-800/80 rounded-lg p-3 text-xs text-red-300 flex items-start space-x-2 animate-in fade-in">
-              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <div className="bg-[#ff453a]/15 border border-[#ff453a]/50 rounded-lg p-3 text-xs text-[#ff453a] flex items-start space-x-2 animate-in fade-in">
+              <AlertCircle className="w-4 h-4 text-[#ff453a] shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
           )}
         </div>
 
         {/* Modal Footer */}
-        <div className="px-5 py-3 border-t border-slate-800 bg-slate-950/70 flex items-center justify-between">
+        <div className="px-5 py-3 border-t border-[#303034] bg-[#18181a] flex items-center justify-between">
           <button
             onClick={onClose}
-            className="px-4 py-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition"
+            className="px-4 py-1.5 text-xs text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e] rounded-lg transition cursor-pointer"
           >
             キャンセル
           </button>
@@ -292,7 +292,7 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
             <button
               onClick={handleApplyPastedText}
               disabled={!previewData}
-              className="px-4 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:hover:bg-cyan-600 text-white font-medium rounded-lg transition flex items-center space-x-1.5 shadow-md shadow-cyan-600/20"
+              className="px-4 py-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] disabled:opacity-40 disabled:hover:bg-[#0a84ff] text-white font-medium rounded-lg transition flex items-center space-x-1.5 shadow-md shadow-[#0a84ff]/30 cursor-pointer"
             >
               <Check className="w-3.5 h-3.5" />
               <span>トラックに反映して読み込み</span>
@@ -300,7 +300,7 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
           ) : (
             <button
               onClick={handleTriggerFileInput}
-              className="px-4 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white font-medium rounded-lg transition flex items-center space-x-1.5 shadow-md shadow-cyan-600/20"
+              className="px-4 py-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] text-white font-medium rounded-lg transition flex items-center space-x-1.5 shadow-md shadow-[#0a84ff]/30 cursor-pointer"
             >
               <FolderOpen className="w-3.5 h-3.5" />
               <span>ファイルを選択...</span>
