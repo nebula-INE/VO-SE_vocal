@@ -54,6 +54,7 @@ interface Note {
   pbs: string; // Pitch bend start e.g. "0;0"
   pbw: string; // Pitch bend width e.g. "50,100"
   pby: string; // Pitch bend height e.g. "0,5"
+  tempo?: number;
 }
 
 interface Track {
@@ -770,43 +771,52 @@ export default function App() {
       const masterGain = ctx.createGain();
       masterGain.gain.setValueAtTime(0.85, ctx.currentTime);
 
-      // スタジオグレード 40Hz HPF (サブベース低域ノイズカット)
+      // スタジオ品質・クリアボーカルマスタリングチェーン (こもり感を一掃し、ヌケと滑舌の明瞭度を最大化)
+      // 1. サブベースカット (60Hz HPF, Q=0.707): 超低域ノイズをカットしボーカルの芯を保護
       const hpf = ctx.createBiquadFilter();
       hpf.type = 'highpass';
-      hpf.frequency.setValueAtTime(40, ctx.currentTime);
+      hpf.frequency.setValueAtTime(60, ctx.currentTime);
       hpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
-      // スタジオグレード De-Hiss & De-Breath フィルター (5.8kHz, -6.5dB)
-      const deHiss = ctx.createBiquadFilter();
-      deHiss.type = 'peaking';
-      deHiss.frequency.setValueAtTime(5800, ctx.currentTime);
-      deHiss.gain.setValueAtTime(-6.5, ctx.currentTime);
-      deHiss.Q.setValueAtTime(1.3, ctx.currentTime);
+      // 2. De-Mud フィルター (350Hz, -2.5dB, Q=1.2): 篭もりの主原因である中低域の箱鳴り・濁りをクリアに除去
+      const deMud = ctx.createBiquadFilter();
+      deMud.type = 'peaking';
+      deMud.frequency.setValueAtTime(350, ctx.currentTime);
+      deMud.gain.setValueAtTime(-2.5, ctx.currentTime);
+      deMud.Q.setValueAtTime(1.2, ctx.currentTime);
 
-      // 急峻な 4次 (24dB/oct) ボーカルローパスフィルター (6800Hz)
-      // 7kHz以上の耳障りな息漏れ・非調波ホワイトノイズをリアルタイムに完全遮断
-      const lpf1 = ctx.createBiquadFilter();
-      lpf1.type = 'lowpass';
-      lpf1.frequency.setValueAtTime(6800, ctx.currentTime);
-      lpf1.Q.setValueAtTime(0.707, ctx.currentTime);
+      // 3. Presence & Articulation ブースト (3.8kHz, +3.0dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、歌詞をはっきりと聴かせる
+      const presence = ctx.createBiquadFilter();
+      presence.type = 'peaking';
+      presence.frequency.setValueAtTime(3800, ctx.currentTime);
+      presence.gain.setValueAtTime(3.0, ctx.currentTime);
+      presence.Q.setValueAtTime(1.0, ctx.currentTime);
 
-      const lpf2 = ctx.createBiquadFilter();
-      lpf2.type = 'lowpass';
-      lpf2.frequency.setValueAtTime(6800, ctx.currentTime);
-      lpf2.Q.setValueAtTime(0.707, ctx.currentTime);
+      // 4. Air & Brilliance ハイシェルフ (9.0kHz, +3.2dB): こもった音を解消し、透明感・抜け・空気感を付加
+      const airShelf = ctx.createBiquadFilter();
+      airShelf.type = 'highshelf';
+      airShelf.frequency.setValueAtTime(9000, ctx.currentTime);
+      airShelf.gain.setValueAtTime(3.2, ctx.currentTime);
+
+      // 5. 超高域セーフティ LPF (17.5kHz, Q=0.707): 可聴域の歌声を一切減衰させずに超高域の折り返しノイズのみを遮断
+      const safetyLpf = ctx.createBiquadFilter();
+      safetyLpf.type = 'lowpass';
+      safetyLpf.frequency.setValueAtTime(17500, ctx.currentTime);
+      safetyLpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
       const limiter = ctx.createDynamicsCompressor();
-      limiter.threshold.setValueAtTime(-1.0, ctx.currentTime); // -1.0 dBFS ceiling
+      limiter.threshold.setValueAtTime(-0.8, ctx.currentTime); // -0.8 dBFS ceiling
       limiter.knee.setValueAtTime(3.0, ctx.currentTime);
       limiter.ratio.setValueAtTime(16.0, ctx.currentTime);
       limiter.attack.setValueAtTime(0.003, ctx.currentTime);
       limiter.release.setValueAtTime(0.050, ctx.currentTime);
 
       masterGain.connect(hpf);
-      hpf.connect(deHiss);
-      deHiss.connect(lpf1);
-      lpf1.connect(lpf2);
-      lpf2.connect(limiter);
+      hpf.connect(deMud);
+      deMud.connect(presence);
+      presence.connect(airShelf);
+      airShelf.connect(safetyLpf);
+      safetyLpf.connect(limiter);
       limiter.connect(ctx.destination);
 
       masterGainRef.current = masterGain;
@@ -2273,12 +2283,12 @@ export default function App() {
       const filter1 = ctx.createBiquadFilter();
       filter1.type = 'bandpass';
       filter1.frequency.setValueAtTime(f1, noteStartCtxTime);
-      filter1.Q.setValueAtTime(3.5, noteStartCtxTime);
+      filter1.Q.setValueAtTime(1.8, noteStartCtxTime);
 
       const filter2 = ctx.createBiquadFilter();
       filter2.type = 'bandpass';
       filter2.frequency.setValueAtTime(f2, noteStartCtxTime);
-      filter2.Q.setValueAtTime(4.0, noteStartCtxTime);
+      filter2.Q.setValueAtTime(2.0, noteStartCtxTime);
 
       const gain = ctx.createGain();
       const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.35 * Math.min(1.5, trackVol);

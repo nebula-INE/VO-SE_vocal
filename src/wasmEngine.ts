@@ -389,52 +389,52 @@ export async function renderStudioOffline(
   const masterGain = offlineCtx.createGain();
   masterGain.gain.setValueAtTime(0.95, 0);
 
-  // サブベースカット (40Hz HPF)
+  // スタジオ品質・クリアボーカルマスタリングチェーン (こもり感を一掃し、ヌケと滑舌の明瞭度を最大化)
+  // 1. サブベースカット (60Hz HPF)
   const masterHpf = offlineCtx.createBiquadFilter();
   masterHpf.type = 'highpass';
-  masterHpf.frequency.setValueAtTime(40, 0);
+  masterHpf.frequency.setValueAtTime(60, 0);
   masterHpf.Q.setValueAtTime(0.707, 0);
 
-  // [スタジオDe-Mud] 320Hz近傍の濁り・こもりをすっきりカット
+  // 2. [スタジオDe-Mud] 350Hz近傍の濁り・こもりをすっきりカット
   const masterDeMud = offlineCtx.createBiquadFilter();
   masterDeMud.type = 'peaking';
-  masterDeMud.frequency.setValueAtTime(320, 0);
+  masterDeMud.frequency.setValueAtTime(350, 0);
   masterDeMud.gain.setValueAtTime(-2.5, 0);
   masterDeMud.Q.setValueAtTime(1.2, 0);
 
-  // [スタジオVocal Core] 2.2kHz声の芯・存在感を自然に保持
-  const masterCore = offlineCtx.createBiquadFilter();
-  masterCore.type = 'peaking';
-  masterCore.frequency.setValueAtTime(2200, 0);
-  masterCore.gain.setValueAtTime(1.0, 0);
-  masterCore.Q.setValueAtTime(1.0, 0);
+  // 3. [スタジオPresence & Articulation] 3.8kHz 子音のアタック・発音の輪郭をクリアに強調
+  const masterPresence = offlineCtx.createBiquadFilter();
+  masterPresence.type = 'peaking';
+  masterPresence.frequency.setValueAtTime(3800, 0);
+  masterPresence.gain.setValueAtTime(3.0, 0);
+  masterPresence.Q.setValueAtTime(1.0, 0);
 
-  // [スタジオDe-Hiss] 5.8kHzの耳障りなヒス・息漏れノイズを自然に抑制
-  const masterDeHiss = offlineCtx.createBiquadFilter();
-  masterDeHiss.type = 'peaking';
-  masterDeHiss.frequency.setValueAtTime(5800, 0);
-  masterDeHiss.gain.setValueAtTime(-5.0, 0);
-  masterDeHiss.Q.setValueAtTime(1.3, 0);
+  // 4. [スタジオAir & Brilliance] 9.0kHz ハイシェルフで抜けと透明感を付加
+  const masterAir = offlineCtx.createBiquadFilter();
+  masterAir.type = 'highshelf';
+  masterAir.frequency.setValueAtTime(9000, 0);
+  masterAir.gain.setValueAtTime(3.2, 0);
 
-  // [スタジオLPF] 13.5kHz以上の不要な超高域ノイズ・折り返しをカット
+  // 5. [スタジオ超高域セーフティLPF] 17.5kHz以上の不要な折り返しノイズのみをカット
   const masterLpf = offlineCtx.createBiquadFilter();
   masterLpf.type = 'lowpass';
-  masterLpf.frequency.setValueAtTime(13500, 0);
+  masterLpf.frequency.setValueAtTime(17500, 0);
   masterLpf.Q.setValueAtTime(0.707, 0);
 
   // クリッピング防止コンプレッサー/リミッター
   const masterLimiter = offlineCtx.createDynamicsCompressor();
-  masterLimiter.threshold.setValueAtTime(-1.0, 0);
-  masterLimiter.knee.setValueAtTime(4.0, 0);
-  masterLimiter.ratio.setValueAtTime(12.0, 0);
+  masterLimiter.threshold.setValueAtTime(-0.8, 0);
+  masterLimiter.knee.setValueAtTime(3.0, 0);
+  masterLimiter.ratio.setValueAtTime(16.0, 0);
   masterLimiter.attack.setValueAtTime(0.003, 0);
-  masterLimiter.release.setValueAtTime(0.08, 0);
+  masterLimiter.release.setValueAtTime(0.05, 0);
 
   masterGain.connect(masterHpf);
   masterHpf.connect(masterDeMud);
-  masterDeMud.connect(masterCore);
-  masterCore.connect(masterDeHiss);
-  masterDeHiss.connect(masterLpf);
+  masterDeMud.connect(masterPresence);
+  masterPresence.connect(masterAir);
+  masterAir.connect(masterLpf);
   masterLpf.connect(masterLimiter);
   masterLimiter.connect(offlineCtx.destination);
 
@@ -599,21 +599,36 @@ export async function renderStudioOffline(
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(baseFreq, startTimeSec);
 
-        const filter = offlineCtx.createBiquadFilter();
-        filter.type = 'bandpass';
-        filter.frequency.setValueAtTime(f1, startTimeSec);
-        filter.Q.setValueAtTime(2.5, startTimeSec);
+        // 母音の第1・第2フォルマント(F1/F2)と抜けの良い高域を合成し、篭もりのない明瞭な音声を生成
+        const filter1 = offlineCtx.createBiquadFilter();
+        filter1.type = 'peaking';
+        filter1.frequency.setValueAtTime(f1, startTimeSec);
+        filter1.gain.setValueAtTime(6.0, startTimeSec);
+        filter1.Q.setValueAtTime(2.0, startTimeSec);
+
+        const filter2 = offlineCtx.createBiquadFilter();
+        filter2.type = 'peaking';
+        filter2.frequency.setValueAtTime(f2, startTimeSec);
+        filter2.gain.setValueAtTime(5.0, startTimeSec);
+        filter2.Q.setValueAtTime(2.0, startTimeSec);
+
+        const lpf = offlineCtx.createBiquadFilter();
+        lpf.type = 'lowpass';
+        lpf.frequency.setValueAtTime(9500, startTimeSec);
+        lpf.Q.setValueAtTime(0.707, startTimeSec);
 
         const synthGain = offlineCtx.createGain();
-        const vol = Math.max(0.05, Math.min(1.0, (note.intensity || 120) / 140)) * 0.7;
+        const vol = Math.max(0.05, Math.min(1.0, (note.intensity || 120) / 140)) * 0.6;
 
         synthGain.gain.setValueAtTime(0.0001, startTimeSec);
         synthGain.gain.linearRampToValueAtTime(vol, startTimeSec + 0.02);
         synthGain.gain.setValueAtTime(vol, Math.max(startTimeSec + 0.03, startTimeSec + durationSec - 0.02));
         synthGain.gain.linearRampToValueAtTime(0.0001, startTimeSec + durationSec);
 
-        osc.connect(filter);
-        filter.connect(synthGain);
+        osc.connect(filter1);
+        filter1.connect(filter2);
+        filter2.connect(lpf);
+        lpf.connect(synthGain);
         synthGain.connect(masterGain);
 
         osc.start(startTimeSec);

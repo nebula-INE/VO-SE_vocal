@@ -36,6 +36,8 @@
 //      解放処理をprogressFnPtrの有無から独立させた。
 // ============================================================
 
+import createVoseCoreModule from './wasm/vose_core.js';
+
 interface VoseCoreModule {
   ccall: (name: string, retType: string | null, argTypes: string[], args: unknown[]) => unknown;
   setValue: (ptr: number, value: number, type: string) => void;
@@ -130,11 +132,32 @@ function getCapturedLogText(): string {
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
-    const wasmJsUrl = new URL('/wasm/vose_core.js', self.location.origin).href;
-    const mod = await import(/* @vite-ignore */ wasmJsUrl);
-    const createVoseCoreModule = mod.default || mod;
-    return await (createVoseCoreModule as any)({
+    const initFn = (createVoseCoreModule as any)?.default || createVoseCoreModule;
+    return await initFn({
       locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path),
+      instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
+        (async () => {
+          try {
+            try {
+              const res = await fetch('/wasm/vose_core.wasm');
+              if (res.ok) {
+                const streamRes = await WebAssembly.instantiateStreaming(res, imports);
+                successCallback(streamRes.instance);
+                return;
+              }
+            } catch (streamErr) {
+              console.warn('[voseCoreWorker] instantiateStreaming failed, falling back to ArrayBuffer:', streamErr);
+            }
+            const bufRes = await fetch('/wasm/vose_core.wasm');
+            const bytes = await bufRes.arrayBuffer();
+            const compiled = await WebAssembly.instantiate(bytes, imports);
+            successCallback(compiled.instance);
+          } catch (err) {
+            console.error('[voseCoreWorker] Failed to instantiate WASM via instantiateWasm:', err);
+          }
+        })();
+        return {};
+      },
       print: (text: string) => {
         captureLine(text);
         console.log('[vose_core stdout]', text);

@@ -39,10 +39,16 @@ class RealtimeAudioEngine {
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(freqWithFreqBoundary(freqWithPitch), ctx.currentTime);
 
-      // Formant Filter for vocal-like resonance
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(1000 + (noteNum - 60) * 20, ctx.currentTime);
-      filter.Q.setValueAtTime(2.5, ctx.currentTime);
+      // クリアなボーカルフォルマント・プレゼンスフィルター (篭もりを排除し抜けの良い音に)
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(8500, ctx.currentTime);
+      filter.Q.setValueAtTime(0.707, ctx.currentTime);
+
+      const presenceFilter = ctx.createBiquadFilter();
+      presenceFilter.type = 'peaking';
+      presenceFilter.frequency.setValueAtTime(3600, ctx.currentTime);
+      presenceFilter.gain.setValueAtTime(3.5, ctx.currentTime);
+      presenceFilter.Q.setValueAtTime(1.0, ctx.currentTime);
 
       // Envelope
       const now = ctx.currentTime;
@@ -50,7 +56,8 @@ class RealtimeAudioEngine {
       gain.gain.linearRampToValueAtTime(volume, now + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec);
 
-      osc.connect(filter);
+      osc.connect(presenceFilter);
+      presenceFilter.connect(filter);
       filter.connect(gain);
       gain.connect(ctx.destination);
 

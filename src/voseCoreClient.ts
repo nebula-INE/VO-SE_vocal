@@ -68,10 +68,25 @@ let sharedDecodeCtx: AudioContext | null = null;
 async function decodeToPcm16(arrayBuf: ArrayBuffer): Promise<Int16Array> {
   const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
   if (!sharedDecodeCtx || sharedDecodeCtx.state === 'closed') {
-    sharedDecodeCtx = new AudioCtx({ sampleRate: CORE_SAMPLE_RATE });
+    sharedDecodeCtx = new AudioCtx();
   }
   const audioBuffer = await sharedDecodeCtx.decodeAudioData(arrayBuf.slice(0));
-  const float32 = audioBuffer.getChannelData(0);
+
+  let float32: Float32Array;
+  if (audioBuffer.sampleRate !== CORE_SAMPLE_RATE) {
+    // 44100Hz に正確にリサンプリングして WORLD ボコーダーの前提 (kFs=44100) に合致させる
+    const targetLength = Math.max(1, Math.round(audioBuffer.duration * CORE_SAMPLE_RATE));
+    const offlineCtx = new OfflineAudioContext(1, targetLength, CORE_SAMPLE_RATE);
+    const source = offlineCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(offlineCtx.destination);
+    source.start(0);
+    const resampledBuffer = await offlineCtx.startRendering();
+    float32 = resampledBuffer.getChannelData(0);
+  } else {
+    float32 = audioBuffer.getChannelData(0);
+  }
+
   const int16 = new Int16Array(float32.length);
   for (let i = 0; i < float32.length; i++) {
     const s = Math.max(-1, Math.min(1, float32[i]));
@@ -223,9 +238,8 @@ function getWorker(): Worker {
 export let lastUsedEngine: 'wasm' | 'js-fallback' | null = null;
 
 /**
- * renderWasm(=wasmEngine.tsのrenderStudioOffline)と同一シグネチャの
- * ドロップイン代替。本物のvose_core WASMコアで合成し、失敗時は
- * 自動的にJS実装(PSOLA版)へフォールバックする。
+ * C++ WebAssembly (vose_core.wasm / WORLDボコーダー) 専用レンダリング関数。
+ * TD-PSOLAへの無言フォールバックを排除し、完全なWORLDボコーダー合成に一本化。
  */
 export async function renderStudioCore(
   notes: any[],
@@ -235,16 +249,15 @@ export async function renderStudioCore(
 ): Promise<string | null> {
   if (!notes || notes.length === 0) return null;
 
+  console.log('[voseCoreClient] 🚀 C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) でレンダリングを開始します...');
   try {
-    console.log('[voseCoreClient] 🚀 C++ WebAssembly エンジン (vose_core.wasm) でレンダリングを開始します...');
     const result = await renderViaCore(notes, tempo, voicebank, onProgress);
     lastUsedEngine = 'wasm';
-    console.log('[voseCoreClient] ✅ C++ WebAssembly エンジン (vose_core.wasm) での合成が正常に完了しました！');
+    console.log('[voseCoreClient] ✅ C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) での合成が正常に完了しました！');
     return result;
-  } catch (err) {
-    lastUsedEngine = 'js-fallback';
-    console.warn('[voseCoreClient] ⚠️ vose_core WASM経由のレンダリングに失敗。JS実装(PSOLA版)にフォールバックします:', err);
-    return await renderStudioOffline(notes, tempo, voicebank, onProgress);
+  } catch (err: any) {
+    console.error('[voseCoreClient] ❌ C++ WebAssembly (vose_core.wasm) レンダリングエラー:', err);
+    throw new Error(`C++ WORLDボコーダー合成エラー: ${err?.message || err}`);
   }
 }
 
@@ -255,7 +268,11 @@ async function renderViaCore(
   onProgress?: (pct: number) => void
 ): Promise<string | null> {
   const sortedNotes = [...notes].sort((a, b) => (a.tick || 0) - (b.tick || 0));
-  const tickDurationSec = 60 / (tempo * 480);
+  
+  // 開始テンポの決定: 最初の音符に明示的なテンポがあればそれを採用、無ければ引数のtempo
+  const initialTempo = (sortedNotes.length > 0 && typeof sortedNotes[0].tempo === 'number' && sortedNotes[0].tempo > 0)
+    ? sortedNotes[0].tempo
+    : (tempo || 120);
 
   onProgress?.(2);
 
@@ -269,11 +286,16 @@ async function renderViaCore(
   const noteInfos: NoteInfo[] = [];
   const uniqueSampleMap = new Map<string, { alias: string; prevLyric?: string; noteNum: number }>();
 
+  let curTempo = initialTempo;
   for (let i = 0; i < sortedNotes.length; i++) {
     const n = sortedNotes[i];
+    if (typeof n.tempo === 'number' && n.tempo > 0) {
+      curTempo = n.tempo;
+    }
+    const currentTickDurationSec = 60 / (curTempo * 480);
     const startTick = n.tick || 0;
     const endTick = startTick + (n.length || 480);
-    const durationMs = (n.length || 480) * tickDurationSec * 1000;
+    const durationMs = (n.length || 480) * currentTickDurationSec * 1000;
 
     if (isRest(n.lyric)) {
       noteInfos.push({ note: n, startTick, endTick, durationMs, cacheKey: null });
@@ -336,10 +358,15 @@ async function renderViaCore(
     workerNotes.push({ key: null, pitchCurveHz: silentFrames(durationMs) });
   };
 
+  let activeTempo = initialTempo;
   for (const info of noteInfos) {
+    if (typeof info.note?.tempo === 'number' && info.note.tempo > 0) {
+      activeTempo = info.note.tempo;
+    }
+    const activeTickDurationSec = 60 / (activeTempo * 480);
     if (info.startTick > cursorTick) {
       const gapTicks = info.startTick - cursorTick;
-      pushSilence(gapTicks * tickDurationSec * 1000);
+      pushSilence(gapTicks * activeTickDurationSec * 1000);
     }
 
     if (info.cacheKey === null) {

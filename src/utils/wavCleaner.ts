@@ -196,25 +196,14 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
     }
   }
 
-  // --- フィルター設計 ---
-  // 1. サブベース/DCドリフト除去 (45Hz HPF, Q=0.707)
-  const hpfCoeffs = makeBiquadHpf(45, sampleRate, 0.707);
+  // --- フィルター設計 (VO-SE Studio Crystal Clarity Vocal Chain) ---
+  // 1. サブベース/DCドリフト除去 (60Hz HPF, Q=0.707)
+  const hpfCoeffs = makeBiquadHpf(60, sampleRate, 0.707);
   const hpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
 
-  // 2. De-Hiss フィルター (5.8kHz, -4.5dB, Q=1.2): ボコーダー/サンプルの耳障りな高域ヒスノイズ除去
-  const deHissCoeffs = makeBiquadPeaking(5800, sampleRate, -4.5, 1.2);
-  const deHissFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
-
-  // 3. 高域ハイシェルフ減衰 (6.8kHz, -5.0dB, S=1.0): WORLDボコーダーで過剰生成される高域ホワイトノイズを自然な歌声スペクトルに整合
-  const highShelfCoeffs = makeBiquadHighShelf(6800, sampleRate, -5.0, 1.0);
-  const highShelfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
-
-  // 4. 急峻な 4次 (24dB/oct) ボーカルローパスフィルター (9.2kHz): 10kHz以上の耳障りな非調波ホワイトノイズ・折り返しを完全遮断
-  const lpf1Coeffs = makeBiquadLpf(9200, sampleRate, 0.707);
-  const lpf1Filters = Array.from({ length: numChannels }, () => new BiquadFilter());
-
-  const lpf2Coeffs = makeBiquadLpf(10000, sampleRate, 0.707);
-  const lpf2Filters = Array.from({ length: numChannels }, () => new BiquadFilter());
+  // 2. 超高域 LPF (16.0kHz, Q=0.707): 可聴域外の折り返しノイズのみをカットし、母音の抜け・子音の自然な透明感を100%保持
+  const lpfCoeffs = makeBiquadLpf(16000, sampleRate, 0.707);
+  const lpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
 
   // 曲頭・曲末のデクリック・フェード（6ms）
   const fadeFrames = Math.min(Math.floor(sampleRate * 0.006), Math.floor(totalFrames / 4));
@@ -243,12 +232,9 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
       const idx = f * numChannels + c;
       let sNorm = pcm[idx] * inv32768;
 
-      // HPF -> De-Hiss -> HighShelf -> LPF1 -> LPF2 フィルターチェーン
+      // HPF -> LPF のみで、声本来のフォルマントや倍音構造をそのまま通す
       sNorm = hpfFilters[c].process(sNorm, hpfCoeffs);
-      sNorm = deHissFilters[c].process(sNorm, deHissCoeffs);
-      sNorm = highShelfFilters[c].process(sNorm, highShelfCoeffs);
-      sNorm = lpf1Filters[c].process(sNorm, lpf1Coeffs);
-      sNorm = lpf2Filters[c].process(sNorm, lpf2Coeffs);
+      sNorm = lpfFilters[c].process(sNorm, lpfCoeffs);
 
       const absS = Math.abs(sNorm);
       if (absS > frameMaxAbs) frameMaxAbs = absS;

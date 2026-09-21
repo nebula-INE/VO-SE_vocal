@@ -180,15 +180,15 @@ export function smoothPitchBendPoints(points: PitchPoint[], maxSemitonePerMs: nu
 
 /**
  * 音高・ピッチベンドに応じたフォルマント補正フィルターの遮断周波数(Hz)を計算。
- * ピッチが過度に上がった際に金属的なエイリアシング高周波を自然に減衰させ、人声の温かみを維持する。
+ * こもり感を完全に解消し、子音の明瞭度・空気感を100%保持するため高域を遮断せずクリアに開放する。
  */
 export function calculateFormantCutoff(basePitchMidi: number, semitoneOffset: number = 0): number {
   const currentMidi = basePitchMidi + semitoneOffset;
-  if (currentMidi > 76) { // E5以上
-    const excess = currentMidi - 76;
-    return Math.max(4200, Math.min(10500, 11000 - excess * 220));
+  if (currentMidi > 88) { // 超高域(E6以上)でのみ可聴域外の折り返しノイズを軽くケア
+    const excess = currentMidi - 88;
+    return Math.max(16000, 18000 - excess * 150);
   }
-  return 12000;
+  return 18000;
 }
 
 /**

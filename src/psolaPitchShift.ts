@@ -412,10 +412,102 @@ export function psolaPitchAndTimeShiftBuffer(
     // ごく短い区間だけを検出し、前後の波形から線形補間で穴埋めする。
     declickBuffer(out, sampleRate);
 
+    // [スタジオClarity補償] TD-PSOLAの窓掛け重ね合わせで発生する高域ロールオフと
+    // 中低域のこもり感を完全に解消し、澄んだ発音と抜けの良いボーカルを復元
+    applyClarityCompensation(out, sampleRate);
+
     outBuffer.copyToChannel(out, ch);
   }
 
   return outBuffer;
+}
+
+/**
+ * TD-PSOLA処理でグレインの重ね合わせによって発生する高域減衰や、
+ * 300〜400Hzの中低域のこもりを解消し、原音以上の抜けとクリアな滑舌・透明感を復元する。
+ */
+function applyClarityCompensation(samples: Float32Array, sampleRate: number): void {
+  // 1. De-Mud (350Hz, -2.0dB, Q=1.2) - 局所グレイン加算による箱鳴り・こもりを解消
+  const deMud = makeBiquadPeakingCoeffs(350, sampleRate, -2.0, 1.2);
+  // 2. Presence (3800Hz, +2.5dB, Q=1.0) - 子音のアタック・発音の輪郭をクリアに強調
+  const presence = makeBiquadPeakingCoeffs(3800, sampleRate, 2.5, 1.0);
+  // 3. Air Shelf (9000Hz, +2.8dB) - 窓関数加算で減衰した高域の艶・透明感を補償
+  const air = makeBiquadHighShelfCoeffs(9000, sampleRate, 2.8, 1.0);
+
+  let x1_1 = 0, x2_1 = 0;
+  let x1_2 = 0, x2_2 = 0;
+  let x1_3 = 0, x2_3 = 0;
+
+  for (let i = 0; i < samples.length; i++) {
+    let s = samples[i];
+
+    // filter 1 (deMud)
+    const y1 = deMud.b0 * s + x1_1;
+    x1_1 = deMud.b1 * s - deMud.a1 * y1 + x2_1;
+    x2_1 = deMud.b2 * s - deMud.a2 * y1;
+    s = y1;
+
+    // filter 2 (presence)
+    const y2 = presence.b0 * s + x1_2;
+    x1_2 = presence.b1 * s - presence.a1 * y2 + x2_2;
+    x2_2 = presence.b2 * s - presence.a2 * y2;
+    s = y2;
+
+    // filter 3 (air)
+    const y3 = air.b0 * s + x1_3;
+    x1_3 = air.b1 * s - air.a1 * y3 + x2_3;
+    x2_3 = air.b2 * s - air.a2 * y3;
+    s = y3;
+
+    samples[i] = s;
+  }
+}
+
+function makeBiquadPeakingCoeffs(f0: number, Fs: number, gainDb: number, Q: number = 1.2) {
+  const w0 = (2 * Math.PI * f0) / Fs;
+  const A = Math.pow(10, gainDb / 40.0);
+  const sinw0 = Math.sin(w0);
+  const cosw0 = Math.cos(w0);
+  const alpha = sinw0 / (2 * Q);
+
+  const b0 = 1 + alpha * A;
+  const b1 = -2 * cosw0;
+  const b2 = 1 - alpha * A;
+  const a0 = 1 + alpha / A;
+  const a1 = -2 * cosw0;
+  const a2 = 1 - alpha / A;
+
+  return {
+    b0: b0 / a0,
+    b1: b1 / a0,
+    b2: b2 / a0,
+    a1: a1 / a0,
+    a2: a2 / a0,
+  };
+}
+
+function makeBiquadHighShelfCoeffs(f0: number, Fs: number, gainDb: number, S: number = 1.0) {
+  const A = Math.pow(10, gainDb / 40.0);
+  const w0 = (2 * Math.PI * f0) / Fs;
+  const cosw0 = Math.cos(w0);
+  const sinw0 = Math.sin(w0);
+  const alpha = (sinw0 / 2) * Math.sqrt((A + 1 / A) * (1 / S - 1) + 2);
+  const two_sqrt_A_alpha = 2 * Math.sqrt(A) * alpha;
+
+  const b0 = A * ((A + 1) + (A - 1) * cosw0 + two_sqrt_A_alpha);
+  const b1 = -2 * A * ((A - 1) + (A + 1) * cosw0);
+  const b2 = A * ((A + 1) + (A - 1) * cosw0 - two_sqrt_A_alpha);
+  const a0 = (A + 1) - (A - 1) * cosw0 + two_sqrt_A_alpha;
+  const a1 = 2 * ((A - 1) - (A + 1) * cosw0);
+  const a2 = (A + 1) - (A - 1) * cosw0 - two_sqrt_A_alpha;
+
+  return {
+    b0: b0 / a0,
+    b1: b1 / a0,
+    b2: b2 / a0,
+    a1: a1 / a0,
+    a2: a2 / a0,
+  };
 }
 
 /**

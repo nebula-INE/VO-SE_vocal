@@ -14,6 +14,7 @@ export interface Note {
   pbs: string;
   pbw: string;
   pby: string;
+  tempo?: number; // Note-specific tempo (BPM) if specified
 }
 
 export interface ProjectData {
@@ -142,7 +143,9 @@ export function parseUstText(text: string): ProjectData {
   const cleanText = text.replace(/^\uFEFF/, '');
   const lines = cleanText.split(/\r?\n|\r/);
 
-  let tempo = 120;
+  let settingTempo: number | null = null;
+  let firstNoteTempo: number | null = null;
+  let currentRunningTempo = 120;
   let projectName = 'UTAU Project';
   let voicebank = '';
   const notes: Note[] = [];
@@ -160,6 +163,7 @@ export function parseUstText(text: string): ProjectData {
   let curPbw = '50';
   let curPby = '0';
   let curPitches = '';
+  let curTempo: number | undefined = undefined;
 
   const pushCurrentNote = () => {
     if (!inNote) return;
@@ -175,7 +179,8 @@ export function parseUstText(text: string): ProjectData {
     if (trimmedLyric === '+') {
       if (notes.length > 0) {
         const prevNote = notes[notes.length - 1];
-        const prevLengthMs = (prevNote.length / 480) * (60000 / (tempo || 120));
+        const activeTempo = prevNote.tempo || currentRunningTempo || 120;
+        const prevLengthMs = (prevNote.length / 480) * (60000 / activeTempo);
 
         if (curPbs || curPbw || curPby) {
           const prevPoints = parsePitchBend(prevNote.pbs, prevNote.pbw, prevNote.pby);
@@ -234,7 +239,8 @@ export function parseUstText(text: string): ProjectData {
           // (以前はノート内の最大絶対値でセント/0.1半音/実半音を"自動判定"していたが、
           //  これは pitchCurve.ts と同じ根本原因のバグ。ベンドの深さと単位は無関係)
           const factor = 0.1;
-          const stepMs = Math.max(10, Math.round(((curLength / 480) * (60000 / (tempo || 120))) / pitchList.length));
+          const activeTempo = curTempo || currentRunningTempo || 120;
+          const stepMs = Math.max(10, Math.round(((curLength / 480) * (60000 / activeTempo)) / pitchList.length));
           const stepSample = Math.max(1, Math.floor(pitchList.length / 6));
           const pts: PitchPoint[] = [];
           let curMs = 0;
@@ -270,7 +276,8 @@ export function parseUstText(text: string): ProjectData {
         flags: curFlags,
         pbs: finalPbs || '0;0',
         pbw: finalPbw || '50',
-        pby: finalPby || '0'
+        pby: finalPby || '0',
+        ...(curTempo !== undefined ? { tempo: curTempo } : {})
       });
     }
 
@@ -330,6 +337,7 @@ export function parseUstText(text: string): ProjectData {
       curPbw = '50';
       curPby = '0';
       curPitches = '';
+      curTempo = undefined;
       continue;
     }
 
@@ -341,7 +349,10 @@ export function parseUstText(text: string): ProjectData {
     if (inSetting) {
       if (key === 'tempo') {
         const parsedTempo = parseFloat(val);
-        if (!isNaN(parsedTempo) && parsedTempo > 0) tempo = parsedTempo;
+        if (!isNaN(parsedTempo) && parsedTempo > 0) {
+          settingTempo = parsedTempo;
+          currentRunningTempo = parsedTempo;
+        }
       } else if (key === 'projectname' || key === 'project') {
         projectName = val;
       } else if (key === 'voicedir' || key === 'voicebank') {
@@ -384,10 +395,13 @@ export function parseUstText(text: string): ProjectData {
           curPitches = val;
           break;
         case 'tempo': {
-          // If tempo specified on note and setting didn't have custom tempo
           const parsed = parseFloat(val);
-          if (!isNaN(parsed) && parsed > 0 && tempo === 120) {
-            tempo = parsed;
+          if (!isNaN(parsed) && parsed > 0) {
+            curTempo = parsed;
+            currentRunningTempo = parsed;
+            if (firstNoteTempo === null) {
+              firstNoteTempo = parsed;
+            }
           }
           break;
         }
@@ -396,7 +410,10 @@ export function parseUstText(text: string): ProjectData {
       // Global key-value pair outside sections
       if (key === 'tempo') {
         const parsed = parseFloat(val);
-        if (!isNaN(parsed) && parsed > 0) tempo = parsed;
+        if (!isNaN(parsed) && parsed > 0 && settingTempo === null) {
+          settingTempo = parsed;
+          currentRunningTempo = parsed;
+        }
       } else if (key === 'projectname') {
         projectName = val;
       } else if (key === 'voicedir' || key === 'voicebank') {
@@ -409,7 +426,17 @@ export function parseUstText(text: string): ProjectData {
   // Push the final note if file did not have [#TRACKEND]
   pushCurrentNote();
 
-  return { projectName, tempo, voicebank, notes };
+  // テンポ優先決定ルール:
+  // 1. ノート側で最初に指定されたテンポ (firstNoteTempo)
+  //    UTAUでは [#SETTING] がデフォルト120のままでも、[#0000] 等のノート側で
+  //    曲の真のテンポ（例: 170）が指定されるケースが極めて多いため最優先する。
+  // 2. [#SETTING] で指定されたテンポ (settingTempo)
+  // 3. デフォルト 120
+  const finalTempo = firstNoteTempo !== null
+    ? firstNoteTempo
+    : (settingTempo !== null ? settingTempo : 120);
+
+  return { projectName, tempo: finalTempo, voicebank, notes };
 }
 
 export function exportUstText(project: ProjectData): string {

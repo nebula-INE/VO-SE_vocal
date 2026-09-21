@@ -13,6 +13,7 @@ export interface Note {
   pbs: string;
   pbw: string;
   pby: string;
+  tempo?: number;
 }
 
 export interface InspectorPanelProps {

@@ -877,7 +877,8 @@ double map_time(double t_out_ms, const OtoEntry& oto,
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
 
-    const double source_stretch = std::max(0.0, cutoff_pos - (offset + fixed));
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
+    const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double output_stretch = std::max(1.0, note_duration_ms - fixed);
 
     double mapped_ms;
@@ -888,7 +889,7 @@ double map_time(double t_out_ms, const OtoEntry& oto,
         mapped_ms = (offset + fixed) + (t_out_ms - fixed) * ratio;
     }
 
-    return clamp(mapped_ms, 0.0, std::max(0.0, source_wav_len_ms - 1.0));
+    return clamp(mapped_ms, 0.0, std::max(0.0, safe_cutoff_pos));
 }
 
 // ============================================================
@@ -1430,11 +1431,14 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         apply_gender_shift(sr, spec_bins, gender, tl_scratch.spec_tmp.data(), f0_ratio);
         apply_tension_breath(sr, ar, spec_bins, tension, breath);
 
-        // ---- 5. 非周期性(ar)の最適クランプ（謎のノイズ混じり吐息を完全に除去） ----
+        // ---- 5. 非周期性(ar)の最適クランプ（ピッチシフト時の高域ノイズ・ヒスノイズを徹底除去） ----
         // ユーザーが明示的に息パラメータ (breath > 0.5) を上げた場合のみ意図的な息漏れを許容
-        // ★修正: 係数を 1.2 → 0.3 に縮小。breath=1.0 でも max_ap の底上げを +0.15 までに
-        // 抑え、意図的な息漏れ設定時でも高域が「サー」と鳴りすぎないようにする。
-        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.3 : 0.0;
+        // 高音シフト時 (f0_ratio > 1.0) は原音波形が引き伸ばされ非周期成分が目立ちやすくなるため、
+        // f0_ratio に応じて動的に非周期性を抑制（最大クランプ値を引き下げ）し、チャタリング・かすれノイズを防ぐ。
+        const double pitch_noise_suppress = (f0_ratio > 1.0)
+            ? std::max(0.20, 1.0 / (1.0 + (f0_ratio - 1.0) * 0.8))
+            : (f0_ratio < 0.7 ? 0.70 : 1.0); // 極端な低音化時の濁りも緩和
+        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.2 * pitch_noise_suppress : 0.0;
         const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path);
         const double fixed_ms = std::max(0.0, current_oto.consonant);
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
@@ -1444,17 +1448,16 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
             double max_ap;
             if (in_consonant_friction) {
-                // 無声子音アタック (k, s, t, h, p など): 高域にのみ子音の摩擦・破裂成分を許容
-                static const double bfreqs[2] = {2200.0, 4500.0};
-                static const double bvals[3]  = {0.01, 0.25, 0.50};
+                // 無声子音アタック (k, s, t, h, p など): 子音の破裂・摩擦に必要な自然な高域非周期性を維持
+                static const double bfreqs[2] = {2000.0, 4000.0};
+                static const double bvals[3]  = {0.05, 0.35, 0.70};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
             } else {
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
-                // 非周期性（ar）を適切に抑制し、背後に乗る不快な「サー」というホワイトノイズ・ヒスノイズを一掃。
-                // 人間の純粋な歌声の調波構造を優先し、高域の必要最小限の自然な空気感(1%〜10%)のみに制限する。
-                static const double bfreqs[3] = {3000.0, 6000.0, 10000.0};
-                static const double bvals[4]  = {0.01, 0.03, 0.06, 0.10};
-                max_ap = smooth_band_value(freq, bfreqs, bvals, 3);
+                // 原音の豊かな倍音・声帯振動を削りすぎず、かつ高域のボコーダーヒスノイズのみをカット
+                static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
+                static const double bvals[4]  = {0.02, 0.08, 0.20, 0.40};
+                max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
             if (ar[k] > max_ap) {
