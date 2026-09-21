@@ -15,7 +15,7 @@
 //
 // 注意: Web WorkerにはDOM(document)もWeb Audio APIも無いため、
 // サンプルのfetch/decode/リサンプリングは引き続きメインスレッド
-// (voseCoreClient.ts)側で行い、ここには「登録キー＋16bit PCM＋oto値」と
+// (voseCoreClient.ts)側で行い、ここには「登録キー＋Float32 PCM＋oto値」と
 // 「NoteEvent構築に必要なプレーンな値」だけを渡す。
 //
 // [修正] 2点追加/修正:
@@ -45,9 +45,11 @@ interface VoseCoreModule {
   lengthBytesUTF8: (str: string) => number;
   _malloc: (size: number) => number;
   _free: (ptr: number) => void;
+  _load_embedded_resource_f32?: (phoneme: string, rawData: number, sampleCount: number) => void;
   addFunction: (fn: (...args: number[]) => number | void, signature: string) => number;
   removeFunction: (ptr: number) => void;
   HEAPU8: Uint8Array;
+  HEAPF32: Float32Array;
   HEAPF64: Float64Array;
   FS: {
     readFile: (path: string, opts?: { encoding?: string }) => Uint8Array;
@@ -217,7 +219,7 @@ export interface OtoData {
 
 export interface WorkerSampleEntry {
   key: string; // load_embedded_resourceのphoneme = oto.aliasとして使う
-  pcm16: ArrayBuffer; // Int16Array の実体をTransferableで受け取る
+  pcmF32: ArrayBuffer; // Float32Array の実体をTransferableで受け取る
   oto: OtoData;
 }
 
@@ -256,13 +258,29 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     const mod = await getModule();
     console.log('[Worker] getModule() resolved');
 
-    // 1. サンプルをWASM側へ登録する(PCM)
+    // 1. サンプルをWASM側へ登録する。Web AudioのFloat32 PCMをそのまま
+    //    使い、Int16量子化でD4C解析前に微小成分を失わないようにする。
     for (const s of samples) {
-      const view = new Int16Array(s.pcm16);
-      const pcmPtr = mod._malloc(view.length * 2);
-      mod.HEAPU8.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength), pcmPtr);
-      mod.ccall('load_embedded_resource', null, ['string', 'number', 'number'], [s.key, pcmPtr, view.length]);
-      mod._free(pcmPtr);
+      const view = new Float32Array(s.pcmF32);
+      if (mod._load_embedded_resource_f32) {
+        const pcmPtr = mod._malloc(view.length * 4);
+        mod.HEAPF32.set(view, pcmPtr / 4);
+        mod._load_embedded_resource_f32(s.key, pcmPtr, view.length);
+        mod._free(pcmPtr);
+      } else {
+        // 新しいWASM成果物が配信されるまでの後方互換。通常経路では
+        // この分岐には入らず、Float32をそのまま解析する。
+        console.warn('[voseCoreWorker] Float32 loader is unavailable; falling back to legacy Int16 sample upload.');
+        const legacy = new Int16Array(view.length);
+        for (let i = 0; i < view.length; i++) {
+          const sample = Math.max(-1, Math.min(1, view[i]));
+          legacy[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        }
+        const pcmPtr = mod._malloc(legacy.byteLength);
+        mod.HEAPU8.set(new Uint8Array(legacy.buffer), pcmPtr);
+        mod.ccall('load_embedded_resource', null, ['string', 'number', 'number'], [s.key, pcmPtr, view.length]);
+        mod._free(pcmPtr);
+      }
     }
 
     // 2. oto.iniデータをWASM側へ登録する(set_oto_data)

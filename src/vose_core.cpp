@@ -1456,7 +1456,10 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
                 // 原音の豊かな倍音・声帯振動を削りすぎず、かつ高域のボコーダーヒスノイズのみをカット
                 static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
-                static const double bvals[4]  = {0.02, 0.08, 0.20, 0.40};
+                // 母音・有声音ではD4Cの高域非周期性を控えめにして、
+                // 高音移調時に目立つヒスやザー音を防ぐ。無声子音の
+                // アタックは上の専用分岐で別途保持する。
+                static const double bvals[4]  = {0.01, 0.04, 0.10, 0.20};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
@@ -1562,6 +1565,28 @@ DLLEXPORT void load_embedded_resource(const char* phoneme,
     ev->waveform.resize(sample_count);
     for (int i = 0; i < sample_count; ++i)
         ev->waveform[i] = static_cast<double>(raw_data[i]) * kInv32768;
+
+    VoseUniqueLock clock(g_analysis_cache_mutex);
+    // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
+    g_analysis_cache.erase(phoneme);
+    ev->path = phoneme;
+    g_voice_db.put(phoneme, std::move(ev));
+}
+
+DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
+                                          const float* raw_data, int sample_count)
+{
+    if (!phoneme || !raw_data || sample_count <= 0) return;
+
+    auto ev = std::make_shared<EmbeddedVoice>();
+    ev->fs = kFs;
+    ev->waveform.resize(sample_count);
+    for (int i = 0; i < sample_count; ++i) {
+        // Web Audio APIのFloat32 PCMは通常[-1, 1]だが、壊れた入力で
+        // WORLD解析に不正値を渡さないよう範囲だけを保証する。
+        const double sample = static_cast<double>(raw_data[i]);
+        ev->waveform[i] = std::isfinite(sample) ? clamp(sample, -1.0, 1.0) : 0.0;
+    }
 
     VoseUniqueLock clock(g_analysis_cache_mutex);
     // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
