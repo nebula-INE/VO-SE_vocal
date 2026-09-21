@@ -28,7 +28,6 @@ import {
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
-import { cleanWavArrayBuffer } from './utils/wavCleaner';
 import type {
   RenderRequestMsg,
   RenderResponseMsg,
@@ -58,14 +57,14 @@ function isRest(lyric?: string): boolean {
 }
 
 interface FetchedRawSample {
-  pcm16: Int16Array;
+  pcmF32: Float32Array;
   baseMidi: number;
   oto: OtoData;
 }
 
 let sharedDecodeCtx: AudioContext | null = null;
 
-async function decodeToPcm16(arrayBuf: ArrayBuffer): Promise<Int16Array> {
+async function decodeToPcmF32(arrayBuf: ArrayBuffer): Promise<Float32Array> {
   const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
   if (!sharedDecodeCtx || sharedDecodeCtx.state === 'closed') {
     sharedDecodeCtx = new AudioCtx();
@@ -87,12 +86,9 @@ async function decodeToPcm16(arrayBuf: ArrayBuffer): Promise<Int16Array> {
     float32 = audioBuffer.getChannelData(0);
   }
 
-  const int16 = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return int16;
+// getChannelData()のビューはAudioBufferに紐付いている。Workerへ安全に
+  // Transferするためコピーし、Float32の精度を保ったままWORLDへ渡す。
+  return new Float32Array(float32);
 }
 
 async function fetchRawSample(
@@ -123,8 +119,8 @@ async function fetchRawSample(
     };
 
     const arrayBuf = await res.arrayBuffer();
-    const pcm16 = await decodeToPcm16(arrayBuf);
-    return { pcm16, baseMidi, oto };
+    const pcmF32 = await decodeToPcmF32(arrayBuf);
+    return { pcmF32, baseMidi, oto };
   } catch (err) {
     console.warn(`[voseCoreClient] サンプル取得/デコード失敗 alias='${alias}':`, err);
     return null;
@@ -183,12 +179,11 @@ let nextRequestId = 1;
 const pending = new Map<number, PendingRender>();
 
 /**
- * レンダリング済みWAVバイナリから軽量・即座にBlob URLを生成。
- * インプレースDSPフィルタ(45Hz HPF, 5.5kHz De-Breath, 4.3kHz De-Hiss, 6.5kHz 4次LPF, ノイズゲート)
- * を適用し、WORLDボコーダー特有の「吐息・ヒス・ホワイトノイズ」をメモリ消費ゼロ・高速に完全除去。
+ * WORLDが出力したWAVを変更せずにBlob URLへ変換する。
+ * 後段のデクリックやフィルタは声帯パルス・無声子音を誤って修正し得るため、
+ * レンダリング経路では適用しない。必要なマスタリングは明示的なexport処理で行う
  */
 function createWavBlobUrl(wavBuffer: ArrayBuffer): string {
-  cleanWavArrayBuffer(wavBuffer);
   const blob = new Blob([wavBuffer], { type: 'audio/wav' });
   return URL.createObjectURL(blob);
 }
@@ -345,7 +340,7 @@ async function renderViaCore(
     if (!s) continue;
     const wasmKey = `s${wasmKeySeq++}`;
     cacheKeyToWasmKey.set(key, wasmKey);
-    samples.push({ key: wasmKey, pcm16: s.pcm16.buffer.slice(0), oto: s.oto });
+    samples.push({ key: wasmKey, pcmF32: s.pcmF32.buffer.slice(0), oto: s.oto });
   }
 
   // NoteEvent列を「絶対時刻を持たない連結列」として構築する。
@@ -406,7 +401,7 @@ async function renderViaCore(
     modeFlag: 0
   };
 
-  const transferables = samples.map((s) => s.pcm16);
+  const transferables = samples.map((s) => s.pcmF32);
   w.postMessage(msg, transferables);
 
   const url = await resultPromise;
