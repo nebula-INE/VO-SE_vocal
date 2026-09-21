@@ -51,10 +51,10 @@ jobs:
           #   これが無いとWeb版はoto.ini由来のタイミング(offset/consonant/
           #   cutoff/preutterance/overlap)を一切C++側に渡せず、
           #   常に kDefaultOto (全フィールド0) でレンダリングされてしまう。
-          # ★変更点7: EXPORTED_RUNTIME_METHODS に 'HEAPU8' と 'HEAPF64' を追加。
-          #   voseCoreWorker.ts は PCM16データやNoteEvent/OtoEntry構造体を
-          #   WASMメモリへ直接書き込むために Module.HEAPU8.set()/HEAPF64.set()
-          #   を使っているが、これらのメモリビューはランタイムメソッドとして
+          # ★変更点7: EXPORTED_RUNTIME_METHODS に 'HEAPU8'、'HEAPF32'、'HEAPF64' を追加。
+          #   voseCoreWorker.ts は Float32 PCMデータやNoteEvent/OtoEntry構造体を
+          #   WASMメモリへ直接書き込むために各メモリビューのset()を使っているが、
+          #   これらのメモリビューはランタイムメソッドとして
           #   明示的にエクスポートしないとMODULARIZE=1のビルドでは
           #   Module(=mod)オブジェクト上に生えず、`mod.HEAPU8` が undefined
           #   になって "undefined is not an object" で失敗する。
