@@ -36,8 +36,6 @@
 //      解放処理をprogressFnPtrの有無から独立させた。
 // ============================================================
 
-import createVoseCoreModule from './wasm/vose_core.js';
-
 interface VoseCoreModule {
   ccall: (name: string, retType: string | null, argTypes: string[], args: unknown[]) => unknown;
   setValue: (ptr: number, value: number, type: string) => void;
@@ -134,7 +132,13 @@ function getCapturedLogText(): string {
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
-    const initFn = (createVoseCoreModule as any)?.default || createVoseCoreModule;
+    // WASM glueはpublic/wasm/の同一リリースを直接読み込む。
+    // 以前の相対importはsrc/wasm/vose_core.jsをVite bundleへ取り込む一方、
+    // .wasmだけはpublic/wasm/から読むため、JS glueとバイナリの世代がずれて
+    // 新しいC++ export（Float32 loaderなど）が利用できないことがあった。
+    const wasmGlueUrl = '/wasm/' + 'vose_core.js';
+    const wasmGlue = await import(/* @vite-ignore */ wasmGlueUrl);
+    const initFn = (wasmGlue as any).default || wasmGlue;
     return await initFn({
       locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path),
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
