@@ -68,6 +68,10 @@ extern "C" {
     // 1. 音源をメモリにパッキングする（内蔵音源化の必須関数）
     DLLEXPORT void load_embedded_resource(const char* phoneme, const int16_t* raw_data, int sample_count);
 
+    // Web Audio APIでデコードしたFloat32 PCMを量子化せずに登録する。
+    // load_embedded_resource() は既存のデスクトップ呼び出しとの互換用に残す。
+    DLLEXPORT void load_embedded_resource_f32(const char* phoneme, const float* raw_data, int sample_count);
+
     // 2. レンダリング実行関数
     DLLEXPORT void execute_render(NoteEvent* notes, int note_count, const char* output_path, int mode_flag);
 
