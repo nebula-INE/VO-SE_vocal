@@ -308,15 +308,61 @@ export async function renderStudioOffline(
 
   onProgress?.(2);
 
-  // 1. 曲の総尺（秒）と必要なサンプルキーを算出
+  // 1. 曲のタイムラインとテンポ変更マーカーを構築
+  const baseTempo = (typeof tempo === 'number' && tempo > 0) ? tempo : 120;
+  interface TempoMarker {
+    tick: number;
+    bpm: number;
+  }
+  const tempoMarkers: TempoMarker[] = [{ tick: 0, bpm: baseTempo }];
+  for (const n of sortedNotes) {
+    if (typeof n.tempo === 'number' && n.tempo > 0) {
+      const t = Math.max(0, n.tick || 0);
+      if (t === 0) {
+        tempoMarkers[0].bpm = n.tempo;
+      } else {
+        tempoMarkers.push({ tick: t, bpm: n.tempo });
+      }
+    }
+  }
+  tempoMarkers.sort((a, b) => a.tick - b.tick);
+  const uniqueTempoMarkers: TempoMarker[] = [];
+  for (const tm of tempoMarkers) {
+    if (uniqueTempoMarkers.length > 0 && uniqueTempoMarkers[uniqueTempoMarkers.length - 1].tick === tm.tick) {
+      uniqueTempoMarkers[uniqueTempoMarkers.length - 1].bpm = tm.bpm;
+    } else {
+      uniqueTempoMarkers.push(tm);
+    }
+  }
+
+  function tickToTimeSec(targetTick: number): number {
+    if (targetTick <= 0) return 0;
+    let totalSec = 0;
+    let prevTick = 0;
+    let currentBpm = uniqueTempoMarkers[0]?.bpm || 120;
+    for (let i = 0; i < uniqueTempoMarkers.length; i++) {
+      const m = uniqueTempoMarkers[i];
+      if (m.tick > targetTick) break;
+      if (m.tick > prevTick) {
+        const dtTicks = m.tick - prevTick;
+        totalSec += dtTicks * (60 / (currentBpm * 480));
+        prevTick = m.tick;
+      }
+      currentBpm = m.bpm;
+    }
+    if (targetTick > prevTick) {
+      const dtTicks = targetTick - prevTick;
+      totalSec += dtTicks * (60 / (currentBpm * 480));
+    }
+    return totalSec;
+  }
+
   let maxTick = 0;
   for (const n of sortedNotes) {
     const endTick = (n.tick || 0) + (n.length || 480);
     if (endTick > maxTick) maxTick = endTick;
   }
-  const tickDurationSec = (60 / (tempo * 480));
-  // 余韻・リバーブ・リリース用に末尾 + 1.5秒追加
-  const totalDurationSec = Math.max(1.0, maxTick * tickDurationSec + 1.5);
+  const totalDurationSec = Math.max(1.0, tickToTimeSec(maxTick) + 1.5);
 
   // 2. 必要なサンプルの一覧を収集
   interface NoteSchedulingInfo {
@@ -339,8 +385,9 @@ export async function renderStudioOffline(
     const isContinuous = prevNote && (n.tick - (prevNote.tick + prevNote.length) <= 240);
     const prevLyric = isContinuous ? prevNote.lyric : undefined;
     const noteNum = n.noteNum || 60;
-    const startTimeSec = (n.tick || 0) * tickDurationSec;
-    const durationSec = (n.length || 480) * tickDurationSec;
+    const startTimeSec = tickToTimeSec(n.tick || 0);
+    const endTimeSec = tickToTimeSec((n.tick || 0) + (n.length || 480));
+    const durationSec = Math.max(0.01, endTimeSec - startTimeSec);
     const key = `${voicebank}:${lyric}:${prevLyric || ''}:${noteNum}`;
 
     if (!uniqueSampleMap.has(key)) {

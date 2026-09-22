@@ -1228,6 +1228,11 @@ function ensureDefaultVoicebanks() {
     if (!fs.existsSync(voicebanksDir)) {
       fs.mkdirSync(voicebanksDir, { recursive: true });
     }
+    const defaultName = 'Standard Japanese CV';
+    const targetDir = path.join(voicebanksDir, defaultName);
+    if (!fs.existsSync(targetDir) || !fs.existsSync(path.join(targetDir, 'oto.ini'))) {
+      createDefaultVoicebank(defaultName, false);
+    }
   } catch (e) {
     console.warn('[VO-SE] ensureDefaultVoicebanks failed:', e && e.message ? e.message : e);
   }
@@ -1984,7 +1989,7 @@ async function setupVite() {
   } else {
     const { createServer: createViteServer } = await import('vite');
     const viteDevServer = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa'
     });
     app.use(viteDevServer.middlewares);

@@ -36,6 +36,9 @@
 //      解放処理をprogressFnPtrの有無から独立させた。
 // ============================================================
 
+// @ts-ignore
+import createVoseCoreModule from './wasm/vose_core.js';
+
 interface VoseCoreModule {
   ccall: (name: string, retType: string | null, argTypes: string[], args: unknown[]) => unknown;
   setValue: (ptr: number, value: number, type: string) => void;
@@ -132,14 +135,7 @@ function getCapturedLogText(): string {
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
-    // WASM glueはpublic/wasm/の同一リリースを直接読み込む。
-    // 以前の相対importはsrc/wasm/vose_core.jsをVite bundleへ取り込む一方、
-    // .wasmだけはpublic/wasm/から読むため、JS glueとバイナリの世代がずれて
-    // 新しいC++ export（Float32 loaderなど）が利用できないことがあった。
-    const wasmGlueUrl = '/wasm/' + 'vose_core.js';
-    const wasmGlue = await import(/* @vite-ignore */ wasmGlueUrl);
-    const initFn = (wasmGlue as any).default || wasmGlue;
-    return await initFn({
+    return await createVoseCoreModule({
       locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path),
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
         (async () => {
@@ -225,6 +221,7 @@ export interface WorkerSampleEntry {
   key: string; // load_embedded_resourceのphoneme = oto.aliasとして使う
   pcmF32: ArrayBuffer; // Float32Array の実体をTransferableで受け取る
   oto: OtoData;
+  origAlias?: string; // C++側で子音・母音判定に使う元の音素名
 }
 
 export interface WorkerNoteEntry {
@@ -303,7 +300,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
         mod.setValue(base + OFF_OTO_FILENAME, 0, 'i32');
         mod.setValue(base + OFF_OTO_CUTOFF, oto.cutoffMs, 'double');
         writeFixedString(mod, key, base + OFF_OTO_ALIAS, OTO_ALIAS_MAX_BYTES);
-        writeFixedString(mod, key, base + OFF_OTO_WAV_PATH, OTO_WAV_PATH_MAX_BYTES);
+        writeFixedString(mod, origAlias || key, base + OFF_OTO_WAV_PATH, OTO_WAV_PATH_MAX_BYTES);
         mod.setValue(base + OFF_OTO_OFFSET, oto.offsetMs, 'double');
         mod.setValue(base + OFF_OTO_CONSONANT, oto.consonantMs, 'double');
         mod.setValue(base + OFF_OTO_BLANK, 0, 'double'); // 未使用フィールド

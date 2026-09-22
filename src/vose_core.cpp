@@ -1251,22 +1251,24 @@ static const OtoEntry kDefaultOto = {};
 
 static bool is_unvoiced_phoneme_name(const std::string& str)
 {
+    if (str.empty()) return false;
     static const char* kUnvoiced[] = {
-        "か", "き", "く", "け", "こ",
-        "カ", "キ", "ク", "ケ", "コ",
-        "さ", "し", "す", "せ", "そ",
-        "サ", "シ", "ス", "セ", "ソ",
-        "た", "ち", "つ", "て", "と",
-        "タ", "チ", "ツ", "テ", "ト",
-        "は", "ひ", "ふ", "へ", "ほ",
-        "ハ", "ヒ", "フ", "ヘ", "ホ",
-        "ぱ", "ぴ", "ぷ", "ぺ", "ぽ",
-        "パ", "ピ", "プ", "ペ", "ポ",
-        "ka", "ki", "ku", "ke", "ko",
-        "sa", "si", "su", "se", "so", "shi",
-        "ta", "ti", "tu", "te", "to", "chi", "tsu",
-        "ha", "hi", "hu", "he", "ho", "fu",
-        "pa", "pi", "pu", "pe", "po"
+        "か", "き", "く", "け", "こ", "きゃ", "きゅ", "きょ",
+        "カ", "キ", "ク", "ケ", "コ", "キャ", "キュ", "キョ",
+        "さ", "し", "す", "せ", "そ", "しゃ", "しゅ", "しょ",
+        "サ", "シ", "ス", "セ", "ソ", "シャ", "シュ", "ショ",
+        "た", "ち", "つ", "て", "と", "ちゃ", "ちゅ", "ちょ",
+        "タ", "チ", "ツ", "テ", "ト", "チャ", "チュ", "チョ",
+        "は", "ひ", "ふ", "へ", "ほ", "ひゃ", "ひゅ", "ひょ",
+        "ハ", "ヒ", "フ", "ヘ", "ホ", "ヒャ", "ヒュ", "ヒョ",
+        "ぱ", "ぴ", "ぷ", "ぺ", "ぽ", "ぴゃ", "ぴゅ", "ぴょ",
+        "パ", "ピ", "プ", "ペ", "ポ", "ピャ", "ピュ", "ピョ",
+        "ka", "ki", "ku", "ke", "ko", "kya", "kyu", "kyo",
+        "sa", "si", "su", "se", "so", "shi", "sha", "shu", "sho",
+        "ta", "ti", "tu", "te", "to", "chi", "tsu", "cha", "chu", "cho",
+        "ha", "hi", "hu", "he", "ho", "fu", "hya", "hyu", "hyo",
+        "pa", "pi", "pu", "pe", "po", "pya", "pyu", "pyo",
+        "fa", "fi", "fe", "fo"
     };
     for (const char* u : kUnvoiced) {
         if (str.find(u) != std::string::npos) return true;
@@ -1439,7 +1441,9 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             ? std::max(0.20, 1.0 / (1.0 + (f0_ratio - 1.0) * 0.8))
             : (f0_ratio < 0.7 ? 0.70 : 1.0); // 極端な低音化時の濁りも緩和
         const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.2 * pitch_noise_suppress : 0.0;
-        const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path);
+        const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path) ||
+                                  (pp.has_oto && is_unvoiced_phoneme_name(current_oto.wav_path)) ||
+                                  (pp.has_oto && is_unvoiced_phoneme_name(current_oto.alias));
         const double fixed_ms = std::max(0.0, current_oto.consonant);
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
         const bool in_consonant_friction = (t_out_ms < unvoiced_attack_ms);
@@ -1454,12 +1458,9 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
             } else {
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
-                // 原音の豊かな倍音・声帯振動を削りすぎず、かつ高域のボコーダーヒスノイズのみをカット
+                // 原音の豊かな倍音・声帯振動を100%保持し、D4Cが誤検出する高域ホワイトノイズ(ヒス・ザー音)を大幅低減
                 static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
-                // 母音・有声音ではD4Cの高域非周期性を控えめにして、
-                // 高音移調時に目立つヒスやザー音を防ぐ。無声子音の
-                // アタックは上の専用分岐で別途保持する。
-                static const double bvals[4]  = {0.01, 0.04, 0.10, 0.20};
+                static const double bvals[4]  = {0.005, 0.025, 0.07, 0.15};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);

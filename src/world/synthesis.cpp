@@ -107,7 +107,8 @@ static void GetPeriodicResponse(int fft_size, const double *spectrum,
     const double *aperiodic_ratio, double current_vuv,
     const InverseRealFFT *inverse_real_fft,
     const MinimumPhaseAnalysis *minimum_phase, const double *dc_remover,
-    double fractional_time_shift, int fs, double *periodic_response) {
+    double fractional_time_shift, int fs, double *periodic_response,
+    RandnState *randn_state) {
   if (current_vuv <= 0.5 || aperiodic_ratio[0] > 0.999) {
     for (int i = 0; i < fft_size; ++i) periodic_response[i] = 0.0;
     return;
@@ -131,6 +132,47 @@ static void GetPeriodicResponse(int fft_size, const double *spectrum,
   double coefficient =
     2.0 * world::kPi * fractional_time_shift * fs / fft_size;
   GetSpectrumWithFractionalTimeShift(fft_size, coefficient, inverse_real_fft);
+
+  // ★ 人間の声帯振動（LFモデル等の声帯流波形）および声道伝達における位相分散（Phase Dispersion）と
+  //   開閉サイクルごとの微小な位相ゆらぎ（Glottal Jitter）を再現。
+  //   最小位相によって全周波数が時間軸0で一斉に急峻なスパイク状に立ち上がり、
+  //   ノコギリ波やブザーに似た金属的・人工的「ジー」というバズ音を生じる現象を根本から解消する。
+  double pulse_jitter = 0.0;
+  if (randn_state != nullptr) {
+    pulse_jitter = randn(randn_state);
+    if (pulse_jitter < -2.0) pulse_jitter = -2.0;
+    if (pulse_jitter > 2.0) pulse_jitter = 2.0;
+    pulse_jitter *= 0.15; // 最大約 +/- 0.3 rad の高域微小ゆらぎ
+  }
+
+  const double nyquist = fs / 2.0;
+  const double f_disp_start = 900.0;
+  const double disp_coeff = 35.0; // 約0.35msの自然な声帯リターンフェーズ位相分散
+
+  for (int i = 0; i <= fft_size / 2; ++i) {
+    const double freq = static_cast<double>(i) * fs / fft_size;
+    double dphi = 0.0;
+    if (freq > f_disp_start) {
+      const double u = (freq - f_disp_start) / (nyquist - f_disp_start);
+      // 滑らかな位相分散（C1連続な3次多項式）
+      dphi -= disp_coeff * (1.5 * u * u - 0.5 * u * u * u);
+
+      // 高域(2kHz以上)におけるサイクル間の微小な位相ゆらぎ
+      if (freq > 2000.0) {
+        const double w_jit = (freq - 2000.0) / (nyquist - 2000.0);
+        dphi += pulse_jitter * w_jit;
+      }
+    }
+
+    if (dphi != 0.0) {
+      const double re = inverse_real_fft->spectrum[i][0];
+      const double im = inverse_real_fft->spectrum[i][1];
+      const double c = cos(dphi);
+      const double s = sin(dphi);
+      inverse_real_fft->spectrum[i][0] = re * c - im * s;
+      inverse_real_fft->spectrum[i][1] = re * s + im * c;
+    }
+  }
 
   fft_execute(inverse_real_fft->inverse_fft);
   fftshift(inverse_real_fft->waveform, fft_size, periodic_response);
@@ -199,10 +241,10 @@ static void GetOneFrameSegment(double current_vuv, int noise_size,
   GetAperiodicRatio(current_time, frame_period, f0_length, aperiodicity,
       fft_size, aperiodic_ratio);
 
-  // Synthesis of the periodic response
+  // Synthesis of the periodic response with phase dispersion and natural glottal jitter
   GetPeriodicResponse(fft_size, spectral_envelope, aperiodic_ratio,
       current_vuv, inverse_real_fft, minimum_phase, dc_remover,
-      fractional_time_shift, fs, periodic_response);
+      fractional_time_shift, fs, periodic_response, randn_state);
 
   // Synthesis of the aperiodic response
   GetAperiodicResponse(noise_size, fft_size, spectral_envelope,

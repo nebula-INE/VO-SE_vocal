@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+import sys, lzma
+
+# Check if arguments include decompression
+args = sys.argv[1:]
+decompress = True
+strip = False
+infile = None
+
+for a in args:
+    if not a.startswith('-'):
+        infile = a
+
+try:
+    if infile:
+        with open(infile, 'rb') as f:
+            data = f.read()
+    else:
+        data = sys.stdin.buffer.read()
+
+    decomp = lzma.decompress(data)
+    sys.stdout.buffer.write(decomp)
+except Exception as e:
+    sys.stderr.write(f"xz error: {e}\n")
+    sys.exit(1)

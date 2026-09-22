@@ -28,6 +28,7 @@ import {
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
+import { cleanWavArrayBuffer } from './utils/wavCleaner';
 import type {
   RenderRequestMsg,
   RenderResponseMsg,
@@ -128,9 +129,8 @@ async function fetchRawSample(
 }
 
 // ノートのピッチベンド(PBS/PBW/PBY)を、5msフレーム周期の絶対Hzカーブへ変換する。
-function buildPitchCurveHz(note: any, durationMs: number): number[] {
+function buildPitchCurveHz(note: any, frameCount: number, durationMs: number): number[] {
   const baseHz = 440 * Math.pow(2, (note.noteNum - 69) / 12);
-  const frameCount = Math.max(1, Math.round(durationMs / PITCH_FRAME_PERIOD_MS));
 
   let bendSemitoneAt: (tMs: number) => number = () => 0;
   if (note.pbs && note.pbw && note.pby) {
@@ -157,14 +157,13 @@ function buildPitchCurveHz(note: any, durationMs: number): number[] {
 
   const curve: number[] = new Array(frameCount);
   for (let i = 0; i < frameCount; i++) {
-    const tMs = i * PITCH_FRAME_PERIOD_MS;
+    const tMs = (i / Math.max(1, frameCount - 1)) * durationMs;
     curve[i] = baseHz * Math.pow(2, bendSemitoneAt(tMs) / 12);
   }
   return curve;
 }
 
-function silentFrames(durationMs: number): number[] {
-  const frameCount = Math.max(1, Math.round(durationMs / PITCH_FRAME_PERIOD_MS));
+function silentFrames(frameCount: number): number[] {
   return new Array(frameCount).fill(0);
 }
 
@@ -207,7 +206,8 @@ function getWorker(): Worker {
         }
       }
       try {
-        const url = createWavBlobUrl(msg.wav);
+        const cleanedWav = cleanWavArrayBuffer(msg.wav);
+        const url = createWavBlobUrl(cleanedWav);
         p.resolve(url);
       } catch (e: any) {
         p.reject(new Error(`WAV Blob生成エラー: ${e?.message || e}`));
@@ -263,43 +263,68 @@ async function renderViaCore(
   onProgress?: (pct: number) => void
 ): Promise<string | null> {
   const sortedNotes = [...notes].sort((a, b) => (a.tick || 0) - (b.tick || 0));
-  
-  // 開始テンポの決定: 最初の音符に明示的なテンポがあればそれを採用、無ければ引数のtempo
-  const initialTempo = (sortedNotes.length > 0 && typeof sortedNotes[0].tempo === 'number' && sortedNotes[0].tempo > 0)
-    ? sortedNotes[0].tempo
-    : (tempo || 120);
+  if (sortedNotes.length === 0) return null;
 
   onProgress?.(2);
 
-  interface NoteInfo {
-    note: any;
-    startTick: number;
-    endTick: number;
-    durationMs: number;
-    cacheKey: string | null; // null = 休符
+  // 1. タイムライン上のテンポ変更ポイントを収集し、正確な tick -> 秒 変換テーブルを構築
+  const baseTempo = (typeof tempo === 'number' && tempo > 0) ? tempo : 120;
+  interface TempoMarker {
+    tick: number;
+    bpm: number;
   }
-  const noteInfos: NoteInfo[] = [];
-  const uniqueSampleMap = new Map<string, { alias: string; prevLyric?: string; noteNum: number }>();
+  const tempoMarkers: TempoMarker[] = [{ tick: 0, bpm: baseTempo }];
+  for (const n of sortedNotes) {
+    if (typeof n.tempo === 'number' && n.tempo > 0) {
+      const t = Math.max(0, n.tick || 0);
+      if (t === 0) {
+        tempoMarkers[0].bpm = n.tempo;
+      } else {
+        tempoMarkers.push({ tick: t, bpm: n.tempo });
+      }
+    }
+  }
+  tempoMarkers.sort((a, b) => a.tick - b.tick);
+  const uniqueTempoMarkers: TempoMarker[] = [];
+  for (const tm of tempoMarkers) {
+    if (uniqueTempoMarkers.length > 0 && uniqueTempoMarkers[uniqueTempoMarkers.length - 1].tick === tm.tick) {
+      uniqueTempoMarkers[uniqueTempoMarkers.length - 1].bpm = tm.bpm;
+    } else {
+      uniqueTempoMarkers.push(tm);
+    }
+  }
 
-  let curTempo = initialTempo;
+  function tickToTimeSec(targetTick: number): number {
+    if (targetTick <= 0) return 0;
+    let totalSec = 0;
+    let prevTick = 0;
+    let currentBpm = uniqueTempoMarkers[0]?.bpm || 120;
+    for (let i = 0; i < uniqueTempoMarkers.length; i++) {
+      const m = uniqueTempoMarkers[i];
+      if (m.tick > targetTick) break;
+      if (m.tick > prevTick) {
+        const dtTicks = m.tick - prevTick;
+        totalSec += dtTicks * (60 / (currentBpm * 480));
+        prevTick = m.tick;
+      }
+      currentBpm = m.bpm;
+    }
+    if (targetTick > prevTick) {
+      const dtTicks = targetTick - prevTick;
+      totalSec += dtTicks * (60 / (currentBpm * 480));
+    }
+    return totalSec;
+  }
+
+  // 2. 必要なサンプル（音素）の一覧を収集
+  const uniqueSampleMap = new Map<string, { alias: string; prevLyric?: string; noteNum: number }>();
   for (let i = 0; i < sortedNotes.length; i++) {
     const n = sortedNotes[i];
-    if (typeof n.tempo === 'number' && n.tempo > 0) {
-      curTempo = n.tempo;
-    }
-    const currentTickDurationSec = 60 / (curTempo * 480);
-    const startTick = n.tick || 0;
-    const endTick = startTick + (n.length || 480);
-    const durationMs = (n.length || 480) * currentTickDurationSec * 1000;
-
-    if (isRest(n.lyric)) {
-      noteInfos.push({ note: n, startTick, endTick, durationMs, cacheKey: null });
-      continue;
-    }
+    if (isRest(n.lyric)) continue;
 
     const lyric = n.lyric || 'あ';
     const prevNote = i > 0 ? sortedNotes[i - 1] : null;
-    const isContinuous = prevNote && (n.tick - (prevNote.tick + prevNote.length) <= 240);
+    const isContinuous = prevNote && !isRest(prevNote.lyric) && ((n.tick || 0) - ((prevNote.tick || 0) + (prevNote.length || 480)) <= 240);
     const prevLyric = isContinuous ? prevNote.lyric : undefined;
     const noteNum = n.noteNum || 60;
     const key = `${voicebank}:${lyric}:${prevLyric || ''}:${noteNum}`;
@@ -307,11 +332,11 @@ async function renderViaCore(
     if (!uniqueSampleMap.has(key)) {
       uniqueSampleMap.set(key, { alias: lyric, prevLyric, noteNum });
     }
-    noteInfos.push({ note: n, startTick, endTick, durationMs, cacheKey: key });
   }
 
-  if (noteInfos.length === 0) return null;
+  onProgress?.(5);
 
+  // 3. サンプルを並行バッチで取得
   const sampleEntries = Array.from(uniqueSampleMap.entries());
   const rawSampleMap = new Map<string, FetchedRawSample | null>();
   const BATCH_SIZE = 8;
@@ -323,63 +348,114 @@ async function renderViaCore(
         rawSampleMap.set(key, s);
       })
     );
-    onProgress?.(Math.min(30, Math.round(5 + ((i + batch.length) / sampleEntries.length) * 25)));
+    onProgress?.(Math.min(30, Math.round(5 + ((i + batch.length) / Math.max(1, sampleEntries.length)) * 25)));
   }
 
   const samples: WorkerSampleEntry[] = [];
-  // [修正] OtoEntry.alias はC++側で固定64バイト。今のcacheKey
-  // (`voicebank:歌詞:直前歌詞:noteNum`)はボイスバンク名に日本語を含み、
-  // UTF-8で簡単に64バイトを超えてしまう。load_embedded_resource側は
-  // 文字列長の制限が無いため、set_oto_data側だけ切り詰められて
-  // 両者のキーが一致しなくなる(oto.iniが引けない/最悪未定義動作)おそれが
-  // あった。WASM側に渡すキーは常に短いASCII識別子(wasmKey)に分離し、
-  // 元のcacheKeyはJS側のサンプルキャッシュだけに使う。
+  // OtoEntry.alias はC++側で固定64バイト。WASM側に渡すキーは常に短いASCII識別子(wasmKey)にする
   const cacheKeyToWasmKey = new Map<string, string>();
   let wasmKeySeq = 0;
   for (const [key, s] of rawSampleMap) {
     if (!s) continue;
     const wasmKey = `s${wasmKeySeq++}`;
     cacheKeyToWasmKey.set(key, wasmKey);
-    samples.push({ key: wasmKey, pcmF32: s.pcmF32.buffer.slice(0), oto: s.oto });
+    const origAlias = uniqueSampleMap.get(key)?.alias || '';
+    samples.push({ key: wasmKey, pcmF32: s.pcmF32.buffer.slice(0), oto: s.oto, origAlias });
   }
 
-  // NoteEvent列を「絶対時刻を持たない連結列」として構築する。
-  // ノート間・曲頭にギャップがあれば無声(key=null)ノートで明示的に埋める。
+  // 4. NoteEvent列を正確なサンプル蓄積・タイムライン整合で構築する
+  // C++ vose_core.wasm の note_samples_safe(p) は:
+  //   note_samples = (p - 1) * 220.5 + 1  (44.1kHz, 5ms周期)
+  // かつ連続有声ノート接続時に declick (最大88サンプル = 2ms) をオーバーラップ・減算する。
+  // 各イベントごとに目標サンプル時刻との差分を累積して p を決定することで、
+  // 5msの欠落やデクリックによる累積誤差を完全にゼロ化する。
   const workerNotes: WorkerNoteEntry[] = [];
   let cursorTick = 0;
+  let accumulatedTimelineSamples = 0;
+  let lastWasVoiced = false;
 
-  const pushSilence = (durationMs: number) => {
-    if (durationMs <= 0) return;
-    workerNotes.push({ key: null, pitchCurveHz: silentFrames(durationMs) });
+  const pushEvent = (
+    key: string | null,
+    note: any | null,
+    targetEndTimeSec: number,
+    durationMs: number
+  ) => {
+    const targetEndSample = Math.round(targetEndTimeSec * 44100);
+    const neededAdvance = targetEndSample - accumulatedTimelineSamples;
+    if (neededAdvance <= 0 && key === null) {
+      return;
+    }
+
+    const isVoiced = key !== null;
+    const declickEst = (isVoiced && lastWasVoiced) ? 88 : 0;
+    const neededSamples = Math.max(0, neededAdvance + declickEst);
+
+    // (p - 1) * 220.5 + 1 ≈ neededSamples
+    const pMinus1 = Math.round(Math.max(1, neededSamples - 1) / 220.5);
+    const p = Math.max(2, pMinus1 + 1);
+
+    const actualSamples = (p - 1) * 220.5 + 1;
+    const actualDeclick = (isVoiced && lastWasVoiced)
+      ? Math.min(88, Math.floor(actualSamples / 8))
+      : 0;
+    const actualAdvance = actualSamples - actualDeclick;
+    accumulatedTimelineSamples += actualAdvance;
+
+    if (isVoiced && note) {
+      workerNotes.push({
+        key,
+        pitchCurveHz: buildPitchCurveHz(note, p, durationMs)
+      });
+      lastWasVoiced = true;
+    } else {
+      workerNotes.push({
+        key: null,
+        pitchCurveHz: silentFrames(p)
+      });
+      lastWasVoiced = false;
+    }
   };
 
-  let activeTempo = initialTempo;
-  for (const info of noteInfos) {
-    if (typeof info.note?.tempo === 'number' && info.note.tempo > 0) {
-      activeTempo = info.note.tempo;
-    }
-    const activeTickDurationSec = 60 / (activeTempo * 480);
-    if (info.startTick > cursorTick) {
-      const gapTicks = info.startTick - cursorTick;
-      pushSilence(gapTicks * activeTickDurationSec * 1000);
+  for (let i = 0; i < sortedNotes.length; i++) {
+    const n = sortedNotes[i];
+    const startTick = Math.max(0, n.tick || 0);
+    const length = Math.max(1, n.length || 480);
+    const endTick = startTick + length;
+
+    // 前のノートとの間にギャップ（無音）があれば無音イベントを挿入
+    if (startTick > cursorTick) {
+      const gapStartSec = tickToTimeSec(cursorTick);
+      const gapEndSec = tickToTimeSec(startTick);
+      const gapDurationMs = (gapEndSec - gapStartSec) * 1000;
+      pushEvent(null, null, gapEndSec, gapDurationMs);
+      cursorTick = startTick;
     }
 
-    if (info.cacheKey === null) {
-      pushSilence(info.durationMs);
+    const noteStartSec = tickToTimeSec(startTick);
+    const noteEndSec = tickToTimeSec(endTick);
+    const noteDurationMs = (noteEndSec - noteStartSec) * 1000;
+
+    if (isRest(n.lyric)) {
+      pushEvent(null, null, noteEndSec, noteDurationMs);
     } else {
-      const s = rawSampleMap.get(info.cacheKey);
-      const wasmKey = cacheKeyToWasmKey.get(info.cacheKey);
+      const lyric = n.lyric || 'あ';
+      const prevNote = i > 0 ? sortedNotes[i - 1] : null;
+      const isContinuous = prevNote && !isRest(prevNote.lyric) && (startTick - ((prevNote.tick || 0) + (prevNote.length || 480)) <= 240);
+      const prevLyric = isContinuous ? prevNote.lyric : undefined;
+      const noteNum = n.noteNum || 60;
+      const key = `${voicebank}:${lyric}:${prevLyric || ''}:${noteNum}`;
+
+      const s = rawSampleMap.get(key);
+      const wasmKey = cacheKeyToWasmKey.get(key);
       if (!s || !wasmKey) {
-        // サンプル取得失敗: 無音で埋めてタイミングだけは崩さない
-        pushSilence(info.durationMs);
+        // サンプル取得失敗時は無音で埋めてタイミングを保持
+        pushEvent(null, null, noteEndSec, noteDurationMs);
       } else {
-        workerNotes.push({
-          key: wasmKey,
-          pitchCurveHz: buildPitchCurveHz(info.note, info.durationMs)
-        });
+        pushEvent(wasmKey, n, noteEndSec, noteDurationMs);
       }
     }
-    cursorTick = Math.max(cursorTick, info.endTick);
+
+    cursorTick = Math.max(cursorTick, endTick);
   }
 
   if (workerNotes.length === 0) return null;
