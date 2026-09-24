@@ -84,6 +84,8 @@ try:
     from modules.gui.mixins.voice_management_mixin import VoiceManagementMixin # type: ignore[assignment]
     from modules.gui.effects_panel import EffectsPanel  # type: ignore[assignment]
     from modules.gui.themes import apply_theme # type: ignore[assignment]
+    from modules.gui.track_strip import TrackStripWidget # type: ignore[assignment]
+    from modules.gui.icons import icon # type: ignore[assignment]
 except ImportError as e:
     print(f"⚠️ Absolute import failed, falling back to relative: {e}")
     # フォールバック（相対インポート）
@@ -1191,19 +1193,22 @@ class ConfigHandler:  #愛なんてシャボン玉！
 class VoiceCardWidget(QFrame):
     clicked = Signal()
 
-    def __init__(self, display_name: str, icon_path: str, base_color: str, is_recruiting: bool = False, parent=None):
+    def __init__(self, display_name: str, icon_path: str, base_color: str,
+                 is_recruiting: bool = False, category: str = "utau", parent=None):
         super().__init__(parent)
-        
-        # --- 1. 属性の代入（ここが Ruff のエラーを消す鍵です） ---
+
+        # --- 1. 属性の代入 ---
         self.display_name = display_name
         self.is_recruiting = is_recruiting
         self.base_color = base_color
-        
+        # "official" | "utau" | "recruiting" — 検索/フィルター用の分類
+        self.category = category
+        self._search_key = display_name.lower()
+
         # --- 2. UIの基本設定 ---
         self.setFixedSize(140, 180)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        
-        # このカード内のレイアウト
+
         self.card_layout = QVBoxLayout(self)
         self.card_layout.setContentsMargins(10, 10, 10, 10)
         self.card_layout.setSpacing(8)
@@ -1213,19 +1218,18 @@ class VoiceCardWidget(QFrame):
         self.icon_label.setFixedSize(110, 110)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_label.setStyleSheet("background-color: rgba(0, 0, 0, 40); border-radius: 8px;")
-        
+
         pixmap = QPixmap(icon_path)
         if pixmap.isNull():
             pixmap = QPixmap(110, 110)
             pixmap.fill(QColor(base_color).darker(150))
-        
+
         self.icon_label.setPixmap(pixmap.scaled(
-            110, 110, 
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding, 
+            110, 110,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation
         ))
-        
-        # 募集枠用オーバーレイ
+
         if self.is_recruiting:
             overlay_layout = QVBoxLayout(self.icon_label)
             overlay_layout.setContentsMargins(0, 0, 0, 0)
@@ -1250,21 +1254,24 @@ class VoiceCardWidget(QFrame):
         """)
         self.card_layout.addWidget(self.name_label)
 
-        # 初期状態を選択解除モードに
         self.set_selected(False)
+
+    def matches(self, query: str, category_filter: str) -> bool:
+        """検索語(部分一致・大小無視)とカテゴリフィルターの両方に合致するか判定する"""
+        if category_filter != "all" and self.category != category_filter:
+            return False
+        if query and query.lower() not in self._search_key:
+            return False
+        return True
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
             super().mousePressEvent(event)
 
-
     def set_selected(self, selected: bool):
-        """選択状態に応じた枠線の変更（省略なし）"""
         border_color = "#00FFCC" if selected else "#333333"
         bg_color = self.base_color if not selected else QColor(self.base_color).lighter(120).name()
-        
-        # 募集枠の場合は少し透過させるなどの演出
         opacity = "1.0" if not self.is_recruiting else "0.7"
 
         self.setStyleSheet(f"""
@@ -1288,163 +1295,192 @@ class VoiceCardWidget(QFrame):
 class VoiceCardGallery(QWidget):
     """
     音源カードを並べて表示するメインコンテナ。
-    実在する音源を優先的に表示し、その後に10枠のパートナー募集枠を表示する。
+    上部の検索バー・カテゴリチップで絞り込みができる。
     """
-    voice_selected = Signal(str, str) # (表示名, 内部ID)
+    voice_selected = Signal(str, str)  # (表示名, 内部ID)
     clicked = Signal()
+
+    CATEGORIES = [
+        ("all", "すべて"),
+        ("official", "内蔵"),
+        ("utau", "UTAU音源"),
+        ("recruiting", "募集枠"),
+    ]
 
     def __init__(self, voice_manager):
         super().__init__()
-        
-        # --- 1. 属性の定義と初期化（住民登録はここで行う） ---
+
         self.manager = voice_manager
-        self.cards = {}           # カード管理用の辞書
-        self.partner_data = {}    # 募集枠のデータ
-        
-        # --- 2. メインレイアウトの構築 ---
+        self.cards = {}            # internal_id -> VoiceCardWidget
+        self.partner_data = {}
+        self._entries = []         # [internal_id, ...] 生成順（フィルター再配置に使う）
+        self._active_category = "all"
+        self._empty_label = None
+
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-        
-        # --- 3. スクロールエリアとコンテナの設定 ---
+
+        # --- 検索・フィルターバー ---
+        self.main_layout.addWidget(self._build_filter_bar())
+
+        # --- スクロールエリアとコンテナ ---
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("background-color: #1E1E1E; border: none;")
-        
+        self.scroll_area.setObjectName("GalleryScrollArea")
+        self.scroll_area.setStyleSheet("QScrollArea#GalleryScrollArea { border: none; }")
+
         self.container = QWidget()
-        
-        # --- 4. グリッドレイアウトの確定 ---
-        self.grid = QGridLayout(self.container) 
+        self.grid = QGridLayout(self.container)
         self.grid.setSpacing(20)
         self.grid.setContentsMargins(20, 20, 20, 20)
-        
         for i in range(4):
             self.grid.setColumnStretch(i, 1)
 
         self.scroll_area.setWidget(self.container)
         self.main_layout.addWidget(self.scroll_area)
-        
+
+    def _build_filter_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("GalleryFilterBar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(20, 14, 20, 10)
+        layout.setSpacing(10)
+
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("SearchField")
+        self.search_input.setPlaceholderText("音源を検索…")
+        self.search_input.setClearButtonEnabled(False)  # 自前のクリアアクションを使う
+        self.search_input.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
+        clear_action = self.search_input.addAction(icon("clear_x"), QLineEdit.ActionPosition.TrailingPosition)
+        clear_action.triggered.connect(self.search_input.clear)
+        self.search_input.textChanged.connect(lambda _: self._apply_filter())
+        layout.addWidget(self.search_input, 1)
+
+        self.category_group = QButtonGroup(self)
+        self.category_group.setExclusive(True)
+        for key, label in self.CATEGORIES:
+            chip = QPushButton(label)
+            chip.setObjectName("FilterChip")
+            chip.setCheckable(True)
+            chip.setChecked(key == "all")
+            chip.clicked.connect(lambda checked, k=key: self._on_category_selected(k))
+            self.category_group.addButton(chip)
+            layout.addWidget(chip)
+
+        return bar
+
+    def _on_category_selected(self, key: str):
+        self._active_category = key
+        self._apply_filter()
 
     def set_partner_data(self, partners: dict):
-        """MainWindowから10枠の募集情報を注入する"""
         self.partner_data = partners
 
     def setup_gallery(self):
-        """
-        全音源の再配置を実行（省略なし）。
-        1. 実在音源（公式・外部）
-        2. パートナー募集枠（10枠）
-        の順でグリッドを構築する。
-        """
-        # 1. 既存カードのクリア（Pyrightのエラーを回避する安全な書き方）
+        """全音源を再スキャンしてカードを作り直す（音源追加/削除があった時に呼ぶ）"""
         if self.grid is not None:
             while self.grid.count() > 0:
                 item = self.grid.takeAt(0)
-                # item が None でないことを確認
                 if item is not None:
                     widget = item.widget()
-                    # widget が実在する場合のみ削除処理を実行
                     if widget is not None:
                         widget.setParent(None)
                         widget.deleteLater()
-        
+
         self.cards.clear()
+        self._entries.clear()
 
-        row, col = 0, 0
-        max_columns = 4 # 1列に並べるカード数
-
-        # --- 2. 【優先】実在する全音源（公式・外部UTAU）の生成 ---
         all_voices = self.manager.scan_voices()
-        
+
         for display_name, internal_id in all_voices.items():
-            # パス解決のロジック
             if internal_id.startswith("__INTERNAL__"):
-                # 公式内蔵キャラクター
-                # "__INTERNAL__:キャラ名" 形式（将来の複数キャラ対応）と、
-                # 現状の voice_manager が返す単独の "__INTERNAL__" 形式の
-                # 両方に対応する。コロンが無い場合は display_name を
-                # ディレクトリ名の代わりに使う。
                 id_parts = internal_id.split(":", 1)
                 char_dir = id_parts[1] if len(id_parts) > 1 else display_name
                 base_path = getattr(self.manager, 'base_path', os.getcwd())
                 icon_path = os.path.join(base_path, "assets", "official_voices", char_dir, "icon.png")
                 card_color = "#3A3A4A"
+                category = "official"
             else:
-                # 外部UTAU音源（フォルダパス）
                 icon_path = os.path.join(internal_id, "icon.png")
                 card_color = "#2D2D2D"
+                category = "utau"
 
-            # カードのインスタンス化
-            card = VoiceCardWidget(display_name, icon_path, card_color, is_recruiting=False)
-            self._finalize_card_setup(card, display_name, internal_id, row, col)
-            
-            col += 1
-            if col >= max_columns:
-                col = 0
-                row += 1
+            card = VoiceCardWidget(display_name, icon_path, card_color,
+                                    is_recruiting=False, category=category)
+            self._register_card(card, display_name, internal_id)
 
-        # --- 3. 【後置】パートナー募集枠（10枠）の生成 ---
-        # 実在音源の後の列から続けて配置する
         loop_range = self.partner_data.keys() if self.partner_data else range(1, 11)
-        
         for i in loop_range:
             display_name = f"PARTNER ID-{i:02d}"
-            # 募集枠を識別するためのプレフィックスを付与
             internal_id = f"__RECRUITING__:ID-{i:02d}"
-            
-            # 募集枠専用のプレースホルダー画像
             base_path = getattr(self.manager, 'base_path', os.getcwd())
             icon_path = os.path.join(base_path, "assets", "icons", "recruiting_placeholder.png")
-            card_color = "#1A2222" # 募集枠は少し沈んだ色にする
-            card = VoiceCardWidget(display_name, icon_path, card_color, is_recruiting=True)
-            self._finalize_card_setup(card, display_name, internal_id, row, col)
-            
-            col += 1
-            if col >= max_columns:
-                col = 0
-                row += 1
+            card_color = "#1A2222"
+            card = VoiceCardWidget(display_name, icon_path, card_color,
+                                    is_recruiting=True, category="recruiting")
+            self._register_card(card, display_name, internal_id)
 
-        # グリッドの下部に伸縮用のスペース（スペーサー）を追加して上に詰める
-        grid = self.grid
-        if grid is None:
-            return
-        grid.setRowStretch(row + 1, 1)
+        self._apply_filter()
 
-
-    def _finalize_card_setup(self, card, display_name, internal_id, row, col):
-        """
-        生成したカードをグリッドに登録し、クリックイベントを接続する（省略なし）。
-        """
-        # クリックイベントの接続
-        # lambdaの引数にデフォルト値を設定することで、ループ内の変数を正しくキャプチャ
+    def _register_card(self, card, display_name, internal_id):
         card.clicked.connect(
             lambda d=display_name, i=internal_id: self.on_card_clicked(d, i)
         )
-        
-        # グリッドレイアウトへ配置
-        self.grid.addWidget(card, row, col)
-        # 管理用辞書に保存（internal_id をキーにして一意性を確保）
         self.cards[internal_id] = card
+        self._entries.append(internal_id)
+
+    def _apply_filter(self):
+        """検索語・カテゴリに合致するカードだけをグリッドに再配置する（再スキャンなし）"""
+        query = self.search_input.text().strip() if hasattr(self, 'search_input') else ""
+
+        # 1. グリッドから全ウィジェットを外す（削除はしない・使い回す）
+        while self.grid.count() > 0:
+            item = self.grid.takeAt(0)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None) 
+
+        # 2. 合致するカードだけ拾う
+        visible_ids = [
+            internal_id for internal_id in self._entries
+            if internal_id in self.cards and self.cards[internal_id].matches(query, self._active_category)
+        ]
+
+        if not visible_ids:
+            empty = QLabel("該当する音源が見つかりません")
+            empty.setObjectName("GalleryEmptyState")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.grid.addWidget(empty, 0, 0, 1, 4)
+            return
+
+        max_columns = 4
+        row, col = 0, 0
+        for internal_id in visible_ids:
+            card = self.cards[internal_id]
+            card.setParent(self.container)
+            card.setVisible(True)
+            self.grid.addWidget(card, row, col)
+            col += 1
+            if col >= max_columns:
+                col = 0
+                row += 1
+
+        self.grid.setRowStretch(row + 1, 1)
 
     def mousePressEvent(self, event):
-        """クリックイベントを検知して信号を発行（省略なし）"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
             super().mousePressEvent(event)
 
     def on_card_clicked(self, name, internal_id):
-        """
-        カード選択時のトグル処理と信号発行（省略なし）。
-        """
-        # 一旦すべてのカードの選択状態（枠線の色など）をオフにする
         for card_widget in self.cards.values():
             card_widget.set_selected(False)
-        
-        # 今回クリックされたカードだけをオンにする
+
         if internal_id in self.cards:
             self.cards[internal_id].set_selected(True)
-        
-        # MainWindow (main_window.py) の on_voice_changed スロットへ飛ばす
+
         print(f"DEBUG: Gallery selection -> {name} ({internal_id})")
         self.voice_selected.emit(name, internal_id)
 
@@ -2071,24 +2107,31 @@ class MainWindow(
     def toggle_theme(self):
         """テーマの切り替えと保存、UIの更新を行う"""
         from modules.gui.themes import apply_theme
+        from modules.gui.icons import icon
         from PySide6.QtCore import QSettings
-        
-        # 💡 アプリケーション識別名を "vocal" で統一
+
         settings = QSettings("VO-SE", "vocal")
         current = settings.value("theme", "dark")
-        
-        # 新しいテーマの決定
         new_theme = "light" if current == "dark" else "dark"
-        
-        # 適用に成功した場合のみ設定を保存
-        if apply_theme(new_theme):
+
+        if apply_theme(new_theme):  # 内部で icons.set_icon_theme() も呼ばれる
             settings.setValue("theme", new_theme)
-            self.statusBar().showMessage(f"テーマを {new_theme} に切り替えました", 3000)
-            
-            # 🔄 修正: theme_action ではなく theme_btn のテキストを切り替える
-            if hasattr(self, 'theme_btn'):
-                btn_text = "🌙 ダークモードへ" if new_theme == "light" else "☀️ ライトモードへ"
-                self.theme_btn.setText(btn_text)
+            if self.statusBar():
+                self.statusBar().showMessage(f"テーマを {new_theme} に切り替えました", 3000)
+
+            if hasattr(self, 'theme_btn') and self.theme_btn is not None:
+                self.theme_btn.setText(" ダークモードへ" if new_theme == "light" else " ライトモードへ")
+                self.theme_btn.setIcon(icon("theme_moon") if new_theme == "light" else icon("theme_sun"))
+
+            # ツールバーの主要アイコンも塗り直す
+            for attr, name in (
+                ("play_btn", "play"), ("stop_btn", "stop"), ("loop_btn", "loop"),
+                ("talk_button", "talk"), ("open_wav_btn", "open_folder"),
+                ("render_btn", "render_export"),
+            ):
+                btn = getattr(self, attr, None)
+                if btn is not None:
+                    btn.setIcon(icon(name))
 
 
     def init_ui(self) -> None:
@@ -2137,104 +2180,6 @@ class MainWindow(
         # その他の初期スタイル調整があれば実行
         self._apply_initial_styles()
 
-    def apply_apple_refined_style(self) -> None:
-        """AppleライクなミニマルUIテーマを全体へ適用（Windowsはフォントサイズ調整済）"""
-        import platform
-
-        # Windows では pt 単位を使い、他では px 単位（Mac での見え方を維持）
-        font_size = "10pt" if platform.system() == "Windows" else "12px"
-
-        self.setStyleSheet(f"""
-            QMainWindow {{
-                background: #1c1c1e;
-                color: #f5f5f7;
-            }}
-            QWidget {{
-                background: #1c1c1e;
-                color: #f5f5f7;
-                font-family: "SF Pro Text", "Segoe UI", "Hiragino Kaku Gothic ProN";
-                font-size: {font_size};
-            }}
-            QToolBar {{
-                background: rgba(44, 44, 46, 0.88);
-                border: 1px solid #3a3a3c;
-                spacing: 6px;
-                padding: 3px 6px;
-            }}
-            QLabel {{ color: #c7c7cc; }}
-            QPushButton {{
-                background: #2c2c2e;
-                color: #f5f5f7;
-                border: 1px solid #48484a;
-                border-radius: 9px;
-                padding: 6px 14px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{ background: #3a3a3c; }}
-            QPushButton:pressed {{ background: #48484a; }}
-            QPushButton#PrimaryButton {{
-                background: #0071e3;
-                color: #ffffff;
-                border: 1px solid #0071e3;
-            }}
-            QPushButton#PrimaryButton:hover {{ background: #0a84ff; }}
-            QPushButton#PrimaryButton:pressed {{ background: #0063cc; }}
-            QPushButton#SegmentLeft, QPushButton#SegmentMid, QPushButton#SegmentRight {{
-                background: #2c2c2e;
-                color: #d1d1d6;
-                border: 1px solid #505055;
-                border-right-width: 0px;
-                border-radius: 0px;
-                min-width: 78px;
-                padding: 5px 11px;
-            }}
-            QPushButton#SegmentRight {{ border-right-width: 1px; }}
-            QPushButton#SegmentLeft {{
-                border-top-left-radius: 9px;
-                border-bottom-left-radius: 9px;
-            }}
-            QPushButton#SegmentRight {{
-                border-top-right-radius: 9px;
-                border-bottom-right-radius: 9px;
-            }}
-            QPushButton#SegmentLeft:checked, QPushButton#SegmentMid:checked, QPushButton#SegmentRight:checked {{
-                background: #f5f5f7;
-                color: #101012;
-                border-color: #d8d8de;
-            }}
-            QPushButton#SegmentLeft:hover, QPushButton#SegmentMid:hover, QPushButton#SegmentRight:hover {{
-                background: #38383d;
-            }}
-            QPushButton#SegmentLeft:checked:hover, QPushButton#SegmentMid:checked:hover, QPushButton#SegmentRight:checked:hover {{
-                background: #ffffff;
-            }}
-            QLineEdit, QComboBox, QListWidget, QTextEdit, QPlainTextEdit {{
-                background: #2c2c2e;
-                border: 1px solid #48484a;
-                border-radius: 9px;
-                padding: 6px;
-            }}
-            QLineEdit:focus, QComboBox:focus, QListWidget:focus {{
-                border: 1px solid #0a84ff;
-            }}
-            QSplitter::handle {{ background: #3a3a3c; }}
-            QScrollBar:vertical, QScrollBar:horizontal {{
-                background: #1c1c1e;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
-                background: #636366;
-                border-radius: 5px;
-                min-height: 28px;
-                min-width: 28px;
-            }}
-            QScrollBar::add-line, QScrollBar::sub-line {{ width: 0px; height: 0px; }}
-            QStatusBar {{
-                background: #2c2c2e;
-                border-top: 1px solid #3a3a3c;
-                color: #c7c7cc;
-            }}
-        """)
 
     def _refresh_transport_button_states(self) -> None:
         """再生/停止/ループの視覚状態を現在の内部状態へ同期。"""
@@ -2308,29 +2253,33 @@ class MainWindow(
     # UI セクション構築
     # ==========================================================================
     def setup_toolbar(self):
-        """上部ツールバー：再生・録音・テンポ・ファイル操作（モダンボタン化版）"""
-        from PySide6.QtWidgets import QToolBar, QPushButton, QLabel, QLineEdit, QWidget
-        from PySide6.QtCore import QSettings
+        """上部ツールバー：再生・録音・テンポ・ファイル操作（アイコン統一版）"""
+        from PySide6.QtWidgets import QToolBar, QPushButton, QLabel, QLineEdit, QWidget, QSizePolicy
+        from PySide6.QtCore import QSettings, QSize, Qt
         from PySide6.QtGui import QAction
-        
+        from modules.gui.icons import icon
+
+        ICON_SIZE = QSize(16, 16)
+
         self.toolbar = QToolBar("Main Toolbar")
         self.addToolBar(self.toolbar)
         self.toolbar.setMovable(False)
+        self.toolbar.setIconSize(ICON_SIZE)
 
-        # 1. 再生コントロール
-        self.play_btn = QPushButton("▶ 再生")
+        # 1. 再生コントロール（セグメント連結）
+        self.play_btn = QPushButton(icon("play"), " 再生")
         self.play_btn.setObjectName("SegmentLeft")
         self.play_btn.setCheckable(True)
         self.play_btn.clicked.connect(self.on_play_pause_toggled)
         self.toolbar.addWidget(self.play_btn)
 
-        self.stop_btn = QPushButton("■ 停止")
+        self.stop_btn = QPushButton(icon("stop"), " 停止")
         self.stop_btn.setObjectName("SegmentMid")
         self.stop_btn.setCheckable(True)
         self.stop_btn.clicked.connect(self.stop_and_clear_playback)
         self.toolbar.addWidget(self.stop_btn)
 
-        self.loop_btn = QPushButton("↻ ループ")
+        self.loop_btn = QPushButton(icon("loop"), " ループ")
         self.loop_btn.setObjectName("SegmentRight")
         self.loop_btn.setCheckable(True)
         self.loop_btn.clicked.connect(self.on_loop_button_toggled)
@@ -2338,50 +2287,59 @@ class MainWindow(
 
         self.toolbar.addSeparator()
 
+        # 時刻表示（インラインstyleSheetを廃止 → objectNameでQSS管理）
         self.time_display_label = QLabel("00:00.000 / 00:00.000")
+        self.time_display_label.setObjectName("TimeDisplay")
         self.time_display_label.setMinimumWidth(150)
         self.time_display_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.time_display_label.setStyleSheet(
-            "font-family: Menlo, Consolas, monospace; font-weight: 700; color: #f2f2f7;"
-        )
         self.toolbar.addWidget(self.time_display_label)
 
         self.toolbar.addSeparator()
 
         # 読み上げ
-        self.talk_button = QPushButton("読み上げ")
+        self.talk_button = QPushButton(icon("talk"), " 読み上げ")
         self.talk_button.clicked.connect(self.on_talk)
         self.toolbar.addWidget(self.talk_button)
-        
+
         # 2. テンポ設定
         self.toolbar.addWidget(QLabel(" Tempo: "))
         self.tempo_input = QLineEdit("120")
-        self.tempo_input.setFixedWidth(40)
+        self.tempo_input.setFixedWidth(44)
         self.tempo_input.returnPressed.connect(self.update_tempo_from_input)
         self.toolbar.addWidget(self.tempo_input)
 
         self.toolbar.addSeparator()
 
         # 3. WAVファイル読み込み
-        self.open_wav_btn = QPushButton("OPEN WAV")
+        self.open_wav_btn = QPushButton(icon("open_folder"), " OPEN WAV")
         self.open_wav_btn.setObjectName("SecondaryButton")
         self.open_wav_btn.clicked.connect(self.open_audio)
         self.toolbar.addWidget(self.open_wav_btn)
 
         # 4. Cエンジン・レンダリング
-        self.render_btn = QPushButton("RENDER (C++ ENGINE)")
+        self.render_btn = QPushButton(icon("render_export"), " RENDER")
         self.render_btn.setObjectName("PrimaryButton")
         self.render_btn.clicked.connect(self.on_render_button_clicked)
         self.toolbar.addWidget(self.render_btn)
 
         # ペンモードトグル
-        self.pen_mode_action = QAction("✏️ ペンモード", self)
+        self.pen_mode_action = QAction(icon("pen"), " ペンモード", self)
         self.pen_mode_action.setCheckable(True)
         self.pen_mode_action.triggered.connect(self.on_pen_mode_toggled)
         self.toolbar.addAction(self.pen_mode_action)
+
+        # ピッチカーブ表示トグル
+        self.pitch_overlay_action = QAction(icon("pitch_curve"), " ピッチカーブ表示", self)
+        self.pitch_overlay_action.setCheckable(True)
+        self.pitch_overlay_action.setChecked(True)
+        self.pitch_overlay_action.toggled.connect(
+            lambda checked: self.timeline_widget.set_show_parameter_overlay(checked)
+            if self.timeline_widget else None
+        )
+        self.toolbar.addAction(self.pitch_overlay_action)
     
         # オートチューン
-        auto_tune_action = QAction("🎵 オートチューン", self)
+        auto_tune_action = QAction(icon("auto_tune"), " オートチューン", self)
         auto_tune_action.triggered.connect(self.auto_tune_selected)
         self.toolbar.addAction(auto_tune_action)
 
@@ -2390,14 +2348,13 @@ class MainWindow(
         spacer.setSizePolicy(QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred))
         self.toolbar.addWidget(spacer)
 
-        # 🌟 変更: QActionからモダンなQPushButtonへ変更
-        settings = QSettings("VO-SE", "Pro")
+        settings = QSettings("VO-SE", "vocal")
         current_theme = settings.value("theme", "dark")
-        btn_text = "🌙 ダークモードへ" if current_theme == "light" else "☀️ ライトモードへ"
-        
-        self.theme_btn = QPushButton(btn_text)
-        # 他の2次ボタンと見た目を揃えるため、必要ならオブジェクト名を設定
-        self.theme_btn.setObjectName("SecondaryButton") 
+        theme_icon = icon("theme_moon") if current_theme == "light" else icon("theme_sun")
+        theme_text = " ダークモードへ" if current_theme == "light" else " ライトモードへ"
+
+        self.theme_btn = QPushButton(theme_icon, theme_text)
+        self.theme_btn.setObjectName("SecondaryButton")
         self.theme_btn.clicked.connect(self.toggle_theme)
         self.toolbar.addWidget(self.theme_btn)
 
@@ -2411,8 +2368,9 @@ class MainWindow(
 
         # --- 左側：トラック管理パネル ---
         self.track_panel = QFrame()
+        self.track_panel.setObjectName("TrackPanel")
         self.track_panel.setFrameShape(QFrame.Shape.StyledPanel)
-        self.track_panel.setMinimumWidth(200)
+        self.track_panel.setMinimumWidth(240)
         self.track_panel.setMaximumWidth(400)
 
         track_layout = QVBoxLayout(self.track_panel)
@@ -2430,16 +2388,11 @@ class MainWindow(
         btn_layout.addWidget(self.btn_add_vocal)
         btn_layout.addWidget(self.btn_add_wave)
 
-        track_layout.addWidget(QLabel("TRACKS"))
+        tracks_heading = QLabel("TRACKS")
+        tracks_heading.setObjectName("SectionHeading")
+        track_layout.addWidget(tracks_heading)
         track_layout.addWidget(self.track_list_widget)
         track_layout.addLayout(btn_layout)
-
-        # トラックのミュート/ソロ/音量コントロール
-        # (元々は setup_mixer_controls / setup_track_controls として
-        #  実装されていたが、init_ui から一度も呼ばれておらず、
-        #  ミュート・ソロ・音量スライダーが画面に表示されていなかった)
-        mixer_layout = self.setup_mixer_controls()
-        track_layout.addLayout(mixer_layout)
 
         # --- 右側：タイムライン（ここで一度だけ生成） ---
         right_container = QWidget()
@@ -2482,6 +2435,9 @@ class MainWindow(
         self.graph_editor_widget.parameters_changed.connect(self.on_graph_parameters_changed)
         timeline_splitter.addWidget(self.graph_editor_widget)
 
+        # ピアノロール側にGraphEditorWidgetの実データを見せる
+        self.timeline_widget.set_parameter_source(self.graph_editor_widget)
+
         # 初期比率（タイムライン7：グラフ3）
         timeline_splitter.setSizes([700, 300])
 
@@ -2505,33 +2461,34 @@ class MainWindow(
     def setup_bottom_panel(self):
         """下部：歌詞入力などのツール"""
         bottom_box = QHBoxLayout()
-        
-        self.lyrics_button = QPushButton("歌詞一括入力")
-        self.lyrics_button.setFixedHeight(40)
+        bottom_box.setContentsMargins(12, 6, 12, 6)
+        bottom_box.setSpacing(10)
+
+        from modules.gui.icons import icon
+        from PySide6.QtCore import QSize
+        self.lyrics_button = QPushButton(" 歌詞一括入力")
+        self.lyrics_button.setIcon(icon("pencil"))
+        self.lyrics_button.setIconSize(QSize(18, 18))
+        self.lyrics_button.setObjectName("PrimaryButton")
+        self.lyrics_button.setFixedHeight(36)
         self.lyrics_button.clicked.connect(self.on_click_apply_lyrics_bulk)
         bottom_box.addWidget(self.lyrics_button)
-        
-        # フォルマントやパフォーマンス等のボタンもここに追加
+
+        bottom_box.addStretch()
         self.main_layout.addLayout(bottom_box)
 
 
     
     def setup_control_panel(self):
         """
-        上部コントロールパネル(セカンドツールバー)の構築。
-
-        以前はこのメソッド自体が init_ui から一度も呼ばれておらず、
-        「AI Auto Setup」「自動歌詞配置」「キャラクター選択」
-        「MIDIポート選択」「編集モード切替(Pitch/Gender/Tension/Breath)」
-        「録音ボタン」の操作手段が画面上に一切存在しなかった。
-
-        再生・停止・ループ・テンポ・時間表示は setup_toolbar 側に
-        既に存在するため、ここでは重複させずユニークな機能のみを置く。
+        上部コントロールパネル(セカンドツールバー)の構築（PATCH_GUIDE 4番準拠）
         """
+        from modules.gui.icons import icon
         panel_layout = QHBoxLayout()
 
-        # 録音コントロール (setup_toolbar には無いユニーク機能)
-        self.record_button = QPushButton("● 録音")
+        # 録音コントロール（危険色はQSS側の #RecordButton が担当）
+        self.record_button = QPushButton(icon("record"), " 録音")
+        self.record_button.setObjectName("RecordButton")
         self.record_button.setCheckable(True)
         self.record_button.clicked.connect(self.on_record_toggled)
         panel_layout.addWidget(self.record_button)
@@ -2551,57 +2508,61 @@ class MainWindow(
         panel_layout.addWidget(self.midi_port_selector)
         
         # ファイルを開く(MIDI/UST等)
-        self.open_button = QPushButton("開く")
+        self.open_button = QPushButton(icon("open_folder"), " 開く")
+        self.open_button.setObjectName("SecondaryButton")
         self.open_button.clicked.connect(self.open_file_dialog_and_load_midi)
         panel_layout.addWidget(self.open_button)
 
         # 音源フォルダの再スキャン
-        # (refresh_voice_list は実装済みだったが、これを呼ぶUIが
-        #  どこにも存在しなかったため、音源を後から追加しても
-        #  アプリを再起動するまでギャラリーに反映されなかった)
-        self.rescan_voices_button = QPushButton("音源再スキャン")
+        self.rescan_voices_button = QPushButton(icon("rescan"), " 音源再スキャン")
+        self.rescan_voices_button.setObjectName("SecondaryButton")
         self.rescan_voices_button.clicked.connect(self.refresh_voice_list)
         panel_layout.addWidget(self.rescan_voices_button)
 
         panel_layout.addSpacing(12)
 
-        # AI解析ボタン
-        self.ai_analyze_button = QPushButton(" AI Auto Setup")
-        self.ai_analyze_button.setStyleSheet(
-            "background-color: #4A90E2; color: white; font-weight: bold;"
-        )
+        # AI解析ボタン（インライン直書き廃止 → PrimaryButton）
+        self.ai_analyze_button = QPushButton(icon("ai_wand"), " AI Auto Setup")
+        self.ai_analyze_button.setObjectName("PrimaryButton")
         self.ai_analyze_button.clicked.connect(self.start_batch_analysis)
         panel_layout.addWidget(self.ai_analyze_button)
         
         # AI歌詞配置ボタン
-        self.auto_lyrics_button = QPushButton("自動歌詞配置")
+        self.auto_lyrics_button = QPushButton(icon("lyrics"), " 自動歌詞配置")
+        self.auto_lyrics_button.setObjectName("SecondaryButton")
         self.auto_lyrics_button.clicked.connect(self.on_click_auto_lyrics)
         panel_layout.addWidget(self.auto_lyrics_button)
 
         # --- パラメーター切り替えボタン ---
-        panel_layout.addSpacing(20) # 少し隙間をあける
+        panel_layout.addSpacing(20)
         panel_layout.addWidget(QLabel("Edit Mode:"))
         
         # ボタングループで「どれか1つが選択されている状態」を作る
         self.param_group = QButtonGroup(self)
-        self.param_buttons = {} # 後で参照しやすいように辞書に保存
+        self.param_buttons = {}
         
         param_list = [
-            ("Pitch", "#3498db"),   # 青
-            ("Gender", "#e74c3c"),  # 赤
-            ("Tension", "#2ecc71"), # 緑
-            ("Breath", "#f1c40f")   # 黄
+            ("Pitch", "pitch"),
+            ("Gender", "gender"),
+            ("Tension", "tension"),
+            ("Breath", "breath"),
         ]
         
-        for name, color in param_list:
+        for name, color_key in param_list:
             btn = QPushButton(name)
             btn.setCheckable(True)
-            btn.setFixedWidth(60)
-            # 選択中のボタンに色を付けるスタイルシート
-            btn.setStyleSheet(f"QPushButton:checked {{ background-color: {color}; color: white; border: 1px solid white; }}")
-            
+            btn.setProperty("role", "paramToggle")
+            btn.setProperty("paramColor", color_key)
+
+            # 動的プロパティを使ったQSSセレクタはtoggle時に自動で再評価されない場合が
+            # あるため、チェック状態が変わるたびに明示的に再ポリッシュする
+            def _repolish(checked, b=btn):
+                b.style().unpolish(b)
+                b.style().polish(b)
+            btn.toggled.connect(_repolish)
+
             if name == "Pitch":
-                btn.setChecked(True) # 初期状態
+                btn.setChecked(True)
             
             panel_layout.addWidget(btn)
             self.param_group.addButton(btn)
@@ -2844,6 +2805,9 @@ class MainWindow(
         status_bar = self.statusBar()
         if status_bar:
             status_bar.showMessage(f"編集モード: {mode}")
+
+        if self.timeline_widget is not None:
+            self.timeline_widget.update()
 
     def toggle_playback(self, event=None):
         """
@@ -3420,27 +3384,8 @@ class MainWindow(
             if self.timeline_widget: 
                 self.timeline_widget.update()
 
-        # 5. UI（ミキサー等）の同期
-        # 各UIパーツの存在を確認しながら値をセット（AttributeAccessIssue対策）
-        vol_slider = getattr(self, 'vol_slider', None)
-        vol_label = getattr(self, 'vol_label', None)
-        btn_mute = getattr(self, 'btn_mute', None)
-        btn_solo = getattr(self, 'btn_solo', None)
-
-        if vol_slider is not None:
-            vol_slider.blockSignals(True)  # 無限ループ防止
-            # volume が None の場合を考慮して 0.0 をデフォルトに
-            vol_val = getattr(target_tr, 'volume', 0.8)
-            vol_int = int(vol_val * 100)
-            vol_slider.setValue(vol_int)
-            if vol_label is not None:
-                vol_label.setText(f"Volume: {vol_int}%")
-            vol_slider.blockSignals(False)
-
-        if btn_mute is not None:
-            btn_mute.setChecked(getattr(target_tr, 'is_muted', False))
-        if btn_solo is not None:
-            btn_solo.setChecked(getattr(target_tr, 'is_solo', False))
+        # 5. 各ストリップの選択枠・ディミング状態を更新
+        self._sync_track_strips()
 
         # 6. ステータスバー更新
         tr_name = getattr(target_tr, 'name', f"Track {index+1}")
@@ -3493,43 +3438,6 @@ class MainWindow(
     # --- 保存（マルチトラック対応） ---
     # (旧: save_project は modules/gui/mixins/project_io_mixin.py へ移動済み)
 
-    #ミュート（M）とソロ（S）
-
-    def setup_track_controls(self):
-        """トラックごとのM/S状態を制御する（setup_main_editor_areaから呼び出し）"""
-        # 現在選択されているトラックに対して操作を行う
-        control_layout = QHBoxLayout()
-        
-        self.btn_mute = QPushButton("M")
-        self.btn_mute.setCheckable(True)
-        self.btn_mute.setFixedWidth(30)
-        self.btn_mute.clicked.connect(self.toggle_mute)
-        
-        self.btn_solo = QPushButton("S")
-        self.btn_solo.setCheckable(True)
-        self.btn_solo.setFixedWidth(30)
-        self.btn_solo.clicked.connect(self.toggle_solo)
-        
-        control_layout.addWidget(self.btn_mute)
-        control_layout.addWidget(self.btn_solo)
-        return control_layout
-
-    def toggle_mute(self):
-        """現在のトラックをミュートにする"""
-        target = self.tracks[self.current_track_idx]
-        target.is_muted = self.btn_mute.isChecked()
-        self.refresh_track_list_ui()
-        self.statusBar().showMessage(f"{target.name} Muted: {target.is_muted}")
-
-    def toggle_solo(self):
-        """現在のトラックをソロにする"""
-        target = self.tracks[self.current_track_idx]
-        target.is_solo = self.btn_solo.isChecked()
-        
-        # ソロがONになった場合、他のトラックのソロ状況も考慮するロジック
-        self.refresh_track_list_ui()
-        self.statusBar().showMessage(f"{target.name} Solo: {target.is_solo}")
-
     def get_active_tracks(self):
         """現在鳴らすべきトラックのリストを返す（再生エンジン用）"""
         # ソロがあるかチェック
@@ -3548,52 +3456,97 @@ class MainWindow(
         return active_tracks
 
     def refresh_track_list_ui(self):
-        """UI上のリスト表示を最新状態に同期（M/S状態を反映）"""
-        # Noneガード：widgetが存在しない場合は何もしない
+        """
+        トラックリストの全項目を TrackStripWidget で再構築する。
+        トラック追加・削除・並べ替えのタイミングで呼ばれる。
+        """
         if not self.track_list_widget:
             return
 
         from PySide6.QtWidgets import QListWidgetItem
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import QSize
 
         self.track_list_widget.blockSignals(True)
         self.track_list_widget.clear()
-        
-        # ソロ状態のトラックが1つでも存在するかチェック
+
         solo_exists = any(t.is_solo for t in self.tracks)
-        
+
         for i, t in enumerate(self.tracks):
-            status = ""
-            # Actionエラー E701 回避済みの綺麗なif文
-            if t.is_muted:
-                status += "[M]"
-            if t.is_solo:
-                status += "[S]"
-            
-            item_text = f"{status} [{'V' if t.track_type == 'vocal' else 'A'}] {t.name}"
-            item = QListWidgetItem(item_text)
-            
-            # ミュート中や、ソロモード時にソロではないトラックをグレーアウト
-            if t.is_muted or (solo_exists and not t.is_solo):
-                item.setForeground(Qt.GlobalColor.gray)
-            elif t.track_type == "wave":
-                item.setForeground(Qt.GlobalColor.cyan)
-                
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 64))
             self.track_list_widget.addItem(item)
-        
-        # 現在の選択行を維持（範囲チェック付き）
+
+            strip = TrackStripWidget(t, self)
+            strip.selected.connect(self._on_strip_selected)
+            strip.mute_toggled.connect(self._on_strip_mute)
+            strip.solo_toggled.connect(self._on_strip_solo)
+            strip.volume_changed.connect(self._on_strip_volume)
+            strip.pan_changed.connect(self._on_strip_pan)
+            strip.name_edited.connect(self._on_strip_renamed)
+
+            # 選択中ハイライトとディミングの初期状態を反映
+            strip.set_current(i == self.current_track_idx)
+            strip.set_dimmed(t.is_muted or (solo_exists and not t.is_solo))
+
+            self.track_list_widget.setItemWidget(item, strip)
+
+        # 現在行を同期
         if 0 <= self.current_track_idx < self.track_list_widget.count():
             self.track_list_widget.setCurrentRow(self.current_track_idx)
-        
-        # 現在のトラックに合わせてM/SボタンのUI状態も同期（Noneガード徹底）
-        if 0 <= self.current_track_idx < len(self.tracks):
-            current_t = self.tracks[self.current_track_idx]
-            if self.btn_mute:
-                self.btn_mute.setChecked(current_t.is_muted)
-            if self.btn_solo:
-                self.btn_solo.setChecked(current_t.is_solo)
-        
+
         self.track_list_widget.blockSignals(False)
+
+    def _sync_track_strips(self):
+        """全ストリップの選択状態とディミング（M/S）を再計算して更新する"""
+        if not self.track_list_widget:
+            return
+        solo_exists = any(t.is_solo for t in self.tracks)
+        for i in range(self.track_list_widget.count()):
+            item = self.track_list_widget.item(i)
+            strip = self.track_list_widget.itemWidget(item)
+            if strip and isinstance(strip, TrackStripWidget):
+                t = self.tracks[i] if i < len(self.tracks) else None
+                strip.set_current(i == self.current_track_idx)
+                if t:
+                    strip.set_dimmed(t.is_muted or (solo_exists and not t.is_solo))
+
+    def _on_strip_selected(self, track):
+        if track in self.tracks:
+            idx = self.tracks.index(track)
+            if idx != self.current_track_idx:
+                self.track_list_widget.setCurrentRow(idx)
+
+    def _on_strip_mute(self, track, is_muted: bool):
+        if track in self.tracks:
+            track.is_muted = is_muted
+            self._sync_track_strips()
+            self.statusBar().showMessage(f"{track.name} Muted: {is_muted}")
+
+    def _on_strip_solo(self, track, is_solo: bool):
+        if track in self.tracks:
+            track.is_solo = is_solo
+            self._sync_track_strips()
+            self.statusBar().showMessage(f"{track.name} Solo: {is_solo}")
+
+    def _on_strip_volume(self, track, value: float):
+        if track in self.tracks:
+            track.volume = value
+            # 再生中のWaveトラックなら即時反映
+            if getattr(track, 'track_type', '') == 'wave' and hasattr(self, 'audio_output') and self.audio_output:
+                if self.tracks.index(track) == self.current_track_idx:
+                    self.audio_output.setVolume(value)
+            self.statusBar().showMessage(f"{track.name} Volume: {int(value * 100)}%")
+
+    def _on_strip_pan(self, track, value: float):
+        if track in self.tracks:
+            track.pan = value
+            p_str = f"L{int(abs(value)*100)}" if value < -0.01 else (f"R{int(value*100)}" if value > 0.01 else "C")
+            self.statusBar().showMessage(f"{track.name} Pan: {p_str}")
+
+    def _on_strip_renamed(self, track, new_name: str):
+        if track in self.tracks:
+            track.name = new_name
+            self.statusBar().showMessage(f"Track renamed to: {new_name}")
 
 
     def init_audio_playback(self):
@@ -3655,7 +3608,7 @@ class MainWindow(
 
     def get_current_playback_state(self) -> bool:
         """
- 
+
         """
         if not hasattr(self, 'player') or self.player is None:
             return False
@@ -3666,62 +3619,6 @@ class MainWindow(
         # getattr を使って、解析ツール(Pyright)の警告を完全にスルーします
         current_state = getattr(self.player, 'playbackState', None)
         return current_state == QMediaPlayer.PlaybackState.PlayingState
-
-    #オーディオミキサー
-
-    def setup_mixer_controls(self):
-        """トラックの音量を調整するスライダーを構築（setup_main_editor_areaから呼び出し）"""
-        from PySide6.QtWidgets import QSlider
-        from PySide6.QtCore import Qt
-
-        mixer_layout = QVBoxLayout()
-        
-        # 音量ラベル
-        self.vol_label = QLabel("Volume: 100%")
-        self.vol_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        # 音量スライダー (0-100で管理)
-        self.vol_slider = QSlider(Qt.Orientation.Horizontal)
-        self.vol_slider.setRange(0, 100)
-        self.vol_slider.setValue(100)
-        self.vol_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.vol_slider.setTickInterval(10)
-        
-        # 値が変わった時の連動
-        self.vol_slider.valueChanged.connect(self.on_volume_changed)
-        
-        mixer_layout.addWidget(self.vol_label)
-        mixer_layout.addWidget(self.vol_slider)
-        
-        # 前に作ったM/Sボタンもここにまとめると綺麗です
-        ms_layout = self.setup_track_controls()
-        mixer_layout.addLayout(ms_layout)
-        
-        return mixer_layout
-
-    def on_volume_changed(self, value):
-        """
-        スライダーを動かした時の処理
-        内部データ保持、ラベル更新、および再生エンジンへの即時反映を行います。
-        """
-        # 1. 現在操作対象のトラックを取得
-        target = self.tracks[self.current_track_idx]
-        
-        # 2. 内部データは 0.0 ~ 1.0 の浮動小数点で保持
-        target.volume = value / 100.0
-        
-        # 3. UIラベルの更新
-        self.vol_label.setText(f"Volume: {value}%")
-        
-        # 4. 【重要】もし再生中のトラックがオーディオトラックなら、出力を即座に変更
-        # これにより、再生を止めずに音量バランスを調整できます
-        if hasattr(self, 'audio_output'):
-            if target.track_type == "wave":
-                self.audio_output.setVolume(target.volume)
-        
-        # 5. ステータスバーへの表示（履歴登録の代わり）
-        self.statusBar().showMessage(f"{target.name} Volume set to {value}%")
-            
 
     # --- [2] 連続音（VCV）解決メソッド ---
 
@@ -5459,6 +5356,8 @@ class MainWindow(
     def on_graph_parameters_changed(self, all_parameters: dict):
         # GraphEditorWidget は {"Pitch": [...], "Gender": [...], ...} を送る
         self.pitch_data = all_parameters.get("Pitch", [])
+        if self.timeline_widget is not None:
+            self.timeline_widget.update()
 
     @Slot(list)
     def on_pitch_data_updated(self, new_pitch_events: list):

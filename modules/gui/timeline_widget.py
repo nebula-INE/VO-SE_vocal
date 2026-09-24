@@ -3,6 +3,7 @@ import logging
 import os
 import ctypes
 import wave
+import bisect
 import numpy as np
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Protocol, runtime_checkable, cast
@@ -138,7 +139,13 @@ class TimelineWidget(QWidget):
         self.parameters: Dict[str, Dict[float, float]] = {
             "Dynamics": {}, "Pitch": {}, "Vibrato": {}, "Formant": {}
         }
-        self.current_param_layer: str = "Dynamics"
+        self.current_param_layer: str = "Pitch"
+
+        # GraphEditorWidgetの実データを直接参照する（ピアノロールのオーバーレイ描画専用）
+        self._param_source: Any = None
+        self.show_parameter_overlay: bool = True
+        self.PITCH_AUTOMATION_SEMITONE_RANGE: float = 2.0
+
         self.audio_level: float = 0.0
 
         self.edit_mode: Optional[str] = None
@@ -179,6 +186,15 @@ class TimelineWidget(QWidget):
         self.setMouseTracking(True)
 
         self._transient_flashes = []  # トランジェント（一時的）なエフェクト管理用
+
+    def set_parameter_source(self, graph_editor_widget: Any) -> None:
+        """GraphEditorWidgetの参照を登録する。以後、ピアノロール上のカーブオーバーレイは
+        このウィジェットが持つ実データ(all_parameters / current_mode)を直接読みに行く。"""
+        self._param_source = graph_editor_widget
+
+    def set_show_parameter_overlay(self, enabled: bool) -> None:
+        self.show_parameter_overlay = bool(enabled)
+        self.update()
       
     def copy_selected_notes_to_clipboard(self) -> None:
         """MainWindow互換: 選択ノートをJSONでクリップボードへ。"""
@@ -668,10 +684,10 @@ class TimelineWidget(QWidget):
         self._draw_glow(p)
         if self.show_ai_phonemes:
             self._draw_ai_phoneme_ghosts(p)
-        self._draw_parameter_curves(p)
         
         self._draw_notes(p)
-        self._draw_transient_flashes(p)  # 🌟 ここに追加！ノートの上に重ねてフラッシュを描画
+        self._draw_parameter_curves(p)
+        self._draw_transient_flashes(p)  # 🌟 ノートの上に重ねてフラッシュを描画
         
         self._draw_selection_rect(p)
         self._draw_playhead(p)
@@ -866,53 +882,102 @@ class TimelineWidget(QWidget):
                 painter.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 4, 4)
 
     def _draw_parameter_curves(self, p: QPainter) -> None:
-        for name, data in self.parameters.items():
-            if name != self.current_param_layer:
-                self._draw_curve(p, data,
-                                 self._PARAM_COLORS.get(name, QColor(200, 200, 200)), 60, 1)
-        self._draw_curve(p,
-                         self.parameters.get(self.current_param_layer, {}),
-                         self._PARAM_COLORS.get(self.current_param_layer, QColor(255, 255, 255)),
-                         255, 2)
-
-    def _draw_curve(self, p: QPainter, data: Dict[float, float],
-                    color: QColor, alpha: int, width: int) -> None:
-        if not data:
+        if not self.show_parameter_overlay or self._param_source is None:
             return
-            
+
+        source = self._param_source
+        all_params = getattr(source, "all_parameters", None)
+        if not all_params:
+            return
+
+        current_mode = getattr(source, "current_mode", "Pitch")
+        colors = getattr(source, "colors", self._PARAM_COLORS)
+
+        # Pitchモードの描画がある場合だけ、ノート検索用の開始時刻リストを1回作る
+        note_starts = [n.start_time for n in self.notes_list] if self.notes_list else []
+
+        # 非アクティブなパラメーターは薄いゴースト表示
+        for name, events in all_params.items():
+            if name == current_mode or not events:
+                continue
+            self._draw_param_events(p, events, name,
+                                     colors.get(name, QColor(200, 200, 200)),
+                                     alpha=50, width=1, note_starts=note_starts)
+
+        # アクティブなパラメーターは太く鮮やかに、最後に描いて最前面に
+        active_events = all_params.get(current_mode, [])
+        if active_events:
+            self._draw_param_events(p, active_events, current_mode,
+                                     colors.get(current_mode, QColor(255, 255, 255)),
+                                     alpha=235, width=2, note_starts=note_starts)
+
+    def _draw_param_events(self, p: QPainter, events: list, mode: str, color: QColor,
+                            alpha: int, width: int, note_starts: List[float]) -> None:
+        if not events:
+            return
+
         vw = self.width()
-        
-        # 1. グロー（発光）エフェクト用の太く薄いペン
+        ordered = sorted(events, key=lambda e: getattr(e, "time", 0.0))
+
         glow_color = QColor(color)
-        glow_color.setAlpha(int(alpha * 0.3))  # 透明度を下げてぼんやり光らせる
+        glow_color.setAlpha(int(alpha * 0.30))
         glow_pen = QPen(glow_color, width * 3, Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
 
-        # 2. 芯となるメインのペン
         core_color = QColor(color)
         core_color.setAlpha(alpha)
         core_pen = QPen(core_color, width, Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
 
         prev: Optional[QPointF] = None
-        for t in sorted(data):
+        for ev in ordered:
+            t = float(getattr(ev, "time", 0.0))
             x = self.seconds_to_beats(t) * self.pixels_per_beat - self.scroll_x_offset
-            
-            # [OPT-2] 可視範囲外はprevだけ更新してスキップ
+
             if x > vw + 10:
                 break
-                
-            y = self.height() - (data[t] * self.height() * 0.4) - 20
+
+            val = float(getattr(ev, "value", 0.0))
+            y = self._param_value_to_y(mode, t, val, note_starts)
             curr = QPointF(x, y)
-            
-            if prev and abs(curr.x() - prev.x()) < 500 and x > -10:
-                # 重ね塗りでネオンのような発光を表現
+
+            if prev is not None and x > -10:
                 p.setPen(glow_pen)
                 p.drawLine(prev, curr)
                 p.setPen(core_pen)
                 p.drawLine(prev, curr)
-                
+
             prev = curr
+
+    def _param_value_to_y(self, mode: str, time_sec: float, value: float,
+                          note_starts: List[float]) -> float:
+        """パラメーター値をピアノロール上のY座標に変換する。
+
+        Pitch: そのノートの実音高 + ピッチベンド偏差(半音換算) を絶対音高として求め、
+               ノート描画と全く同じ座標系 (127 - note_number) * key_height_pixels で
+               マッピングする。これによりカーブが実際のノートの上を通って見える。
+        それ以外: 0.0〜1.0のパラメーターとして、ピアノロール下部の帯にミニグラフ表示する。
+        """
+        if mode == "Pitch":
+            base_note = self._get_note_pitch_at_time(time_sec, note_starts)
+            semitone_offset = (value / 8191.0) * self.PITCH_AUTOMATION_SEMITONE_RANGE
+            absolute_pitch = base_note + semitone_offset
+            return (127.0 - absolute_pitch) * self.key_height_pixels - self.scroll_y_offset
+
+        band_h = max(40.0, self.height() * 0.18)
+        band_top = self.height() - band_h - 4
+        clamped = max(0.0, min(1.0, value))
+        return band_top + band_h * (1.0 - clamped)
+
+    def _get_note_pitch_at_time(self, time_sec: float, note_starts: List[float]) -> float:
+        """指定時刻を含む(または直前の)ノートの音高を返す。ノートが1つもなければA4(69)を仮定値とする。
+        note_starts は self.notes_list と同じ並び順・昇順ソート済みであること。"""
+        if not self.notes_list:
+            return 69.0
+        idx = bisect.bisect_right(note_starts, time_sec) - 1
+        if idx < 0:
+            return float(self.notes_list[0].note_number)
+        return float(self.notes_list[idx].note_number)
 
     def _draw_selection_rect(self, p: QPainter) -> None:
         if self.edit_mode == "select_box" and self.selection_rect.isValid():
@@ -1324,6 +1389,8 @@ class TimelineWidget(QWidget):
 
     def change_layer(self, name: str) -> None:
         self.current_param_layer = name
+        if self._param_source is not None and hasattr(self._param_source, "set_mode"):
+            self._param_source.set_mode(name)   # GraphEditorWidget側も追従させる
         main_win = self.window()
         if isinstance(main_win, QMainWindow):
             sb = main_win.statusBar()
@@ -1356,14 +1423,36 @@ class TimelineWidget(QWidget):
         self.notes_changed_signal.emit()
 
     def _clear_selected_params(self) -> None:
+        """選択中のノートの時間範囲にある、現在のレイヤーのパラメーターポイントを削除する。
+        GraphEditorWidgetの実データ(all_parameters)を操作するように変更。"""
+        source = self._param_source
+        if source is None or not hasattr(source, "all_parameters"):
+            return
+
         layer = self.current_param_layer
-        for n in self.notes_list:
-            if not getattr(n, 'is_selected', False):
-                continue
-            keys_to_del = [t for t in self.parameters[layer]
-                           if n.start_time <= t <= n.start_time + n.duration]
-            for k in keys_to_del:
-                del self.parameters[layer][k]
+        events = source.all_parameters.get(layer)
+        if not events:
+            return
+
+        selected_ranges = [
+            (n.start_time, n.start_time + n.duration)
+            for n in self.notes_list if getattr(n, 'is_selected', False)
+        ]
+        if not selected_ranges:
+            return
+
+        before = source._snapshot_parameters() if hasattr(source, "_snapshot_parameters") else None
+        events[:] = [
+            ev for ev in events
+            if not any(start <= getattr(ev, 'time', 0.0) <= end for start, end in selected_ranges)
+        ]
+
+        if hasattr(source, "parameters_changed"):
+            source.parameters_changed.emit(source.all_parameters)
+        if before is not None and hasattr(source, "_commit_edit"):
+            source._commit_edit(before, f"{layer} パラメーターリセット")
+
+        source.update()
         self.update()
 
     def _reset_selected_lyrics(self) -> None:

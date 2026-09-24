@@ -46,7 +46,8 @@ interface VoseCoreModule {
   lengthBytesUTF8: (str: string) => number;
   _malloc: (size: number) => number;
   _free: (ptr: number) => void;
-  _load_embedded_resource_f32?: (phoneme: string, rawData: number, sampleCount: number) => void;
+  _load_embedded_resource?: (phonemePtr: number, rawData: number, sampleCount: number) => void;
+  _load_embedded_resource_f32?: (phonemePtr: number, rawData: number, sampleCount: number) => void;
   addFunction: (fn: (...args: number[]) => number | void, signature: string) => number;
   removeFunction: (ptr: number) => void;
   HEAPU8: Uint8Array;
@@ -263,10 +264,11 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     //    使い、Int16量子化でD4C解析前に微小成分を失わないようにする。
     for (const s of samples) {
       const view = new Float32Array(s.pcmF32);
+      const keyPtr = allocCString(mod, s.key);
       if (mod._load_embedded_resource_f32) {
         const pcmPtr = mod._malloc(view.length * 4);
         mod.HEAPF32.set(view, pcmPtr / 4);
-        mod._load_embedded_resource_f32(s.key, pcmPtr, view.length);
+        mod._load_embedded_resource_f32(keyPtr, pcmPtr, view.length);
         mod._free(pcmPtr);
       } else {
         // 新しいWASM成果物が配信されるまでの後方互換。通常経路では
@@ -279,9 +281,14 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
         }
         const pcmPtr = mod._malloc(legacy.byteLength);
         mod.HEAPU8.set(new Uint8Array(legacy.buffer), pcmPtr);
-        mod.ccall('load_embedded_resource', null, ['string', 'number', 'number'], [s.key, pcmPtr, view.length]);
+        if (mod._load_embedded_resource) {
+          mod._load_embedded_resource(keyPtr, pcmPtr, view.length);
+        } else {
+          mod.ccall('load_embedded_resource', null, ['number', 'number', 'number'], [keyPtr, pcmPtr, view.length]);
+        }
         mod._free(pcmPtr);
       }
+      mod._free(keyPtr);
     }
 
     // 2. oto.iniデータをWASM側へ登録する(set_oto_data)
@@ -293,7 +300,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       allocatedPtrs.push(otoPtr);
 
       for (let i = 0; i < samples.length; i++) {
-        const { key, oto } = samples[i];
+        const { key, oto, origAlias } = samples[i];
         const base = otoPtr + i * OTO_ENTRY_SIZE;
 
         // filenameは未使用フィールド。ダングリングポインタを避けるため0固定。

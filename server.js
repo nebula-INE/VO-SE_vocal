@@ -13,7 +13,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+let PORT = 3000;
+const portArgIdx = process.argv.indexOf('--port');
+if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+  const parsedPort = parseInt(process.argv[portArgIdx + 1], 10);
+  if (!isNaN(parsedPort) && parsedPort > 0) {
+    PORT = parsedPort;
+  }
+}
 
 app.use(cors());
 
@@ -1989,8 +1996,8 @@ async function setupVite() {
   } else {
     const { createServer: createViteServer } = await import('vite');
     const viteDevServer = await createViteServer({
-      server: { middlewareMode: true, allowedHosts: true },
-      appType: 'spa'
+       server: { middlewareMode: true, allowedHosts: true, hmr: false },
+       appType: 'spa'
     });
     app.use(viteDevServer.middlewares);
   }
