@@ -159,7 +159,27 @@ class UstParser:
 
         content = self._read_safe(path)
         lines = content.splitlines()
-        return self._parse(lines)
+        project = self._parse(lines)
+
+        # [FIX] UTAU では [#SETTING] の Tempo= がデフォルト 120 のままでも、
+        # 実際の曲テンポは最初のノート ([#0000] 等) の Tempo= に書かれている
+        # ケースが非常に多い。Web版 (src/utils/formatConverter.ts) と同じ
+        # 優先順位で project.tempo を決定する:
+        #
+        #   1. 最初のノートに書かれた Tempo (= UTAU 実挙動での真のテンポ)
+        #   2. [#SETTING] の Tempo (既に project.tempo に入っている)
+        #   3. デフォルト 120 (UstProject のフィールド既定値)
+        #
+        # ここで上書きしておかないと、UI のテンポ表示・拍グリッド・
+        # .ust 再書き出し時の [#SETTING] Tempo= がすべて 120 のまま
+        # 固定されてしまう (音は UstNote.tempo 経由で正しく鳴るため
+        # 気付きにくい)。
+        if project.notes:
+            first_tempo = project.notes[0].tempo
+            if first_tempo and first_tempo > 0.0:
+                project.tempo = first_tempo
+
+        return project
 
     # ------------------------------------------------------------------
     # 内部実装
