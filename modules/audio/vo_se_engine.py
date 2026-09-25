@@ -286,8 +286,8 @@ class VO_SE_Engine:
         progress_callback: Optional[Callable[[int], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Optional[str]:
-        """
-        バッチレンダリング対応版 export_to_wav。
+        """バッチレンダリング対応版 export_to_wav。
+
         - notes をチャンク分割して C++ execute_render を複数回呼び出す
         - 各チャンク完了後に progress_callback を呼ぶ
         - cancel_check が True を返したら中断
@@ -295,7 +295,6 @@ class VO_SE_Engine:
         if not self.lib:
             raise RuntimeError("Engine Core library missing!")
 
-        # soundfile が利用可能かチェック（安全ガード）
         if sf is None:
             print("[VO_SE_Engine] soundfile not available, cannot write WAV.")
             return None
@@ -314,116 +313,137 @@ class VO_SE_Engine:
         else:
             chunk_size = max(MIN_CHUNK_NOTES, total // 20)  # 最大でも約20分割程度に抑える
 
-        # テンポラリディレクトリ
         temp_dir = tempfile.mkdtemp(prefix="vose_render_")
-        chunk_files = []
-        combined_audio = []
+        chunk_files: List[str] = []
+        combined_audio: List[np.ndarray] = []
 
         try:
             for start_idx in range(0, total, chunk_size):
-                # キャンセルチェック
                 if cancel_check and cancel_check():
                     print("[VO_SE_Engine] Render cancelled by user.")
                     return None
 
                 chunk_notes = notes[start_idx:start_idx + chunk_size]
+                chunk_count = len(chunk_notes)
 
-                # 歌詞が解決できるノートだけを先に選別する。
-                # ★重要★ ここで選別せず c_notes_array[i] を「歌詞なし=continue」で
-                # 飛ばすと、配列はゼロ初期化された ctypes.Structure のままのスロットが
-                # 残り（wav_path=NULL, pitch_curve=NULL 等）、それでも execute_render には
-                # 元のノート数をそのまま渡してしまうため、C++側がNULL構造体を1ノートとして
-                # レンダリングしてしまう（未定義動作＝雑音や別音源っぽいゴミ音の原因）。
-                # なので必ず「配列サイズ」と「execute_renderに渡す件数」を
-                # 実際に書き込んだ件数に一致させる。
-                resolved = []
-                for note in chunk_notes:
-                    wav_path = self.oto_map.get(note.lyrics) or self.oto_map.get(note.phonemes)
-                    if not wav_path:
-                        print(f"[VO_SE_Engine][WARN] 未解決の歌詞をスキップ（無音化）: "
-                              f"lyrics='{note.lyrics}' phonemes='{getattr(note, 'phonemes', None)}'")
-                        continue
-                    resolved.append((note, wav_path))
-
-                chunk_count = len(resolved)
-                if chunk_count == 0:
-                    # このチャンクに有効なノートが1つも無い場合は execute_render 自体を呼ばない
-                    if progress_callback:
-                        processed = min(start_idx + len(chunk_notes), total)
-                        percent = int((processed / total) * 100)
-                        progress_callback(percent)
-                    continue
-
-                # C++ 構造体配列は「実際に解決できた件数」ぴったりのサイズで作る
+                # 全ノートを保持する。未解決ノートも「無音プレースホルダ」として
+                # 配列に残し、wav_path を NULL (ゼロ初期化されたまま) にしておく。
+                # C++ 側は wav_path==NULL の NoteEvent を NoteState::NO_VOICE として扱い、
+                # pitch_length の分だけ時刻を進める（src/vose_core.cpp の
+                # execute_render_impl パス2-B 参照）。
+                # ここで continue で除外してしまうと、休符が詰められてタイムラインが
+                # ずれる（実際には休符が消えて後続が前倒しになる）ので、必ず残すこと。
                 c_notes_array = (CNoteEvent * chunk_count)()
                 self._temp_refs = []
 
-                for i, (note, wav_path) in enumerate(resolved):
-                    res = 128
-                    p_curve = self._get_sampled_curve(parameters.get("Pitch", []), note, res, is_pitch=True).astype(np.float64)
-                    g_curve = self._get_sampled_curve(parameters.get("Gender", []), note, res).astype(np.float64)
-                    t_curve = self._get_sampled_curve(parameters.get("Tension", []), note, res).astype(np.float64)
-                    b_curve = self._get_sampled_curve(parameters.get("Breath", []), note, res).astype(np.float64)
+                for i, note in enumerate(chunk_notes):
+                    # そのノートの実時間から C++ の pitch_length を逆算する
+                    res = self._duration_sec_to_frames(
+                        float(getattr(note, "duration", 0.5))
+                    )
+
+                    p_curve = self._get_sampled_curve(
+                        parameters.get("Pitch", []), note, res, is_pitch=True
+                    ).astype(np.float64)
+                    g_curve = self._get_sampled_curve(
+                        parameters.get("Gender", []), note, res
+                    ).astype(np.float64)
+                    t_curve = self._get_sampled_curve(
+                        parameters.get("Tension", []), note, res
+                    ).astype(np.float64)
+                    b_curve = self._get_sampled_curve(
+                        parameters.get("Breath", []), note, res
+                    ).astype(np.float64)
                     vibrato_depth_curve = np.zeros(res, dtype=np.float64)
                     vibrato_rate_curve = np.zeros(res, dtype=np.float64)
 
                     self._temp_refs.extend([
                         p_curve, g_curve, t_curve, b_curve,
-                        vibrato_depth_curve, vibrato_rate_curve
+                        vibrato_depth_curve, vibrato_rate_curve,
                     ])
 
-                    c_notes_array[i].wav_path = wav_path.encode('utf-8')
-                    c_notes_array[i].pitch_curve = p_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-                    c_notes_array[i].gender_curve = g_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-                    c_notes_array[i].tension_curve = t_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-                    c_notes_array[i].breath_curve = b_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-                    c_notes_array[i].vibrato_depth_curve = vibrato_depth_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-                    c_notes_array[i].vibrato_rate_curve = vibrato_rate_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+                    # 歌詞解決（休符や未収録音素は None のまま）
+                    lyric = getattr(note, "lyrics", None) or getattr(note, "lyric", "")
+                    phonemes = getattr(note, "phonemes", None)
+                    wav_path = self.oto_map.get(lyric) or (
+                        self.oto_map.get(phonemes) if phonemes else None
+                    )
+
+                    if wav_path:
+                        c_notes_array[i].wav_path = wav_path.encode("utf-8")
+                    else:
+                        # wav_path は NULL のまま（ゼロ初期化済み）。
+                        # C++ はこのノートを無音区間として扱い、
+                        # pitch_length から計算される note_samples 分だけ時刻を進める。
+                        print(
+                            f"[VO_SE_Engine][INFO] 未解決の歌詞を無音として保持: "
+                            f"lyric='{lyric}' phonemes='{phonemes}' "
+                            f"duration={float(getattr(note, 'duration', 0.0)):.3f}s "
+                            f"frames={res}"
+                        )
+
+                    c_notes_array[i].pitch_curve = p_curve.ctypes.data_as(
+                        ctypes.POINTER(ctypes.c_double)
+                    )
+                    c_notes_array[i].gender_curve = g_curve.ctypes.data_as(
+                        ctypes.POINTER(ctypes.c_double)
+                    )
+                    c_notes_array[i].tension_curve = t_curve.ctypes.data_as(
+                        ctypes.POINTER(ctypes.c_double)
+                    )
+                    c_notes_array[i].breath_curve = b_curve.ctypes.data_as(
+                        ctypes.POINTER(ctypes.c_double)
+                    )
+                    c_notes_array[i].vibrato_depth_curve = vibrato_depth_curve.ctypes.data_as(
+                        ctypes.POINTER(ctypes.c_double)
+                    )
+                    c_notes_array[i].vibrato_rate_curve = vibrato_rate_curve.ctypes.data_as(
+                        ctypes.POINTER(ctypes.c_double)
+                    )
                     c_notes_array[i].pitch_length = res
                     c_notes_array[i].vibrato_curve_length = res
 
-                # チャンク用の一時WAVパス
                 chunk_path = os.path.join(temp_dir, f"chunk_{start_idx:06d}.wav")
 
                 # C++ エンジン実行（渡す件数は必ず c_notes_array の実サイズと一致させる）
                 self.lib.execute_render(
                     c_notes_array,
                     chunk_count,
-                    chunk_path.encode('utf-8'),
-                    mode_flag
+                    chunk_path.encode("utf-8"),
+                    mode_flag,
                 )
-                # メモリ保護リストをクリア
                 self._temp_refs = []
 
-                # レンダリング結果を読み込む
                 if os.path.exists(chunk_path):
                     data, sr = sf.read(chunk_path)
                     combined_audio.append(data)
                     chunk_files.append(chunk_path)
 
-                # 進捗更新（進捗の分母は「元のチャンクの読み進み」基準。
-                # chunk_count は歌詞解決後の件数なので進捗計算には使わない）
                 if progress_callback:
                     processed = min(start_idx + len(chunk_notes), total)
                     percent = int((processed / total) * 100)
                     progress_callback(percent)
 
-            # 全チャンクを結合して最終出力
             if not combined_audio:
                 print("[VO_SE_Engine] No audio data rendered.")
                 return None
 
-            # チャンク境界（≒execute_renderの独立呼び出し間）は位相・音量が
-            # 不連続になりがちなので、約8msのイコールパワー・クロスフェードで
-            # 縫い目のクリック/ポップ音を隠す。
-            fade_len = int(0.008 * 44100)  # 約8ms
+            # チャンク境界の不連続を約8msのイコールパワー・クロスフェードで隠す
+            fade_len = int(0.008 * 44100)
             final_audio = combined_audio[0]
             for nxt in combined_audio[1:]:
                 if len(final_audio) >= fade_len and len(nxt) >= fade_len:
                     fade_out = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
                     fade_in = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
-                    overlap = final_audio[-fade_len:] * fade_out + nxt[:fade_len] * fade_in
-                    final_audio = np.concatenate([final_audio[:-fade_len], overlap, nxt[fade_len:]])
+                    overlap = (
+                        final_audio[-fade_len:] * fade_out
+                        + nxt[:fade_len] * fade_in
+                    )
+                    final_audio = np.concatenate([
+                        final_audio[:-fade_len],
+                        overlap,
+                        nxt[fade_len:],
+                    ])
                 else:
                     final_audio = np.concatenate([final_audio, nxt])
             sf.write(file_path, final_audio, 44100)
@@ -436,7 +456,6 @@ class VO_SE_Engine:
             return None
 
         finally:
-            # テンポラリディレクトリの後片付け
             try:
                 shutil.rmtree(temp_dir)
             except Exception:
