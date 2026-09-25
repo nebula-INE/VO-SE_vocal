@@ -63,11 +63,19 @@ class NoteEvent:
         self.lyric = value
 
     def to_dict(self) -> Dict[str, Any]:
-        """保存用に辞書化（GUI用フラグは除外）"""
+        """保存用に辞書化（GUI用フラグは除外、_ust_* 拡張は保持）"""
         d = asdict(self)
         # 不要な内部状態を削除
         d.pop('is_selected', None)
         d.pop('is_playing', None)
+
+        # UST 拡張属性 (_ust_tempo, _ust_flags 等) を永続化。
+        # asdict() は dataclass のフィールドしか含めないため、
+        # setattr で動的に付与された属性はここで明示的に拾う。
+        for k, v in self.__dict__.items():
+            if k.startswith("_ust_"):
+                d[k] = v
+
         return d
 
     @classmethod
