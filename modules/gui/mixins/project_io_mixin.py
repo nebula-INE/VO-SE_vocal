@@ -918,67 +918,117 @@ class ProjectIOMixin:
         return str(os.path.splitext(os.path.basename(zip_path))[0])
 
     def on_export_button_clicked(self: Any):
-        """[LIVE] WAV出力"""
+        """[LIVE] WAV出力 — 新シグネチャ (notes, parameters, file_path) 対応版"""
         from modules.data.licensing import LicenseManager
-        import numpy as np
 
-        tw = getattr(self, 'timeline_widget', None)
-        gw = getattr(self, 'graph_editor_widget', None)
-        engine = getattr(self, 'vo_se_engine', None)
-        ai_engine = getattr(self, 'ai_engine', None)
+        tw = getattr(self, "timeline_widget", None)
+        gw = getattr(self, "graph_editor_widget", None)
+        engine = getattr(self, "vo_se_engine", None)
 
         if tw is None or gw is None or engine is None:
-            QMessageBox.warning(self, "エラー", "書き出しに必要な初期化が完了していません。")
+            QMessageBox.warning(
+                self,
+                "エラー",
+                "書き出しに必要な初期化が完了していません。",
+            )
             return
 
-        notes = getattr(tw, 'notes_list', [])
+        notes = list(getattr(tw, "notes_list", []) or [])
         if not notes:
-            QMessageBox.warning(self, "エラー", "ノートがないため書き出しできません。")
+            QMessageBox.warning(
+                self,
+                "エラー",
+                "ノートがないため書き出しできません。",
+            )
             return
 
-        file_path, _ = QFileDialog.getSaveFileName(self, "音声ファイルを保存", "output.wav", "WAV Files (*.wav)")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "音声ファイルを保存",
+            "output.wav",
+            "WAV Files (*.wav)",
+        )
         if not file_path:
             return
 
         is_pro = LicenseManager.is_pro()
-        if is_pro:
-            sample_rate, bit_depth = 96000, 32
-            quality_label = "Studio Master Quality"
-        else:
-            sample_rate, bit_depth = 44100, 16
-            quality_label = "Standard Quality"
+        mode_flag = 1 if is_pro else 0
+
+        # graph_editor_widget からパラメータ辞書を組み立てる
+        all_params = getattr(gw, "all_parameters", {}) or {}
+        parameters: Dict[str, Any] = {
+            "Pitch":   list(all_params.get("Pitch",   [])),
+            "Gender":  list(all_params.get("Gender",  [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath":  list(all_params.get("Breath",  [])),
+        }
 
         self.stop_and_clear_playback()
         status_bar = self.statusBar()
         if status_bar:
-            status_bar.showMessage(f"{quality_label} でレンダリング中（AI表現力を付加中）...")
+            status_bar.showMessage("レンダリング中...")
+
+        # パッチ適用環境では v2 を優先 (VCV + Vibrato + Portamento 対応)
+        export_fn = (
+            getattr(engine, "export_to_wav_v2", None)
+            or getattr(engine, "export_to_wav", None)
+        )
+        if export_fn is None:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                "エンジンに export_to_wav が実装されていません。",
+            )
+            return
 
         try:
-            all_params = getattr(gw, 'all_parameters', {})
-            vocal_data_list = []
-            res = 128
+            # v2 は (notes, parameters, file_path) の3引数のみ。
+            # v1 は mode_flag をキーワード引数で受ける。
+            if getattr(export_fn, "__name__", "") == "export_to_wav_v2":
+                result = export_fn(notes, parameters, file_path)
+            else:
+                result = export_fn(
+                    notes,
+                    parameters,
+                    file_path,
+                    mode_flag=mode_flag,
+                )
 
-            for note in notes:
-                base_f0_list = self._sample_range(all_params.get("Pitch", []), note, res)
+            if result is None:
+                QMessageBox.warning(
+                    self,
+                    "書き出し",
+                    "レンダリング結果が空でした。",
+                )
+                return
 
-                if ai_engine is not None:
-                    base_f0_np = np.array(base_f0_list, dtype=np.float32)
-                    emotional_f0_np = ai_engine.get_baked_pitch(id(note), base_f0_np)
-                    final_pitch_list = emotional_f0_np.tolist()
-                else:
-                    final_pitch_list = base_f0_list
-
-                note_data = {"lyric": note.lyrics, "phonemes": note.phonemes, "note_number": note.note_number, "start_time": note.start_time, "duration": note.duration, "pitch_list": final_pitch_list, "gender_list": self._sample_range(all_params.get("Gender", []), note, res), "tension_list": self._sample_range(all_params.get("Tension", []), note, res), "breath_list": self._sample_range(all_params.get("Breath", []), note, res)}
-                vocal_data_list.append(note_data)
-
-            engine.export_to_wav(vocal_data=vocal_data_list, tempo=tw.tempo, file_path=file_path, sample_rate=sample_rate, bit_depth=bit_depth, is_pro=is_pro)
-
-            QMessageBox.information(self, "完了", f"レンダリングが完了しました！\n品質: {quality_label}\nAIによる調声が適用されています。")
             if status_bar:
-                status_bar.showMessage(f"エクスポート完了（{quality_label}）")
+                status_bar.showMessage(
+                    f"エクスポート完了: {os.path.basename(file_path)}"
+                )
+            QMessageBox.information(
+                self,
+                "完了",
+                f"レンダリングが完了しました！\nファイル: {file_path}",
+            )
 
-        except Exception as e:
-            QMessageBox.critical(self, "エラー", f"書き出し失敗: {e}")
+        except TypeError as exc:
+            logger.exception("export_to_wav 呼び出し失敗: %s", exc)
+            QMessageBox.critical(
+                self,
+                "エラー",
+                "export_to_wav のシグネチャが一致しません。\n"
+                "vo_se_engine_patch.apply_patch(VO_SE_Engine) "
+                "が適用済みか確認してください。\n"
+                f"詳細: {exc}",
+            )
+        except Exception as exc:
+            logger.exception("書き出しエラー: %s", exc)
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"書き出し失敗: {exc}",
+            )
             if status_bar:
                 status_bar.showMessage("エラー発生")
 
