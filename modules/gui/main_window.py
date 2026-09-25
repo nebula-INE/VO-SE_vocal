@@ -5190,12 +5190,17 @@ class MainWindow(
         """
         テンポ入力をシステム全体（Timeline, GraphEditor, Engine）に反映する。
         Ruff F811を解消した統合版（省略なし）。
+
+        [FIX] 以前は int(new_tempo) で小数点以下を切り捨てていたため、
+        170.5 のような小数テンポを UST から読み込んだ直後に
+        ユーザーがテンポ欄を編集すると 170 に丸められてしまっていた。
+        UST 側は float 精度で扱っているので、UI 側も float で統一する。
         """
         try:
             # 1. 必須ウィジェットの存在チェック
             if self.tempo_input is None:
                 return
-            
+
             # 安全な型変換
             try:
                 new_tempo = float(self.tempo_input.text())
@@ -5207,18 +5212,19 @@ class MainWindow(
                 raise ValueError("テンポは30.0〜300.0の範囲で入力してください")
 
             # 3. 各コンポーネントへの伝播
+            # [FIX] int() → float() に変更。小数テンポの精度を保持する。
             # TimelineWidgetへの反映
             if hasattr(self, 'timeline_widget') and self.timeline_widget is not None:
-                self.timeline_widget.tempo = int(new_tempo)
-                self.timeline_widget.update() # 再描画強制
+                self.timeline_widget.tempo = float(new_tempo)
+                self.timeline_widget.update()  # 再描画強制
             elif hasattr(self, 'timeline') and self.timeline is not None:
                 # 変数名の揺れ対策
-                self.timeline.tempo = int(new_tempo)
+                self.timeline.tempo = float(new_tempo)
                 self.timeline.update()
 
             # グラフエディタへの反映
             if hasattr(self, 'graph_editor_widget') and self.graph_editor_widget is not None:
-                self.graph_editor_widget.tempo = int(new_tempo)
+                self.graph_editor_widget.tempo = float(new_tempo)
                 self.graph_editor_widget.update()
 
             # C++エンジンへの即時通知
@@ -5241,18 +5247,17 @@ class MainWindow(
             # エラー時は警告を出し、値を元に戻す
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "テンポ設定エラー", str(e))
-            
+
             # 直近の有効な値（timeline_widget保持分）をUIに復元
-            valid_tempo = 120
+            # [FIX] 120 → 120.0 (float で統一)
+            valid_tempo = 120.0
             if hasattr(self, 'timeline_widget') and self.timeline_widget:
                 valid_tempo = self.timeline_widget.tempo
             elif hasattr(self, 'timeline') and self.timeline:
                 valid_tempo = self.timeline.tempo
-                
-                    
+
             if self.tempo_input:
                 self.tempo_input.setText(str(valid_tempo))
-
 
     @Slot(str)
     def set_current_parameter_layer(self, layer_name: str):
