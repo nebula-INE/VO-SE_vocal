@@ -159,6 +159,11 @@ class ProjectIOMixin:
         """
         現在のプロジェクトを .ust 形式で書き出す。
         ビブラート・強度・フラグは NoteEvent の _ust_* 拡張フィールドから復元する。
+
+        [テンポ対応]
+        各ノートに `_ust_tempo` 属性があればその値を優先し、無ければ
+        timeline_widget.tempo を使う。テンポが変化する位置には Tempo= 行を
+        挿入し、ticks もそのノート自身のテンポで逆算する。
         """
         if not hasattr(self, "timeline_widget") or self.timeline_widget is None:
             return
@@ -178,15 +183,22 @@ class ProjectIOMixin:
             return
 
         try:
-            tempo = float(getattr(getattr(self, "timeline_widget", None), "tempo", 120.0))
-            lines: List[str] = []
+            default_tempo = float(
+                getattr(getattr(self, "timeline_widget", None), "tempo", 120.0)
+            )
 
-            # ヘッダー
-            lines += [
+            # ---- ヘッダー [#SETTING] の Tempo 決定 ----
+            # UTAU の慣例に合わせ、最初のノートの _ust_tempo を優先採用する。
+            # (_ust_tempo が無いノートしか無い場合は timeline_widget.tempo)
+            first_note_tempo = float(
+                getattr(notes_list[0], "_ust_tempo", None) or default_tempo
+            )
+
+            lines: List[str] = [
                 "[#VERSION]",
                 "UST Version 1.2",
                 "[#SETTING]",
-                f"Tempo={tempo:.2f}",
+                f"Tempo={first_note_tempo:.2f}",
                 "Tracks=1",
                 "ProjectName=VO-SE Export",
                 "VoiceDir=%voice%",
@@ -197,18 +209,41 @@ class ProjectIOMixin:
                 "",
             ]
 
+            # 直前に出力した Tempo= を追跡（同じ値を繰り返さないため）
+            current_tempo: Optional[float] = first_note_tempo
+
             for i, note in enumerate(notes_list):
-                section_id = f"{i:04X}"
+                # ---- このノート自身のテンポを決定 ----
+                note_tempo = float(
+                    getattr(note, "_ust_tempo", None) or default_tempo
+                )
+
+                # ---- そのノートのテンポで秒 → ticks へ逆変換 ----
+                # 各ノートは読み込み時に「そのノートのテンポ」で秒に変換されているので、
+                # 逆変換も同じテンポを使う必要がある。
                 duration_sec = float(getattr(note, "duration", 0.5))
-                beats = duration_sec / (60.0 / tempo)
-                ticks = int(round(beats * _TICKS_PER_BEAT))
+                beats = duration_sec / (60.0 / note_tempo)
+                ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
 
                 note_num = int(getattr(note, "note_number", 60))
                 lyric    = str(getattr(note, "lyric", "あ"))
 
-                lines += [f"[#{section_id}]", f"Length={ticks}", f"Lyric={lyric}", f"NoteNum={note_num}"]
+                section_id = f"{i:04X}"
+                lines += [
+                    f"[#{section_id}]",
+                    f"Length={ticks}",
+                    f"Lyric={lyric}",
+                    f"NoteNum={note_num}",
+                ]
 
-                # 先行発声・オーバーラップ
+                # ---- テンポ変化の位置に Tempo= を挿入 ----
+                # UTAU はこの行があればそのノートから先のテンポを上書きする。
+                # 同値が続く場合は省略し、変化点のみ出力する。
+                if note_tempo != current_tempo:
+                    lines.append(f"Tempo={note_tempo:.2f}")
+                    current_tempo = note_tempo
+
+                # ---- 先行発声・オーバーラップ ----
                 pre_ms = float(getattr(note, "pre_utterance", 0.0))
                 ov_ms  = float(getattr(note, "overlap",       0.0))
                 if pre_ms != 0.0:
@@ -216,17 +251,17 @@ class ProjectIOMixin:
                 if ov_ms != 0.0:
                     lines.append(f"VoiceOverlap={ov_ms:.3f}")
 
-                # 強度・モジュレーション
+                # ---- 強度・モジュレーション ----
                 intensity  = float(getattr(note, "_ust_intensity",  100.0))
                 modulation = float(getattr(note, "_ust_modulation", 100.0))
                 lines += [f"Intensity={intensity:.0f}", f"Modulation={modulation:.0f}"]
 
-                # フラグ
+                # ---- フラグ ----
                 flags = str(getattr(note, "_ust_flags", ""))
                 if flags:
                     lines.append(f"Flags={flags}")
 
-                # ビブラート
+                # ---- ビブラート ----
                 vib_dict = getattr(note, "_ust_vibrato", None)
                 if isinstance(vib_dict, dict):
                     vbr_vals = [
@@ -240,9 +275,13 @@ class ProjectIOMixin:
                     ]
                     lines.append("VBR=" + ",".join(str(v) for v in vbr_vals))
 
-                # ポルタメント
-                for attr, key in [("_ust_pbs", "PBS"), ("_ust_pbw", "PBW"),
-                                   ("_ust_pby", "PBY"), ("_ust_pbm", "PBM")]:
+                # ---- ポルタメント ----
+                for attr, key in [
+                    ("_ust_pbs", "PBS"),
+                    ("_ust_pbw", "PBW"),
+                    ("_ust_pby", "PBY"),
+                    ("_ust_pbm", "PBM"),
+                ]:
                     val = str(getattr(note, attr, ""))
                     if val:
                         lines.append(f"{key}={val}")
@@ -255,12 +294,19 @@ class ProjectIOMixin:
             with open(file_path, "w", encoding="cp932", errors="replace") as f:
                 f.write("\r\n".join(lines))
 
-            self.statusBar().showMessage(f"UST 書き出し完了: {os.path.basename(file_path)}")
-            logger.info("UST 書き出し完了: %s (%d ノート)", file_path, len(notes_list))
+            self.statusBar().showMessage(
+                f"UST 書き出し完了: {os.path.basename(file_path)}"
+            )
+            logger.info(
+                "UST 書き出し完了: %s (%d ノート / default_tempo=%.1f)",
+                file_path, len(notes_list), default_tempo,
+            )
 
         except Exception as exc:
             logger.exception("UST 書き出しエラー: %s", exc)
-            QMessageBox.critical(self, "書き出しエラー", f"UST の書き出しに失敗しました:\n{exc}")
+            QMessageBox.critical(
+                self, "書き出しエラー", f"UST の書き出しに失敗しました:\n{exc}"
+            )
 
     # ------------------------------------------------------------------
     # JSON プロジェクト保存・読み込み (従来通り)
