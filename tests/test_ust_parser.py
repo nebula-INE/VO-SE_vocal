@@ -102,5 +102,123 @@ class TestUstParser(unittest.TestCase):
             self.assertEqual(dicts[0]["_ust_flags"], "g-5B50")
             self.assertIn("_ust_vibrato", dicts[0])
 
+    def test_ust_tempo_is_exported_in_note_dict(self):
+        """[Step 2-A] 各ノートの tempo が _ust_tempo として辞書に含まれること"""
+        ust = (
+            "[#SETTING]\n"
+            "Tempo=120.00\n"
+            "ProjectName=Test\n"
+            "\n"
+            "[#0000]\n"
+            "Length=480\n"
+            "Lyric=か\n"
+            "NoteNum=60\n"
+            "Tempo=120.00\n"
+            "\n"
+            "[#0001]\n"
+            "Length=480\n"
+            "Lyric=き\n"
+            "NoteNum=62\n"
+            "Tempo=170.00\n"
+            "\n"
+            "[#0002]\n"
+            "Length=480\n"
+            "Lyric=く\n"
+            "NoteNum=64\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ust_file = os.path.join(tmp_dir, "test.ust")
+            with open(ust_file, "w", encoding="cp932") as f:
+                f.write(ust)
+
+            project = UstParser().load(ust_file)
+            dicts = UstConverter.to_note_dicts(project)
+
+            self.assertEqual(len(dicts), 3)
+            # ノート1: 明示的に Tempo=120.00
+            self.assertEqual(dicts[0]["_ust_tempo"], 120.0)
+            # ノート2: 明示的に Tempo=170.00
+            self.assertEqual(dicts[1]["_ust_tempo"], 170.0)
+            # ノート3: Tempo省略 → 直前の170を継承
+            self.assertEqual(dicts[2]["_ust_tempo"], 170.0)
+
+    def test_ust_tempo_affects_duration_per_note(self):
+        """テンポ変化を含むUSTで、各ノートの duration が個別テンポで計算されること"""
+        ust = (
+            "[#SETTING]\n"
+            "Tempo=120.00\n"
+            "\n"
+            "[#0000]\n"
+            "Length=480\n"
+            "Lyric=か\n"
+            "NoteNum=60\n"
+            "Tempo=120.00\n"
+            "\n"
+            "[#0001]\n"
+            "Length=480\n"
+            "Lyric=き\n"
+            "NoteNum=62\n"
+            "Tempo=170.00\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ust_file = os.path.join(tmp_dir, "test.ust")
+            with open(ust_file, "w", encoding="cp932") as f:
+                f.write(ust)
+
+            project = UstParser().load(ust_file)
+            dicts = UstConverter.to_note_dicts(project)
+
+            # 480 ticks / 480 ticks_per_beat = 1拍
+            # 120 BPM: 1拍 = 0.5秒
+            self.assertAlmostEqual(dicts[0]["duration"], 0.5, places=4)
+            # 170 BPM: 1拍 = 60/170 ≒ 0.3529秒
+            self.assertAlmostEqual(dicts[1]["duration"], 60.0 / 170.0, places=4)
+
+            # start_time も正しく累積されること
+            self.assertAlmostEqual(dicts[0]["start_time"], 0.0, places=4)
+            self.assertAlmostEqual(dicts[1]["start_time"], 0.5, places=4)
+
+    def test_note_event_preserves_ust_tempo(self):
+        """[Step 2-B] NoteEvent.from_dict() / to_dict() が _ust_tempo を保持すること"""
+        from modules.data.data_models import NoteEvent
+
+        # 典型的な UST 辞書
+        note_dict = {
+            "note_number": 60,
+            "start_time": 0.0,
+            "duration": 0.5,
+            "lyric": "か",
+            "velocity": 100,
+            "vibrato_depth": 0.0,
+            "vibrato_rate": 5.5,
+            "pre_utterance": None,
+            "overlap": None,
+            "_ust_flags": "g-5B50",
+            "_ust_tempo": 170.0,
+            "_ust_modulation": 100.0,
+            "_ust_pbs": "",
+            "_ust_pbw": "",
+            "_ust_pby": "",
+            "_ust_pbm": "",
+            "_ust_intensity": 120.0,
+        }
+
+        note = NoteEvent.from_dict(note_dict)
+
+        # _ust_* が動的属性として復元されていること
+        self.assertEqual(getattr(note, "_ust_tempo", None), 170.0)
+        self.assertEqual(getattr(note, "_ust_flags", None), "g-5B50")
+        self.assertEqual(getattr(note, "_ust_intensity", None), 120.0)
+
+        # to_dict() で _ust_* が再出力されること（往復）
+        roundtrip = note.to_dict()
+        self.assertEqual(roundtrip.get("_ust_tempo"), 170.0)
+        self.assertEqual(roundtrip.get("_ust_flags"), "g-5B50")
+        self.assertEqual(roundtrip.get("_ust_intensity"), 120.0)
+
+        # 再構築しても同じ値が復元されること
+        note2 = NoteEvent.from_dict(roundtrip)
+        self.assertEqual(getattr(note2, "_ust_tempo", None), 170.0)
+
 if __name__ == "__main__":
     unittest.main()
