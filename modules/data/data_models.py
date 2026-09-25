@@ -80,24 +80,32 @@ class NoteEvent:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'NoteEvent':
-        """辞書データから復元（不要なキーを無視）"""
+        """辞書データから復元（不要なキーを無視、_ust_* 拡張は属性として復元）"""
         # クラスのフィールドに存在しないキーを除去して初期化（後方互換性のため）
         valid_keys = cls.__dataclass_fields__.keys()
-        
+
         # 古い保存データ形式（start, note_num等）を現在のフィールド名にマッピング
         mapping = {
             "start": "start_time",
             "note_num": "note_number",
             "lyrics": "lyric"
         }
-        
+
         normalized_data = {}
+        ust_extras = {}
         for k, v in data.items():
             new_key = mapping.get(k, k)
             if new_key in valid_keys:
                 normalized_data[new_key] = v
-                
-        return cls(**normalized_data)
+            elif new_key.startswith("_ust_"):
+                # UST 拡張属性は dataclass フィールドではないので
+                # いったん分離しておき、インスタンス生成後に setattr で戻す。
+                ust_extras[new_key] = v
+
+        obj = cls(**normalized_data)
+        for k, v in ust_extras.items():
+            setattr(obj, k, v)
+        return obj
 
 
 @dataclass
