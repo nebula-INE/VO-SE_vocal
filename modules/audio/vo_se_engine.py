@@ -462,25 +462,39 @@ class VO_SE_Engine:
                 pass
                 
     def _get_sampled_curve(self, events, note, res, is_pitch=False):
+        """ノート区間におけるパラメータカーブを res 点でサンプリングする。
+
+        events が空のときは「無変更」を意味する中立値を返す:
+          - is_pitch=True : 0.0 (半音偏差。ノート基準ピッチそのものは
+                            呼び出し側で note.note_number から復元する)
+          - is_pitch=False: 0.5 (Gender/Tension の中立値。Breath は別途 0.0 を明示)
+        """
         curve = np.zeros(res, dtype=np.float32)
-        default_val = 60.0 if is_pitch else 0.5
+        default_val = 0.0 if is_pitch else 0.5
         if not events:
             return curve + default_val
 
-        times = np.linspace(note.start_time, note.start_time + note.duration, res)
-        event_times = [p.time for p in events]
-        event_values = [p.value for p in events]
-        
+        start_time = float(getattr(note, "start_time", 0.0))
+        duration = float(getattr(note, "duration", 0.0))
+        times = np.linspace(start_time, start_time + duration, res)
+
+        event_times = [float(p.time) for p in events]
+        event_values = [float(p.value) for p in events]
+
         curve = np.interp(times, event_times, event_values).astype(np.float32)
-        
+
         if is_pitch:
-            curve += float(note.note_number)
+            # curve は「ノート基準ピッチからの半音偏差」として扱う。
+            # ノート基準ピッチ (note_number) を加算してから Hz に変換する。
+            curve = curve + float(getattr(note, "note_number", 60))
             curve = 440.0 * (2.0 ** ((curve - 69.0) / 12.0))
             if self.aural_ai is not None:
                 note_id = id(note)
                 curve = self.aural_ai.get_baked_pitch(note_id, curve)
-            
+
         return curve
+            
+
 
     def get_current_rms(self):
         """再生中の『本物の波形』から現在の音量を計算して返す"""
