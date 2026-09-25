@@ -3923,7 +3923,7 @@ class MainWindow(
                     # デフォルトのピッチカーブ
                     p_curve = np.array([440.0], dtype=np.float64)
             
-                 # GC保護リストに追加
+                # GC保護リストに追加
                 keep_alive.append(p_curve)
             
                 # その他のパラメータカーブ（DSP最適化済み標準値）
