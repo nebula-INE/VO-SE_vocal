@@ -182,6 +182,21 @@ class VO_SE_Engine:
                     print(f"Load Error: {e}")
         return None
 
+    @staticmethod
+    def _duration_sec_to_frames(duration_sec: float) -> int:
+        """秒 → C++ 側の pitch_length (5ms フレーム数) に変換する。
+
+        C++ 側の note_samples_safe(p) は以下の式で出力サンプル数を決める:
+            note_samples = (p - 1) * kFramePeriod / 1000.0 * kFs + 1
+        ここで kFramePeriod = 5.0 [ms], kFs = 44100 [Hz] なので
+            note_samples = (p - 1) * 220.5 + 1
+        よって duration_sec を再現するには:
+            p = round(duration_sec * 44100 / 220.5) + 1
+              = round(duration_sec * 200.0) + 1
+        """
+        frames = int(round(duration_sec * 200.0)) + 1
+        return max(2, frames)
+
     # --- 高度な音源スキャン ---
     def refresh_voice_library(self):
         """voicesフォルダを再帰的にスキャン。UTAU音源の階層構造に対応"""
