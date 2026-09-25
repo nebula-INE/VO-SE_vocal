@@ -431,6 +431,7 @@ class UstConverter:
 
                 # UST 拡張フィールド (エンジン側が参照可能)
                 "_ust_flags":      ust_note.flags,
+                "_ust_tempo":      ust_note.tempo,        # ★追加: ノート毎のテンポを保持
                 "_ust_modulation": ust_note.modulation,
                 "_ust_pbs":        ust_note.pbs,
                 "_ust_pbw":        ust_note.pbw,
