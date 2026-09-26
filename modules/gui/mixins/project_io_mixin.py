@@ -56,6 +56,29 @@ class ProjectIOMixin:
             project = parser.load(file_path)
             note_dicts = UstConverter.to_note_dicts(project)
 
+            # UST の VoiceDir を解決し、実在する音源なら読み込み時点で
+            # エンジンの音源ライブラリを切り替える。%VOICE% のような
+            # UTAU側プレースホルダや存在しないパスは現在の音源を維持する。
+            voice_dir = str(project.voice_dir or "").strip()
+            if voice_dir and voice_dir.upper() not in {"%VOICE%", "%VOICE"}:
+                if not os.path.isabs(voice_dir):
+                    voice_dir = os.path.abspath(
+                        os.path.join(os.path.dirname(os.path.abspath(file_path)), voice_dir)
+                    )
+                if os.path.isdir(voice_dir):
+                    engine = getattr(self, "vo_se_engine", None)
+                    set_voice_library = getattr(engine, "set_voice_library", None)
+                    if callable(set_voice_library):
+                        try:
+                            set_voice_library(voice_dir)
+                            logger.info("UST VoiceDir を音源ライブラリへ適用: %s", voice_dir)
+                        except Exception as exc:
+                            logger.warning("UST VoiceDir の適用に失敗: %s", exc)
+                    else:
+                        logger.debug("vo_se_engine.set_voice_library が利用できないため VoiceDir を無視")
+                else:
+                    logger.warning("UST VoiceDir が存在しません: %s", voice_dir)
+
             if not note_dicts:
                 self.statusBar().showMessage("UST: ノートが見つかりませんでした。")
                 return False
