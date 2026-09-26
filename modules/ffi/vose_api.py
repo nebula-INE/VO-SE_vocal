@@ -22,14 +22,14 @@ import sys
 import logging
 from typing import Optional
 
+from modules.ffi.vose_types import CNoteEvent
+
 logger = logging.getLogger(__name__)
 
 
 # ============================================================
 # C 互換構造体（vose_core.h の定義に厳密に準拠）
 # ============================================================
-
-from modules.ffi.vose_types import CNoteEvent
 
 
 class CVoseFrame(ctypes.Structure):
