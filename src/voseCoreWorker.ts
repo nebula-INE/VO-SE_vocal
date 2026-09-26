@@ -359,7 +359,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_INTENSITY, intensity ?? 100, 'double');
-      mod.setValue(base + OFF_MODULATION, modulation ?? 100, 'double');
+      mod.setValue(base + OFF_MODULATION, modulation ?? 0, 'double');
     }
 
     // 4. レンダリング実行 (execute_render_cancelable で進捗をメインスレッドへ
