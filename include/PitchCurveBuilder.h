@@ -57,7 +57,7 @@ namespace vose_pitch
         std::vector<char> shapes;
         bool valid = false;
 
-        void build (const juce::String& pbs, const juce::String& pbw, const juce::String& pby, const juce::String& pbm = {})
+        void build (const juce::String& pbs, const juce::String& pbw, const juce::String& pby, const juce::String& pbm = {}, double durationMs = 0.0)
         {
             valid = false;
             if (pbw.trim().isEmpty())
@@ -116,10 +116,11 @@ namespace vose_pitch
             }
             // PBWで定義された最後の点の後は、ノート終端を暗黙の0 semitone点とする。
             // 「+10ms」のマジック値はUST仕様にないため使用しない。
-            // buildPortamentoCentsCurve() の時間軸はノート全体なので、
-            // 最終点は durationMs で評価する。
-            // durationMs は build() の引数に渡されないため、呼び出し側で
-            // ノート終端まで評価できるよう、最後の制御点自体を保持する。
+            const double endpointMs = durationMs > 0.0
+                ? juce::jmax (pbsOffsetMs, durationMs)
+                : (totalWidthMs + pbsOffsetMs);
+            cpTimes.push_back (endpointMs);
+            cpValues.push_back (0.0);
 
             char finalShape = 0;
             if ((int) widths.size() < shapeText.size())
@@ -247,7 +248,7 @@ namespace vose_pitch
         std::vector<double> curve ((size_t) resolution, 0.0);
 
         PortamentoCurveBuilder portamento;
-        portamento.build (pbs, pbw, pby, pbm);
+        portamento.build (pbs, pbw, pby, pbm, durationMs);
         if (! portamento.valid)
             return curve; // PBWが無い等 → オフセット無し（0セント）
 
