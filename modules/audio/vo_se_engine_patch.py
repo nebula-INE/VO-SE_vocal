@@ -211,13 +211,35 @@ def _export_to_wav_v2(
                 pass
 
         if ust_vib is not None:
-            preutterance_sec = float(getattr(note, "pre_utterance", 0.0)) / 1000.0
-            vib_depth, vib_rate = build_vibrato_curves(
-                duration_sec=float(note.duration),
-                vibrato_params=ust_vib,
-                resolution=res,
-                note_start_offset_sec=preutterance_sec,
-            )
+            # UST VBR は phase / height / fade を含むため、ネイティブ側の
+            # 簡易 apply_vibrato() には渡さず pitch_curve に正確に焼き込む。
+            duration_sec = float(note.duration)
+            times = np.linspace(0.0, duration_sec, res)
+            vib_start = duration_sec * (1.0 - ust_vib.length / 100.0)
+            vib_total = max(duration_sec - vib_start, 0.0)
+            fade_in_sec = vib_total * ust_vib.fade_in / 100.0
+            fade_out_sec = vib_total * ust_vib.fade_out / 100.0
+
+            semitone_offset = np.zeros(res, dtype=np.float64)
+            for idx, t in enumerate(times):
+                if t < vib_start or vib_total <= 0.0:
+                    continue
+                elapsed = t - vib_start
+                env = 1.0
+                if fade_in_sec > 0.0 and elapsed < fade_in_sec:
+                    env = elapsed / fade_in_sec
+                if fade_out_sec > 0.0 and elapsed > vib_total - fade_out_sec:
+                    env = min(env, (vib_total - elapsed) / fade_out_sec)
+                env = max(0.0, min(1.0, env))
+
+                phase = ust_vib.phase / 100.0
+                cycles = elapsed * (1000.0 / max(ust_vib.cycle, 1e-6)) / 1000.0 + phase
+                cents = math.sin(2.0 * math.pi * cycles) * ust_vib.depth * env + ust_vib.height
+                semitone_offset[idx] = cents / 100.0
+
+            p_curve *= np.power(2.0, semitone_offset / 12.0)
+            vib_depth = np.zeros(res, dtype=np.float64)
+            vib_rate = np.zeros(res, dtype=np.float64)
         elif float(getattr(note, "vibrato_depth", 0.0)) > 0:
             depth = float(note.vibrato_depth)
             rate = float(getattr(note, "vibrato_rate", 5.5))
