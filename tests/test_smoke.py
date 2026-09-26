@@ -44,7 +44,7 @@ class TestSmoke(unittest.TestCase):
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            self.assertTrue(True)
+            self.fail(f"Application exited unexpectedly with code {returncode}\nSTDOUT:{stdout}\nSTDERR:{stderr}")
         else:
             stdout, stderr = proc.communicate()
             print(f"Startup check code {returncode}\nSTDOUT:{stdout}\nSTDERR:{stderr}")
