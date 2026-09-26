@@ -54,6 +54,9 @@ struct NoteEvent {
 
     double*     portamento_offsets;
     int         portamento_length;
+
+    double      intensity;
+    double      modulation;
 };
 
 #pragma pack(pop)
@@ -94,7 +97,8 @@ using VoseStreamHandle = void*;
 // ============================================================
 // 関数ポインタ型（vose_core.h / vose_streaming.h の extern "C" ブロックと1:1対応）
 // ============================================================
-using Fn_load_embedded_resource = void  (*)(const char*, const int16_t*, int);
+using Fn_load_embedded_resource    = void (*)(const char*, const int16_t*, int);
+using Fn_load_embedded_resource_f32 = void (*)(const char*, const float*, int);
 using Fn_execute_render         = void  (*)(NoteEvent*, int, const char*, int);
 using Fn_set_vocal_timeline     = void  (*)(const VoseFrame*, int);
 using Fn_get_engine_version     = float (*)();
@@ -141,7 +145,8 @@ public:
         {
             if (f.existsAsFile() && dll.open (f.getFullPathName()))
             {
-                load_embedded_resource = (Fn_load_embedded_resource) dll.getFunction ("load_embedded_resource");
+                load_embedded_resource    = (Fn_load_embedded_resource)    dll.getFunction ("load_embedded_resource");
+                load_embedded_resource_f32 = (Fn_load_embedded_resource_f32) dll.getFunction ("load_embedded_resource_f32");
                 execute_render         = (Fn_execute_render)         dll.getFunction ("execute_render");
                 set_vocal_timeline     = (Fn_set_vocal_timeline)     dll.getFunction ("set_vocal_timeline");
                 get_engine_version     = (Fn_get_engine_version)     dll.getFunction ("get_engine_version");
@@ -179,7 +184,8 @@ public:
     bool supportsStreaming() const { return hasStreamingApi; }
     float getLastKnownVersion() const { return lastKnownVersion; }
 
-    Fn_load_embedded_resource load_embedded_resource = nullptr;
+    Fn_load_embedded_resource    load_embedded_resource    = nullptr;
+    Fn_load_embedded_resource_f32 load_embedded_resource_f32 = nullptr;
     Fn_execute_render         execute_render         = nullptr;
     Fn_set_vocal_timeline     set_vocal_timeline     = nullptr;
     Fn_get_engine_version     get_engine_version     = nullptr;
