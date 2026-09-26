@@ -205,7 +205,7 @@ def _export_to_wav_v2(
     **kwargs,
 ) -> str:
     """VCV + UST ビブラート + ポルタメント対応の WAV export。"""
-    _ = (progress_callback, cancel_check, kwargs)
+    _ = kwargs
 
     if not self.lib:
         raise RuntimeError("Engine Core library missing!")
@@ -222,6 +222,8 @@ def _export_to_wav_v2(
     self._temp_refs = []
 
     for i, note in enumerate(notes):
+        if callable(cancel_check) and cancel_check():
+            raise RuntimeError("レンダリングがキャンセルされました")
         vcv_resolver = getattr(self, "vcv_resolver", None)
         wav_path = ""
 
@@ -330,12 +332,18 @@ def _export_to_wav_v2(
         c_notes_array[i].intensity = float(np.clip(getattr(note, "_ust_intensity", 100.0), 0.0, 200.0))
         c_notes_array[i].modulation = float(np.clip(getattr(note, "_ust_modulation", 0.0), 0.0, 100.0))
 
+        if callable(progress_callback):
+            progress_callback(int(((i + 1) / max(note_count, 1)) * 90.0))
+
         if portamento_arr is not None:
             c_notes_array[i].portamento_offsets = portamento_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
             c_notes_array[i].portamento_length = portamento_len
         else:
             c_notes_array[i].portamento_offsets = None
             c_notes_array[i].portamento_length = 0
+
+    if callable(cancel_check) and cancel_check():
+        raise RuntimeError("レンダリングがキャンセルされました")
 
     try:
         self.lib.execute_render(
