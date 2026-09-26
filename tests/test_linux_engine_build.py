@@ -77,3 +77,5 @@ def test_python_note_event_matches_cpp_linux_engine_abi():
     assert CNoteEvent.pitch_curve.offset == ctypes.sizeof(ctypes.c_void_p)
     assert CNoteEvent.vibrato_depth_curve.offset > CNoteEvent.breath_curve.offset
     assert CNoteEvent.vibrato_curve_length.offset > CNoteEvent.vibrato_rate_curve.offset
+    assert CNoteEvent.portamento_offsets.offset > CNoteEvent.vibrato_curve_length.offset
+    assert CNoteEvent.portamento_length.offset > CNoteEvent.portamento_offsets.offset
