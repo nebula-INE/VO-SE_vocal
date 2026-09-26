@@ -10,7 +10,7 @@ def main():
     input_json = sys.argv[1]
     
     with open(input_json, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+        _ = json.load(f)
         
     engine = VO_SE_Engine()
     engine.setup_audio_output()
