@@ -328,7 +328,7 @@ def _export_to_wav_v2(
         c_notes_array[i].pitch_length = res
         c_notes_array[i].vibrato_curve_length = res
         c_notes_array[i].intensity = float(np.clip(getattr(note, "_ust_intensity", 100.0), 0.0, 200.0))
-        c_notes_array[i].modulation = float(np.clip(getattr(note, "_ust_modulation", 100.0), 0.0, 100.0))
+        c_notes_array[i].modulation = float(np.clip(getattr(note, "_ust_modulation", 0.0), 0.0, 100.0))
 
         if portamento_arr is not None:
             c_notes_array[i].portamento_offsets = portamento_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
