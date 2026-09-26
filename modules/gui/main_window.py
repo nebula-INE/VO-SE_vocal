@@ -1987,26 +1987,6 @@ class MainWindow(
             raise RuntimeError("レンダリング処理が利用できません。")
         return render_fn()
 
-    def on_record_toggled(self, checked: bool = False) -> None:
-        """録音ボタンの安全な入口。
-
-        現在のデスクトップ版には音声入力バックエンドが存在しないため、
-        録音中と偽装せず、ボタンを元に戻して利用不可であることを通知する。
-        実録音機能は音声入力バックエンド導入時にここへ接続する。
-        """
-        self.is_recording = False
-        record_button = getattr(self, "record_button", None)
-        if record_button is not None and hasattr(record_button, "setChecked"):
-            record_button.setChecked(False)
-
-        if checked:
-            QMessageBox.information(
-                self,
-                "録音",
-                "デスクトップ版の録音機能は現在準備中です。"
-                "\n音声入力バックエンドがまだ実装されていないため、録音は開始されません。",
-            )
-
     def toggle_recording(self):
         """録音トグルの互換エントリポイント。"""
         return self.on_record_toggled(True)
