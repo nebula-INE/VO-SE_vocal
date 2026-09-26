@@ -44,6 +44,8 @@ class CNoteEvent(ctypes.Structure):
         ("vibrato_depth_curve",  ctypes.POINTER(ctypes.c_double)),
         ("vibrato_rate_curve",   ctypes.POINTER(ctypes.c_double)),
         ("vibrato_curve_length", ctypes.c_int),
+        ("portamento_offsets", ctypes.POINTER(ctypes.c_double)),
+        ("portamento_length", ctypes.c_int),
     ]
 
 
