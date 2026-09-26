@@ -406,7 +406,7 @@ async function renderViaCore(
         key,
         pitchCurveHz: buildPitchCurveHz(note, p, durationMs),
         intensity: typeof note.intensity === 'number' ? note.intensity : 100,
-        modulation: typeof note.modulation === 'number' ? note.modulation : 100
+        modulation: typeof note.modulation === 'number' ? note.modulation : 0
       });
       lastWasVoiced = true;
     } else {
