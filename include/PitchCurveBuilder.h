@@ -93,6 +93,9 @@ namespace vose_pitch
             cpTimes.push_back (pbsOffsetMs);
             cpValues.push_back (pbsStartPitch);
 
+            juce::StringArray shapeText;
+            shapeText.addTokens (pbm, ",", "");
+
             double t = pbsOffsetMs;
             for (size_t i = 0; i < widths.size(); ++i)
             {
@@ -100,8 +103,7 @@ namespace vose_pitch
                 const double h = (i < heights.size()) ? heights[i] * 0.1 : 0.0; // UTAU: 10cent単位
                 cpTimes.push_back (t);
                 cpValues.push_back (h);
-                juce::StringArray shapeText;
-                shapeText.addTokens (pbm, ",", "");
+
                 char shape = 0;
                 if ((int) i < shapeText.size())
                 {
@@ -114,6 +116,16 @@ namespace vose_pitch
             }
             cpTimes.push_back (totalWidthMs + pbsOffsetMs + 10.0);
             cpValues.push_back (0.0);
+
+            char finalShape = 0;
+            if ((int) widths.size() < shapeText.size())
+            {
+                const auto token = shapeText[(int) widths.size()].trim().toLowerCase();
+                if (token == "s") finalShape = "s"[0];
+                else if (token == "r") finalShape = "r"[0];
+                else if (token == "j") finalShape = "j"[0];
+            }
+            shapes.push_back (finalShape);
 
             valid = true;
         }
