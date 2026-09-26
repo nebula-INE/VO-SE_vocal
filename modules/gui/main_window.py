@@ -1989,7 +1989,7 @@ class MainWindow(
 
     def toggle_recording(self):
         """録音トグルの互換エントリポイント。"""
-        return self.on_record_toggled(True)
+        return self.on_record_toggled()
 
     def update_playback_ui(self):
         """再生位置・時間表示・タイムラインのプレイヘッドを同期する。"""
@@ -4972,9 +4972,14 @@ class MainWindow(
                 raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
 
             # 5. 再生
-            if result_path and os.path.exists(result_path):
+            if isinstance(result_path, (str, os.PathLike)):
+                result_path_str = os.fspath(result_path)
+            else:
+                result_path_str = None
+
+            if isinstance(result_path_str, str) and os.path.exists(result_path_str):
                 self.statusBar().showMessage("再生中...")
-                self.play_rendered_audio(result_path)
+                self.play_rendered_audio(result_path_str)
             else:
                 QMessageBox.critical(
                     self,
