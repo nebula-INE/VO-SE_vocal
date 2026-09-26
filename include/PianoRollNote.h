@@ -21,7 +21,7 @@ struct PianoRollNote
 
     // UST expression/detail data preserved across piano-roll edits.
     double intensity = 100.0;
-    double modulation = 100.0;
+    double modulation = 0.0;
     juce::String flags;
     juce::String pbs, pbw, pby, pbm;
     std::optional<UstVibratoParams> vibrato;
