@@ -99,10 +99,6 @@ class VoiceAdaptationEngine:
             from peft import LoraConfig, get_peft_model, TaskType
             # transformers に BigVGANModel は存在しないため、ダミーで回避
             # 実際には適切な BigVGAN 実装をインポートすること
-            from transformers import PreTrainedModel
-            # BigVGANModel をダミーとして PreTrainedModel のサブクラスを想定
-            # ここではエラーを避けるため、Any として扱う
-            BigVGANModel: Any = None  # type: ignore
             # 実際のロード処理はプロジェクトに合わせる
             # base_model = BigVGANModel.from_pretrained(self.base_model_path)
             # 代わりにダミーモデルを作成
