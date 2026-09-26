@@ -1400,7 +1400,17 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             ? resample_curve(n.pitch_curve, n.pitch_length, j, output_frames)
             : 440.0;
 
-        // ---- 2. ★★★ ポルタメントオフセットを適用（セント → Hz） ★★★ ----
+        // ---- 2. UST Modulation: 原音解析F0の揺れを指定割合だけ残す ----
+        const double modulation = clamp(n.modulation, 0.0, 100.0) / 100.0;
+        if (modulation > 0.0 && src_frame >= 0 && src_frame < cache_cur->length) {
+            const double source_f0 = cache_cur->f0[src_frame];
+            if (source_f0 > 50.0 && base_f0 > 50.0) {
+                const double source_ratio = source_f0 / base_f0;
+                base_f0_val *= std::pow(source_ratio, modulation);
+            }
+        }
+
+        // ---- 3. ★★★ ポルタメントオフセットを適用（セント → Hz） ★★★ ----
         if (n.portamento_offsets && n.portamento_length > 0 && j < n.portamento_length) {
             double cents = resample_curve(n.portamento_offsets, n.portamento_length, j, output_frames);
             base_f0_val *= std::pow(2.0, cents / 1200.0);
@@ -1529,6 +1539,13 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     // シマー(振幅ゆらぎ)は出力波形に対して適用する
     try {
         apply_shimmer(note_buf, pp.ev->fs, p.global_time_sec, voice_seed);
+
+    // UST Intensity: 200 ≒ 0 dB、100 ≒ -6 dB。
+    const double intensity = clamp(n.intensity, 0.0, 200.0);
+    const double gain_db = (intensity - 200.0) * 0.06;
+    const double gain = std::pow(10.0, gain_db / 20.0);
+    for (double& sample : note_buf)
+        sample *= gain;
     } catch (const std::exception& e) {
         char buf[256];
         snprintf(buf, sizeof(buf), "apply_shimmer failed: note_samples=%lld : %s",
