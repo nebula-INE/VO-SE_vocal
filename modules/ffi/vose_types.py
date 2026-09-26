@@ -30,7 +30,7 @@ def as_c_double_array(values: Iterable[float]) -> ctypes.Array[ctypes.c_double]:
 def validate_note_event_layout():
     """CNoteEvent のレイアウト検証。
 
-    C++ 側の NoteEvent は 64bit 環境で pointer x 9 + int x 3 の
+    C++ 側の NoteEvent は 64bit 環境で pointer x 8 + int x 3 の
     8-byte alignment になるため 88 bytes になる。
     （2026-08-04 現在の vose_core.h の定義に基づく）
     """
