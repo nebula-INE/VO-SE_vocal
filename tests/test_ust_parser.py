@@ -195,6 +195,37 @@ class TestUstParser(unittest.TestCase):
             dicts = UstConverter.to_note_dicts(UstParser().load(ust_file))
             self.assertEqual(dicts[0]["_ust_flags"], "")
 
+    def test_voice_dir_resolves_relative_and_percent_voice(self):
+        """UST VoiceDir の相対パスと %VOICE% を音源ライブラリへ正しく解決する。"""
+        from modules.audio.vo_se_engine_patch import _load_ust_project
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            voice_dir = os.path.join(tmp_dir, "voice")
+            os.makedirs(voice_dir)
+            with open(os.path.join(voice_dir, "oto.ini"), "w", encoding="cp932") as f:
+                f.write("a.wav=あ,0,0,0,0,0\\n")
+
+            ust_path = os.path.join(tmp_dir, "song.ust")
+            ust = (
+                "[#SETTING]\\nTempo=120\\nVoiceDir=%VOICE%\\n"
+                "[#0000]\\nLength=480\\nLyric=あ\\nNoteNum=60\\n"
+            )
+            with open(ust_path, "w", encoding="cp932") as f:
+                f.write(ust)
+
+            class DummyEngine:
+                def __init__(self):
+                    self.voice_lib_path = voice_dir
+                    self.oto_parser = None
+                    self.oto_map = {}
+                    self.vcv_resolver = None
+
+            engine = DummyEngine()
+            notes = _load_ust_project(engine, ust_path)
+            self.assertEqual(engine.voice_lib_path, os.path.abspath(voice_dir))
+            self.assertTrue(engine.oto_parser.get("あ"))
+            self.assertEqual(len(notes), 1)
+
     def test_ust_flags_map_g_b_and_t(self):
         """g/B はパラメータ、t は10cent単位のピッチシフトとして扱う。"""
         from modules.audio.vo_se_engine_patch import parse_ust_flag_overrides
