@@ -1103,10 +1103,6 @@ class ProjectIOMixin:
         """[LIVE] 再生停止"""
         pass
 
-    def _sample_range(self: Any, events, note, res):
-        """[LIVE] オートメーションサンプリング"""
-        return [0.5] * res
-
     def export_to_midi_file(self: Any):
         """[LIVE] MIDIエクスポート"""
         print("MIDIエクスポートを開始します...")
