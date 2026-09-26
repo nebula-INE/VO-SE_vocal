@@ -278,7 +278,9 @@ def _export_to_wav_v2(
         if portamento_arr is not None:
             self._temp_refs.append(portamento_arr)
 
-        c_notes_array[i].wav_path = wav_path.encode("utf-8") if wav_path else b""
+        # ctypes.c_char_p の None は C++ 側の nullptr になる。
+        # b"" は「NUL終端の空文字列へのポインタ」であり nullptr ではない。
+        c_notes_array[i].wav_path = wav_path.encode("utf-8") if wav_path else None
         c_notes_array[i].pitch_curve = p_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
         c_notes_array[i].gender_curve = g_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
         c_notes_array[i].tension_curve = t_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
