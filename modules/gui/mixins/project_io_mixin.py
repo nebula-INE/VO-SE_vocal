@@ -407,11 +407,11 @@ class ProjectIOMixin:
 
         if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
             if hasattr(self.timeline_widget, "set_notes"):
-                    self.timeline_widget.set_notes(notes)
-                elif hasattr(self.timeline_widget, "notes_list"):
-                    self.timeline_widget.notes_list = notes
-                    if hasattr(self.timeline_widget, "update"):
-                        self.timeline_widget.update()
+                self.timeline_widget.set_notes(notes)
+            elif hasattr(self.timeline_widget, "notes_list"):
+                self.timeline_widget.notes_list = notes
+                if hasattr(self.timeline_widget, "update"):
+                    self.timeline_widget.update()
 
         self.statusBar().showMessage(
             f"MIDI 読み込み完了: {len(notes)} ノート ({os.path.basename(file_path)})"
@@ -1028,15 +1028,17 @@ class ProjectIOMixin:
         try:
             # 関数の __name__ はパッチによる代入後も _export_to_wav_v2 のままなので、
             # __name__ ではなく「どの属性から取得したか」で v1/v2 を判定する。
-            if v2_export_fn is not None:
+            if callable(v2_export_fn):
                 result = v2_export_fn(notes, parameters, file_path)
-            else:
+            elif callable(v1_export_fn):
                 result = v1_export_fn(
                     notes,
                     parameters,
                     file_path,
                     mode_flag=mode_flag,
                 )
+            else:
+                raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
 
             if result is None:
                 QMessageBox.warning(
