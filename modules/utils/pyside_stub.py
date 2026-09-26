@@ -4,11 +4,12 @@ PySide6 がインストールされていない環境（Web Studio サーバー�
 モジュールをインポートした際に ModuleNotFoundError にならないためのスタブ。
 """
 
+import importlib.util
 import sys
 
 def setup_pyside_stub():
     try:
-        import PySide6
+        importlib.util.find_spec("PySide6")
         return
     except ImportError:
         pass
