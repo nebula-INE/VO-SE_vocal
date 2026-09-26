@@ -5653,12 +5653,12 @@ class MainWindow(
         )
 
         if reply == QMessageBox.StandardButton.Save:
-            # メソッドがあるか確認（代表のナイスなアイデア！）
-            if hasattr(self, 'on_save_project_clicked'):
-                # さらに、呼び出し可能（callable）かチェックするとActionはもっと喜びます
-                save_func = getattr(self, 'on_save_project_clicked')
-                if callable(save_func):
-                    save_func()
+            save_func = getattr(self, "on_save_project_clicked", None)
+            if callable(save_func):
+                # 保存ダイアログのキャンセルや保存失敗時は終了しない。
+                if not bool(save_func()):
+                    event.ignore()
+                    return
             event.accept()
         elif reply == QMessageBox.StandardButton.Discard:
             event.accept()
