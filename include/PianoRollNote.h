@@ -1,28 +1,35 @@
 // PianoRollNote.h
-//
-// フェーズ3 UI: ピアノロール用の編集中ノート表現。
-// modules/data/data_models.py の NoteEvent（start_time/duration/note_number/lyric...）
-// に相当する最小サブセットを持つ。id は編集操作（移動・リサイズ・選択）を
-// ソート順に依存せず追跡するために付与する（ScheduledSongNote には無い概念）。
-//
-// PianoRollComponent はこの構造体のリストだけを扱い、VoseAudioProcessor や
-// ScheduledSongNote を一切知らない。プロセッサとの橋渡しは
-// PianoRollBridge.h（toScheduledSongNotes / fromScheduledSongNotes）が担う。
+// Piano-roll editing representation. UST expression data is carried through
+// edits so loading/editing/exporting a UST does not silently discard it.
 
 #pragma once
 
 #include <juce_core/juce_core.h>
 #include <cstdint>
+#include <optional>
+#include "UstProject.h"
 
 struct PianoRollNote
 {
-    int64_t      id = 0;
-    double       startTimeSec = 0.0;
-    double       durationSec  = 0.5;
-    int          noteNum = 60;          // MIDIノート番号 (60=C4)
+    int64_t id = 0;
+    double startTimeSec = 0.0;
+    double durationSec = 0.5;
+    int noteNum = 60;
     juce::String lyric = "a";
-    int          velocity = 100;        // 0-127（将来のベロシティ編集用、現状は表示のみ）
-    bool         selected = false;
+    int velocity = 100;
+    bool selected = false;
+
+    // UST expression/detail data preserved across piano-roll edits.
+    double intensity = 100.0;
+    double modulation = 100.0;
+    juce::String flags;
+    juce::String pbs, pbw, pby, pbm;
+    std::optional<UstVibratoParams> vibrato;
+    std::optional<double> genderOverride01;
+    std::optional<double> tensionOverride01;
+    std::optional<double> breathOverride01;
+    std::optional<double> preUtteranceMs;
+    std::optional<double> overlapMs;
 
     double endTimeSec() const { return startTimeSec + durationSec; }
 };
