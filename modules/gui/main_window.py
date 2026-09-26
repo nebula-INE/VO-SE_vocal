@@ -4898,11 +4898,10 @@ class MainWindow(
         mode_flag = 1 if is_pro else 0
 
         # 4. エンジン呼び出し（v2 優先、無ければ旧 export_to_wav にフォールバック）
-        export_fn = (
-            getattr(engine, "export_to_wav_v2", None)
-            or getattr(engine, "export_to_wav", None)
-        )
-        if export_fn is None:
+        v2_export_fn = getattr(engine, "export_to_wav_v2", None)
+        v1_export_fn = getattr(engine, "export_to_wav", None)
+
+        if v2_export_fn is None and v1_export_fn is None:
             QMessageBox.critical(
                 self,
                 "エラー",
@@ -4911,10 +4910,12 @@ class MainWindow(
             return
 
         try:
-            if getattr(export_fn, "__name__", "") == "export_to_wav_v2":
-                result_path = export_fn(notes, parameters, output_path)
+            # パッチで代入された v2 は __name__ が _export_to_wav_v2 のままなので、
+            # 関数名ではなく取得元の属性で v1/v2 を判定する。
+            if v2_export_fn is not None:
+                result_path = v2_export_fn(notes, parameters, output_path)
             else:
-                result_path = export_fn(
+                result_path = v1_export_fn(
                     notes,
                     parameters,
                     output_path,
