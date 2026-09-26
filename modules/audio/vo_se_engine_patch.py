@@ -113,7 +113,6 @@ def build_portamento_curve(
     Returns:
         長さ resolution の float64 配列、またはポルタメント情報がない場合は None
     """
-    # 辞書対応（UstConverter が返す dict にも対応）
     if isinstance(ust_note, dict):
         pbs = ust_note.get("_ust_pbs", "")
         pbw = ust_note.get("_ust_pbw", "")
@@ -123,20 +122,14 @@ def build_portamento_curve(
         pbw = getattr(ust_note, "_ust_pbw", "")
         pby = getattr(ust_note, "_ust_pby", "")
 
-    if not pbw:  # PBW がなければポルタメントなし
+    if not pbw:
         return None
 
-    # UstConverter の静的メソッドを使ってカーブ生成
-    # extract_portamento_curve は (semitone 単位のリスト) を返す
-    # ただし UstNote 型を期待するため、ダミーオブジェクトを生成するか、
-    # 直接関数を呼び出すために簡易ラッパーを作る。
-    # ここでは UstNote クラスをインポートしてインスタンス化するのが安全。
     from modules.data.ust_parser import UstNote
 
-    # 最小限の属性を持つ UstNote を作成（他のフィールドはダミー）
     dummy_note = UstNote(
         index=0,
-        length=480,  # ダミー
+        length=480,
         lyric="",
         note_num=60,
         tempo=120.0,
@@ -160,7 +153,6 @@ def _refresh_voice_library_v2(self) -> None:
     [NEW-1] VcvResolver を再初期化しながら音源フォルダを再スキャンする。
     既存の refresh_voice_library() を置き換えるか、その後に呼び出す。
     """
-    # 既存の oto_map をリセット
     self.oto_map = {}
 
     if not os.path.exists(self.voice_lib_path):
@@ -168,7 +160,6 @@ def _refresh_voice_library_v2(self) -> None:
         self.vcv_resolver = None
         return
 
-    # oto_parser がなければ生成
     if not hasattr(self, "oto_parser") or self.oto_parser is None:
         self.oto_parser = OtoParser()
 
@@ -187,7 +178,6 @@ def _refresh_voice_library_v2(self) -> None:
                 lyric = os.path.splitext(fname)[0]
                 self.oto_map[lyric] = os.path.abspath(os.path.join(root, fname))
 
-    # VcvResolver を再初期化
     self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
     logger.info(
         "音源ライブラリ更新: %d WAV / VCV=%s",
@@ -215,28 +205,23 @@ def _export_to_wav_v2(
       - UST _ust_vibrato 拡張フィールドが存在する場合はそちらを優先する
       - **新規: _ust_pbs/_ust_pbw/_ust_pby があればポルタメントカーブを生成して C++ に渡す**
     """
-    # v1/v2 共通呼び出し元から渡される互換引数。
-    # v2 自体では現時点で使用しないが、将来の進捗・キャンセル対応に備えて受け取る。
     _ = (mode_flag, progress_callback, cancel_check, kwargs)
 
     if not self.lib:
         raise RuntimeError("Engine Core library missing!")
 
-    # text_analyzer で先行発声・VCV タイムラインを整合
     oto_parser = getattr(self, "oto_parser", None)
     notes, timeline = self.text_analyzer.align_vocal_timing(notes, oto_parser)
 
-    # C++ へタイムライン転送
     if timeline and hasattr(self, "pipeline_bridge") and self.pipeline_bridge:
         self.pipeline_bridge.send_timeline_to_core(timeline)
 
     note_count = len(notes)
-    from modules.audio.vo_se_engine import CNoteEvent  # 本体の構造体を再利用
+    from modules.audio.vo_se_engine import CNoteEvent
     c_notes_array = (CNoteEvent * note_count)()
     self._temp_refs = []
 
     for i, note in enumerate(notes):
-        # WAV パスの解決
         vcv_resolver = getattr(self, "vcv_resolver", None)
         wav_path = ""
 
@@ -247,7 +232,6 @@ def _export_to_wav_v2(
                 wav_path = oto_entry.wav_path
 
         if not wav_path or not os.path.exists(wav_path):
-            # フォールバック: lyric 直接マッチ
             wav_path = self.oto_map.get(note.lyric) or self.oto_map.get(
                 getattr(note, "phonemes", ""), ""
             )
@@ -256,13 +240,11 @@ def _export_to_wav_v2(
 
         res = 128
 
-        # パラメーターカーブ
-        p_curve = self._get_sampled_curve(parameters["Pitch"],   note, res, is_pitch=True).astype(np.float64)
-        g_curve = self._get_sampled_curve(parameters["Gender"],  note, res).astype(np.float64)
+        p_curve = self._get_sampled_curve(parameters["Pitch"], note, res, is_pitch=True).astype(np.float64)
+        g_curve = self._get_sampled_curve(parameters["Gender"], note, res).astype(np.float64)
         t_curve = self._get_sampled_curve(parameters["Tension"], note, res).astype(np.float64)
-        b_curve = self._get_sampled_curve(parameters["Breath"],  note, res).astype(np.float64)
+        b_curve = self._get_sampled_curve(parameters["Breath"], note, res).astype(np.float64)
 
-        # ビブラートカーブ: UST VBR > NoteEvent の固定値 > ゼロ
         ust_vib_dict = getattr(note, "_ust_vibrato", None)
         ust_vib: Optional[UstVibratoParams] = None
         if isinstance(ust_vib_dict, dict):
@@ -272,26 +254,23 @@ def _export_to_wav_v2(
                 pass
 
         if ust_vib is not None:
-            # UST ビブラートパラメーターから生成
             preutterance_sec = float(getattr(note, "pre_utterance", 0.0)) / 1000.0
             vib_depth, vib_rate = build_vibrato_curves(
-                duration_sec          = float(note.duration),
-                vibrato_params        = ust_vib,
-                resolution            = res,
-                note_start_offset_sec = preutterance_sec,
+                duration_sec=float(note.duration),
+                vibrato_params=ust_vib,
+                resolution=res,
+                note_start_offset_sec=preutterance_sec,
             )
         elif float(getattr(note, "vibrato_depth", 0.0)) > 0:
-            # NoteEvent の固定値から正弦波カーブを生成
             depth = float(note.vibrato_depth)
-            rate  = float(getattr(note, "vibrato_rate", 5.5))
+            rate = float(getattr(note, "vibrato_rate", 5.5))
             times = np.linspace(0.0, float(note.duration), res)
             vib_depth = (np.sin(2 * math.pi * rate * times) * depth).astype(np.float64)
-            vib_rate  = np.full(res, rate, dtype=np.float64)
+            vib_rate = np.full(res, rate, dtype=np.float64)
         else:
             vib_depth = np.zeros(res, dtype=np.float64)
-            vib_rate  = np.zeros(res, dtype=np.float64)
+            vib_rate = np.zeros(res, dtype=np.float64)
 
-        # ★新規: ポルタメントカーブを生成 (PBS/PBW/PBY があれば)
         portamento_curve = build_portamento_curve(note, resolution=res)
         if portamento_curve is not None:
             portamento_arr = portamento_curve.astype(np.float64)
@@ -300,29 +279,26 @@ def _export_to_wav_v2(
             portamento_arr = None
             portamento_len = 0
 
-        # 参照保持用に追加 (GC 対策)
         self._temp_refs.extend([p_curve, g_curve, t_curve, b_curve, vib_depth, vib_rate])
         if portamento_arr is not None:
             self._temp_refs.append(portamento_arr)
 
-        # CNoteEvent への代入
         c_notes_array[i].wav_path = wav_path.encode("utf-8") if wav_path else b""
-        c_notes_array[i].pitch_curve            = p_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-        c_notes_array[i].gender_curve           = g_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-        c_notes_array[i].tension_curve          = t_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-        c_notes_array[i].breath_curve           = b_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-        c_notes_array[i].vibrato_depth_curve    = vib_depth.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-        c_notes_array[i].vibrato_rate_curve     = vib_rate.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-        c_notes_array[i].pitch_length           = res
-        c_notes_array[i].vibrato_curve_length   = res
+        c_notes_array[i].pitch_curve = p_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        c_notes_array[i].gender_curve = g_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        c_notes_array[i].tension_curve = t_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        c_notes_array[i].breath_curve = b_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        c_notes_array[i].vibrato_depth_curve = vib_depth.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        c_notes_array[i].vibrato_rate_curve = vib_rate.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        c_notes_array[i].pitch_length = res
+        c_notes_array[i].vibrato_curve_length = res
 
-        # ★新規: ポルタメントフィールドを設定
         if portamento_arr is not None:
             c_notes_array[i].portamento_offsets = portamento_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-            c_notes_array[i].portamento_length  = portamento_len
+            c_notes_array[i].portamento_length = portamento_len
         else:
             c_notes_array[i].portamento_offsets = None
-            c_notes_array[i].portamento_length  = 0
+            c_notes_array[i].portamento_length = 0
 
     try:
         self.lib.execute_render(
@@ -334,17 +310,13 @@ def _export_to_wav_v2(
     finally:
         self._temp_refs = []
 
+    return os.path.abspath(file_path)
+
 
 def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
     """
     [NEW-4] UST ファイルをネイティブパーサーで読み込み、
     NoteEvent 互換辞書リストを返す。
-
-    Args:
-        ust_path: .ust ファイルのパス
-
-    Returns:
-        NoteEvent.from_dict() で復元可能な辞書のリスト
     """
     parser = UstParser()
     project = parser.load(ust_path)
@@ -365,13 +337,8 @@ def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
 def apply_patch(engine_class) -> None:
     """
     VO_SE_Engine クラスに新メソッドをバインドする。
-
-    呼び出し例 (vo_se_engine.py の末尾 or app_main.py):
-        from modules.audio.vo_se_engine_patch import apply_patch
-        from modules.audio.vo_se_engine import VO_SE_Engine
-        apply_patch(VO_SE_Engine)
     """
     engine_class.refresh_voice_library_v2 = _refresh_voice_library_v2
-    engine_class.export_to_wav_v2         = _export_to_wav_v2
-    engine_class.load_ust_project         = _load_ust_project
+    engine_class.export_to_wav_v2 = _export_to_wav_v2
+    engine_class.load_ust_project = _load_ust_project
     logger.info("VO_SE_Engine パッチ適用完了 (VCV + UST + Vibrato + Portamento)")
