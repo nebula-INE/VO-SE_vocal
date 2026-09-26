@@ -186,7 +186,7 @@ private:
         n.lyric    = get ("Lyric") != nullptr ? *get ("Lyric") : juce::String ("R");
         n.tempo    = (get ("Tempo") != nullptr) ? get ("Tempo")->getDoubleValue() : currentTempo;
         n.intensity  = (get ("Intensity")  != nullptr) ? get ("Intensity")->getDoubleValue()  : 100.0;
-        n.modulation = (get ("Modulation") != nullptr) ? get ("Modulation")->getDoubleValue() : 100.0;
+        n.modulation = (get ("Modulation") != nullptr) ? get ("Modulation")->getDoubleValue() : 0.0;
         n.flags = get ("Flags") != nullptr ? *get ("Flags") : juce::String();
         n.pbs = get ("PBS") != nullptr ? *get ("PBS") : juce::String();
         n.pbw = get ("PBW") != nullptr ? *get ("PBW") : juce::String();
