@@ -390,7 +390,7 @@ class VO_SE_Engine:
                     )
                     c_notes_array[i].pitch_length = res
                     c_notes_array[i].vibrato_curve_length = res
-                    # UST expression fields。通常ノートはIntensity=100 / Modulation=100。
+                    # UST expression fields。UTAU/OpenUtauの既定値はIntensity=100 / Modulation=0。
                     # CNoteEventはゼロ初期化されるため、明示しないとv1経路だけ
                     # intensity=0（完全ミュート）/modulation=0になる。
                     c_notes_array[i].intensity = float(np.clip(getattr(note, "_ust_intensity", 100.0), 0.0, 200.0))
