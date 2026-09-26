@@ -34,6 +34,8 @@ class CNoteEvent(ctypes.Structure):
         ("vibrato_depth_curve", ctypes.POINTER(ctypes.c_double)),
         ("vibrato_rate_curve", ctypes.POINTER(ctypes.c_double)),
         ("vibrato_curve_length", ctypes.c_int),
+        ("portamento_offsets", ctypes.POINTER(ctypes.c_double)),
+        ("portamento_length", ctypes.c_int),
     ]
 
 # 🚀 【新規追加】C++側の 8バイトアライメント（24バイト固定長）に完全準拠した構造体定義
