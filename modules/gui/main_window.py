@@ -1989,7 +1989,8 @@ class MainWindow(
 
     def toggle_recording(self):
         """録音トグルの互換エントリポイント。"""
-        return self.on_record_toggled()
+        record_handler = cast(Callable[[], Any], self.on_record_toggled)
+        return record_handler()
 
     def update_playback_ui(self):
         """再生位置・時間表示・タイムラインのプレイヘッドを同期する。"""
@@ -4972,12 +4973,14 @@ class MainWindow(
                 raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
 
             # 5. 再生
-            if isinstance(result_path, (str, os.PathLike)):
-                result_path_str = os.fspath(result_path)
-            else:
-                result_path_str = None
+            result_path_str: Optional[str] = None
+            if isinstance(result_path, str):
+                result_path_str = result_path
+            elif isinstance(result_path, os.PathLike):
+                path_value = os.fspath(result_path)
+                result_path_str = os.fsdecode(path_value)
 
-            if isinstance(result_path_str, str) and os.path.exists(result_path_str):
+            if result_path_str is not None and os.path.exists(result_path_str):
                 self.statusBar().showMessage("再生中...")
                 self.play_rendered_audio(result_path_str)
             else:
