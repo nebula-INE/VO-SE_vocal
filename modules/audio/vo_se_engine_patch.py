@@ -69,7 +69,10 @@ def build_vibrato_curves(
         else:
             env = 1.0
 
-        depth_curve[idx] = vibrato_params.depth_semitones * env
+        # C++ apply_vibrato() の depth は「15cent = 1.0」の正規化値。
+        # UTAU VBR depth は cents なので、単位を合わせてから渡す。
+        # (35 cents -> 35 / 15 = 2.333..., すなわち約35cent)
+        depth_curve[idx] = (vibrato_params.depth / 15.0) * env
         rate_curve[idx] = vibrato_params.rate_hz
 
     return depth_curve, rate_curve
