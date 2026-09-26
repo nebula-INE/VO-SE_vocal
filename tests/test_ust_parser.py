@@ -3,7 +3,6 @@ import tempfile
 import os
 from modules.data.ust_parser import UstParser, UstConverter
 import pytest
-from dataclasses import replace
 
 SAMPLE_UST = """
 [#VERSION]
