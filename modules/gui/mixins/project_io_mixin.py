@@ -969,11 +969,10 @@ class ProjectIOMixin:
             status_bar.showMessage("レンダリング中...")
 
         # パッチ適用環境では v2 を優先 (VCV + Vibrato + Portamento 対応)
-        export_fn = (
-            getattr(engine, "export_to_wav_v2", None)
-            or getattr(engine, "export_to_wav", None)
-        )
-        if export_fn is None:
+        v2_export_fn = getattr(engine, "export_to_wav_v2", None)
+        v1_export_fn = getattr(engine, "export_to_wav", None)
+
+        if v2_export_fn is None and v1_export_fn is None:
             QMessageBox.critical(
                 self,
                 "エラー",
@@ -982,12 +981,12 @@ class ProjectIOMixin:
             return
 
         try:
-            # v2 は (notes, parameters, file_path) の3引数のみ。
-            # v1 は mode_flag をキーワード引数で受ける。
-            if getattr(export_fn, "__name__", "") == "export_to_wav_v2":
-                result = export_fn(notes, parameters, file_path)
+            # 関数の __name__ はパッチによる代入後も _export_to_wav_v2 のままなので、
+            # __name__ ではなく「どの属性から取得したか」で v1/v2 を判定する。
+            if v2_export_fn is not None:
+                result = v2_export_fn(notes, parameters, file_path)
             else:
-                result = export_fn(
+                result = v1_export_fn(
                     notes,
                     parameters,
                     file_path,
@@ -1107,23 +1106,3 @@ class ProjectIOMixin:
         """[LIVE] MIDIエクスポート"""
         print("MIDIエクスポートを開始します...")
 
-    def _get_yomi_from_lyrics(self: Any, lyrics: str) -> str:
-        """[LIVE] 歌詞（漢字・かな混じり）を平仮名に変換する"""
-        if not lyrics:
-            return ""
-
-        try:
-            import pykakasi
-            
-            kks = pykakasi.kakasi()
-            result = kks.convert(lyrics)
-            
-            yomi = "".join([str(item.get('hira', '')) for item in result])
-            return yomi
-            
-        except (ImportError, ModuleNotFoundError):
-            print("DEBUG: pykakasi not found. Returning raw lyrics.")
-            return lyrics
-        except Exception as e:
-            print(f"DEBUG: Yomi conversion error: {e}")
-            return lyrics
