@@ -151,6 +151,11 @@ private:
                                               ? nullptr : const_cast<double*> (n.portamentoOffsetsCents.data());
             cNotes[i].portamento_length    = n.portamentoOffsetsCents.empty()
                                               ? 0 : (int) n.portamentoOffsetsCents.size();
+            // UST表現値を持たないこのC++ API経路ではUTAU既定値を使う。
+            // NoteEventはvalue-initializeされるため、未設定のままだと
+            // intensity=0（完全ミュート）/modulation=0になってしまう。
+            cNotes[i].intensity           = 100.0;
+            cNotes[i].modulation          = 100.0;
         }
 
         auto tempFile = juce::File::getSpecialLocation (juce::File::tempDirectory)
