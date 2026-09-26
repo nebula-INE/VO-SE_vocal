@@ -144,10 +144,12 @@ class TestUstParser(unittest.TestCase):
             UstNote(**base, pbm="j"), resolution=5
         )
 
-        self.assertAlmostEqual(linear[2], 0.5, places=6)
-        self.assertAlmostEqual(smooth[2], 0.5, places=6)
+        self.assertAlmostEqual(linear[2], 1.0, places=6)
+        self.assertAlmostEqual(smooth[2], 1.0, places=6)
         self.assertGreater(r_shape[1], linear[1])
         self.assertLess(j_shape[1], linear[1])
+        # PBWの最終点以降はノート終端へ0 semitoneに戻る。
+        self.assertGreater(linear[3], linear[4])
         self.assertAlmostEqual(r_shape[0], 0.0, places=6)
         self.assertAlmostEqual(j_shape[0], 0.0, places=6)
         # PBWの終端後は次の制御点(0 semitone)へ戻る。
@@ -311,7 +313,7 @@ class TestUstParser(unittest.TestCase):
             "overlap": None,
             "_ust_flags": "g-5B50",
             "_ust_tempo": 170.0,
-            "_ust_modulation": 100.0,
+            "_ust_modulation": 0.0,
             "_ust_pbs": "",
             "_ust_pbw": "",
             "_ust_pby": "",
