@@ -23,21 +23,7 @@ except Exception:
 # ==========================================================================
 # 1. C言語互換構造体（パラメーターを1つも漏らさずC++へ）
 # ==========================================================================
-class CNoteEvent(ctypes.Structure):
-    _fields_ = [
-        ("wav_path", ctypes.c_char_p),
-        ("pitch_curve", ctypes.POINTER(ctypes.c_double)),
-        ("pitch_length", ctypes.c_int),
-        ("gender_curve", ctypes.POINTER(ctypes.c_double)),
-        ("tension_curve", ctypes.POINTER(ctypes.c_double)),
-        ("breath_curve", ctypes.POINTER(ctypes.c_double)),
-        ("vibrato_depth_curve", ctypes.POINTER(ctypes.c_double)),
-        ("vibrato_rate_curve", ctypes.POINTER(ctypes.c_double)),
-        ("vibrato_curve_length", ctypes.c_int),
-        ("portamento_offsets", ctypes.POINTER(ctypes.c_double)),
-        ("portamento_length", ctypes.c_int),
-    ]
-
+from modules.ffi.vose_types import CNoteEvent
 # 🚀 【新規追加】C++側の 8バイトアライメント（24バイト固定長）に完全準拠した構造体定義
 class CVoseFrame(ctypes.Structure):
     _pack_ = 8
