@@ -37,6 +37,8 @@ class TestSmoke(unittest.TestCase):
 
         time.sleep(2)
         returncode = proc.poll()
+        stdout = ""
+        stderr = ""
 
         if returncode is None:
             proc.terminate()
