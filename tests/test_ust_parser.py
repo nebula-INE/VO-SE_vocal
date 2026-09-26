@@ -139,6 +139,32 @@ class TestUstParser(unittest.TestCase):
         self.assertAlmostEqual(r_shape[-1], 1.0, places=6)
         self.assertAlmostEqual(j_shape[-1], 1.0, places=6)
 
+    def test_project_flags_are_inherited_by_notes(self):
+        """[#SETTING] Flags はノート側にFlagsが無い場合だけ継承される。"""
+        ust = (
+            "[#SETTING]\n"
+            "Tempo=120.00\n"
+            "Flags=g-5B50\n"
+            "\n"
+            "[#0000]\n"
+            "Length=480\n"
+            "Lyric=か\n"
+            "NoteNum=60\n"
+            "\n"
+            "[#0001]\n"
+            "Length=480\n"
+            "Lyric=き\n"
+            "NoteNum=62\n"
+            "Flags=g10\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ust_file = os.path.join(tmp_dir, "flags.ust")
+            with open(ust_file, "w", encoding="cp932") as f:
+                f.write(ust)
+            dicts = UstConverter.to_note_dicts(UstParser().load(ust_file))
+            self.assertEqual(dicts[0]["_ust_flags"], "g-5B50")
+            self.assertEqual(dicts[1]["_ust_flags"], "g10")
+
     def test_convert_to_note_events(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
