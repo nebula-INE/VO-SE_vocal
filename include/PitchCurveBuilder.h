@@ -48,7 +48,7 @@ namespace vose_pitch
         return 0.0;
     }
 
-    // PBS(開始オフセット;開始ピッチ) / PBW(区間幅msのCSV) / PBY(区間高さsemitoneのCSV)
+    // PBS(開始オフセット;開始ピッチ) / PBW(区間幅msのCSV) / PBY(区間高さ10centのCSV)
     // から制御点列を作る。build()後に at(tMs) でセミトーンオフセットを取れる。
     struct PortamentoCurveBuilder
     {
@@ -78,7 +78,7 @@ namespace vose_pitch
             if (pbsParts.size() > 0 && pbsParts[0].trim().isNotEmpty())
                 pbsOffsetMs = pbsParts[0].getDoubleValue();
             if (pbsParts.size() > 1 && pbsParts[1].trim().isNotEmpty())
-                pbsStartPitch = pbsParts[1].getDoubleValue();
+                pbsStartPitch = pbsParts[1].getDoubleValue() * 0.1; // UTAU: 10cent単位 → semitone
 
             double totalWidthMs = 0.0;
             for (auto w : widths)
@@ -95,7 +95,7 @@ namespace vose_pitch
             for (size_t i = 0; i < widths.size(); ++i)
             {
                 t += widths[i];
-                const double h = (i < heights.size()) ? heights[i] : 0.0;
+                const double h = (i < heights.size()) ? heights[i] * 0.1 : 0.0; // UTAU: 10cent単位
                 cpTimes.push_back (t);
                 cpValues.push_back (h);
             }
