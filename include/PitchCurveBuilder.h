@@ -89,6 +89,7 @@ namespace vose_pitch
 
             cpTimes.clear();
             cpValues.clear();
+            cpShapes.clear();
             shapes.clear();
             cpTimes.push_back (pbsOffsetMs);
             cpValues.push_back (pbsStartPitch);
