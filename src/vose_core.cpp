@@ -1541,9 +1541,10 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         apply_shimmer(note_buf, pp.ev->fs, p.global_time_sec, voice_seed);
 
     // UST Intensity: 200 ≒ 0 dB、100 ≒ -6 dB。
+    // UST Intensity は 100 が基準値。0 は無音、200 は +6.02 dB とする。
+    // 旧実装は Intensity=100 を -6 dB にしており、既定値の音量を不必要に下げていた。
     const double intensity = clamp(n.intensity, 0.0, 200.0);
-    const double gain_db = (intensity - 200.0) * 0.06;
-    const double gain = std::pow(10.0, gain_db / 20.0);
+    const double gain = intensity / 100.0;
     for (double& sample : note_buf)
         sample *= gain;
     } catch (const std::exception& e) {
