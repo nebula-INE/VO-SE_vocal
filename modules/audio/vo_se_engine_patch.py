@@ -196,7 +196,16 @@ def _refresh_voice_library_v2(self) -> None:
     )
 
 
-def _export_to_wav_v2(self, notes, parameters, file_path) -> None:
+def _export_to_wav_v2(
+    self,
+    notes,
+    parameters,
+    file_path,
+    mode_flag: int = 0,
+    progress_callback=None,
+    cancel_check=None,
+    **kwargs,
+) -> None:
     """
     [NEW-2] VCV 解決 + UST ビブラートカーブ + ポルタメントカーブ に対応した export_to_wav。
 
@@ -206,6 +215,10 @@ def _export_to_wav_v2(self, notes, parameters, file_path) -> None:
       - UST _ust_vibrato 拡張フィールドが存在する場合はそちらを優先する
       - **新規: _ust_pbs/_ust_pbw/_ust_pby があればポルタメントカーブを生成して C++ に渡す**
     """
+    # v1/v2 共通呼び出し元から渡される互換引数。
+    # v2 自体では現時点で使用しないが、将来の進捗・キャンセル対応に備えて受け取る。
+    _ = (mode_flag, progress_callback, cancel_check, kwargs)
+
     if not self.lib:
         raise RuntimeError("Engine Core library missing!")
 
