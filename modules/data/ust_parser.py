@@ -522,7 +522,10 @@ class UstConverter:
                 h = (heights[i] * 0.1) if i < len(heights) else 0.0
                 control_points.append((t, h))
                 segment_shapes.append(shapes[i] if i < len(shapes) else "")
-            control_points.append((total_width_ms + pbs_offset_ms + 10.0, 0.0))
+            # PBWで定義された最後の点の後は、ノート終端を暗黙の0 semitone点として扱う。
+            # 旧実装の「+10ms」はUST仕様にないマジック値で、短いノートでは
+            # 最終区間の時間軸を不正に伸ばしていた。
+            control_points.append((duration_ms, 0.0))
             segment_shapes.append(shapes[len(widths)] if len(shapes) > len(widths) else "")
 
             denom = max(resolution - 1, 1)
