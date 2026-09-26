@@ -109,13 +109,12 @@ class ProjectIOMixin:
             # テンポの適用
             if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
                 self.timeline_widget.tempo = project.tempo
-                if hasattr(self.timeline_widget, "notes_list"):
-                    self.timeline_widget.notes_list = notes
-                elif hasattr(self.timeline_widget, "set_notes"):
+                if hasattr(self.timeline_widget, "set_notes"):
                     self.timeline_widget.set_notes(notes)
-
-                if hasattr(self.timeline_widget, "update"):
-                    self.timeline_widget.update()
+                elif hasattr(self.timeline_widget, "notes_list"):
+                    self.timeline_widget.notes_list = notes
+                    if hasattr(self.timeline_widget, "update"):
+                        self.timeline_widget.update()
 
             # テンポスピンボックスがある場合は更新
             if hasattr(self, "tempo_spinbox") and self.tempo_spinbox is not None:
@@ -375,12 +374,12 @@ class ProjectIOMixin:
 
             if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
                 self.timeline_widget.tempo = tempo
-                if hasattr(self.timeline_widget, "notes_list"):
-                    self.timeline_widget.notes_list = notes
-                elif hasattr(self.timeline_widget, "set_notes"):
+                if hasattr(self.timeline_widget, "set_notes"):
                     self.timeline_widget.set_notes(notes)
-                if hasattr(self.timeline_widget, "update"):
-                    self.timeline_widget.update()
+                elif hasattr(self.timeline_widget, "notes_list"):
+                    self.timeline_widget.notes_list = notes
+                    if hasattr(self.timeline_widget, "update"):
+                        self.timeline_widget.update()
 
             if hasattr(self, "tempo_spinbox") and self.tempo_spinbox is not None:
                 self.tempo_spinbox.setValue(int(tempo))
@@ -407,12 +406,12 @@ class ProjectIOMixin:
         notes = [NoteEvent.from_dict(d) for d in note_dicts]
 
         if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
-            if hasattr(self.timeline_widget, "notes_list"):
-                self.timeline_widget.notes_list = notes
-            elif hasattr(self.timeline_widget, "set_notes"):
-                self.timeline_widget.set_notes(notes)
-            if hasattr(self.timeline_widget, "update"):
-                self.timeline_widget.update()
+            if hasattr(self.timeline_widget, "set_notes"):
+                    self.timeline_widget.set_notes(notes)
+                elif hasattr(self.timeline_widget, "notes_list"):
+                    self.timeline_widget.notes_list = notes
+                    if hasattr(self.timeline_widget, "update"):
+                        self.timeline_widget.update()
 
         self.statusBar().showMessage(
             f"MIDI 読み込み完了: {len(notes)} ノート ({os.path.basename(file_path)})"
