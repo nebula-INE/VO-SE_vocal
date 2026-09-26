@@ -207,7 +207,7 @@ class VO_SE_Engine:
             rel_dir = os.path.relpath(root, self.voice_lib_path)
             subdir_prefix = "" if rel_dir in (".", "") else rel_dir.replace(os.sep, "\\") + "\\"
 
-            oto_aliases = {}  # alias -> filename（このフォルダのoto.iniがあれば埋まる）
+            oto_aliases: Dict[str, str] = {}  # alias -> filename（このフォルダのoto.iniがあれば埋まる）
             if "oto.ini" in files_lower:
                 target_ini = files[files_lower.index("oto.ini")]
                 ini_path = os.path.join(root, target_ini)
