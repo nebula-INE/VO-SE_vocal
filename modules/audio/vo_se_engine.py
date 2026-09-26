@@ -5,7 +5,7 @@ import platform
 import numpy as np
 import tempfile
 import shutil
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, cast
 try:
     import sounddevice as sd
 except Exception:
@@ -215,7 +215,10 @@ class VO_SE_Engine:
                 # oto_parser がエイリアス一覧を引ける場合はそれを使う
                 get_aliases = getattr(self.oto_parser, "get_aliases_for_dir", None)
                 if callable(get_aliases):
-                    oto_aliases = get_aliases(ini_path) or {}
+                    oto_aliases = cast(
+                        Dict[str, str],
+                        get_aliases(ini_path) or {},
+                    )
 
             for file in files:
                 if not file.lower().endswith(".wav"):
