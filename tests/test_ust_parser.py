@@ -242,12 +242,9 @@ class TestUstParser(unittest.TestCase):
         from modules.audio.vo_se_engine_patch import parse_ust_flag_overrides
 
         gender, tension, breath, pitch_cents = parse_ust_flag_overrides("g-5B50t20")
-        if gender is None:
-            self.fail("g flag should produce a gender value")
-        if breath is None:
-            self.fail("B flag should produce a breath value")
-        if pitch_cents is None:
-            self.fail("t flag should produce a pitch-shift value")
+        assert gender is not None
+        assert breath is not None
+        assert pitch_cents is not None
         self.assertAlmostEqual(float(gender), 0.475)
         self.assertIsNone(tension)
         self.assertAlmostEqual(float(breath), 0.5)
