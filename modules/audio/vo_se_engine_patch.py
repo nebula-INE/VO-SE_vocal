@@ -81,13 +81,14 @@ def build_vibrato_curves(
 
 def parse_ust_flag_overrides(
     flags: str,
-) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    """UST Flags の g/B/t をレンダー用の0..1値へ正規化する。"""
+) -> Tuple[Optional[float], Optional[float], Optional[float], float]:
+    """UST Flags の g/B/t をレンダー値へ正規化する。t は10cent単位。"""
     gender = None
     tension = None
     breath = None
+    pitch_shift_cents = 0.0
     if not flags:
-        return gender, tension, breath
+        return gender, tension, breath, pitch_shift_cents
 
     for match in re.finditer(r"([gBt])([+-]?\d+(?:\.\d+)?)", str(flags)):
         letter = match.group(1)
@@ -97,8 +98,8 @@ def parse_ust_flag_overrides(
         elif letter == "B":
             breath = float(np.clip(value / 100.0, 0.0, 1.0))
         elif letter == "t":
-            tension = float(np.clip(value / 100.0, 0.0, 1.0))
-    return gender, tension, breath
+            pitch_shift_cents += value * 10.0
+    return gender, tension, breath, pitch_shift_cents
 
 
 def build_portamento_curve(
@@ -243,7 +244,7 @@ def _export_to_wav_v2(
         g_curve = self._get_sampled_curve(parameters["Gender"], note, res).astype(np.float64)
         t_curve = self._get_sampled_curve(parameters["Tension"], note, res).astype(np.float64)
         b_curve = self._get_sampled_curve(parameters["Breath"], note, res).astype(np.float64)
-        flag_gender, flag_tension, flag_breath = parse_ust_flag_overrides(
+        flag_gender, flag_tension, flag_breath, flag_pitch_cents = parse_ust_flag_overrides(
             str(getattr(note, "_ust_flags", "") or "")
         )
         if flag_gender is not None:
@@ -252,6 +253,8 @@ def _export_to_wav_v2(
             t_curve.fill(flag_tension)
         if flag_breath is not None:
             b_curve.fill(flag_breath)
+        if flag_pitch_cents:
+            p_curve *= np.power(2.0, flag_pitch_cents / 1200.0)
 
         ust_vib_dict = getattr(note, "_ust_vibrato", None)
         ust_vib: Optional[UstVibratoParams] = None
