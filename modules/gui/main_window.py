@@ -703,10 +703,12 @@ class SynthesisWorker(QRunnable):
                 if self._cancelled:
                     self.signals.error.emit("ユーザーによりキャンセルされました")
                     return
-                if not result or not os.path.exists(result):
+                if not isinstance(result, (str, bytes, os.PathLike)):
+                    raise RuntimeError("レンダリング結果の WAV パスが不正です。")
+                if not os.path.exists(result):
                     raise RuntimeError("レンダリング結果の WAV が生成されませんでした。")
                 self.signals.progress.emit(100, 0.0)
-                self.signals.finished.emit(result)
+                self.signals.finished.emit(os.fspath(result))
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -4946,20 +4948,22 @@ class MainWindow(
         try:
             # パッチで代入された v2 は __name__ が _export_to_wav_v2 のままなので、
             # 関数名ではなく取得元の属性で v1/v2 を判定する。
-            if v2_export_fn is not None:
+            if callable(v2_export_fn):
                 result_path = v2_export_fn(
                     notes,
                     parameters,
                     output_path,
                     mode_flag=mode_flag,
                 )
-            else:
+            elif callable(v1_export_fn):
                 result_path = v1_export_fn(
                     notes,
                     parameters,
                     output_path,
                     mode_flag=mode_flag,
                 )
+            else:
+                raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
 
             # 5. 再生
             if result_path and os.path.exists(result_path):
