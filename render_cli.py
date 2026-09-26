@@ -8,7 +8,6 @@ def main():
         sys.exit(1)
         
     input_json = sys.argv[1]
-    output_wav = sys.argv[2]
     
     with open(input_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -16,7 +15,5 @@ def main():
     engine = VO_SE_Engine()
     engine.setup_audio_output()
     # Mock some basic params
-    notes = data.get("notes", [])
-    voicebank = data.get("voicebank", "Official Voice (VCV)")
     # For now, we assume voicebank is just passing to engine or something?
     # Let's check how VO_SE_Engine is set up in main_window.py or test_ci_render.py.
