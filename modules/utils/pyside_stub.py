@@ -57,10 +57,10 @@ def setup_pyside_stub():
     qtmultimedia = types.ModuleType("PySide6.QtMultimedia")
 
     pyside6.__spec__ = importlib_machinery.ModuleSpec("PySide6", None)
-    qtcore.__spec__ = importlib.machinery.ModuleSpec("PySide6.QtCore", None)
-    qtwidgets.__spec__ = importlib.machinery.ModuleSpec("PySide6.QtWidgets", None)
-    qtgui.__spec__ = importlib.machinery.ModuleSpec("PySide6.QtGui", None)
-    qtmultimedia.__spec__ = importlib.machinery.ModuleSpec("PySide6.QtMultimedia", None)
+    qtcore.__spec__ = importlib_machinery.ModuleSpec("PySide6.QtCore", None)
+    qtwidgets.__spec__ = importlib_machinery.ModuleSpec("PySide6.QtWidgets", None)
+    qtgui.__spec__ = importlib_machinery.ModuleSpec("PySide6.QtGui", None)
+    qtmultimedia.__spec__ = importlib_machinery.ModuleSpec("PySide6.QtMultimedia", None)
 
     # QtCore
     qtcore.QObject = DummyClass
