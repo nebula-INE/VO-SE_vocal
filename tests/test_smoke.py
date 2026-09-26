@@ -43,10 +43,11 @@ class TestSmoke(unittest.TestCase):
         if returncode is None:
             proc.terminate()
             try:
-                proc.wait(timeout=3)
+                stdout, stderr = proc.communicate(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            self.fail(f"Application exited unexpectedly with code {returncode}\nSTDOUT:{stdout}\nSTDERR:{stderr}")
+                stdout, stderr = proc.communicate()
+            self.fail(f"Application did not exit during the smoke-test window.\nSTDOUT:{stdout}\nSTDERR:{stderr}")
         else:
             stdout, stderr = proc.communicate()
             print(f"Startup check code {returncode}\nSTDOUT:{stdout}\nSTDERR:{stderr}")
