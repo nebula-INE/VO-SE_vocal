@@ -4,12 +4,12 @@ PySide6 がインストールされていない環境（Web Studio サーバー�
 モジュールをインポートした際に ModuleNotFoundError にならないためのスタブ。
 """
 
-import importlib.util
+from importlib.util import find_spec
 import sys
 
 def setup_pyside_stub():
     try:
-        importlib.util.find_spec("PySide6")
+        find_spec("PySide6")
         return
     except ImportError:
         pass
@@ -48,7 +48,7 @@ def setup_pyside_stub():
         return decorator
 
     import types
-    import importlib.machinery
+    import importlib.machinery as importlib_machinery
 
     pyside6 = types.ModuleType("PySide6")
     qtcore = types.ModuleType("PySide6.QtCore")
@@ -56,7 +56,7 @@ def setup_pyside_stub():
     qtgui = types.ModuleType("PySide6.QtGui")
     qtmultimedia = types.ModuleType("PySide6.QtMultimedia")
 
-    pyside6.__spec__ = importlib.machinery.ModuleSpec("PySide6", None)
+    pyside6.__spec__ = importlib_machinery.ModuleSpec("PySide6", None)
     qtcore.__spec__ = importlib.machinery.ModuleSpec("PySide6.QtCore", None)
     qtwidgets.__spec__ = importlib.machinery.ModuleSpec("PySide6.QtWidgets", None)
     qtgui.__spec__ = importlib.machinery.ModuleSpec("PySide6.QtGui", None)
