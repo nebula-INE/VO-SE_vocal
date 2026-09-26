@@ -16,7 +16,7 @@ from typing import Tuple
 from copy import deepcopy
 from scipy.signal import hilbert
 from scipy.fft import rfft, rfftfreq
-from typing import Any, List, Dict, Optional, TYPE_CHECKING, cast
+from typing import Any, Callable, List, Dict, Optional, TYPE_CHECKING, cast
 
 # ==========================================================================
 # 2. 数値計算・信号処理 (Numerical Processing)
@@ -685,8 +685,11 @@ class SynthesisWorker(QRunnable):
     def run(self):
         # 通常のデスクトップレンダーは VO_SE_Engine v2 を優先する。
         # v2 が無い古い環境だけ従来の C ABI 経路へフォールバックする。
-        export_v2 = getattr(self.vose_core, "export_to_wav_v2", None)
-        if callable(export_v2):
+        export_v2 = cast(
+            Optional[Callable[..., str]],
+            getattr(self.vose_core, "export_to_wav_v2", None),
+        )
+        if export_v2 is not None:
             try:
                 if self._cancelled:
                     self.signals.error.emit("ユーザーによりキャンセルされました")
