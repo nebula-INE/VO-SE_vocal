@@ -41,6 +41,16 @@ namespace PianoRollBridge
             n.noteNum      = sn.noteNum;
             n.lyric        = sn.lyric;
             n.velocity     = juce::jlimit (0, 127, (int) std::lround (sn.velocity01 * 127.0));
+            n.intensity   = juce::jlimit (0.0, 200.0, sn.intensity);
+            n.modulation  = juce::jlimit (0.0, 100.0, sn.modulation);
+            n.flags       = sn.flags;
+            n.pbs = sn.pbs; n.pbw = sn.pbw; n.pby = sn.pby; n.pbm = sn.pbm;
+            n.vibrato = sn.vibrato;
+            n.genderOverride01 = sn.genderOverride01;
+            n.tensionOverride01 = sn.tensionOverride01;
+            n.breathOverride01 = sn.breathOverride01;
+            n.preUtteranceMs = sn.preUtteranceMs;
+            n.overlapMs = sn.overlapMs;
             out.push_back (n);
         }
         return out;
@@ -74,6 +84,16 @@ namespace PianoRollBridge
             sn.noteNum      = n.noteNum;
             sn.lyric        = n.lyric;
             sn.velocity01   = juce::jlimit (0.0, 1.0, n.velocity / 127.0);
+            sn.intensity    = juce::jlimit (0.0, 200.0, n.intensity);
+            sn.modulation   = juce::jlimit (0.0, 100.0, n.modulation);
+            sn.flags        = n.flags;
+            sn.pbs = n.pbs; sn.pbw = n.pbw; sn.pby = n.pby; sn.pbm = n.pbm;
+            sn.vibrato = n.vibrato;
+            sn.genderOverride01 = n.genderOverride01;
+            sn.tensionOverride01 = n.tensionOverride01;
+            sn.breathOverride01 = n.breathOverride01;
+            sn.preUtteranceMs = n.preUtteranceMs;
+            sn.overlapMs = n.overlapMs;
 
             out.push_back (sn);
         }
