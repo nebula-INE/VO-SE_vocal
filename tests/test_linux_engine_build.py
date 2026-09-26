@@ -79,3 +79,5 @@ def test_python_note_event_matches_cpp_linux_engine_abi():
     assert CNoteEvent.vibrato_curve_length.offset > CNoteEvent.vibrato_rate_curve.offset
     assert CNoteEvent.portamento_offsets.offset > CNoteEvent.vibrato_curve_length.offset
     assert CNoteEvent.portamento_length.offset > CNoteEvent.portamento_offsets.offset
+    assert CNoteEvent.intensity.offset > CNoteEvent.portamento_length.offset
+    assert CNoteEvent.modulation.offset > CNoteEvent.intensity.offset
