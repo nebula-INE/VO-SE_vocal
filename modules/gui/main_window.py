@@ -3669,11 +3669,14 @@ class MainWindow(
 
     # --- [3] 音声生成のメインループ ---
     def on_synthesize(self, notes):
-        prev_lyric = None
-        for note in notes:
-            wav_path = self.resolve_target_wav(note.lyric, prev_lyric)
-            self.run_engine(wav_path, None)
-            prev_lyric = note.lyric
+        """旧API互換の合成入口。レンダーは1回だけ共通経路へ委譲する。"""
+        if not notes:
+            return None
+
+        render_fn = getattr(self, "on_render_button_clicked", None)
+        if not callable(render_fn):
+            raise RuntimeError("レンダリング処理が利用できません。")
+        return render_fn()
 
     def init_vcv_logic(self):
         """起動時に一度だけ。MainWindowの__init__から呼び出してください"""
