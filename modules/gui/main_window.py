@@ -2097,7 +2097,7 @@ class MainWindow(
         # 💡 "vocal" に統一して設定の不一致を防ぐ
         settings = QSettings("VO-SE", "vocal")
         
-        # ⭕ 修正: 'heme_value' から 'theme_value' にタイポを修正
+        # ⭕ 修正: 変数名を theme_value に統一
         theme_value = settings.value("theme", "dark")
         
         # 明示的に str にキャストしてグローバル関数を呼び出す
