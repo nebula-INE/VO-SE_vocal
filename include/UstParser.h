@@ -54,6 +54,7 @@ public:
             sn.noteNum      = n.noteNum;
             sn.lyric        = n.lyric;
             sn.velocity01   = juce::jlimit (0.0, 1.0, n.intensity / 200.0);
+            sn.modulation   = juce::jlimit (0.0, 100.0, n.modulation);
             sn.flags        = n.flags;
             sn.preUtteranceMs = n.preUtterance;
             sn.overlapMs      = n.overlap;
