@@ -108,6 +108,37 @@ class TestUstParser(unittest.TestCase):
         self.assertAlmostEqual(curve[0], 0.5, places=6)
         self.assertAlmostEqual(curve[1], 1.0, places=6)
 
+    def test_portamento_pbm_shapes(self):
+        """PBM の S/linear/R/J が区間補間へ反映されること。"""
+        from modules.data.ust_parser import UstNote
+
+        base = dict(
+            index=0, length=480, lyric="か", note_num=60, tempo=60.0,
+            pbs="0;0", pbw="100", pby="10",
+        )
+
+        linear = UstConverter.extract_portamento_curve(
+            UstNote(**base, pbm="s"), resolution=5
+        )
+        smooth = UstConverter.extract_portamento_curve(
+            UstNote(**base, pbm=""), resolution=5
+        )
+        r_shape = UstConverter.extract_portamento_curve(
+            UstNote(**base, pbm="r"), resolution=5
+        )
+        j_shape = UstConverter.extract_portamento_curve(
+            UstNote(**base, pbm="j"), resolution=5
+        )
+
+        self.assertAlmostEqual(linear[2], 0.5, places=6)
+        self.assertAlmostEqual(smooth[2], 0.5, places=6)
+        self.assertGreater(r_shape[1], linear[1])
+        self.assertLess(j_shape[1], linear[1])
+        self.assertAlmostEqual(r_shape[0], 0.0, places=6)
+        self.assertAlmostEqual(j_shape[0], 0.0, places=6)
+        self.assertAlmostEqual(r_shape[-1], 1.0, places=6)
+        self.assertAlmostEqual(j_shape[-1], 1.0, places=6)
+
     def test_convert_to_note_events(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
