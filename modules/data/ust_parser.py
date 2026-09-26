@@ -481,10 +481,15 @@ class UstConverter:
             widths  = [float(w) for w in ust_note.pbw.split(",") if w.strip()]
             heights = [float(h) for h in ust_note.pby.split(",") if h.strip()] if ust_note.pby else []
 
-            # pbs の開始オフセット (ms) と開始ピッチ (semitone)
+            # PBS/PBY のピッチ値は UTAU では 10cent 単位。
+            # 内部カーブは semitone 単位に正規化する。
             pbs_parts = ust_note.pbs.split(";")
-            pbs_offset_ms   = float(pbs_parts[0]) if pbs_parts[0].strip() else 0.0
-            pbs_start_pitch = float(pbs_parts[1]) if len(pbs_parts) > 1 and pbs_parts[1].strip() else 0.0
+            pbs_offset_ms = float(pbs_parts[0]) if pbs_parts[0].strip() else 0.0
+            pbs_start_pitch = (
+                float(pbs_parts[1]) * 0.1
+                if len(pbs_parts) > 1 and pbs_parts[1].strip()
+                else 0.0
+            )
 
             # ノート全長 (ms) を基準にカーブを生成する。
             # PBW の合計時間を resolution 全体に割り当てると、C++ 側が
@@ -506,7 +511,8 @@ class UstConverter:
             t = pbs_offset_ms
             for i, w in enumerate(widths):
                 t += w
-                h = heights[i] if i < len(heights) else 0.0
+                # PBY は 10cent 単位 → semitone に正規化。
+                h = (heights[i] * 0.1) if i < len(heights) else 0.0
                 control_points.append((t, h))
             control_points.append((total_width_ms + pbs_offset_ms + 10.0, 0.0))
 
