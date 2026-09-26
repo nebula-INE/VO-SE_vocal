@@ -26,6 +26,7 @@ import os
 import ctypes
 import logging
 from typing import Any, Dict, List, Optional, Tuple
+import re
 
 import numpy as np
 
@@ -87,10 +88,12 @@ def build_portamento_curve(
         pbs = ust_note.get("_ust_pbs", "")
         pbw = ust_note.get("_ust_pbw", "")
         pby = ust_note.get("_ust_pby", "")
+        pbm = ust_note.get("_ust_pbm", "")
     else:
         pbs = getattr(ust_note, "_ust_pbs", "")
         pbw = getattr(ust_note, "_ust_pbw", "")
         pby = getattr(ust_note, "_ust_pby", "")
+        pbm = getattr(ust_note, "_ust_pbm", "")
 
     if not pbw:
         return None
@@ -122,6 +125,7 @@ def build_portamento_curve(
         pbs=pbs,
         pbw=pbw,
         pby=pby,
+        pbm=pbm,
     )
     curve_list = UstConverter.extract_portamento_curve(dummy_note, resolution)
     if not curve_list or len(curve_list) != resolution:
@@ -130,6 +134,23 @@ def build_portamento_curve(
     # UstConverter は半音単位で返すが、C++ NoteEvent.portamento_offsets は
     # セント単位として解釈するため、ここで 100 倍して単位を統一する。
     return np.asarray(curve_list, dtype=np.float64) * 100.0
+
+
+def _parse_ust_flag_overrides(flags: str) -> Dict[str, float]:
+    """UST Flags の g/B/t を NoteEvent の0..1カーブ値へ変換する。"""
+    result: Dict[str, float] = {}
+    if not flags:
+        return result
+    for match in re.finditer(r"([gBt])([+-]?\\d+(?:\\.\\d+)?)", str(flags)):
+        letter = match.group(1)
+        value = float(match.group(2))
+        if letter == "g":
+            result["Gender"] = max(0.0, min(1.0, 0.5 + value / 200.0))
+        elif letter == "B":
+            result["Breath"] = max(0.0, min(1.0, value / 100.0))
+        elif letter == "t":
+            result["Tension"] = max(0.0, min(1.0, value / 100.0))
+    return result
 
 
 def _refresh_voice_library_v2(self) -> None:
@@ -218,6 +239,15 @@ def _export_to_wav_v2(
         t_curve = self._get_sampled_curve(parameters["Tension"], note, res).astype(np.float64)
         b_curve = self._get_sampled_curve(parameters["Breath"], note, res).astype(np.float64)
 
+        # UST Flags はノート単位の表情指定。Python v2ではここで正規化する。
+        flag_overrides = _parse_ust_flag_overrides(str(getattr(note, "_ust_flags", "")))
+        if "Gender" in flag_overrides:
+            g_curve.fill(flag_overrides["Gender"])
+        if "Tension" in flag_overrides:
+            t_curve.fill(flag_overrides["Tension"])
+        if "Breath" in flag_overrides:
+            b_curve.fill(flag_overrides["Breath"])
+
         ust_vib_dict = getattr(note, "_ust_vibrato", None)
         ust_vib: Optional[UstVibratoParams] = None
         if isinstance(ust_vib_dict, dict):
@@ -250,14 +280,15 @@ def _export_to_wav_v2(
 
                 phase = ust_vib.phase / 100.0
                 cycles = elapsed * (1000.0 / max(ust_vib.cycle, 1e-6)) / 1000.0 + phase
-                cents = math.sin(2.0 * math.pi * cycles) * ust_vib.depth * env + ust_vib.height
+                modulation = max(0.0, min(2.0, float(getattr(note, "_ust_modulation", 100.0)) / 100.0))
+                cents = math.sin(2.0 * math.pi * cycles) * ust_vib.depth * modulation * env + ust_vib.height
                 semitone_offset[idx] = cents / 100.0
 
             p_curve *= np.power(2.0, semitone_offset / 12.0)
             vib_depth = np.zeros(res, dtype=np.float64)
             vib_rate = np.zeros(res, dtype=np.float64)
         elif float(getattr(note, "vibrato_depth", 0.0)) > 0:
-            depth = float(note.vibrato_depth)
+            depth = float(note.vibrato_depth) * max(0.0, min(2.0, float(getattr(note, "_ust_modulation", 100.0)) / 100.0))
             rate = float(getattr(note, "vibrato_rate", 5.5))
             times = np.linspace(0.0, float(note.duration), res)
             vib_depth = (np.sin(2 * math.pi * rate * times) * depth).astype(np.float64)
