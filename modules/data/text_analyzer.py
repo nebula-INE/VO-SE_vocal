@@ -100,7 +100,6 @@ class TextAnalyzer:
         DEFAULT_PREUTTERANCE  = 0.05   # 50 ms
         DEFAULT_OVERLAP       = 0.02   # 20 ms
         DEFAULT_CONSONANT_DUR = 0.05
-        DEFAULT_SPECIAL_DUR   = 0.08
         RELEASE_DURATION      = 0.03
 
         frame_period_sec = frame_period_ms / 1000.0
