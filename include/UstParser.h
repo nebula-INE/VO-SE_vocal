@@ -54,6 +54,7 @@ public:
             sn.noteNum      = n.noteNum;
             sn.lyric        = n.lyric;
             sn.velocity01   = juce::jlimit (0.0, 1.0, n.intensity / 200.0);
+            sn.intensity    = juce::jlimit (0.0, 200.0, n.intensity);
             sn.modulation   = juce::jlimit (0.0, 100.0, n.modulation);
             sn.flags        = n.flags;
             sn.preUtteranceMs = n.preUtterance;
@@ -61,6 +62,7 @@ public:
             sn.pbs = n.pbs;
             sn.pbw = n.pbw;
             sn.pby = n.pby;
+            sn.pbm = n.pbm;
             sn.vibrato = n.vibrato;
 
             results.push_back (sn);
