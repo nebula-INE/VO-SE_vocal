@@ -48,7 +48,7 @@ inline UstFlagOverrides parseUstFlags (const juce::String& flags)
         }
 
         int j = i + 1;
-        while (j < n && (flags[j] == '-' || juce::CharacterFunctions::isDigit (flags[j])))
+        while (j < n && (flags[j] == '-' || flags[j] == '+' || juce::CharacterFunctions::isDigit (flags[j])))
             ++j;
 
         if (j > i + 1) // 数値部分が取れた場合のみ有効なフラグとして扱う
