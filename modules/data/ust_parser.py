@@ -34,7 +34,6 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-import math
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +96,7 @@ class UstNote:
     intensity: float   = 100.0      # 音量 (0–200)
     modulation: float  = 100.0      # ピッチモジュレーション深度 (0–200)
     flags: str         = ""         # 音色フラグ文字列 (例: "g-5B50")
+    flags_present: bool = False      # USTにFlagsキー自体が存在したか
 
     # ポルタメント (PBS/PBW/PBY/PBM)
     pbs: str           = ""         # ポルタメント開始オフセット (ms または "ms;semitone")
@@ -354,6 +354,7 @@ class UstParser:
             intensity     = intensity,
             modulation    = modulation,
             flags         = block.get("Flags", ""),
+            flags_present = "Flags" in block,
             pbs           = block.get("PBS",   ""),
             pbw           = block.get("PBW",   ""),
             pby           = block.get("PBY",   ""),
@@ -432,7 +433,9 @@ class UstConverter:
                 "overlap":       ov_ms,
 
                 # UST 拡張フィールド (エンジン側が参照可能)
-                "_ust_flags":      ust_note.flags or project.flags,
+                # ノート側にFlagsキーが無い場合だけ[#SETTING] Flagsを継承する。
+                # Flags= の明示的な空文字は継承しない。
+                "_ust_flags":      ust_note.flags if ust_note.flags_present else project.flags,
                 "_ust_tempo":      ust_note.tempo,        # ★追加: ノート毎のテンポを保持
                 "_ust_modulation": ust_note.modulation,
                 "_ust_pbs":        ust_note.pbs,
