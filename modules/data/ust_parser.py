@@ -486,9 +486,20 @@ class UstConverter:
             pbs_offset_ms   = float(pbs_parts[0]) if pbs_parts[0].strip() else 0.0
             pbs_start_pitch = float(pbs_parts[1]) if len(pbs_parts) > 1 and pbs_parts[1].strip() else 0.0
 
-            # ノート全長 (ms) で正規化してカーブを生成
+            # ノート全長 (ms) を基準にカーブを生成する。
+            # PBW の合計時間を resolution 全体に割り当てると、C++ 側が
+            # pitch_length 全体をノート時間として再サンプルする際に時間軸がずれる。
             total_width_ms = sum(widths)
             if total_width_ms <= 0:
+                return curve
+
+            # UST length は 480 ticks = 1 beat。tempo は BPM。
+            duration_ms = (
+                float(ust_note.length) * 60000.0
+                / max(float(ust_note.tempo), 1.0)
+                / _TICKS_PER_BEAT
+            )
+            if duration_ms <= 0:
                 return curve
 
             control_points: List[Tuple[float, float]] = [(pbs_offset_ms, pbs_start_pitch)]
@@ -502,10 +513,12 @@ class UstConverter:
             cp_times  = [p[0] for p in control_points]
             cp_values = [p[1] for p in control_points]
 
-            # linear interpolation
-            step = total_width_ms / resolution
+            # linear interpolation over the entire note timeline (0..duration_ms).
+            # C++ PitchCurveBuilder と同じ時間軸に揃える。
+            denom = max(resolution - 1, 1)
+            step = duration_ms / denom
             for j in range(resolution):
-                t_j = pbs_offset_ms + j * step
+                t_j = j * step
                 curve[j] = float(_interp(t_j, cp_times, cp_values))
 
         except Exception as exc:
