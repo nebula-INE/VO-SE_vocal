@@ -114,8 +114,12 @@ namespace vose_pitch
                 }
                 shapes.push_back (shape);
             }
-            cpTimes.push_back (totalWidthMs + pbsOffsetMs + 10.0);
-            cpValues.push_back (0.0);
+            // PBWで定義された最後の点の後は、ノート終端を暗黙の0 semitone点とする。
+            // 「+10ms」のマジック値はUST仕様にないため使用しない。
+            // buildPortamentoCentsCurve() の時間軸はノート全体なので、
+            // 最終点は durationMs で評価する。
+            // durationMs は build() の引数に渡されないため、呼び出し側で
+            // ノート終端まで評価できるよう、最後の制御点自体を保持する。
 
             char finalShape = 0;
             if ((int) widths.size() < shapeText.size())
