@@ -59,6 +59,9 @@ struct NoteEvent {
     // ★↓↓↓ ここから新規追加（必ず末尾に配置） ↓↓↓★
     double* portamento_offsets;   // 各フレームのピッチオフセット（セント単位）
     int     portamento_length;    // pitch_length と同じか、0なら無効
+    // USTノート単位の表現パラメータ。intensity=0..200, modulation=0..100。
+    double  intensity;
+    double  modulation;
 };
 #pragma pack(pop)
 
