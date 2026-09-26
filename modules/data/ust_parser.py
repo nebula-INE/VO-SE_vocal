@@ -29,6 +29,7 @@ UTAU の .ust ファイルを NoteEvent 互換形式に変換する。
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -431,7 +432,7 @@ class UstConverter:
                 "overlap":       ov_ms,
 
                 # UST 拡張フィールド (エンジン側が参照可能)
-                "_ust_flags":      ust_note.flags,
+                "_ust_flags":      ust_note.flags or project.flags,
                 "_ust_tempo":      ust_note.tempo,        # ★追加: ノート毎のテンポを保持
                 "_ust_modulation": ust_note.modulation,
                 "_ust_pbs":        ust_note.pbs,
@@ -481,6 +482,7 @@ class UstConverter:
         try:
             widths  = [float(w) for w in ust_note.pbw.split(",") if w.strip()]
             heights = [float(h) for h in ust_note.pby.split(",") if h.strip()] if ust_note.pby else []
+            shapes = [p.strip().lower() for p in ust_note.pbm.split(",")] if ust_note.pbm else []
 
             # PBS/PBY のピッチ値は UTAU では 10cent 単位。
             # 内部カーブは semitone 単位に正規化する。
@@ -509,59 +511,22 @@ class UstConverter:
                 return curve
 
             control_points: List[Tuple[float, float]] = [(pbs_offset_ms, pbs_start_pitch)]
+            segment_shapes: List[str] = []
             t = pbs_offset_ms
             for i, w in enumerate(widths):
                 t += w
                 # PBY は 10cent 単位 → semitone に正規化。
                 h = (heights[i] * 0.1) if i < len(heights) else 0.0
                 control_points.append((t, h))
+                segment_shapes.append(shapes[i] if i < len(shapes) else "")
             control_points.append((total_width_ms + pbs_offset_ms + 10.0, 0.0))
+            segment_shapes.append(shapes[len(widths)] if len(shapes) > len(widths) else "")
 
-            cp_times  = [p[0] for p in control_points]
-            cp_values = [p[1] for p in control_points]
-
-            # PBM は各制御点間の補間形状を指定する。
-            # UTAU の仕様では:
-            #   空欄 = S字, s = 直線, r = R型, j = J型。
-            # R/J は OpenUtau の SineOut/SineIn と同じ向きに対応させる。
-            # PBM が短い場合は仕様どおり残りを既定のS字にする。
-            shapes = [s.strip().lower() for s in ust_note.pbm.split(",")] if ust_note.pbm else []
-
-            def _shape_t(value: float, shape: str) -> float:
-                value = max(0.0, min(1.0, value))
-                if shape == "s":
-                    return value
-                if shape == "r":
-                    return math.sin(math.pi * value / 2.0)  # fast -> slow
-                if shape == "j":
-                    return 1.0 - math.cos(math.pi * value / 2.0)  # slow -> fast
-                # UTAU既定のS字
-                return 0.5 - 0.5 * math.cos(math.pi * value)
-
-            # linear interpolation over the entire note timeline (0..duration_ms).
-            # C++ PitchCurveBuilder と同じ時間軸に揃える。
             denom = max(resolution - 1, 1)
             step = duration_ms / denom
             for j in range(resolution):
                 t_j = j * step
-                if not cp_times or t_j <= cp_times[0]:
-                    curve[j] = cp_values[0] if cp_values else 0.0
-                    continue
-                if t_j >= cp_times[-1]:
-                    curve[j] = cp_values[-1] if cp_values else 0.0
-                    continue
-
-                for seg in range(len(cp_times) - 1):
-                    left = cp_times[seg]
-                    right = cp_times[seg + 1]
-                    if left <= t_j <= right:
-                        span = right - left
-                        u = 0.0 if span <= 0.0 else (t_j - left) / span
-                        shaped = _shape_t(u, shapes[seg] if seg < len(shapes) else "")
-                        curve[j] = cp_values[seg] + shaped * (
-                            cp_values[seg + 1] - cp_values[seg]
-                        )
-                        break
+                curve[j] = float(_interp_shape(t_j, control_points, segment_shapes))
 
         except Exception as exc:
             logger.debug("ポルタメントカーブ生成失敗: %s", exc)
@@ -569,14 +534,34 @@ class UstConverter:
         return curve
 
 
-def _interp(x: float, xs: List[float], ys: List[float]) -> float:
-    """単純な線形補間（numpy 不要版）"""
-    if not xs or x <= xs[0]:
-        return ys[0] if ys else 0.0
-    if x >= xs[-1]:
-        return ys[-1]
-    for i in range(len(xs) - 1):
-        if xs[i] <= x <= xs[i + 1]:
-            t = (x - xs[i]) / (xs[i + 1] - xs[i])
-            return ys[i] + t * (ys[i + 1] - ys[i])
+def _interp_shape(
+    x: float,
+    points: List[Tuple[float, float]],
+    shapes: List[str],
+) -> float:
+    """PBM形状を反映した補間。空欄=S、s=linear、r=R、j=J。"""
+    if not points:
+        return 0.0
+    if x <= points[0][0]:
+        return points[0][1]
+    if x >= points[-1][0]:
+        return points[-1][1]
+    for i in range(len(points) - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        if x0 <= x <= x1:
+            span = x1 - x0
+            if span <= 1e-9:
+                return y1
+            u = (x - x0) / span
+            shape = shapes[i] if i < len(shapes) else ""
+            if shape == "s":
+                eased = u
+            elif shape == "r":
+                eased = math.sin(math.pi * u / 2.0)
+            elif shape == "j":
+                eased = 1.0 - math.cos(math.pi * u / 2.0)
+            else:
+                eased = (1.0 - math.cos(math.pi * u)) / 2.0
+            return y0 + (y1 - y0) * eased
     return 0.0
