@@ -75,6 +75,7 @@ struct ScheduledSongNote
     int    noteNum = 60;
     juce::String lyric;
     double velocity01 = 1.0;       // intensity(0-200) を 0-1 に正規化したもの
+    double modulation = 100.0;     // UST Modulation (0-100)
     juce::String flags;            // 例: "g-5B50"。UstFlags.h でパースする
 
     // グラフエディタ(GraphEditorComponent)からの明示的な上書き。
