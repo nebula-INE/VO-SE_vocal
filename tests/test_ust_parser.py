@@ -126,10 +126,18 @@ class TestUstParser(unittest.TestCase):
         """PBM の S/linear/R/J が区間補間へ反映されること。"""
         from modules.data.ust_parser import UstNote
 
-        base = dict(
-            index=0, length=480, lyric="か", note_num=60, tempo=60.0,
-            pbs="0;0", pbw="500", pby="10",
-        )
+        from typing import Any
+
+        base: dict[str, Any] = {
+            "index": 0,
+            "length": 480,
+            "lyric": "か",
+            "note_num": 60,
+            "tempo": 60.0,
+            "pbs": "0;0",
+            "pbw": "500",
+            "pby": "10",
+        }
 
         linear = UstConverter.extract_portamento_curve(
             UstNote(**base, pbm="s"), resolution=5
@@ -223,7 +231,10 @@ class TestUstParser(unittest.TestCase):
             engine = DummyEngine()
             notes = _load_ust_project(engine, ust_path)
             self.assertEqual(engine.voice_lib_path, os.path.abspath(voice_dir))
-            self.assertTrue(engine.oto_parser.get("あ"))
+            oto_parser = engine.oto_parser
+            self.assertIsNotNone(oto_parser)
+            assert oto_parser is not None
+            self.assertTrue(oto_parser.get("あ"))
             self.assertEqual(len(notes), 1)
 
     def test_ust_flags_map_g_b_and_t(self):
@@ -231,10 +242,12 @@ class TestUstParser(unittest.TestCase):
         from modules.audio.vo_se_engine_patch import parse_ust_flag_overrides
 
         gender, tension, breath, pitch_cents = parse_ust_flag_overrides("g-5B50t20")
-        self.assertAlmostEqual(gender, 0.475)
+        self.assertIsNotNone(gender)
+        self.assertAlmostEqual(float(gender), 0.475)
         self.assertIsNone(tension)
-        self.assertAlmostEqual(breath, 0.5)
-        self.assertAlmostEqual(pitch_cents, 200.0)
+        self.assertIsNotNone(breath)
+        self.assertAlmostEqual(float(breath), 0.5)
+        self.assertAlmostEqual(float(pitch_cents), 200.0)
 
     def test_convert_to_note_events(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
