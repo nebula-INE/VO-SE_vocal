@@ -35,22 +35,26 @@ class TestSmoke(unittest.TestCase):
             text=True
         )
 
-        time.sleep(2)
-        returncode = proc.poll()
-        stdout = ""
-        stderr = ""
-
-        if returncode is None:
-            proc.terminate()
-            try:
-                stdout, stderr = proc.communicate(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-            self.fail(f"Application did not exit during the smoke-test window.\nSTDOUT:{stdout}\nSTDERR:{stderr}")
-        else:
+        # Windows の PyInstaller --onefile は自己展開に時間がかかるため、
+        # 固定2秒ではなく Smoke Test 用の正常終了を最大30秒待つ。
+        try:
+            stdout, stderr = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
             stdout, stderr = proc.communicate()
-            print(f"Startup check code {returncode}\nSTDOUT:{stdout}\nSTDERR:{stderr}")
+            self.fail(
+                "Application did not exit during the smoke-test window.\n"
+                f"STDOUT:{stdout}\nSTDERR:{stderr}"
+            )
+
+        returncode = proc.returncode
+        print(f"Startup check code {returncode}\nSTDOUT:{stdout}\nSTDERR:{stderr}")
+        self.assertEqual(
+            returncode,
+            0,
+            f"Application exited with code {returncode}.\n"
+            f"STDOUT:{stdout}\nSTDERR:{stderr}",
+        )
 
 if __name__ == "__main__":
     unittest.main()
