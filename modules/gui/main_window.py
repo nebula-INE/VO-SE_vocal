@@ -667,12 +667,13 @@ class SynthesisWorker(QRunnable):
     非同期レンダリングワーカー。
     ノートをチャンク分割し、進捗・ETA・キャンセルに対応する。
     """
-    def __init__(self, vose_core, raw_notes, output_path, is_pro=False):
+    def __init__(self, vose_core, raw_notes, output_path, is_pro=False, parameters=None):
         super().__init__()
         self.vose_core = vose_core
-        self.raw_notes = raw_notes          # ノート辞書のリスト
+        self.raw_notes = raw_notes
         self.output_path = output_path
         self.is_pro = is_pro
+        self.parameters = parameters or {}
         self.signals = WorkerSignals()
         self._cancelled = False
         self._timer = QElapsedTimer()
@@ -682,7 +683,36 @@ class SynthesisWorker(QRunnable):
         self._cancelled = True
 
     def run(self):
-        # ★★★ ここで temp_dir を None で初期化（finally 対策） ★★★
+        # 通常のデスクトップレンダーは VO_SE_Engine v2 を優先する。
+        # v2 が無い古い環境だけ従来の C ABI 経路へフォールバックする。
+        export_v2 = getattr(self.vose_core, "export_to_wav_v2", None)
+        if callable(export_v2):
+            try:
+                if self._cancelled:
+                    self.signals.error.emit("ユーザーによりキャンセルされました")
+                    return
+                self.signals.progress.emit(0, 0.0)
+                result = export_v2(
+                    self.raw_notes,
+                    self.parameters,
+                    self.output_path,
+                    mode_flag=1 if self.is_pro else 0,
+                    progress_callback=lambda percent: self.signals.progress.emit(int(percent), 0.0),
+                    cancel_check=lambda: self._cancelled,
+                )
+                if self._cancelled:
+                    self.signals.error.emit("ユーザーによりキャンセルされました")
+                    return
+                if not result or not os.path.exists(result):
+                    raise RuntimeError("レンダリング結果の WAV が生成されませんでした。")
+                self.signals.progress.emit(100, 0.0)
+                self.signals.finished.emit(result)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.signals.error.emit(str(e))
+            return
+
         temp_dir = None
         try:
             total = len(self.raw_notes)
@@ -1834,9 +1864,13 @@ class MainWindow(
             # DLLが読み込めない場合のセーフティネット
             class MockCore:
                 def __getattr__(self, name):
-                    return lambda *args, **kwargs: None
+                    def _missing_core(*args, **kwargs):
+                        raise RuntimeError(
+                            f"VOSE Core がロードされていないため {name} を実行できません。"
+                        )
+                    return _missing_core
             self.vose_core = MockCore()
-            print("⚠️ VOSE Core DLL is missing. Running in Mock mode.")
+            print("⚠️ VOSE Core DLL is missing. Rendering is disabled.")
         else:
             self.statusBar().showMessage("VOSE Core Engine: Online", 3000)
 
@@ -4913,7 +4947,12 @@ class MainWindow(
             # パッチで代入された v2 は __name__ が _export_to_wav_v2 のままなので、
             # 関数名ではなく取得元の属性で v1/v2 を判定する。
             if v2_export_fn is not None:
-                result_path = v2_export_fn(notes, parameters, output_path)
+                result_path = v2_export_fn(
+                    notes,
+                    parameters,
+                    output_path,
+                    mode_flag=mode_flag,
+                )
             else:
                 result_path = v1_export_fn(
                     notes,
@@ -5692,11 +5731,21 @@ class MainWindow(
             self.cancel_render_btn.setEnabled(True)
 
             # ワーカーの作成
+            gw = getattr(self, "graph_editor_widget", None)
+            all_params = getattr(gw, "all_parameters", {}) or {}
+            parameters = {
+                "Pitch": list(all_params.get("Pitch", [])),
+                "Gender": list(all_params.get("Gender", [])),
+                "Tension": list(all_params.get("Tension", [])),
+                "Breath": list(all_params.get("Breath", [])),
+            }
+
             worker = SynthesisWorker(
-                self.vose_core,
+                self.vo_se_engine,
                 raw_notes,
                 output_wav,
-                is_pro=is_pro
+                is_pro=is_pro,
+                parameters=parameters,
             )
             self.current_worker = worker
 
