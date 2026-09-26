@@ -12,7 +12,7 @@
 // 【往復性(round-trip)について】UstParser -> UstWriter -> UstParser で
 // 元のタイミング・歌詞・ポルタメント・ビブラート・Flagsはほぼ保持される
 // （浮動小数点の丸め誤差を除く）。ただしIntensity/Modulationは
-// ScheduledSongNoteが個別に保持していないため既定値(100/0)で書き出す
+// ScheduledSongNoteが保持するIntensity/Modulationをそのまま書き出す
 // （velocity01はあるが、これは元々UST Intensityから作った値なので
 // 逆変換して書き戻している）。
 
@@ -62,7 +62,8 @@ namespace UstWriter
             text << "Length=" << juce::String (juce::jmax (1, lengthTicks)) << "\n";
             text << "Lyric=" << lyric << "\n";
             text << "NoteNum=" << juce::String (noteNum) << "\n";
-            text << "Intensity=" << juce::String (intensity, 1) << "\n";
+            const double storedIntensity = src != nullptr ? juce::jlimit (0.0, 200.0, src->intensity) : intensity;
+            text << "Intensity=" << juce::String (storedIntensity, 1) << "\n";
             const double modulation = src != nullptr ? juce::jlimit (0.0, 100.0, src->modulation) : 100.0;
             text << "Modulation=" << juce::String (modulation, 1) << "\n";
 
@@ -73,6 +74,7 @@ namespace UstWriter
                 if (src->pbs.isNotEmpty()) text << "PBS=" << src->pbs << "\n";
                 if (src->pbw.isNotEmpty()) text << "PBW=" << src->pbw << "\n";
                 if (src->pby.isNotEmpty()) text << "PBY=" << src->pby << "\n";
+                if (src->pbm.isNotEmpty()) text << "PBM=" << src->pbm << "\n";
                 if (src->vibrato.has_value())
                     text << "VBR=" << formatVbr (*src->vibrato) << "\n";
                 if (src->preUtteranceMs.has_value())
@@ -96,7 +98,7 @@ namespace UstWriter
             }
 
             const int lengthTicks = secToTicks (n.durationSec);
-            writeNoteSection (index++, lengthTicks, n.lyric, n.noteNum, n.velocity01 * 200.0, &n);
+            writeNoteSection (index++, lengthTicks, n.lyric, n.noteNum, n.intensity, &n);
 
             expectedStartSec = n.startTimeSec + n.durationSec;
         }
