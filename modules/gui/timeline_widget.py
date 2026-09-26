@@ -1039,7 +1039,6 @@ class TimelineWidget(QWidget):
             time_at_mouse = (mouse_x + self.scroll_x_offset) / self.pixels_per_beat
             
             # 3. 倍率を更新
-            old_ppb = self.pixels_per_beat
             self.pixels_per_beat = max(10.0, min(500.0, self.pixels_per_beat * zoom_factor))
             
             # 4. ズーム後のスクロール位置を再計算
