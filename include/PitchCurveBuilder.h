@@ -100,7 +100,8 @@ namespace vose_pitch
                 const double h = (i < heights.size()) ? heights[i] * 0.1 : 0.0; // UTAU: 10cent単位
                 cpTimes.push_back (t);
                 cpValues.push_back (h);
-                const auto shapeText = pbm.split (",");
+                juce::StringArray shapeText;
+                shapeText.addTokens (pbm, ",", "");
                 char shape = 0;
                 if ((int) i < shapeText.size())
                 {
