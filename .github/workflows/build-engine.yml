@@ -63,16 +63,16 @@ jobs:
 
           # --- 事前ビルド版を先に入れて pyopenjtalk のソースビルドを回避 ---
           # macOS / Linux 両方で有効。Windows でも問題なければ同様に入れてOK。
-          python -m pip install --upgrade pyopenjtalk-prebuilt || true
+          python -m pip install --upgrade pyopenjtalk-prebuilt
 
           # requirements をインストール（prebuilt があればそちらが優先されます）
           python -m pip install -r requirements.txt
 
           # 必要ランタイム（任意で追加）
-          python -m pip install Pillow PySide6 sounddevice soundfile || true
+          python -m pip install Pillow PySide6 sounddevice soundfile
 
           # デバッグ出力
-          python - <<'PY' || true
+          python - <<'PY'
           import importlib, sys, subprocess
           def show(pkg):
               try:
