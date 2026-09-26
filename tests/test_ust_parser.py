@@ -114,7 +114,7 @@ class TestUstParser(unittest.TestCase):
 
         base = dict(
             index=0, length=480, lyric="か", note_num=60, tempo=60.0,
-            pbs="0;0", pbw="100", pby="10",
+            pbs="0;0", pbw="500", pby="10",
         )
 
         linear = UstConverter.extract_portamento_curve(
@@ -136,8 +136,9 @@ class TestUstParser(unittest.TestCase):
         self.assertLess(j_shape[1], linear[1])
         self.assertAlmostEqual(r_shape[0], 0.0, places=6)
         self.assertAlmostEqual(j_shape[0], 0.0, places=6)
-        self.assertAlmostEqual(r_shape[-1], 1.0, places=6)
-        self.assertAlmostEqual(j_shape[-1], 1.0, places=6)
+        # PBWの終端後は次の制御点(0 semitone)へ戻る。
+        self.assertAlmostEqual(r_shape[-1], 0.0, places=6)
+        self.assertAlmostEqual(j_shape[-1], 0.0, places=6)
 
     def test_project_flags_are_inherited_by_notes(self):
         """[#SETTING] Flags はノート側にFlagsが無い場合だけ継承される。"""
