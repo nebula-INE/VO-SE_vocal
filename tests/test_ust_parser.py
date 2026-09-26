@@ -40,6 +40,20 @@ class TestUstParser(unittest.TestCase):
             self.assertEqual(note.intensity, 120.0)
             self.assertEqual(note.flags, "g-5B50")
 
+    def test_modulation_defaults_to_zero(self):
+        """UST/OpenUtau の Modulation 省略時は 0（完全にフラット）を使う。"""
+        ust = (
+            "[#SETTING]\\nTempo=120\\n"
+            "[#0000]\\nLength=480\\nLyric=か\\nNoteNum=60\\nIntensity=100\\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ust_file = os.path.join(tmp_dir, "mod_default.ust")
+            with open(ust_file, "w", encoding="cp932") as f:
+                f.write(ust)
+            project = UstParser().load(ust_file)
+            self.assertEqual(project.notes[0].modulation, 0.0)
+            self.assertEqual(UstConverter.to_note_dicts(project)[0]["_ust_modulation"], 0.0)
+
     def test_parse_vibrato(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
