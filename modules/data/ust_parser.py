@@ -94,7 +94,7 @@ class UstNote:
 
     # 音量・表情
     intensity: float   = 100.0      # 音量 (0–200)
-    modulation: float  = 100.0      # ピッチモジュレーション深度 (0–200)
+    modulation: float  = 0.0        # ピッチモジュレーション深度 (0–100)
     flags: str         = ""         # 音色フラグ文字列 (例: "g-5B50")
     flags_present: bool = False      # USTにFlagsキー自体が存在したか
 
@@ -307,7 +307,7 @@ class UstParser:
                 return default
 
         intensity   = _fv("Intensity",   100.0)
-        modulation  = _fv("Modulation",  100.0)
+        modulation  = _fv("Modulation",  0.0)
 
         # 先行発声・オーバーラップ上書き（空の場合は None = oto.ini に委ねる）
         pre_utterance: Optional[float] = None
