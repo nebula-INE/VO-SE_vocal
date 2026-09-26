@@ -1984,14 +1984,18 @@ class MainWindow(
                 action.setShortcut(QKeySequence(str(saved_value)))
                 
     def execute_render(self):
-        """オーディオ書き出しの実行（省略なし）"""
-        print("DEBUG: Rendering started...")
-        # 将来的に self.vo_se_engine.render() を呼び出す
+        """現在のデスクトップ用レンダリング処理へ委譲する。"""
+        render_fn = getattr(self, "on_render_button_clicked", None)
+        if not callable(render_fn):
+            raise RuntimeError("レンダリング処理が利用できません。")
+        return render_fn()
 
     def toggle_recording(self):
-        """録音状態の切り替え（省略なし）"""
-        self.is_recording = not getattr(self, 'is_recording', False)
-        print(f"DEBUG: Recording toggled to: {self.is_recording}")
+        """録音トグルの互換エントリポイント。"""
+        record_fn = getattr(self, "on_record_toggled", None)
+        if not callable(record_fn):
+            raise RuntimeError("録音処理が利用できません。")
+        return record_fn()
 
     def update_playback_ui(self):
         """再生位置・時間表示・タイムラインのプレイヘッドを同期する。"""
@@ -2748,8 +2752,9 @@ class MainWindow(
         # --- 8.再生・停止・録音ボタンの制御 ---
         if self.play_button:
             self.play_button.clicked.connect(self.toggle_playback)
-        if self.record_button:
-            self.record_button.clicked.connect(self.toggle_recording)
+        # record_button は生成時に on_record_toggled() へ接続済み。
+        # ここで再接続すると1クリックで開始→停止まで2回反転するため、
+        # 二重接続は行わない。
 
         # --- 9. エンジンからのフィードバック（再生位置の同期） ---
         if self.playback_timer:
@@ -3229,11 +3234,12 @@ class MainWindow(
     # --- 3. エンジン・モニタリング系 ---
 
     def run_engine(self, alias: Optional[str] = None, params: Optional[Any] = None):
-        """音声合成エンジンの実行（レンダリング）"""
-        print("エンジンのレンダリングを開始します...")
-        if hasattr(self, 'ai_manager'):
-            # AIマネージャーを通じた処理をここに記述
-            pass
+        """旧API互換のレンダリング入口。実処理はデスクトップUIの共通経路へ委譲する。"""
+        del alias, params
+        render_fn = getattr(self, "on_render_button_clicked", None)
+        if not callable(render_fn):
+            raise RuntimeError("レンダリング処理が利用できません。")
+        return render_fn()
 
     @property
     def pro_monitoring(self):
