@@ -788,29 +788,52 @@ class ProjectIOMixin:
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Save Failed: {e}")
 
-    def on_save_project_clicked(self: Any) -> None:
-        """[LIVE] プロジェクト保存"""
-        file_path, _ = QFileDialog.getSaveFileName(self, "プロジェクトを保存", "", "VO-SE Project (*.vose);;JSON Files (*.json);;All Files (*)")
+    def on_save_project_clicked(self: Any) -> bool:
+        """[LIVE] プロジェクト保存。NoteEvent を明示的にシリアライズする。"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "プロジェクトを保存",
+            "",
+            "VO-SE Project (*.vose);;JSON Files (*.json);;All Files (*)",
+        )
         if not file_path:
-            return
+            return False
 
         try:
-            t_widget = getattr(self, 'timeline_widget', None)
-            notes_data = []
-            if t_widget is not None and hasattr(t_widget, 'get_notes'):
-                notes_data = t_widget.get_notes()
+            t_widget = getattr(self, "timeline_widget", None)
+            notes = list(getattr(t_widget, "notes_list", []) or []) if t_widget is not None else []
+            tempo = float(getattr(t_widget, "tempo", 120.0)) if t_widget is not None else 120.0
+            notes_data = [
+                n.to_dict() if hasattr(n, "to_dict") else dict(n)
+                for n in notes
+            ]
 
-            project_data = {"version": "1.0.0", "timestamp": 2026, "current_time": float(getattr(self, 'current_playback_time', 0.0)), "notes": notes_data}
+            project_data = {
+                "version": "1.3.0",
+                "project_name": os.path.splitext(os.path.basename(file_path))[0],
+                "tempo": tempo,
+                "current_time": float(getattr(self, "current_playback_time", 0.0)),
+                "notes": notes_data,
+            }
 
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(project_data, f, ensure_ascii=False, indent=4)
+            tmp_file_path = f"{file_path}.tmp"
+            with open(tmp_file_path, "w", encoding="utf-8") as f:
+                json.dump(project_data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_file_path, file_path)
 
             sb = self.statusBar()
             if sb:
                 sb.showMessage(f"保存完了: {os.path.basename(file_path)}", 3000)
+            return True
 
         except Exception as e:
+            if "tmp_file_path" in locals() and os.path.exists(tmp_file_path):
+                try:
+                    os.remove(tmp_file_path)
+                except OSError:
+                    pass
             QMessageBox.critical(self, "保存エラー", f"プロジェクトの保存に失敗しました:\n{str(e)}")
+            return False
 
     def open_file_dialog_and_load_midi(self: Any) -> None:
         """[LIVE] MIDI読み込みダイアログ"""
