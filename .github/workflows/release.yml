@@ -1237,4 +1237,4 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -m pytest tests/ -v -m smoke --maxfail=1 2>&1 || echo "Some tests may have failed"
+          python -m pytest tests/ -v -m smoke --maxfail=1
