@@ -31,7 +31,7 @@ struct UstNote
     int noteNum = 60;
     double tempo = kUstDefaultTempo;
     double intensity = 100.0;
-    double modulation = 100.0;
+    double modulation = 0.0;
     juce::String flags;
     juce::String pbs, pbw, pby, pbm;
     std::optional<UstVibratoParams> vibrato;
@@ -61,7 +61,7 @@ struct ScheduledSongNote
     juce::String lyric;
     double velocity01 = 1.0;
     double intensity = 100.0;
-    double modulation = 100.0;
+    double modulation = 0.0;
     juce::String flags;
 
     std::optional<double> genderOverride01;
