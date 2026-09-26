@@ -43,8 +43,8 @@ class TestUstParser(unittest.TestCase):
     def test_modulation_defaults_to_zero(self):
         """UST/OpenUtau の Modulation 省略時は 0（完全にフラット）を使う。"""
         ust = (
-            "[#SETTING]\\nTempo=120\\n"
-            "[#0000]\\nLength=480\\nLyric=か\\nNoteNum=60\\nIntensity=100\\n"
+            "[#SETTING]\nTempo=120\n"
+            "[#0000]\nLength=480\nLyric=か\nNoteNum=60\nIntensity=100\n"
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "mod_default.ust")
