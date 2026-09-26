@@ -160,7 +160,7 @@ def _export_to_wav_v2(
     progress_callback=None,
     cancel_check=None,
     **kwargs,
-) -> None:
+) -> str:
     """VCV + UST ビブラート + ポルタメント対応の WAV export。"""
     _ = (progress_callback, cancel_check, kwargs)
 
