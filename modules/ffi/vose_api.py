@@ -29,24 +29,7 @@ logger = logging.getLogger(__name__)
 # C 互換構造体（vose_core.h の定義に厳密に準拠）
 # ============================================================
 
-class CNoteEvent(ctypes.Structure):
-    """
-    C++ struct NoteEvent の Python ミラー。
-    vose_core.h の #pragma pack(pop) 後の定義と _fields_ の順序・型を一致させること。
-    """
-    _fields_ = [
-        ("wav_path",             ctypes.c_char_p),
-        ("pitch_curve",          ctypes.POINTER(ctypes.c_double)),
-        ("pitch_length",         ctypes.c_int),
-        ("gender_curve",         ctypes.POINTER(ctypes.c_double)),
-        ("tension_curve",        ctypes.POINTER(ctypes.c_double)),
-        ("breath_curve",         ctypes.POINTER(ctypes.c_double)),
-        ("vibrato_depth_curve",  ctypes.POINTER(ctypes.c_double)),
-        ("vibrato_rate_curve",   ctypes.POINTER(ctypes.c_double)),
-        ("vibrato_curve_length", ctypes.c_int),
-        ("portamento_offsets", ctypes.POINTER(ctypes.c_double)),
-        ("portamento_length", ctypes.c_int),
-    ]
+from modules.ffi.vose_types import CNoteEvent
 
 
 class CVoseFrame(ctypes.Structure):
