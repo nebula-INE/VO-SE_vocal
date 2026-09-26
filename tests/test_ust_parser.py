@@ -87,6 +87,27 @@ class TestUstParser(unittest.TestCase):
             note_dicts = UstConverter.to_note_dicts(project)
             self.assertAlmostEqual(note_dicts[0]["duration"], 60.0 / 170.0, places=4)
 
+    def test_portamento_uses_ust_10cent_units(self):
+        """PBS/PBY は 10cent 単位で、内部の semitone に正規化される。"""
+        from modules.data.ust_parser import UstNote
+
+        note = UstNote(
+            index=0,
+            length=480,
+            lyric="か",
+            note_num=60,
+            tempo=60.0,
+            pbs="0;5",
+            pbw="100",
+            pby="10",
+        )
+        curve = UstConverter.extract_portamento_curve(note, resolution=11)
+
+        # 60 BPM / 480 ticks = 1000ms。resolution=11 なので100ms刻み。
+        # PBS=5 => +0.5 semitone、PBY=10 => +1.0 semitone。
+        self.assertAlmostEqual(curve[0], 0.5, places=6)
+        self.assertAlmostEqual(curve[1], 1.0, places=6)
+
     def test_convert_to_note_events(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
