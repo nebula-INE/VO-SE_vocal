@@ -35,30 +35,7 @@
 
 
 
-// ------------------------------------------------------------------
-// PianoRollNote
-// ------------------------------------------------------------------
-struct PianoRollNote
-{
-    int    id = 0;
-    double startTimeSec = 0.0;
-    double durationSec  = 0.5;
-    int    noteNum = 60;
-    juce::String lyric { "a" };
-    bool   selected = false;
-
-    // UST由来の付随データ。.cppは直接触らないが、PluginProcessorとの
-    // 往復変換（ScheduledSongNote <-> PianoRollNote）で必要になる。
-    juce::String flags;
-    juce::String pbs, pbw, pby;
-    std::optional<UstVibratoParams> vibrato;
-    std::optional<double> genderOverride01;
-    std::optional<double> tensionOverride01;
-    std::optional<double> breathOverride01;
-
-    double endTimeSec() const { return startTimeSec + durationSec; }
-};
-
+#include "PianoRollNote.h"
 // ------------------------------------------------------------------
 // PianoRollComponent
 // ------------------------------------------------------------------
