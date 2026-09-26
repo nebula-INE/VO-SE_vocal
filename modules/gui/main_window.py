@@ -4216,14 +4216,18 @@ class MainWindow(
         pitch_events = all_params.get("Pitch", [])
         tension_events = all_params.get("Tension", [])
 
+        # MRO で ProjectIOMixin のダミーが勝つのを回避するため、
+        # クラス属性経由で MainWindow 側の実装を明示的に参照する
+        sampler = MainWindow._sample_range.__get__(self, MainWindow)
+
         for note in notes:
             note_info = {
                 "lyric": note.lyrics,
                 "note_num": note.note_number,
                 "start_sec": note.start_time,
                 "duration_sec": note.duration,
-                "pitch_bend": self._sample_range(pitch_events, note, 64),
-                "dynamics": self._sample_range(tension_events, note, 64)
+                "pitch_bend": sampler(pitch_events, note, 64),
+                "dynamics": sampler(tension_events, note, 64),
             }
             render_data["notes"].append(note_info)
 
