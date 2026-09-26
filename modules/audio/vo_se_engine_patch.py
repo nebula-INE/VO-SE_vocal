@@ -79,6 +79,28 @@ def build_vibrato_curves(
     return depth_curve, rate_curve
 
 
+def parse_ust_flag_overrides(flags: str) -> Tuple[Optional[float], Optional[float], Optional[float], float]:
+    """UST Flags の g/B/t をレンダー用の値へ正規化する。"""
+    gender = None
+    tension = None
+    breath = None
+    pitch_shift_cents = 0.0
+    if not flags:
+        return gender, tension, breath, pitch_shift_cents
+
+    import re
+    for match in re.finditer(r"([A-Za-z])([+-]?\d+(?:\.\d+)?)", str(flags)):
+        letter = match.group(1)
+        value = float(match.group(2))
+        if letter == "g":
+            gender = float(np.clip(0.5 + value / 200.0, 0.0, 1.0))
+        elif letter == "B":
+            breath = float(np.clip(value / 100.0, 0.0, 1.0))
+        elif letter == "t":
+            pitch_shift_cents += value * 10.0
+    return gender, tension, breath, pitch_shift_cents
+
+
 def build_portamento_curve(
     ust_note: Any,
     resolution: int = 128,
@@ -89,10 +111,12 @@ def build_portamento_curve(
         pbw = ust_note.get("_ust_pbw", "")
         pby = ust_note.get("_ust_pby", "")
         pbm = ust_note.get("_ust_pbm", "")
+        pbm = ust_note.get("_ust_pbm", "")
     else:
         pbs = getattr(ust_note, "_ust_pbs", "")
         pbw = getattr(ust_note, "_ust_pbw", "")
         pby = getattr(ust_note, "_ust_pby", "")
+        pbm = getattr(ust_note, "_ust_pbm", "")
         pbm = getattr(ust_note, "_ust_pbm", "")
 
     if not pbw:
@@ -238,6 +262,17 @@ def _export_to_wav_v2(
         g_curve = self._get_sampled_curve(parameters["Gender"], note, res).astype(np.float64)
         t_curve = self._get_sampled_curve(parameters["Tension"], note, res).astype(np.float64)
         b_curve = self._get_sampled_curve(parameters["Breath"], note, res).astype(np.float64)
+        flag_gender, flag_tension, flag_breath, flag_pitch_cents = parse_ust_flag_overrides(
+            str(getattr(note, "_ust_flags", "") or "")
+        )
+        if flag_gender is not None:
+            g_curve.fill(flag_gender)
+        if flag_tension is not None:
+            t_curve.fill(flag_tension)
+        if flag_breath is not None:
+            b_curve.fill(flag_breath)
+        if flag_pitch_cents:
+            p_curve *= np.power(2.0, flag_pitch_cents / 1200.0)
 
         # UST Flags はノート単位の表情指定。Python v2ではここで正規化する。
         flag_overrides = _parse_ust_flag_overrides(str(getattr(note, "_ust_flags", "")))
@@ -320,6 +355,8 @@ def _export_to_wav_v2(
         c_notes_array[i].vibrato_rate_curve = vib_rate.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
         c_notes_array[i].pitch_length = res
         c_notes_array[i].vibrato_curve_length = res
+        c_notes_array[i].intensity = float(np.clip(getattr(note, "_ust_intensity", 100.0), 0.0, 200.0))
+        c_notes_array[i].modulation = float(np.clip(getattr(note, "_ust_modulation", 100.0), 0.0, 100.0))
 
         if portamento_arr is not None:
             c_notes_array[i].portamento_offsets = portamento_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
@@ -345,6 +382,24 @@ def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
     """UST ファイルをネイティブパーサーで読み込み、NoteEvent 互換辞書リストを返す。"""
     parser = UstParser()
     project = parser.load(ust_path)
+
+    voice_dir = str(project.voice_dir or "").strip()
+    if voice_dir:
+        current_voice_dir = str(getattr(self, "voice_lib_path", "") or "")
+        voice_dir = voice_dir.replace("%VOICE%", current_voice_dir)
+        if not os.path.isabs(voice_dir):
+            voice_dir = os.path.abspath(os.path.join(
+                os.path.dirname(os.path.abspath(ust_path)), voice_dir
+            ))
+        else:
+            voice_dir = os.path.abspath(voice_dir)
+        if os.path.isdir(voice_dir):
+            self.voice_lib_path = voice_dir
+            self._ust_voice_dir = voice_dir
+            _refresh_voice_library_v2(self)
+        else:
+            logger.warning("UST VoiceDir が見つかりません: %s", voice_dir)
+
     note_dicts = UstConverter.to_note_dicts(project)
     logger.info(
         "UST ロード完了: %d ノート / Tempo=%.1f (%s)",
