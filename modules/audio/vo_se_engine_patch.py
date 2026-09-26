@@ -36,49 +36,30 @@ from modules.data.ust_parser import UstParser, UstConverter, UstVibratoParams
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# ビブラートカーブビルダー (スタンドアロン関数)
-# ---------------------------------------------------------------------------
-
 def build_vibrato_curves(
     duration_sec: float,
     vibrato_params: Optional[UstVibratoParams],
     resolution: int = 128,
     note_start_offset_sec: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    UstVibratoParams から depth/rate カーブを生成する。
-
-    Args:
-        duration_sec:         ノートの長さ (秒)
-        vibrato_params:       UST VBR パラメーター (None なら全ゼロ)
-        resolution:           サンプル数
-        note_start_offset_sec: 先行発声分のオフセット (ビブラートはノート開始後にかける)
-
-    Returns:
-        (vibrato_depth_curve, vibrato_rate_curve) それぞれ shape=(resolution,) の float64 配列
-    """
+    """UstVibratoParams から depth/rate カーブを生成する。"""
     depth_curve = np.zeros(resolution, dtype=np.float64)
-    rate_curve  = np.zeros(resolution, dtype=np.float64)
+    rate_curve = np.zeros(resolution, dtype=np.float64)
 
     if vibrato_params is None or vibrato_params.length <= 0:
         return depth_curve, rate_curve
 
     times = np.linspace(0.0, duration_sec + note_start_offset_sec, resolution)
-
-    # ビブラート開始時刻: ノート開始から length% 後
     vib_start = note_start_offset_sec + duration_sec * (1.0 - vibrato_params.length / 100.0)
-    vib_end   = note_start_offset_sec + duration_sec
+    vib_end = note_start_offset_sec + duration_sec
 
     for idx, t in enumerate(times):
         if t < vib_start or t >= vib_end:
             continue
 
         vib_elapsed = t - vib_start
-        vib_total   = vib_end - vib_start
-
-        # フェードイン / フェードアウトの包絡
-        fade_in_sec  = vib_total * vibrato_params.fade_in  / 100.0
+        vib_total = vib_end - vib_start
+        fade_in_sec = vib_total * vibrato_params.fade_in / 100.0
         fade_out_sec = vib_total * vibrato_params.fade_out / 100.0
 
         if vib_elapsed < fade_in_sec and fade_in_sec > 0:
@@ -89,30 +70,16 @@ def build_vibrato_curves(
             env = 1.0
 
         depth_curve[idx] = vibrato_params.depth_semitones * env
-        rate_curve[idx]  = vibrato_params.rate_hz
+        rate_curve[idx] = vibrato_params.rate_hz
 
     return depth_curve, rate_curve
 
-
-# ---------------------------------------------------------------------------
-# ★新規：ポルタメントカーブビルダー
-# ---------------------------------------------------------------------------
 
 def build_portamento_curve(
     ust_note: Any,
     resolution: int = 128,
 ) -> Optional[np.ndarray]:
-    """
-    UST ノートオブジェクト（_ust_pbs, _ust_pbw, _ust_pby 属性を持つ）から
-    ピッチオフセットカーブ（セント単位）を生成する。
-
-    Args:
-        ust_note:   UstNote またはそれに準ずるオブジェクト（dict でも可）
-        resolution: カーブのサンプル数（NoteEvent の pitch_length と一致させる）
-
-    Returns:
-        長さ resolution の float64 配列、またはポルタメント情報がない場合は None
-    """
+    """UST ノートからピッチオフセットカーブを生成する。"""
     if isinstance(ust_note, dict):
         pbs = ust_note.get("_ust_pbs", "")
         pbw = ust_note.get("_ust_pbw", "")
@@ -144,15 +111,8 @@ def build_portamento_curve(
     return np.array(curve_list, dtype=np.float64)
 
 
-# ---------------------------------------------------------------------------
-# VO_SE_Engine への追加メソッド群
-# ---------------------------------------------------------------------------
-
 def _refresh_voice_library_v2(self) -> None:
-    """
-    [NEW-1] VcvResolver を再初期化しながら音源フォルダを再スキャンする。
-    既存の refresh_voice_library() を置き換えるか、その後に呼び出す。
-    """
+    """VcvResolver を再初期化しながら音源フォルダを再スキャンする。"""
     self.oto_map = {}
 
     if not os.path.exists(self.voice_lib_path):
@@ -169,7 +129,7 @@ def _refresh_voice_library_v2(self) -> None:
         files_lower = [f.lower() for f in files]
         if "oto.ini" in files_lower:
             real_name = files[files_lower.index("oto.ini")]
-            ini_path  = os.path.join(root, real_name)
+            ini_path = os.path.join(root, real_name)
             loaded = self.oto_parser.load_oto_file(ini_path)
             logger.debug("oto.ini ロード: %d エントリ (%s)", loaded, ini_path)
 
@@ -196,16 +156,8 @@ def _export_to_wav_v2(
     cancel_check=None,
     **kwargs,
 ) -> None:
-    """
-    [NEW-2] VCV 解決 + UST ビブラートカーブ + ポルタメントカーブ に対応した export_to_wav。
-
-    旧 export_to_wav() との差分:
-      - resolve_target_wav() を廃止し VcvResolver を使う
-      - vibrato_depth_curve / vibrato_rate_curve を NoteEvent の値から生成する
-      - UST _ust_vibrato 拡張フィールドが存在する場合はそちらを優先する
-      - **新規: _ust_pbs/_ust_pbw/_ust_pby があればポルタメントカーブを生成して C++ に渡す**
-    """
-    _ = (mode_flag, progress_callback, cancel_check, kwargs)
+    """VCV + UST ビブラート + ポルタメント対応の WAV export。"""
+    _ = (progress_callback, cancel_check, kwargs)
 
     if not self.lib:
         raise RuntimeError("Engine Core library missing!")
@@ -239,7 +191,6 @@ def _export_to_wav_v2(
                 wav_path = next(iter(self.oto_map.values()), "")
 
         res = 128
-
         p_curve = self._get_sampled_curve(parameters["Pitch"], note, res, is_pitch=True).astype(np.float64)
         g_curve = self._get_sampled_curve(parameters["Gender"], note, res).astype(np.float64)
         t_curve = self._get_sampled_curve(parameters["Tension"], note, res).astype(np.float64)
@@ -305,7 +256,7 @@ def _export_to_wav_v2(
             c_notes_array,
             note_count,
             os.path.abspath(file_path).encode("utf-8"),
-            0,
+            mode_flag,
         )
     finally:
         self._temp_refs = []
@@ -314,10 +265,7 @@ def _export_to_wav_v2(
 
 
 def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
-    """
-    [NEW-4] UST ファイルをネイティブパーサーで読み込み、
-    NoteEvent 互換辞書リストを返す。
-    """
+    """UST ファイルをネイティブパーサーで読み込み、NoteEvent 互換辞書リストを返す。"""
     parser = UstParser()
     project = parser.load(ust_path)
     note_dicts = UstConverter.to_note_dicts(project)
@@ -330,14 +278,8 @@ def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
     return note_dicts
 
 
-# ---------------------------------------------------------------------------
-# パッチ適用関数
-# ---------------------------------------------------------------------------
-
 def apply_patch(engine_class) -> None:
-    """
-    VO_SE_Engine クラスに新メソッドをバインドする。
-    """
+    """VO_SE_Engine クラスに新メソッドをバインドする。"""
     engine_class.refresh_voice_library_v2 = _refresh_voice_library_v2
     engine_class.export_to_wav_v2 = _export_to_wav_v2
     engine_class.load_ust_project = _load_ust_project
