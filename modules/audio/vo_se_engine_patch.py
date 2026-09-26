@@ -108,7 +108,9 @@ def build_portamento_curve(
     if not curve_list or len(curve_list) != resolution:
         return None
 
-    return np.array(curve_list, dtype=np.float64)
+    # UstConverter は半音単位で返すが、C++ NoteEvent.portamento_offsets は
+    # セント単位として解釈するため、ここで 100 倍して単位を統一する。
+    return np.asarray(curve_list, dtype=np.float64) * 100.0
 
 
 def _refresh_voice_library_v2(self) -> None:
