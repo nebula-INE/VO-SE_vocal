@@ -54,9 +54,10 @@ namespace vose_pitch
     {
         std::vector<double> cpTimes;
         std::vector<double> cpValues;
+        std::vector<char> shapes;
         bool valid = false;
 
-        void build (const juce::String& pbs, const juce::String& pbw, const juce::String& pby)
+        void build (const juce::String& pbs, const juce::String& pbw, const juce::String& pby, const juce::String& pbm = {})
         {
             valid = false;
             if (pbw.trim().isEmpty())
@@ -88,6 +89,7 @@ namespace vose_pitch
 
             cpTimes.clear();
             cpValues.clear();
+            shapes.clear();
             cpTimes.push_back (pbsOffsetMs);
             cpValues.push_back (pbsStartPitch);
 
@@ -98,6 +100,16 @@ namespace vose_pitch
                 const double h = (i < heights.size()) ? heights[i] * 0.1 : 0.0; // UTAU: 10cent単位
                 cpTimes.push_back (t);
                 cpValues.push_back (h);
+                const auto shapeText = pbm.split (",");
+                char shape = 0;
+                if ((int) i < shapeText.size())
+                {
+                    const auto token = shapeText[(int) i].trim().toLowerCase();
+                    if (token == "s") shape = "s"[0];
+                    else if (token == "r") shape = "r"[0];
+                    else if (token == "j") shape = "j"[0];
+                }
+                shapes.push_back (shape);
             }
             cpTimes.push_back (totalWidthMs + pbsOffsetMs + 10.0);
             cpValues.push_back (0.0);
@@ -107,7 +119,30 @@ namespace vose_pitch
 
         double at (double tMs) const
         {
-            return valid ? interpLinear (tMs, cpTimes, cpValues) : 0.0;
+            if (! valid || cpTimes.empty())
+                return 0.0;
+            if (tMs <= cpTimes.front())
+                return cpValues.front();
+            if (tMs >= cpTimes.back())
+                return cpValues.back();
+
+            for (size_t i = 0; i + 1 < cpTimes.size(); ++i)
+            {
+                if (tMs < cpTimes[i] || tMs > cpTimes[i + 1])
+                    continue;
+                const double span = cpTimes[i + 1] - cpTimes[i];
+                const double u = span > 0.0 ? juce::jlimit (0.0, 1.0, (tMs - cpTimes[i]) / span) : 0.0;
+                const char shape = i < shapes.size() ? shapes[i] : 0;
+                double shaped = u;
+                if (shape == "r"[0])
+                    shaped = std::sin (juce::MathConstants<double>::pi * u / 2.0);
+                else if (shape == "j"[0])
+                    shaped = 1.0 - std::cos (juce::MathConstants<double>::pi * u / 2.0);
+                else if (shape != "s"[0])
+                    shaped = 0.5 - 0.5 * std::cos (juce::MathConstants<double>::pi * u);
+                return cpValues[i] + shaped * (cpValues[i + 1] - cpValues[i]);
+            }
+            return 0.0;
         }
     };
 
@@ -188,13 +223,14 @@ namespace vose_pitch
     // （コア側は同じ pitch_length を使って resample_curve するため、
     //  両カーブの index が同じ絶対時刻を指している前提で合成される）。
     inline std::vector<double> buildPortamentoCentsCurve (const juce::String& pbs, const juce::String& pbw,
-                                                           const juce::String& pby, double durationMs,
+                                                           const juce::String& pby, const juce::String& pbm,
+                                                           double durationMs,
                                                            int resolution)
     {
         std::vector<double> curve ((size_t) resolution, 0.0);
 
         PortamentoCurveBuilder portamento;
-        portamento.build (pbs, pbw, pby);
+        portamento.build (pbs, pbw, pby, pbm);
         if (! portamento.valid)
             return curve; // PBWが無い等 → オフセット無し（0セント）
 
