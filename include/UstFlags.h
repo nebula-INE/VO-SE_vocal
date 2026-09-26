@@ -9,8 +9,7 @@
 //       gender01 = 0.5 + g/200.0 に変換する（±100 で ±0.5 動く）。
 //   B : Breathiness（息成分）。慣例的に 0〜100。
 //       breath_curve も 0.0〜1.0 規約なので breath01 = B/100.0。
-//   t : Tension（テンション）。エンジンによって意味が異なる場合があるが、
-//       ここでは 0〜100 を想定し tension01 = t/100.0 とする。
+//   t : Pitch shift（音程シフト）。UTAUでは10cent単位なので、t20 = +200cent。
 // 該当する文字が無ければ、そのパラメータはUST側からの指定なし
 // （呼び出し側でAPVTSのグローバル値にフォールバックする）とみなす。
 
@@ -24,6 +23,7 @@ struct UstFlagOverrides
     std::optional<double> gender01;
     std::optional<double> tension01;
     std::optional<double> breath01;
+    std::optional<double> pitchShiftCents;
 };
 
 inline UstFlagOverrides parseUstFlags (const juce::String& flags)
@@ -60,7 +60,7 @@ inline UstFlagOverrides parseUstFlags (const juce::String& flags)
             else if (letter == 'B')
                 result.breath01 = juce::jlimit (0.0, 1.0, value / 100.0);
             else if (letter == 't')
-                result.tension01 = juce::jlimit (0.0, 1.0, value / 100.0);
+                result.pitchShiftCents = value * 10.0;
             // 他の文字(H, Y, A 等、エンジン固有フラグ)は現状未対応。無視する。
         }
 
