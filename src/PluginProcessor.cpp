@@ -227,7 +227,7 @@ void VoseAudioProcessor::pushSongNote (const ScheduledSongNote& note)
         }
     }
 
-    auto portamentoCents = vose_pitch::buildPortamentoCentsCurve (note.pbs, note.pbw, note.pby, durationMs, kRes);
+    auto portamentoCents = vose_pitch::buildPortamentoCentsCurve (note.pbs, note.pbw, note.pby, note.pbm, durationMs, kRes);
 
     const auto flagOverrides = parseUstFlags (note.flags);
     const double genderFallback  = flagOverrides.gender01.value_or  ((double) apvts.getRawParameterValue ("gender")->load());
