@@ -166,6 +166,16 @@ class TestUstParser(unittest.TestCase):
             self.assertEqual(dicts[0]["_ust_flags"], "g-5B50")
             self.assertEqual(dicts[1]["_ust_flags"], "g10")
 
+    def test_ust_flags_map_g_b_and_t(self):
+        """g/B はパラメータ、t は10cent単位のピッチシフトとして扱う。"""
+        from modules.audio.vo_se_engine_patch import parse_ust_flag_overrides
+
+        gender, tension, breath, pitch_cents = parse_ust_flag_overrides("g-5B50t20")
+        self.assertAlmostEqual(gender, 0.475)
+        self.assertIsNone(tension)
+        self.assertAlmostEqual(breath, 0.5)
+        self.assertAlmostEqual(pitch_cents, 200.0)
+
     def test_convert_to_note_events(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
