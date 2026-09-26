@@ -4850,37 +4850,101 @@ class MainWindow(
 
     @Slot()
     def on_render_button_clicked(self):
-        """合成ボタンの最終接続"""
-        from modules.data.licensing import LicenseManager # 追加
-        
+        """合成ボタンの最終接続 — 新シグネチャ (notes, parameters, file_path) 対応版"""
+        from modules.data.licensing import LicenseManager
+
         is_pro = LicenseManager.is_pro()
-        status_msg = "レンダリング中 (Pro Mode)..." if is_pro else "レンダリング中..."
+        status_msg = (
+            "レンダリング中 (Pro Mode)..."
+            if is_pro
+            else "レンダリング中..."
+        )
         self.statusBar().showMessage(status_msg)
-    
+
         # 1. データの準備
-        song_data = self.prepare_rendering_data()
-        if not song_data:
+        tw = getattr(self, "timeline_widget", None)
+        gw = getattr(self, "graph_editor_widget", None)
+        engine = getattr(self, "vo_se_engine", None)
+
+        if tw is None or gw is None or engine is None:
+            QMessageBox.warning(
+                self,
+                "エラー",
+                "書き出しに必要な初期化が完了していません。",
+            )
+            return
+
+        notes = list(getattr(tw, "notes_list", []) or [])
+        if not notes:
             self.statusBar().showMessage("ノートがありません")
             return
 
-        # 2. C++エンジンでWAV生成
-        # Pro版なら高精度フラグをエンジンに渡すようにしておく
+        # 2. 保存先の決定
         output_filename = "preview_render.wav"
-        
-        # 代表、ここがポイントです。将来的に render() が is_pro 引数を受け取れるようにします。
-        result_path = self.vo_se_engine.render(
-            song_data, 
-            output_filename, 
-            is_pro=is_pro # フラグを渡す
+        output_path = os.path.abspath(output_filename)
+
+        # 3. パラメータ辞書の組み立て
+        all_params = getattr(gw, "all_parameters", {}) or {}
+        parameters = {
+            "Pitch":   list(all_params.get("Pitch",   [])),
+            "Gender":  list(all_params.get("Gender",  [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath":  list(all_params.get("Breath",  [])),
+        }
+
+        mode_flag = 1 if is_pro else 0
+
+        # 4. エンジン呼び出し（v2 優先、無ければ旧 export_to_wav にフォールバック）
+        export_fn = (
+            getattr(engine, "export_to_wav_v2", None)
+            or getattr(engine, "export_to_wav", None)
         )
+        if export_fn is None:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                "エンジンに export_to_wav が実装されていません。",
+            )
+            return
 
-        # 3. 再生
-        if result_path and os.path.exists(result_path):
-            self.statusBar().showMessage("再生中...")
-            self.vo_se_engine.play_result(result_path)
-        else:
-            QMessageBox.critical(self, "エラー", "合成に失敗しました。DLLまたは音源パスを確認してください。")
+        try:
+            if getattr(export_fn, "__name__", "") == "export_to_wav_v2":
+                result_path = export_fn(notes, parameters, output_path)
+            else:
+                result_path = export_fn(
+                    notes,
+                    parameters,
+                    output_path,
+                    mode_flag=mode_flag,
+                )
 
+            # 5. 再生
+            if result_path and os.path.exists(result_path):
+                self.statusBar().showMessage("再生中...")
+                self.play_rendered_audio(result_path)
+            else:
+                QMessageBox.critical(
+                    self,
+                    "エラー",
+                    "合成に失敗しました。\n"
+                    "DLLまたは音源パスを確認してください。",
+                )
+
+        except TypeError as exc:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                "export_to_wav のシグネチャが一致しません。\n"
+                "vo_se_engine_patch.apply_patch(VO_SE_Engine) "
+                "が適用済みか確認してください。\n"
+                f"詳細: {exc}",
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"書き出し失敗: {exc}",
+            )
 
     @Slot()
     def on_ai_button_clicked(self):
