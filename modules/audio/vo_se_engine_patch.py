@@ -192,8 +192,9 @@ def _export_to_wav_v2(
             wav_path = self.oto_map.get(note.lyric) or self.oto_map.get(
                 getattr(note, "phonemes", ""), ""
             )
-            if not wav_path:
-                wav_path = next(iter(self.oto_map.values()), "")
+            # 未解決時にライブラリ先頭の別音素を使うと、
+            # 「あ」が見つからないから「か」を歌う、といった誤発音になる。
+            # 解決不能なノートは wav_path を空のままにし、C++ 側で無音として扱う。
 
         res = 128
         p_curve = self._get_sampled_curve(parameters["Pitch"], note, res, is_pitch=True).astype(np.float64)
