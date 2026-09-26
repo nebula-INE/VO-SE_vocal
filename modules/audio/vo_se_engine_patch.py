@@ -97,12 +97,28 @@ def build_portamento_curve(
 
     from modules.data.ust_parser import UstNote
 
+    # NoteEvent 互換辞書/オブジェクトの場合も、実際のノート長とテンポを
+    # 使ってポルタメントの時間軸を構築する。固定の480tick/120BPMだと
+    # テンポ変化や長音符でカーブ位置がずれる。
+    if isinstance(ust_note, dict):
+        duration_sec = float(ust_note.get("duration", 0.0))
+        tempo = float(ust_note.get("_ust_tempo", 120.0) or 120.0)
+        length = max(1, int(round(duration_sec * tempo * 480.0 / 60.0)))
+    else:
+        duration_sec = float(getattr(ust_note, "duration", 0.0) or 0.0)
+        tempo = float(getattr(ust_note, "_ust_tempo", 120.0) or 120.0)
+        if duration_sec > 0.0:
+            length = max(1, int(round(duration_sec * tempo * 480.0 / 60.0)))
+        else:
+            length = int(getattr(ust_note, "length", 480))
+            tempo = float(getattr(ust_note, "tempo", tempo) or tempo)
+
     dummy_note = UstNote(
         index=0,
-        length=480,
+        length=length,
         lyric="",
         note_num=60,
-        tempo=120.0,
+        tempo=max(tempo, 1.0),
         pbs=pbs,
         pbw=pbw,
         pby=pby,
