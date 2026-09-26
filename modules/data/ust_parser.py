@@ -33,6 +33,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -519,13 +520,48 @@ class UstConverter:
             cp_times  = [p[0] for p in control_points]
             cp_values = [p[1] for p in control_points]
 
+            # PBM は各制御点間の補間形状を指定する。
+            # UTAU の仕様では:
+            #   空欄 = S字, s = 直線, r = R型, j = J型。
+            # R/J は OpenUtau の SineOut/SineIn と同じ向きに対応させる。
+            # PBM が短い場合は仕様どおり残りを既定のS字にする。
+            shapes = [s.strip().lower() for s in ust_note.pbm.split(",")] if ust_note.pbm else []
+
+            def _shape_t(value: float, shape: str) -> float:
+                value = max(0.0, min(1.0, value))
+                if shape == "s":
+                    return value
+                if shape == "r":
+                    return math.sin(math.pi * value / 2.0)  # fast -> slow
+                if shape == "j":
+                    return 1.0 - math.cos(math.pi * value / 2.0)  # slow -> fast
+                # UTAU既定のS字
+                return 0.5 - 0.5 * math.cos(math.pi * value)
+
             # linear interpolation over the entire note timeline (0..duration_ms).
             # C++ PitchCurveBuilder と同じ時間軸に揃える。
             denom = max(resolution - 1, 1)
             step = duration_ms / denom
             for j in range(resolution):
                 t_j = j * step
-                curve[j] = float(_interp(t_j, cp_times, cp_values))
+                if not cp_times or t_j <= cp_times[0]:
+                    curve[j] = cp_values[0] if cp_values else 0.0
+                    continue
+                if t_j >= cp_times[-1]:
+                    curve[j] = cp_values[-1] if cp_values else 0.0
+                    continue
+
+                for seg in range(len(cp_times) - 1):
+                    left = cp_times[seg]
+                    right = cp_times[seg + 1]
+                    if left <= t_j <= right:
+                        span = right - left
+                        u = 0.0 if span <= 0.0 else (t_j - left) / span
+                        shaped = _shape_t(u, shapes[seg] if seg < len(shapes) else "")
+                        curve[j] = cp_values[seg] + shaped * (
+                            cp_values[seg + 1] - cp_values[seg]
+                        )
+                        break
 
         except Exception as exc:
             logger.debug("ポルタメントカーブ生成失敗: %s", exc)
