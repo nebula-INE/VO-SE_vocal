@@ -32,12 +32,12 @@ ort = importlib.import_module("onnxruntime") if importlib.util.find_spec("onnxru
 # ==========================================================================
 # 3. GUIライブラリ (PySide6 )
 # ==========================================================================
-from PySide6.QtCore import (
+from PySide6.QtCore import (  # noqa: E402
     Qt, Signal, QThread, QTimer,
     QObject, QRunnable, QThreadPool, Slot,
     QElapsedTimer
 )
-from PySide6.QtWidgets import (
+from PySide6.QtWidgets import (  # noqa: E402
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSlider,
     QPushButton, QFileDialog, QScrollBar, QInputDialog, QLineEdit,
     QLabel, QSplitter, QComboBox, QProgressBar, QMessageBox, QToolBar,
@@ -45,11 +45,11 @@ from PySide6.QtWidgets import (
     QListWidget, QApplication, 
     QDockWidget     
 )
-from PySide6.QtGui import (
+from PySide6.QtGui import (  # noqa: E402
     QAction, QKeySequence, QFont, QColor, QShortcut, QPixmap, 
     QPainter, QPen
 )
-from PySide6.QtMultimedia import QMediaPlayer
+from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
 
 # ==========================================================================
 # 4. 型チェック時のみのインポート (reportAssignmentType エラーを根本解決)
@@ -76,13 +76,11 @@ try:
     from modules.gui.keyboard_sidebar_widget import KeyboardSidebarWidget # type: ignore[assignment]
     from modules.gui.core_manager import vose_manager, CNoteEvent # type: ignore[assignment]
     from modules.audio.voice_manager import VoiceManager # type: ignore[assignment]
-    from modules.gui.aural_engine import AuralAIEngine # type: ignore[assignment]
     from modules.data.licensing import LicenseManager # type: ignore[assignment]
     from modules.gui.audio_mixin import AudioOutputMixin # type: ignore[assignment]
     from modules.gui.voice_mixin import VoiceManagerMixin # type: ignore[assignment]
     from modules.gui.mixins.voice_management_mixin import VoiceManagementMixin # type: ignore[assignment]
     from modules.gui.effects_panel import EffectsPanel  # type: ignore[assignment]
-    from modules.gui.themes import apply_theme # type: ignore[assignment]
     from modules.gui.track_strip import TrackStripWidget # type: ignore[assignment]
     from modules.gui.icons import icon # type: ignore[assignment]
 except ImportError as e:
@@ -98,7 +96,7 @@ except ImportError as e:
 
 # MainWindow を機能ごとに分割した Mixin 群。
 # ここでの import は main_window.py を逆 import しないため、循環 import は発生しない。
-from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+from modules.gui.mixins.project_io_mixin import ProjectIOMixin  # noqa: E402
 
 try:
     import psutil
@@ -727,7 +725,6 @@ class SynthesisWorker(QRunnable):
 
             # チャンクサイズの決定（最大50チャンク、1チャンク最低1ノート）
             chunk_size = max(1, min(50, total // 20 + 1))
-            num_chunks = (total + chunk_size - 1) // chunk_size
 
             temp_dir = tempfile.mkdtemp(prefix="vose_render_")
             combined_audio = []
