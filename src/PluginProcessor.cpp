@@ -210,6 +210,15 @@ void VoseAudioProcessor::pushSongNote (const ScheduledSongNote& note)
 
     auto pitchCurve = vose_pitch::buildVibratoPitchCurveHz (note.noteNum, durationMs, note.vibrato, kRes);
 
+    // UST Flags の t は10cent単位のピッチシフト。
+    const auto flagOverrides = parseUstFlags (note.flags);
+    if (flagOverrides.pitchShiftCents.has_value())
+    {
+        const double ratio = std::pow (2.0, *flagOverrides.pitchShiftCents / 1200.0);
+        for (double& hz : pitchCurve)
+            hz *= ratio;
+    }
+
     // Pitchオートメーション（あれば）をベースピッチ(ビブラート込み)に乗算で加算適用。
     // AutomationRanges::pitchValueToSemitones()で値域(-8192..8191)を semitone に変換してから
     // 周波数比へ変換する（加算前の semitone 空間で足すのと数学的に等価）。
@@ -229,7 +238,6 @@ void VoseAudioProcessor::pushSongNote (const ScheduledSongNote& note)
 
     auto portamentoCents = vose_pitch::buildPortamentoCentsCurve (note.pbs, note.pbw, note.pby, note.pbm, durationMs, kRes);
 
-    const auto flagOverrides = parseUstFlags (note.flags);
     const double genderFallback  = flagOverrides.gender01.value_or  ((double) apvts.getRawParameterValue ("gender")->load());
     const double tensionFallback = flagOverrides.tension01.value_or ((double) apvts.getRawParameterValue ("tension")->load());
     const double breathFallback  = flagOverrides.breath01.value_or  ((double) apvts.getRawParameterValue ("breath")->load());
