@@ -404,7 +404,9 @@ async function renderViaCore(
     if (isVoiced && note) {
       workerNotes.push({
         key,
-        pitchCurveHz: buildPitchCurveHz(note, p, durationMs)
+        pitchCurveHz: buildPitchCurveHz(note, p, durationMs),
+        intensity: typeof note.intensity === 'number' ? note.intensity : 100,
+        modulation: typeof note.modulation === 'number' ? note.modulation : 100
       });
       lastWasVoiced = true;
     } else {
