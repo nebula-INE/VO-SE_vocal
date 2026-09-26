@@ -71,7 +71,7 @@ self.onerror = (e) => {
 // 全フィールドが4バイト境界に収まるため、doubleを直接メンバに持たない
 // この構造体には隠れたパディングが一切無い。合計44バイト)
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 44;
+const NOTE_EVENT_SIZE = 64;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
@@ -83,6 +83,8 @@ const OFF_VIBRATO_RATE_CURVE = 28;
 const OFF_VIBRATO_CURVE_LENGTH = 32;
 const OFF_PORTAMENTO_OFFSETS = 36;
 const OFF_PORTAMENTO_LENGTH = 40;
+const OFF_INTENSITY = 48;
+const OFF_MODULATION = 56;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
@@ -231,6 +233,8 @@ export interface WorkerNoteEntry {
   // (pitchCurveHz.lengthだけがpitch_length=フレーム数として使われる)。
   key: string | null;
   pitchCurveHz: number[];
+  intensity?: number;
+  modulation?: number;
 }
 
 export interface RenderRequestMsg {
@@ -327,7 +331,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     allocatedPtrs.push(notesPtr);
 
     for (let i = 0; i < notes.length; i++) {
-      const { key, pitchCurveHz } = notes[i];
+      const { key, pitchCurveHz, intensity, modulation } = notes[i];
       const base = notesPtr + i * NOTE_EVENT_SIZE;
 
       const isVoiced = key !== null;
@@ -354,6 +358,8 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
+      mod.setValue(base + OFF_INTENSITY, intensity ?? 100, 'double');
+      mod.setValue(base + OFF_MODULATION, modulation ?? 100, 'double');
     }
 
     // 4. レンダリング実行 (execute_render_cancelable で進捗をメインスレッドへ
