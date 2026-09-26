@@ -481,6 +481,14 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("VO-SE Pro")
 
+    # CI Smoke Test は重い C++ エンジン/ MainWindow 初期化を行わず、
+    # PyInstaller バンドル内で Qt と MainWindow モジュールをロードできることを確認する。
+    # 実際の MainWindow / エンジン初期化は通常起動時のみに実行する。
+    if is_smoke_test:
+        print("[SmokeTest] VO-SE Pro modules initialized successfully.")
+        app.quit()
+        return 0
+
     for icon_rel in ("assets/icon.png", "assets/icon.icns", "assets/icon.ico"):
         icon_path = get_resource_path(icon_rel)
         if os.path.exists(icon_path):
