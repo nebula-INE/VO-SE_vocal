@@ -211,12 +211,12 @@ class TestUstParser(unittest.TestCase):
             voice_dir = os.path.join(tmp_dir, "voice")
             os.makedirs(voice_dir)
             with open(os.path.join(voice_dir, "oto.ini"), "w", encoding="cp932") as f:
-                f.write("a.wav=あ,0,0,0,0,0\\n")
+                f.write("a.wav=あ,0,0,0,0,0\n")
 
             ust_path = os.path.join(tmp_dir, "song.ust")
             ust = (
-                "[#SETTING]\\nTempo=120\\nVoiceDir=%VOICE%\\n"
-                "[#0000]\\nLength=480\\nLyric=あ\\nNoteNum=60\\n"
+                "[#SETTING]\nTempo=120\nVoiceDir=%VOICE%\n"
+                "[#0000]\nLength=480\nLyric=あ\nNoteNum=60\n"
             )
             with open(ust_path, "w", encoding="cp932") as f:
                 f.write(ust)
