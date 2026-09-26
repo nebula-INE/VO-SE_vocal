@@ -83,17 +83,17 @@ jobs:
 
           # --- 事前ビルド済パッケージを先に入れて pyopenjtalk のソースビルドを回避 ---
           if [[ "${{ matrix.os }}" == macos* ]] || [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            python -m pip install --upgrade pyopenjtalk-prebuilt || true
+            python -m pip install --upgrade pyopenjtalk-prebuilt
           fi
 
           # requirements をインストール（prebuilt があればそちらが優先されます）
-          python -m pip install -r requirements.txt || true
+          python -m pip install -r requirements.txt
 
           # 起動に必要なランタイム類を確実に入れる
-          python -m pip install Pillow PySide6 sounddevice soundfile || true
+          python -m pip install Pillow PySide6 sounddevice soundfile
 
           # その他ツール類
-          python -m pip install "setuptools<82" pytest ruff pyright python-rtmidi mido pyinstaller || true
+          python -m pip install "setuptools<82" pytest ruff pyright python-rtmidi mido pyinstaller
 
           # デバッグ: インストール確認（CIログに出ます）
           python - <<'PY' || true
@@ -140,7 +140,7 @@ jobs:
       - name: Ruff Check and Fix (Windows only)
         if: matrix.os == 'windows-latest'
         shell: bash
-        run: ruff check . --select E,F --ignore E501,E401 --fix --exit-zero
+        run: ruff check . --select E,F --ignore E501,E401 --fix
 
       - name: 🔍 audioio.h を探す
         if: startsWith(matrix.os, 'macos')
@@ -1230,7 +1230,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip wheel setuptools
           python -m pip install -r requirements.txt || true
-          python -m pip install Pillow PySide6 pytest || true
+          python -m pip install Pillow PySide6 pytest
 
       - name: Run smoke tests
         shell: bash
