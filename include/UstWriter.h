@@ -64,7 +64,7 @@ namespace UstWriter
             text << "NoteNum=" << juce::String (noteNum) << "\n";
             const double storedIntensity = src != nullptr ? juce::jlimit (0.0, 200.0, src->intensity) : intensity;
             text << "Intensity=" << juce::String (storedIntensity, 1) << "\n";
-            const double modulation = src != nullptr ? juce::jlimit (0.0, 100.0, src->modulation) : 100.0;
+            const double modulation = src != nullptr ? juce::jlimit (0.0, 100.0, src->modulation) : 0.0;
             text << "Modulation=" << juce::String (modulation, 1) << "\n";
 
             if (src != nullptr)
