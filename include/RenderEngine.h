@@ -155,7 +155,7 @@ private:
             // NoteEventはvalue-initializeされるため、未設定のままだと
             // intensity=0（完全ミュート）/modulation=0になってしまう。
             cNotes[i].intensity           = 100.0;
-            cNotes[i].modulation          = 100.0;
+            cNotes[i].modulation          = 0.0;
         }
 
         auto tempFile = juce::File::getSpecialLocation (juce::File::tempDirectory)
