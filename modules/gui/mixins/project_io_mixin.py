@@ -276,7 +276,7 @@ class ProjectIOMixin:
 
                 # ---- 強度・モジュレーション ----
                 intensity  = float(getattr(note, "_ust_intensity",  100.0))
-                modulation = float(getattr(note, "_ust_modulation", 100.0))
+                modulation = float(getattr(note, "_ust_modulation", 0.0))
                 lines += [f"Intensity={intensity:.0f}", f"Modulation={modulation:.0f}"]
 
                 # ---- フラグ ----
