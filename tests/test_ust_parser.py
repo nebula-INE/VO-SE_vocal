@@ -166,6 +166,19 @@ class TestUstParser(unittest.TestCase):
             self.assertEqual(dicts[0]["_ust_flags"], "g-5B50")
             self.assertEqual(dicts[1]["_ust_flags"], "g10")
 
+    def test_explicit_empty_note_flags_override_project_flags(self):
+        """ノート側の明示的なFlags=は[#SETTING] Flagsを継承しない。"""
+        ust = (
+            "[#SETTING]\nTempo=120\nFlags=g-5B50\n"
+            "[#0000]\nLength=480\nLyric=か\nNoteNum=60\nFlags=\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ust_file = os.path.join(tmp_dir, "flags_empty.ust")
+            with open(ust_file, "w", encoding="cp932") as f:
+                f.write(ust)
+            dicts = UstConverter.to_note_dicts(UstParser().load(ust_file))
+            self.assertEqual(dicts[0]["_ust_flags"], "")
+
     def test_ust_flags_map_g_b_and_t(self):
         """g/B はパラメータ、t は10cent単位のピッチシフトとして扱う。"""
         from modules.audio.vo_se_engine_patch import parse_ust_flag_overrides
