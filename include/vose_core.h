@@ -66,6 +66,7 @@ struct NoteEvent {
     // UTAU oto.ini timing in milliseconds.
     double  preutterance_ms;
     double  overlap_ms;
+    int     timing_override; // non-zero when Python supplied final per-note timing
 };
 #pragma pack(pop)
 
