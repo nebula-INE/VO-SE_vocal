@@ -340,6 +340,7 @@ def _export_to_wav_v2(
         c_notes_array[i].modulation = float(np.clip(getattr(note, "_ust_modulation", 0.0), 0.0, 100.0))
         c_notes_array[i].preutterance_ms = float(max(0.0, getattr(note, "pre_utterance", 0.0)))
         c_notes_array[i].overlap_ms = float(max(0.0, getattr(note, "overlap", 0.0)))
+        c_notes_array[i].timing_override = 1
 
         if callable(progress_callback):
             progress_callback(int(((i + 1) / max(note_count, 1)) * 90.0))
