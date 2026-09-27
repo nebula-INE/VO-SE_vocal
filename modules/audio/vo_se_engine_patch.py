@@ -293,8 +293,10 @@ def _export_to_wav_v2(
                     env = min(env, (vib_total - elapsed) / fade_out_sec)
                 env = max(0.0, min(1.0, env))
 
+                # UST VBR の cycle はミリ秒。elapsed は秒なので、周期数は
+                # elapsed * 1000 / cycle_ms で求める。
                 phase = ust_vib.phase / 100.0
-                cycles = elapsed * (1000.0 / max(ust_vib.cycle, 1e-6)) / 1000.0 + phase
+                cycles = (elapsed * 1000.0 / max(ust_vib.cycle, 1e-6)) + phase
                 cents = math.sin(2.0 * math.pi * cycles) * ust_vib.depth * env + ust_vib.height
                 semitone_offset[idx] = cents / 100.0
 
