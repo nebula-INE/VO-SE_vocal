@@ -789,21 +789,45 @@ jobs:
           DMG_FILE="${OUTPUT_DIR}/VO-SE_vocal_Mac_${MAC_LABEL}.dmg"
           ZIP_FILE="${OUTPUT_DIR}/VO-SE_vocal_Mac_${MAC_LABEL}_update.zip"
 
-          # --- 必須: クリーンアップ関数 (エラー時や終了時に必ず実行) ---
+          # --- 必須: クリーンアップ関数 ---
+          # hdiutil は detach 直後もデバイスを保持することがあるため、
+          # 「detach → 状態確認 → 待機」を必ず行う。
           cleanup() {
-            if [ -d "/Volumes/${VOLUME_NAME}" ]; then
-              echo "🧹 クリーンアップ: 残留マウントを強制解除します..."
-              hdiutil detach "/Volumes/${VOLUME_NAME}" -force 2>/dev/null || true
+            echo "🧹 DMG残留マウントを確認中..."
+
+            if mount | grep -Fq "on /Volumes/VO-SE vocal "; then
+              echo "  Detaching: /Volumes/VO-SE vocal"
+              hdiutil detach "/Volumes/VO-SE vocal" -force 2>/dev/null || true
             fi
+
+            for _ in {1..20}; do
+              if ! mount | grep -Fq "on /Volumes/VO-SE vocal "; then
+                break
+              fi
+              sleep 0.5
+            done
+
+            hdiutil info 2>/dev/null | grep -B 5 -F "/Volumes/VO-SE vocal" |
+              awk '/^\/dev\// {print $1}' | while read -r device; do
+                [ -n "$device" ] || continue
+                hdiutil detach "$device" -force 2>/dev/null || true
+              done
+
+            sleep 1
           }
           trap cleanup EXIT
 
-          # --- 1. 前回のビルド遺物を完全に削除 (Resource busy 対策) ---
+          # --- 1. 前回のビルド遺物を完全に削除 ---
           echo "🧹 前回のビルド遺物を削除中..."
           cleanup
-          if [ -f "$DMG_FILE" ]; then
+
+          if [ -e "$DMG_FILE" ]; then
             chflags noschg "$DMG_FILE" 2>/dev/null || true
-            rm -f "$DMG_FILE"
+            for _ in {1..10}; do
+              rm -f "$DMG_FILE" 2>/dev/null || true
+              [ ! -e "$DMG_FILE" ] && break
+              sleep 0.5
+            done
           fi
           rm -f "$ZIP_FILE"
 
@@ -815,14 +839,32 @@ jobs:
             exit 1
           fi
 
-          # --- 3. DMG作成 (事前アンマウント + ファイル削除済みのため確実に成功) ---
+          # --- 3. DMG作成 ---
+          # 一時ファイルへ生成して完成後に最終名へ移動する。
           echo "🗜️ Creating DMG (ボリューム名: ${VOLUME_NAME})..."
-          hdiutil create \
-            -volname "${VOLUME_NAME}" \
-            -srcfolder "$APP_BUNDLE" \
-            -ov \
-            -format UDZO \
-            "$DMG_FILE"
+          DMG_TMP="${OUTPUT_DIR}/.VO-SE_vocal_Mac_${MAC_LABEL}_$$.dmg"
+          rm -f "$DMG_TMP"
+
+          DMG_CREATED=0
+          for attempt in {1..5}; do
+            echo "  DMG creation attempt ${attempt}/5..."
+            if hdiutil create               -volname "${VOLUME_NAME}"               -srcfolder "$APP_BUNDLE"               -format UDZO               "$DMG_TMP"; then
+              DMG_CREATED=1
+              break
+            fi
+
+            echo "  ⚠️ hdiutil failed; cleaning up and retrying..."
+            cleanup
+            rm -f "$DMG_TMP" 2>/dev/null || true
+            sleep "$attempt"
+          done
+
+          if [ "$DMG_CREATED" -ne 1 ]; then
+            echo "❌ Failed to create DMG after 5 attempts"
+            exit 1
+          fi
+
+          mv -f "$DMG_TMP" "$DMG_FILE"
 
           # --- 4. ZIP作成 ---
           echo "🗜️ Creating update ZIP..."
