@@ -49,7 +49,6 @@ from PySide6.QtGui import (  # noqa: E402
     QAction, QKeySequence, QFont, QColor, QShortcut, QPixmap, 
     QPainter, QPen
 )
-from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
 
 # ==========================================================================
 # 4. 型チェック時のみのインポート (reportAssignmentType エラーを根本解決)
