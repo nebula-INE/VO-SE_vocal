@@ -106,6 +106,12 @@ class ProjectIOMixin:
                 except Exception as exc:
                     logger.warning("NoteEvent 変換失敗: %s / %s", exc, d)
 
+            # 現在のトラックにも実データを同期する。
+            tracks = list(getattr(self, "tracks", []) or [])
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            if 0 <= current_idx < len(tracks):
+                tracks[current_idx].notes = list(notes)
+
             # テンポの適用
             if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
                 self.timeline_widget.tempo = project.tempo
@@ -475,6 +481,11 @@ class ProjectIOMixin:
             return False
 
         notes = [NoteEvent.from_dict(d) for d in note_dicts]
+
+        tracks = list(getattr(self, "tracks", []) or [])
+        current_idx = int(getattr(self, "current_track_idx", 0))
+        if 0 <= current_idx < len(tracks):
+            tracks[current_idx].notes = list(notes)
 
         if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
             if hasattr(self.timeline_widget, "set_notes"):
