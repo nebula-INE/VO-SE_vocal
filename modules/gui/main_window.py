@@ -1917,9 +1917,9 @@ class MainWindow(
         except TypeError:
             self.voice_manager = cast(Any, VoiceManager())
 
-        # オーディオ・プレイヤー系
-        AudioPlayer = safe_import("modules.backend.audio_player", "AudioPlayer", MockAudioPlayer)
-        self.audio_player = AudioPlayer(volume=getattr(self, 'volume', 0.8))
+        # デスクトップ音声は MainWindow.setup_audio_interface() で生成した
+        # AudioMixer を唯一の実再生経路として使用する。
+        self.audio_player = getattr(self, "audio_mixer", None)
 
         # トーク解析系（Talk機能用）
         IntonationAnalyzer = safe_import("modules.talk.talk_manager", "IntonationAnalyzer", lambda: None)
