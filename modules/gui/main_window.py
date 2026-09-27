@@ -4953,8 +4953,8 @@ class MainWindow(
             return
 
         try:
-            # パッチで代入された v2 は __name__ が _export_to_wav_v2 のままなので、
-            # 関数名ではなく取得元の属性で v1/v2 を判定する。
+            # v2 を優先。属性が存在するだけでなく callable であることを確認し、
+            # 壊れた/未初期化の属性なら v1 に安全にフォールバックする。
             if callable(v2_export_fn):
                 result_path = v2_export_fn(
                     notes,
