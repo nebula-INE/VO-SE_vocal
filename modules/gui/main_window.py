@@ -4085,6 +4085,10 @@ class MainWindow(
         try:
             play_file(os.path.abspath(path))
             self.is_playing = True
+            self.current_playback_time = 0.0
+            timer = getattr(self, "playback_timer", None)
+            if timer is not None:
+                timer.start()
             print(f"再生開始: {path}")
         except Exception as exc:
             self.is_playing = False
