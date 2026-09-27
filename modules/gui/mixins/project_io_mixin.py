@@ -747,115 +747,44 @@ class ProjectIOMixin:
     # 【従来実装】その他メソッド
     # ======================================================================
 
-    def load_file_from_path(self: Any, filepath: str):
-        """[LIVE] ファイル自動判別読み込み"""
-        if filepath.endswith('.mid') or filepath.endswith('.midi'):
-            self._parse_midi(filepath)
-        elif filepath.endswith('.ustx'):
-            self._parse_ustx(filepath)
-        print(f"ファイルを読み込みました: {filepath}")
+    def load_file_from_path(self: Any, filepath: str) -> bool:
+        """ファイル拡張子に応じて、実際のプロジェクトローダーへ振り分ける。"""
+        ext = os.path.splitext(filepath)[1].lower()
+        try:
+            if ext in (".mid", ".midi"):
+                return bool(self.load_midi_file_from_path(filepath))
+            if ext == ".ust":
+                return bool(self.load_ust_file(filepath))
+            if ext in (".json", ".vose"):
+                return bool(self.load_json_project(filepath))
+            if ext == ".vsqx":
+                self._load_vsqx(filepath)
+                return False
+            if ext == ".ustx":
+                self._parse_ustx(filepath)
+                return False
+            self.statusBar().showMessage(f"未対応のファイル形式です: {ext}", 3000)
+            return False
+        except Exception as exc:
+            logger.exception("ファイル読み込みエラー: %s", exc)
+            QMessageBox.critical(self, "読み込みエラー", f"ファイルの読み込みに失敗しました:\n{exc}")
+            return False
 
     def _parse_midi(self: Any, filepath: str):
-        """[LIVE] MIDI解析"""
-        from modules.data.midi_manager import load_midi_file
-        notes_data = load_midi_file(filepath)
-        if notes_data:
-            self.update_timeline_with_notes(notes_data)
+        """互換用MIDIローダー。正式経路は load_midi_file_from_path()."""
+        return self.load_midi_file_from_path(filepath)
 
     def _parse_ustx(self: Any, filepath: str):
-        """[LIVE] USTX解析（将来拡張用）"""
-        print(f"USTX解析は現在開発中です: {filepath}")
+        """USTXは未実装であることを明示する。"""
+        QMessageBox.information(
+            self,
+            "未対応形式",
+            ".ustx の読み込みは現在未実装です。\nUST / MIDI / JSON / VO-SE プロジェクトをご利用ください。",
+        )
 
     def save_project(self: Any):
-        """[LIVE] .vose形式保存"""
-        path, _ = QFileDialog.getSaveFileName(self, "保存", "", "VO-SE Project (*.vose)")
-        if not path: 
-            return
-
-        self.tracks[self.current_track_idx].notes = self.timeline_widget.notes_list
-
-        data = {
-            "app_id": "VO_SE_Pro_2026",
-            "tempo": self.timeline_widget.tempo,
-            "tracks": [{"name": t.name, "type": t.track_type, "notes": [n.to_dict() for n in t.notes], "audio": t.audio_path, "mixer": {"vol": t.volume, "pan": t.pan}} for t in self.tracks]
-        }
-        
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            self.statusBar().showMessage(f"Saved: {path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Save Failed: {e}")
-
-    def on_save_project_clicked(self: Any) -> bool:
-        """[LIVE] プロジェクト保存。NoteEvent を明示的にシリアライズする。"""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "プロジェクトを保存",
-            "",
-            "VO-SE Project (*.vose);;JSON Files (*.json);;All Files (*)",
-        )
-        if not file_path:
-            return False
-
-        try:
-            t_widget = getattr(self, "timeline_widget", None)
-            notes = list(getattr(t_widget, "notes_list", []) or []) if t_widget is not None else []
-            tempo = float(getattr(t_widget, "tempo", 120.0)) if t_widget is not None else 120.0
-            notes_data = [
-                n.to_dict() if hasattr(n, "to_dict") else dict(n)
-                for n in notes
-            ]
-
-            project_data = {
-                "version": "1.3.0",
-                "project_name": os.path.splitext(os.path.basename(file_path))[0],
-                "tempo": tempo,
-                "current_time": float(getattr(self, "current_playback_time", 0.0)),
-                "notes": notes_data,
-            }
-
-            tmp_file_path = f"{file_path}.tmp"
-            with open(tmp_file_path, "w", encoding="utf-8") as f:
-                json.dump(project_data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_file_path, file_path)
-
-            sb = self.statusBar()
-            if sb:
-                sb.showMessage(f"保存完了: {os.path.basename(file_path)}", 3000)
-            return True
-
-        except Exception as e:
-            if "tmp_file_path" in locals() and os.path.exists(tmp_file_path):
-                try:
-                    os.remove(tmp_file_path)
-                except OSError:
-                    pass
-            QMessageBox.critical(self, "保存エラー", f"プロジェクトの保存に失敗しました:\n{str(e)}")
-            return False
-
-    def open_file_dialog_and_load_midi(self: Any) -> None:
-        """[LIVE] MIDI読み込みダイアログ"""
-        file_path, _ = QFileDialog.getOpenFileName(self, "MIDIファイルを開く", "", "MIDI Files (*.mid *.midi);;All Files (*)")
-        if not file_path:
-            return
-
-        try:
-            from modules.data.midi_manager import load_midi_file
-            notes = load_midi_file(file_path)
-
-            if notes:
-                t_widget = getattr(self, 'timeline_widget', None)
-                if t_widget is not None:
-                    t_widget.set_notes(notes)
-                    sb = self.statusBar()
-                    if sb:
-                        sb.showMessage(f"MIDI読込成功: {len(notes)} ノート", 3000)
-            else:
-                QMessageBox.information(self, "MIDI読込", "MIDIファイルに有効なノートが含まれていません。")
-
-        except Exception as e:
-            QMessageBox.critical(self, "MIDIエラー", f"MIDIの読み込み中にエラーが発生しました:\n{str(e)}")
+        """マルチトラック対応のVO-SEプロジェクト保存。"""
+        return bool(self.on_save_project_clicked())
 
     def export_analysis_to_oto_ini(self: Any):
         """[LIVE] 解析結果 → oto.ini"""
