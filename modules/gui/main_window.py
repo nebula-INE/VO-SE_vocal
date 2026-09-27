@@ -4633,6 +4633,12 @@ class MainWindow(
                 if callable(stop_func):
                     stop_func()
 
+        # 1b. WAV/伴奏トラックの停止
+        audio_player = getattr(self, "audio_player", None)
+        audio_stop = getattr(audio_player, "stop", None)
+        if callable(audio_stop):
+            audio_stop()
+
         # 2. 内部フラグの安全なリセット
         # Pyright の reportAttributeAccessIssue を防ぐため、確実に属性を更新
         self.is_playing: bool = False
