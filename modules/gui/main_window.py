@@ -3940,9 +3940,29 @@ class MainWindow(
                 keep_alive.extend([g_curve, t_curve, b_curve])
 
                 # 5. C++構造体へのポインタ転送
-                # 音素情報
-                phoneme_str = getattr(note, 'phonemes', 'a')
-                cpp_notes_array[i].wav_path = phoneme_str.encode('utf-8')
+                # alias を実際の oto.ini エントリへ解決し、WAVパスをC++へ渡す。
+                # alias文字列そのものを wav_path に渡す旧実装では、C++が存在しない
+                # ファイル名を開こうとして無音になっていた。
+                phoneme_str = str(getattr(note, "phonemes", "") or "")
+                lyric = str(getattr(note, "lyric", "") or "")
+                prev_lyric = str(getattr(notes[i - 1], "lyric", "") or "") if i > 0 else None
+                wav_path = ""
+
+                engine = getattr(self, "vo_se_engine", None)
+                resolver = getattr(engine, "vcv_resolver", None)
+                if resolver is not None and lyric:
+                    try:
+                        _alias, entry = resolver.resolve_note(lyric, prev_lyric)
+                        if entry is not None:
+                            wav_path = str(entry.wav_path)
+                    except Exception as exc:
+                        self.log_startup(f"UTAU WAV resolution failed for '{lyric}': {exc}")
+
+                if not wav_path and engine is not None:
+                    oto_map = getattr(engine, "oto_map", {}) or {}
+                    wav_path = str(oto_map.get(phoneme_str) or oto_map.get(lyric) or "")
+
+                cpp_notes_array[i].wav_path = wav_path.encode("utf-8") if wav_path else None
             
                 # ピッチカーブ
                 cpp_notes_array[i].pitch_curve = p_curve.ctypes.data_as(
