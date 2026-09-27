@@ -364,34 +364,105 @@ class ProjectIOMixin:
             QMessageBox.critical(self, "保存エラー", f"保存に失敗しました:\n{exc}")
 
     def load_json_project(self: Any, file_path: str) -> bool:
-        """JSON プロジェクトを読み込む"""
+        """旧単一トラックJSONと新マルチトラックVOSE/JSONの両方を読み込む。"""
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             tempo = float(data.get("tempo", 120.0))
-            notes = [NoteEvent.from_dict(d) for d in data.get("notes", [])]
+            raw_tracks = data.get("tracks")
 
-            if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
-                self.timeline_widget.tempo = tempo
-                if hasattr(self.timeline_widget, "set_notes"):
+            if isinstance(raw_tracks, list) and raw_tracks:
+                existing_tracks = list(getattr(self, "tracks", []) or [])
+                track_cls = type(existing_tracks[0]) if existing_tracks else None
+                loaded_tracks = []
+
+                for index, raw in enumerate(raw_tracks):
+                    if not isinstance(raw, dict) or track_cls is None:
+                        continue
+                    track = track_cls(
+                        str(raw.get("name", f"Track {index + 1}")),
+                        str(raw.get("type", "vocal")),
+                    )
+                    track.notes = [
+                        NoteEvent.from_dict(d)
+                        for d in raw.get("notes", [])
+                        if isinstance(d, dict)
+                    ]
+                    track.audio_path = str(
+                        raw.get("audio_path", raw.get("audio", "")) or ""
+                    )
+                    mixer = raw.get("mixer", {})
+                    track.volume = float(raw.get("volume", mixer.get("vol", 1.0)))
+                    track.pan = float(raw.get("pan", mixer.get("pan", 0.0)))
+                    track.is_muted = bool(raw.get("is_muted", False))
+                    track.is_solo = bool(raw.get("is_solo", False))
+                    if "engine_type" in raw:
+                        track.engine_type = str(raw["engine_type"])
+                    if "color_label" in raw:
+                        track.color_label = str(raw["color_label"])
+                    loaded_tracks.append(track)
+
+                if not loaded_tracks:
+                    raise ValueError("有効なトラックが見つかりません。")
+
+                self.tracks = loaded_tracks
+                requested_idx = int(data.get("current_track_idx", 0))
+                self.current_track_idx = min(
+                    max(requested_idx, 0),
+                    len(self.tracks) - 1,
+                )
+
+                if hasattr(self, "refresh_track_list_ui"):
+                    self.refresh_track_list_ui()
+                if hasattr(self, "switch_track"):
+                    self.switch_track(self.current_track_idx)
+                elif getattr(self, "timeline_widget", None) is not None:
+                    self.timeline_widget.set_notes(
+                        self.tracks[self.current_track_idx].notes
+                    )
+
+            else:
+                # 旧1.3系JSONは現在のトラックへ読み込む。
+                notes = [
+                    NoteEvent.from_dict(d)
+                    for d in data.get("notes", [])
+                    if isinstance(d, dict)
+                ]
+                tracks = list(getattr(self, "tracks", []) or [])
+                current_idx = int(getattr(self, "current_track_idx", 0))
+                if tracks and 0 <= current_idx < len(tracks):
+                    tracks[current_idx].notes = notes
+                if getattr(self, "timeline_widget", None) is not None:
                     self.timeline_widget.set_notes(notes)
-                elif hasattr(self.timeline_widget, "notes_list"):
-                    self.timeline_widget.notes_list = notes
-                    if hasattr(self.timeline_widget, "update"):
-                        self.timeline_widget.update()
 
-            if hasattr(self, "tempo_spinbox") and self.tempo_spinbox is not None:
-                self.tempo_spinbox.setValue(int(tempo))
+            timeline = getattr(self, "timeline_widget", None)
+            if timeline is not None:
+                timeline.tempo = tempo
 
+            tempo_input = getattr(self, "tempo_input", None)
+            if tempo_input is not None:
+                tempo_input.setText(str(int(round(tempo))))
+
+            self.current_playback_time = float(data.get("current_time", 0.0))
+            set_time = getattr(self, "_set_transport_time", None)
+            if callable(set_time):
+                set_time(self.current_playback_time)
+
+            note_count = len(getattr(timeline, "notes_list", []) or []) if timeline is not None else 0
             self.statusBar().showMessage(
-                f"読み込み完了: {len(notes)} ノート ({os.path.basename(file_path)})"
+                f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})",
+                3000,
             )
             return True
 
         except Exception as exc:
-            logger.exception("JSON 読み込みエラー: %s", exc)
-            QMessageBox.critical(self, "読み込みエラー", f"JSON の読み込みに失敗しました:\n{exc}")
+            logger.exception("JSON/VOSE 読み込みエラー: %s", exc)
+            QMessageBox.critical(
+                self,
+                "読み込みエラー",
+                f"プロジェクトの読み込みに失敗しました:\n{exc}",
+            )
             return False
 
     def load_midi_file_from_path(self: Any, file_path: str) -> bool:
