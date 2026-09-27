@@ -340,34 +340,9 @@ class ProjectIOMixin:
     # JSON プロジェクト保存・読み込み (従来通り)
     # ------------------------------------------------------------------
 
-    def save_file_dialog_and_save_midi(self: Any) -> None:
-        """プロジェクトを JSON で保存するダイアログを表示する"""
-        if not hasattr(self, "timeline_widget") or self.timeline_widget is None:
-            return
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "プロジェクトを保存", "project.json", "VO-SE プロジェクト (*.json)"
-        )
-        if not file_path:
-            return
-
-        notes_list = getattr(self.timeline_widget, "notes_list", [])
-        tempo      = float(getattr(self.timeline_widget, "tempo", 120.0))
-
-        project_data: Dict[str, Any] = {
-            "version":      "1.3.0",
-            "project_name": os.path.splitext(os.path.basename(file_path))[0],
-            "tempo":        tempo,
-            "notes":        [n.to_dict() for n in notes_list],
-        }
-
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(project_data, f, ensure_ascii=False, indent=2)
-            self.statusBar().showMessage(f"保存完了: {os.path.basename(file_path)}")
-        except Exception as exc:
-            logger.exception("JSON 保存エラー: %s", exc)
-            QMessageBox.critical(self, "保存エラー", f"保存に失敗しました:\n{exc}")
+    def save_file_dialog_and_save_midi(self: Any) -> bool:
+        """互換用保存エントリポイント。正式なマルチトラック保存へ委譲する。"""
+        return bool(self.on_save_project_clicked())
 
     def load_json_project(self: Any, file_path: str) -> bool:
         """旧単一トラックJSONと新マルチトラックVOSE/JSONの両方を読み込む。"""
