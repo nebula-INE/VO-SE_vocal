@@ -3537,9 +3537,18 @@ class MainWindow(
         if track in self.tracks:
             track.volume = value
             # 再生中のWaveトラックなら即時反映
-            if getattr(track, 'track_type', '') == 'wave' and hasattr(self, 'audio_output') and self.audio_output:
-                if self.tracks.index(track) == self.current_track_idx:
-                    self.audio_output.setVolume(value)
+            if getattr(track, 'track_type', '') == 'wave' and self.tracks.index(track) == self.current_track_idx:
+                # Waveトラックは AudioPlayer ラッパー側の QAudioOutput が実再生経路。
+                # MainWindow.audio_output は別の QMediaPlayer 用なので、こちらを操作しても
+                # 実際の伴奏音量が変わらない。ラッパーAPIを優先して同期する。
+                audio_player = getattr(self, 'audio_player', None)
+                set_volume = getattr(audio_player, 'set_volume', None)
+                if callable(set_volume):
+                    set_volume(value)
+                else:
+                    audio_output = getattr(self, 'audio_output', None)
+                    if audio_output is not None:
+                        audio_output.setVolume(value)
             self.statusBar().showMessage(f"{track.name} Volume: {int(value * 100)}%")
 
     def _on_strip_pan(self, track, value: float):
