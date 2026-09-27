@@ -1578,6 +1578,7 @@ class MainWindow(
     player: Optional[Any]
     audio_player: Any
     audio_output: Any
+    audio_mixer: Any
 
     # === AI / エンジン系（実体保証できないため Any） ===
     vo_se_engine: Any
@@ -1754,6 +1755,7 @@ class MainWindow(
         self.midi_manager = None  
         self.audio_output = None
         self.audio_player = None
+        self.audio_mixer = None
         self.vose_core = None
         self.text_analyzer = None
         self.playback_thread = None
