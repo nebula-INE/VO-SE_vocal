@@ -1745,10 +1745,10 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             // Python export supplies the final per-note values after UST
             // overrides have been resolved against oto.ini.  Use those values
             // first; the oto entry remains the fallback for legacy callers.
-            const double pre_ms = notes[i].preutterance_ms > 0.0
+            const double pre_ms = notes[i].timing_override
                 ? std::max(0.0, notes[i].preutterance_ms)
                 : (has_found_oto ? std::max(0.0, found_oto.preutterance) : 0.0);
-            const double ovl_ms = notes[i].overlap_ms > 0.0
+            const double ovl_ms = notes[i].timing_override
                 ? std::max(0.0, notes[i].overlap_ms)
                 : (has_found_oto ? std::max(0.0, found_oto.overlap) : 0.0);
             prepass[i].preutterance_samples = static_cast<int>(
