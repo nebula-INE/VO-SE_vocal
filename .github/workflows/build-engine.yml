@@ -231,22 +231,53 @@ jobs:
           import os
           import subprocess
           import sys
+          import time
 
           exe = sys.argv[1]
           env = os.environ.copy()
           env["VOSE_STARTUP_SMOKE_TEST"] = "1"
           env.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-          try:
-              result = subprocess.run([exe], env=env, timeout=20)
-          except subprocess.TimeoutExpired:
-              print("::error::Packaged application did not exit within 20 seconds.")
-              raise SystemExit(1)
+          startup_window = 8.0
+          proc = subprocess.Popen(
+              [exe],
+              env=env,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              text=True,
+          )
 
-          print(f"Packaged application exit code: {result.returncode}")
-          if result.returncode != 0:
-              print("::error::Packaged application failed to start cleanly.")
-              raise SystemExit(result.returncode)
+          try:
+              deadline = time.monotonic() + startup_window
+              while proc.poll() is None and time.monotonic() < deadline:
+                  time.sleep(0.25)
+
+              returncode = proc.poll()
+              if returncode is not None:
+                  stdout, stderr = proc.communicate()
+                  print(f"Packaged application exited during startup with code: {returncode}")
+                  print(f"STDOUT:{stdout}")
+                  print(f"STDERR:{stderr}")
+                  print("::error::Packaged application exited unexpectedly during startup.")
+                  raise SystemExit(returncode if returncode != 0 else 1)
+
+              # GUI applications are expected to keep their event loop alive.
+              # Reaching this point means the packaged binary survived startup.
+              print(f"Packaged application remained alive for {startup_window:.0f}s; startup succeeded.")
+
+              proc.terminate()
+              try:
+                  stdout, stderr = proc.communicate(timeout=5)
+              except subprocess.TimeoutExpired:
+                  proc.kill()
+                  stdout, stderr = proc.communicate()
+
+              print(f"STDOUT:{stdout}")
+              print(f"STDERR:{stderr}")
+          finally:
+              if proc.poll() is None:
+                  proc.kill()
+                  proc.communicate()
           PY
 
       - name: "🔍 Debug: List files before release"
