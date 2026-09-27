@@ -106,6 +106,31 @@ class AudioMixer:
         )
         self._stream.start()
 
+    def play_buffer(self, audio: np.ndarray, sample_rate: int | None = None, start_sec: float = 0.0) -> None:
+        """メモリ上のレンダー済み音声を同じMixer経路で再生する。"""
+        data = np.asarray(audio, dtype=np.float32)
+        if data.ndim == 1:
+            data = data[:, None]
+        if data.ndim != 2 or data.shape[0] == 0:
+            raise ValueError("audio buffer is empty or has an invalid shape")
+
+        source_rate = int(sample_rate or self.sample_rate)
+        data = self._resample(data, source_rate)
+        stereo = self._to_stereo(data)
+
+        with self._lock:
+            self._tracks = []
+            self._buffers = {-1: stereo}
+            self._position = max(0, min(int(start_sec * self.sample_rate), len(stereo) - 1))
+
+        self._stream = sd.OutputStream(
+            samplerate=self.sample_rate,
+            channels=2,
+            dtype="float32",
+            callback=self._callback,
+        )
+        self._stream.start()
+
     def play_file(self, file_path: str, start_sec: float = 0.0) -> None:
         """Play one rendered file through the same mixer path used by tracks."""
         class _PlaybackTrack:
