@@ -4602,7 +4602,6 @@ class MainWindow(
                 self.is_playing = False
 
     @Slot()
-    @Slot()
     def on_play_pause_toggled(self):
         """Start/stop the unified desktop playback path, including all Vocal tracks."""
         mixer = getattr(self, "audio_mixer", None)
