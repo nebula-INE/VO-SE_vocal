@@ -943,6 +943,18 @@ inline double resample_curve(const double* curve, int src_len,
     const int    j1    = std::min(j0+1, src_len-1);
     return (1.0-(src_f-j0))*curve[j0] + (src_f-j0)*curve[j1];
 }
+inline double resample_curve_at_time(const double* curve, int src_len,
+                                            double time_ms, double duration_ms)
+{
+    if (!curve || src_len <= 0) return 0.0;
+    if (src_len == 1 || duration_ms <= 0.0) return curve[0];
+    const double t = clamp(time_ms / duration_ms, 0.0, 1.0);
+    const double src_f = t * (src_len - 1);
+    const int j0 = static_cast<int>(src_f);
+    const int j1 = std::min(j0 + 1, src_len - 1);
+    return (1.0 - (src_f - j0)) * curve[j0] + (src_f - j0) * curve[j1];
+}
+
 
 // ============================================================
 // apply_crossfade
@@ -1335,8 +1347,10 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     }
 
     const int64_t note_samples  = pp.note_samples;
-    const int     output_frames = std::max(1, p.n.pitch_length);
-    const double  note_ms       = static_cast<double>(output_frames) * kFramePeriod;
+    const double  pre_ms         = static_cast<double>(pp.preutterance_samples) * 1000.0 / kFs;
+    const double  note_ms        = static_cast<double>(std::max(1, p.n.pitch_length) - 1) * kFramePeriod;
+    const int     pre_frames     = static_cast<int>(std::ceil(pre_ms / kFramePeriod));
+    const int     output_frames  = std::max(1, p.n.pitch_length + pre_frames);
     const double  src_ms        = get_source_ms(*pp.ev);
     const OtoEntry& current_oto = pp.has_oto ? pp.oto : kDefaultOto;
 
@@ -1433,13 +1447,13 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
         // ---- 3. その他のパラメータ ----
         const double gender  = n.gender_curve
-            ? resample_curve(n.gender_curve,  n.pitch_length, j, output_frames) : 0.5;
+            ? resample_curve_at_time(n.gender_curve, n.pitch_length, musical_t_ms, note_ms) : 0.5;
         const double tension = n.tension_curve
-            ? resample_curve(n.tension_curve, n.pitch_length, j, output_frames) : 0.5;
+            ? resample_curve_at_time(n.tension_curve, n.pitch_length, musical_t_ms, note_ms) : 0.5;
         // デフォルト息パラメータは 0.0 (純粋な有声調波・息ノイズなし)
         // 0.5 だと意図しないヒスノイズが乗るため、明示的な指定がない限り息漏れは0とする
         double breath  = n.breath_curve
-            ? resample_curve(n.breath_curve,  n.pitch_length, j, output_frames) : 0.0;
+            ? resample_curve_at_time(n.breath_curve, n.pitch_length, musical_t_ms, note_ms) : 0.0;
         // ★修正: breath は本来 0.0〜1.0 (0.5=無変化) の規約だが、上流 (UI/UST/レガシー
         // パス) が 0〜100 スケールのままのカーブを渡してくるケースがあり、その場合
         // breath_allowance が桁違いに膨張して下の max_ap クランプが事実上無効化され、
@@ -1972,58 +1986,50 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             continue;
         }
 
-        // ノート境界での滑らかな接続
-        if (last_note_rendered) {
-            // 直前ノートと連続している場合:
-            // 直前ノートの末尾と現在ノートの先頭を 2ms (88サンプル) でオーバーラップ・クロスフェード接続する。
-            // 以前のような「直前ノートを0にフェードアウトしてから次ノートを0からフェードインする」処理だと
-            // 境界で4msの完全な無音の谷間（振幅ディップ）が生じ、プチプチ・ガタガタというノイズの原因になっていた。
-            // fade_out + fade_in = 1.0 の定ゲイン・クロスフェードにより、音圧の落ち込みやクリックのない
-            // シームレスで滑らかなレガート接続を実現する。
-            const int64_t write_start = timeline_offset - pp.preutterance_samples;
-            const int declick = static_cast<int>(std::min<int64_t>(
-                pp.overlap_samples > 0 ? pp.overlap_samples : 88, note_samples / 8));
-            const int64_t overlap_start = timeline_offset - pp.overlap_samples;
-            const int overlap = static_cast<int>(std::min<int64_t>(
-                pp.overlap_samples, std::min<int64_t>(note_samples, timeline_offset)));
-            for (int s = 0; s < declick; ++s) {
-                const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 0.5;
-                const double fade_in  = 0.5 * (1.0 - std::cos(M_PI * t));
-                const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
-                const int64_t di = timeline_offset - declick + s;
-                const int64_t src = pp.preutterance_samples + s - declick;
-                if (di >= 0 && di < total_samples && src >= 0 && src < note_samples) {
-                    full_song_buffer[di] = full_song_buffer[di] * fade_out + note_bufs[idx][src] * fade_in;
-                }
-            }
-            const int64_t write_start = timeline_offset - pp.preutterance_samples;
-            for (int64_t s = declick; s < note_samples; ++s) {
+        // oto.ini の preutterance でノートを前倒しし、overlap は
+        // 「offset -> overlap marker」区間だけを前ノートとクロスフェードする。
+        // これは UTAU のタイミング定義に合わせた配置で、単純な固定2ms
+        // クロスフェードよりも VCV/CV の原音設定を尊重する。
+        const int64_t write_start = timeline_offset - pp.preutterance_samples;
+        const int overlap_samples = static_cast<int>(std::min<int64_t>(
+            std::max(0, pp.overlap_samples),
+            std::min<int64_t>(pp.preutterance_samples, note_samples)));
+
+        if (last_note_rendered && overlap_samples > 0) {
+            for (int s = 0; s < overlap_samples; ++s) {
+                const double t = (overlap_samples > 1)
+                    ? static_cast<double>(s) / overlap_samples : 0.5;
+                const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
                 const int64_t di = write_start + s;
                 if (di >= 0 && di < total_samples) {
-                    full_song_buffer[di] = note_bufs[idx][s];
+                    full_song_buffer[di] =
+                        full_song_buffer[di] * (1.0 - fade_in)
+                        + note_bufs[idx][s] * fade_in;
                 }
             }
-            timeline_offset += pp.timeline_samples;
+            for (int64_t s = overlap_samples; s < note_samples; ++s) {
+                const int64_t di = write_start + s;
+                if (di >= 0 && di < total_samples)
+                    full_song_buffer[di] = note_bufs[idx][s];
+            }
         } else {
-            // 休符明けの立ち上がり: 3msのデクリック・フェードイン
-            const int fade_in_samples = static_cast<int>(std::min<int64_t>(132, note_samples / 4));
-            for (int s = 0; s < fade_in_samples; ++s) {
-                const double t = (fade_in_samples > 1) ? (static_cast<double>(s) / fade_in_samples) : 1.0;
-                const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
-                const int64_t di = timeline_offset + s - pp.preutterance_samples;
-                if (di < total_samples && s < note_samples) {
-                    full_song_buffer[di] = note_bufs[idx][s] * fade_in;
+            const int fade_in_samples = static_cast<int>(
+                std::min<int64_t>(132, note_samples / 4));
+            for (int64_t s = 0; s < note_samples; ++s) {
+                const int64_t di = write_start + s;
+                if (di < 0 || di >= total_samples) continue;
+
+                double gain = 1.0;
+                if (!last_note_rendered && s < fade_in_samples) {
+                    const double t = (fade_in_samples > 1)
+                        ? static_cast<double>(s) / fade_in_samples : 1.0;
+                    gain = 0.5 * (1.0 - std::cos(M_PI * t));
                 }
+                full_song_buffer[di] = note_bufs[idx][s] * gain;
             }
-            for (int64_t s = fade_in_samples; s < note_samples; ++s) {
-                const int64_t di = timeline_offset + s;
-                if (di < total_samples) {
-                    full_song_buffer[di] = note_bufs[idx][s];
-                }
-            }
-            timeline_offset += pp.timeline_samples;
         }
 
+        timeline_offset += pp.timeline_samples;
         // 次のノートがRENDERABLEでない、または曲末尾の場合: 5msのデクリック・フェードアウト
         const bool next_rendered = (idx + 1 < note_count && prepass[idx + 1].state == NoteState::RENDERABLE);
         if (!next_rendered) {
