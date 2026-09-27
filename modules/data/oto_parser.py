@@ -72,20 +72,27 @@ class OtoEntry:
     @property
     def wav_path(self) -> str:
         """フルパスで WAV へのパスを返す (大文字小文字表記ブレ・拡張子自動解決、高速化)"""
-        exact_path = os.path.join(self.voice_dir, self.filename)
+        # UTAU oto.ini may contain Windows separators even on another OS.
+        relative_name = self.filename.replace("\\", os.sep).replace("/", os.sep)
+        exact_path = os.path.join(self.voice_dir, relative_name)
         if os.path.exists(exact_path):
             return exact_path
 
-        # Case-insensitive & relative path resolution using cached file map
-        target_lower = os.path.basename(self.filename).lower()
+        # Preserve the relative directory during case-insensitive lookup.
+        # Basename-only lookup can select a wrong sample from another subfolder.
         file_map = get_voice_dir_file_map(self.voice_dir)
+        normalized = os.path.normcase(os.path.normpath(relative_name))
+        for candidate, candidate_path in file_map.items():
+            if os.path.normcase(os.path.normpath(candidate)) == normalized:
+                return candidate_path
 
-        if target_lower in file_map:
-            return file_map[target_lower]
-        if (target_lower + ".wav") in file_map:
-            return file_map[target_lower + ".wav"]
+        if os.path.dirname(relative_name) in ("", "."):
+            target_lower = os.path.basename(relative_name).lower()
+            if target_lower in file_map:
+                return file_map[target_lower]
+            if (target_lower + ".wav") in file_map:
+                return file_map[target_lower + ".wav"]
 
-        # Fallback to exact path
         return exact_path
 
     @property
@@ -178,29 +185,34 @@ class OtoParser:
 
         cache_path = os.path.join(voice_dir, ".oto_cache.json")
 
-        # 1. Check latest mtime of all oto.ini files in directory
-        latest_mtime = 0.0
+        # 1. Build a complete fingerprint of every oto.ini file.
+        # A newest-mtime-only check misses deleted/replaced secondary oto.ini files.
         ini_files = []
+        ini_fingerprints = []
         for root, _dirs, files in os.walk(voice_dir):
             for fname in files:
                 if fname.lower() == "oto.ini":
-                    full_p = os.path.join(root, fname)
+                    full_p = os.path.abspath(os.path.join(root, fname))
                     ini_files.append(full_p)
                     try:
-                        mtime = os.path.getmtime(full_p)
-                        if mtime > latest_mtime:
-                            latest_mtime = mtime
-                    except Exception:
-                        pass
+                        stat = os.stat(full_p)
+                        ini_fingerprints.append([
+                            os.path.relpath(full_p, voice_dir),
+                            stat.st_mtime_ns,
+                            stat.st_size,
+                        ])
+                    except OSError:
+                        continue
+        ini_files.sort()
+        ini_fingerprints.sort(key=lambda item: item[0])
 
-        # 2. Try loading from .oto_cache.json if valid
+        # 2. Load cache only when every source oto.ini still matches.
         if use_cache and os.path.exists(cache_path):
             try:
-                cache_mtime = os.path.getmtime(cache_path)
-                if cache_mtime >= latest_mtime:
-                    import json
-                    with open(cache_path, "r", encoding="utf-8") as f:
-                        cached_data = json.load(f)
+                import json
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                if cached_data.get("source_fingerprint") == ini_fingerprints:
                     for item in cached_data.get("entries", []):
                         entry = OtoEntry(
                             alias=item["alias"],
@@ -242,7 +254,11 @@ class OtoParser:
                     "overlap": entry.overlap
                 })
             with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump({"entries": cache_entries, "mtime": latest_mtime}, f, ensure_ascii=False)
+                json.dump(
+                    {"entries": cache_entries, "source_fingerprint": ini_fingerprints},
+                    f,
+                    ensure_ascii=False,
+                )
             logger.info("oto.ini 高速キャッシュ保存完了: %s", cache_path)
         except Exception as ex_save:
             logger.warning("oto.ini キャッシュ保存エラー (%s)", ex_save)
