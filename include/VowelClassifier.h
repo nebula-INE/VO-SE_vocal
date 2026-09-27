@@ -36,10 +36,11 @@ public:
         std::string clean (lyric.toRawUTF8());
         static const std::regex prefix (R"(^[-aieuon_]\s*)", std::regex_constants::icase);
         static const std::regex pitch (R"(_?[A-Ga-g][#b]?[0-9]$)");
+        const std::string original = clean;
         clean = std::regex_replace (clean, prefix, "");
         clean = std::regex_replace (clean, pitch, "");
         if (clean.empty())
-            return {};
+            clean = original;
 
         const auto normalized = juce::String::fromUTF8 (clean.c_str());
         for (int i = normalized.length() - 1; i >= 0; --i)
