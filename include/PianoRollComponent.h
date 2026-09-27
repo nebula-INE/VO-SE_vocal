@@ -116,7 +116,7 @@ private:
     std::unique_ptr<juce::TextEditor> lyricEditor;
 
     std::function<double()> playheadProvider;
-    int nextNoteId = 1;
+    int64_t nextNoteId = 1;
 
     static constexpr int    kLowestNote  = 36;
     static constexpr int    kHighestNote = 84;
