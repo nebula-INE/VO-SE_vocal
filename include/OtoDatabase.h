@@ -91,25 +91,26 @@ public:
         return it != db.end() ? &it->second : nullptr;
     }
 
-    // VCV ("a い") → CV+無音 ("- い") → 単独音 ("い") → 部分一致 の順で解決。
-    // prevVowel が空文字/nullなら VCV 候補はスキップ（Python版と同じ挙動）。
+    // Python版 OtoParser.resolve_alias() と同じく、推測的な部分一致は行わない。
     const OtoEntryCpp* resolveAlias (const juce::String& lyric, const juce::String& prevVowel) const
     {
+        if (lyric.isEmpty())
+            return nullptr;
+
+        if (lyric.containsAnyOf (" _-") && get (lyric) != nullptr)
+            return get (lyric);
+
         if (prevVowel.isNotEmpty())
-            if (auto* e = get (prevVowel + " " + lyric))
-                return e;
+        {
+            if (auto* e = get (prevVowel + " " + lyric)) return e;
+            if (auto* e = get (prevVowel + "_" + lyric)) return e;
+            if (auto* e = get (prevVowel + lyric)) return e;
+        }
 
-        if (auto* e = get ("- " + lyric))
-            return e;
-
-        if (auto* e = get (lyric))
-            return e;
-
-        // 末尾一致の部分一致フォールバック（Python版の endswith(" "+lyric) 相当）
-        const auto suffix = " " + lyric;
-        for (const auto& [alias, entry] : db)
-            if (alias == lyric || alias.endsWith (suffix))
-                return &entry;
+        if (auto* e = get ("- " + lyric)) return e;
+        if (auto* e = get ("_" + lyric)) return e;
+        if (auto* e = get ("-" + lyric)) return e;
+        if (auto* e = get (lyric)) return e;
 
         return nullptr;
     }
