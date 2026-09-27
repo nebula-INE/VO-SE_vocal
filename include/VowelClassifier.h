@@ -17,6 +17,8 @@
 
 #include <juce_core/juce_core.h>
 #include <map>
+#include <regex>
+#include <string>
 
 class VowelClassifier
 {
@@ -31,19 +33,27 @@ public:
         if (lyric.isEmpty())
             return {};
 
-        for (int i = lyric.length() - 1; i >= 0; --i)
-        {
-            // 名前空間を明示
-            const juce::juce_wchar ch = lyric[i];
+        std::string clean (lyric.toRawUTF8());
+        static const std::regex prefix (R"(^[-aieuon_]\s*)", std::regex::icase);
+        static const std::regex pitch (R"(_?[A-Ga-g][#b]?[0-9]$)");
+        clean = std::regex_replace (clean, prefix, "");
+        clean = std::regex_replace (clean, pitch, "");
+        if (clean.empty())
+            return {};
 
-            if (ch == (juce::juce_wchar) 0x3063 || ch == (juce::juce_wchar) 0x30C3) // っ / ッ
+        const auto normalized = juce::String::fromUTF8 (clean.c_str());
+        for (int i = normalized.length() - 1; i >= 0; --i)
+        {
+            const juce::juce_wchar ch = normalized[i];
+            if (ch == (juce::juce_wchar) 0x3063 || ch == (juce::juce_wchar) 0x30C3
+                || ch == (juce::juce_wchar) 0x30FC)
                 continue;
 
             const auto it = vowelMap.find (ch);
             if (it != vowelMap.end())
                 return it->second;
 
-            break; // 辞書に無い文字＝判定不能（Python版と同じくここで諦める）
+            break;
         }
         return {};
     }
