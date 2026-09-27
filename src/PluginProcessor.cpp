@@ -331,7 +331,7 @@ void VoseAudioProcessor::startSongPlayback()
         songNoteCursor = 0;
     }
     songPositionSec = 0.0;
-    prevLyric.clear();
+    prevLyrics.fill (juce::String());
     songPlaying = (getLoadedSongNoteCount() > 0);
 }
 
