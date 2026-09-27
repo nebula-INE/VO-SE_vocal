@@ -1742,8 +1742,15 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             prepass[i] = NotePrepass(NoteState::RENDERABLE, ns, ev,
                                      prev_renderable ? last_ev : nullptr,
                                      has_found_oto ? &found_oto : nullptr);
-            const double pre_ms = has_found_oto ? std::max(0.0, found_oto.preutterance) : 0.0;
-            const double ovl_ms = has_found_oto ? std::max(0.0, found_oto.overlap) : 0.0;
+            // Python export supplies the final per-note values after UST
+            // overrides have been resolved against oto.ini.  Use those values
+            // first; the oto entry remains the fallback for legacy callers.
+            const double pre_ms = notes[i].preutterance_ms > 0.0
+                ? std::max(0.0, notes[i].preutterance_ms)
+                : (has_found_oto ? std::max(0.0, found_oto.preutterance) : 0.0);
+            const double ovl_ms = notes[i].overlap_ms > 0.0
+                ? std::max(0.0, notes[i].overlap_ms)
+                : (has_found_oto ? std::max(0.0, found_oto.overlap) : 0.0);
             prepass[i].preutterance_samples = static_cast<int>(
                 std::llround(pre_ms * kFs / 1000.0));
             prepass[i].overlap_samples = static_cast<int>(
