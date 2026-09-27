@@ -62,12 +62,11 @@ def _patch_engine(window) -> None:
     # 音源ライブラリを VCV 対応版で再スキャン
     engine.refresh_voice_library_v2()
 
-    # export_to_wav を v2 に差し替え
-    import types
-    engine.export_to_wav = types.MethodType(
-        lambda self, notes, params, path: self.export_to_wav_v2(notes, params, path),
-        engine,
-    )
+    # export_to_wav_v2 は ProjectIOMixin が直接優先利用する。
+    # export_to_wav 自体を monkey-patch すると mode_flag / progress / cancel の
+    # シグネチャを壊してしまうため、既存APIは上書きしない。
+    if not callable(getattr(engine, "export_to_wav_v2", None)):
+        logger.warning("export_to_wav_v2 が利用できません。v1 export を維持します。")
 
     logger.info("エンジンパッチ: VCV + 先行発声 + ビブラートカーブ 適用")
 
