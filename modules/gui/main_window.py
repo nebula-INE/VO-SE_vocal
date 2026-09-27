@@ -4302,7 +4302,13 @@ class MainWindow(
         audio_data = self.vo_se_engine.synthesize(notes_data)
 
         if audio_data is not None and len(audio_data) > 0:
-            self.vo_se_engine.play(audio_data)
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is None:
+                raise RuntimeError("AudioMixer is not initialized")
+            mixer.play_buffer(audio_data, sample_rate=getattr(self.vo_se_engine, "sample_rate", 44100))
+            self.is_playing = True
+            self.current_playback_time = 0.0
+            self.playback_timer.start()
             self.statusBar().showMessage("再生中 (v1.3.0 VCV Engine)")
         else:
             self.statusBar().showMessage("合成エラー。ログを確認してください。")
@@ -4432,9 +4438,26 @@ class MainWindow(
 
 
     def on_click_play(self):
-        # タイムラインのデータを渡して合成・再生
+        """互換用の再生入口も AudioMixer に統一する。"""
+        if self.timeline_widget is None or not self.timeline_widget.notes_list:
+            self.statusBar().showMessage("再生するノートがありません。")
+            return
+
         audio = self.vo_se_engine.synthesize(self.timeline_widget.notes_list)
-        self.vo_se_engine.play(audio)
+        if audio is None or len(audio) == 0:
+            self.statusBar().showMessage("合成エラー。ログを確認してください。")
+            return
+
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            raise RuntimeError("AudioMixer is not initialized")
+        mixer.play_buffer(
+            audio,
+            sample_rate=getattr(self.vo_se_engine, "sample_rate", 44100),
+        )
+        self.is_playing = True
+        self.current_playback_time = 0.0
+        self.playback_timer.start()
 
     def tart_playback_locked_s(self):
         """
