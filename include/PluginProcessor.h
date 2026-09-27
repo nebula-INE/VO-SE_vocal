@@ -155,7 +155,7 @@ private:
     juce::StringArray lyricSequence { "a" };
     int               lyricSequenceIndex = 0;
 
-    juce::String prevLyric;
+    std::array<juce::String, kMaxTracks> prevLyrics;
     juce::String projectName { "Untitled" };
 
     mutable juce::SpinLock automationCurvesLock;
