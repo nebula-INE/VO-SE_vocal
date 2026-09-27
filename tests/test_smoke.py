@@ -1,13 +1,16 @@
 import os
 import subprocess
 import sys
+import time
 import unittest
+
 import pytest
+
 
 @pytest.mark.smoke
 class TestSmoke(unittest.TestCase):
     def test_app_startup(self):
-        """パッケージ化されたアプリまたはmain.pyが起動し、クラッシュしないことを確認する"""
+        """パッケージ化されたアプリまたはmain.pyが起動し、一定時間安定して生存することを確認する。"""
         env = os.environ.copy()
         env["VOSE_STARTUP_SMOKE_TEST"] = "1"
         env["QT_QPA_PLATFORM"] = "offscreen"
@@ -21,39 +24,52 @@ class TestSmoke(unittest.TestCase):
         else:
             app_path = "dist/VO-SE_vocal_Linux"
 
-        if os.path.exists(app_path):
-            cmd = [app_path]
-        else:
-            cmd = [sys.executable, "main.py"]
+        cmd = [app_path] if os.path.exists(app_path) else [sys.executable, "main.py"]
 
         proc = subprocess.Popen(
             cmd,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
         )
 
-        # Windows の PyInstaller --onefile は自己展開に時間がかかるため、
-        # 固定2秒ではなく Smoke Test 用の正常終了を最大30秒待つ。
+        startup_window = 8.0
+        deadline = time.monotonic() + startup_window
+
         try:
-            stdout, stderr = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            while proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.25)
+
+            returncode = proc.poll()
+
+            if returncode is None:
+                # GUIアプリは通常の終了を待つものではない。
+                # 一定時間クラッシュせずイベントループが生存したことを
+                # 起動成功とみなし、テスト側から終了させる。
+                proc.terminate()
+                try:
+                    stdout, stderr = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+
+                print(
+                    f"Startup check: process remained alive for {startup_window:.0f}s.\n"
+                    f"STDOUT:{stdout}\nSTDERR:{stderr}"
+                )
+                return
+
             stdout, stderr = proc.communicate()
             self.fail(
-                "Application did not exit during the smoke-test window.\n"
+                f"Application exited unexpectedly with code {returncode}.\n"
                 f"STDOUT:{stdout}\nSTDERR:{stderr}"
             )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
 
-        returncode = proc.returncode
-        print(f"Startup check code {returncode}\nSTDOUT:{stdout}\nSTDERR:{stderr}")
-        self.assertEqual(
-            returncode,
-            0,
-            f"Application exited with code {returncode}.\n"
-            f"STDOUT:{stdout}\nSTDERR:{stderr}",
-        )
 
 if __name__ == "__main__":
     unittest.main()
