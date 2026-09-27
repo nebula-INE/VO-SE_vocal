@@ -2850,6 +2850,125 @@ class MainWindow(
         if self.timeline_widget is not None:
             self.timeline_widget.update()
 
+    def _build_render_parameters(self) -> dict:
+        """現在のグラフパラメータをレンダリング用に正規化する。"""
+        graph = getattr(self, "graph_editor_widget", None)
+        all_params = getattr(graph, "all_parameters", {}) if graph is not None else {}
+        return {
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath": list(all_params.get("Breath", [])),
+        }
+
+    def _render_vocal_track_for_playback(self, track: Any, track_index: int) -> str:
+        """Vocalトラックを個別WAVへレンダーし、Mixer用パスを返す。"""
+        notes = list(getattr(track, "notes", []) or [])
+        if not notes:
+            return ""
+
+        export_v2 = getattr(self.vo_se_engine, "export_to_wav_v2", None)
+        if not callable(export_v2):
+            raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
+
+        signature_items = []
+        for note in notes:
+            if hasattr(note, "to_dict"):
+                signature_items.append(note.to_dict())
+            else:
+                signature_items.append(getattr(note, "__dict__", repr(note)))
+        signature = repr((signature_items, self.current_voice_id, self.timeline_widget.tempo))
+
+        cache_dir = os.path.join(tempfile.gettempdir(), "vose_playback_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f"track_{track_index}.wav")
+
+        if (
+            getattr(track, "_playback_signature", None) == signature
+            and os.path.exists(cache_path)
+        ):
+            track.playback_path = cache_path
+            return cache_path
+
+        self.statusBar().showMessage(f"Vocal {track_index + 1} を再生用にレンダリング中...")
+        result = export_v2(
+            notes,
+            self._build_render_parameters(),
+            cache_path,
+            mode_flag=0,
+        )
+        if not result or not os.path.exists(result):
+            raise RuntimeError(f"Vocal {track_index + 1} のWAV生成に失敗しました。")
+
+        track.playback_path = os.path.abspath(result)
+        track._playback_signature = signature
+        return track.playback_path
+
+    def _prepare_all_vocal_playback(self) -> list[Any]:
+        """全Vocalトラックを個別レンダーして、同時ミックス可能な状態にする。"""
+        paths = []
+        for index, track in enumerate(getattr(self, "tracks", []) or []):
+            if getattr(track, "track_type", "") != "vocal":
+                continue
+            path = self._render_vocal_track_for_playback(track, index)
+            if path:
+                paths.append(path)
+        return paths
+
+    def on_play_pause_toggled(self) -> None:
+        """ツールバーの再生/一時停止をAudioMixerへ統一する。"""
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+            return
+
+        with self._playback_lock:
+            if mixer.is_playing:
+                mixer.pause()
+                self.is_playing = False
+                self.playback_timer.stop()
+                self._refresh_transport_button_states()
+                self.statusBar().showMessage("一時停止", 2000)
+                return
+
+            tracks = list(getattr(self, "tracks", []) or [])
+            try:
+                # 現在の編集内容を必ず選択中トラックへ退避してから、
+                # 全Vocalトラックを個別レンダーする。
+                current_idx = int(getattr(self, "current_track_idx", 0))
+                if 0 <= current_idx < len(tracks):
+                    current_track = tracks[current_idx]
+                    current_track.notes = deepcopy(
+                        getattr(getattr(self, "timeline_widget", None), "notes_list", [])
+                    )
+
+                self._prepare_all_vocal_playback()
+
+                start_time = float(
+                    getattr(getattr(self, "timeline_widget", None), "_current_playback_time", 0.0)
+                )
+                playable = [
+                    track for track in tracks
+                    if str(getattr(track, "playback_path", "") or "")
+                    or str(getattr(track, "audio_path", "") or "")
+                ]
+                if not playable:
+                    self.statusBar().showMessage("再生可能な音声トラックがありません。", 3000)
+                    return
+
+                mixer.set_tracks(tracks)
+                mixer.play(start_time)
+                self.is_playing = True
+                self.current_playback_time = start_time
+                self.playback_timer.start()
+                self._refresh_transport_button_states()
+                self.statusBar().showMessage("再生中")
+            except Exception as exc:
+                self.is_playing = False
+                self.playback_timer.stop()
+                self._refresh_transport_button_states()
+                self.statusBar().showMessage(f"再生準備エラー: {exc}", 5000)
+
     def toggle_playback(self, event=None):
         """互換再生入口。すべてのデスクトップ音声をAudioMixerへ送る。"""
         _ = event
