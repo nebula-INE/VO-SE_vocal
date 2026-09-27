@@ -370,7 +370,10 @@ enum class NoteState : uint8_t { INVALID, NO_VOICE, RENDERABLE };
 
 struct NotePrepass {
     NoteState                            state        = NoteState::INVALID;
-    int64_t                              note_samples = 0;
+    int64_t                              note_samples = 0;       // rendered length incl. preutterance
+    int64_t                              timeline_samples = 0;   // musical note duration
+    int                                preutterance_samples = 0;
+    int                                overlap_samples = 0;
     std::shared_ptr<const EmbeddedVoice> ev;
     std::shared_ptr<const EmbeddedVoice> prev_ev;
     // raw pointer ではなく値コピー。
@@ -852,17 +855,18 @@ double get_source_ms(const EmbeddedVoice& ev) {
 }
 
 double map_time(double t_out_ms, const OtoEntry& oto,
-                double source_wav_len_ms, double note_duration_ms)
+                double source_wav_len_ms, double note_duration_ms,
+                double preutterance_ms)
 {
     const double offset = std::max(0.0, oto.offset);
     double fixed        = std::max(0.0, oto.consonant);
+    const double pre    = std::max(0.0, preutterance_ms);
 
-    // 短いノート(例: 16分音符や速いテンポ)で fixed >= note_duration_ms になると
-    // 母音まで到達できず子音だけで終わってしまう。
-    // その場合は固定子音区間を短縮し、ノート後半の少なくとも50%は母音が鳴るようにする。
-    if (note_duration_ms > 0.0 && fixed >= note_duration_ms) {
-        fixed = std::max(5.0, note_duration_ms * 0.45);
-    }
+    // UTAU の preutterance は「音符の開始位置がWAV上のどこか」を示す。
+    // したがってレンダー開始時刻は note start より pre ms 前にあり、
+    // その位置は offset から始まる。
+    // source: offset --[pre]--> musical note start --> fixed --> stretched vowel.
+    fixed = std::max(fixed, pre);
 
     double cutoff_pos;
     if (oto.cutoff < 0) {
@@ -877,16 +881,21 @@ double map_time(double t_out_ms, const OtoEntry& oto,
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
 
+    const double fixed_musical_ms = std::max(0.0, fixed - pre);
     const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
-    const double output_stretch = std::max(1.0, note_duration_ms - fixed);
+    const double output_stretch = std::max(1.0, note_duration_ms - fixed_musical_ms);
 
+    const double musical_t_ms = t_out_ms - pre;
     double mapped_ms;
-    if (t_out_ms < fixed) {
-        mapped_ms = offset + t_out_ms;
+    if (musical_t_ms < fixed_musical_ms) {
+        // Prefix + consonant: no stretching.
+        mapped_ms = offset + pre + musical_t_ms;
     } else {
-        const double ratio = (source_stretch > 0.0) ? (source_stretch / output_stretch) : 1.0;
-        mapped_ms = (offset + fixed) + (t_out_ms - fixed) * ratio;
+        const double ratio = (source_stretch > 0.0)
+            ? (source_stretch / output_stretch) : 1.0;
+        mapped_ms = (offset + fixed)
+                  + (musical_t_ms - fixed_musical_ms) * ratio;
     }
 
     return clamp(mapped_ms, 0.0, std::max(0.0, safe_cutoff_pos));
@@ -1384,7 +1393,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     try {
     for (int j = 0; j < output_frames; ++j) {
         const double t_out_ms = j * kFramePeriod;
-        const double t_src_ms = map_time(t_out_ms, current_oto, src_ms, note_ms);
+        const double t_src_ms = map_time(t_out_ms, current_oto, src_ms, note_ms, pre_ms);
+        const double musical_t_ms = t_out_ms - pre_ms;
         const int src_frame   = clamp(
             static_cast<int>(t_src_ms / kFramePeriod), 0, cache_cur->length - 1);
 
@@ -1397,7 +1407,7 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
         // ---- 1. ベースF0を計算 ----
         double base_f0_val = n.pitch_curve
-            ? resample_curve(n.pitch_curve, n.pitch_length, j, output_frames)
+            ? resample_curve_at_time(n.pitch_curve, n.pitch_length, musical_t_ms, note_ms)
             : 440.0;
 
         // ---- 2. UST Modulation: 原音解析F0の揺れを指定割合だけ残す ----
@@ -1412,7 +1422,7 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
         // ---- 3. ★★★ ポルタメントオフセットを適用（セント → Hz） ★★★ ----
         if (n.portamento_offsets && n.portamento_length > 0 && j < n.portamento_length) {
-            double cents = resample_curve(n.portamento_offsets, n.portamento_length, j, output_frames);
+            double cents = resample_curve_at_time(n.portamento_offsets, n.portamento_length, musical_t_ms, note_ms);
             base_f0_val *= std::pow(2.0, cents / 1200.0);
         }
 
@@ -1718,6 +1728,14 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             prepass[i] = NotePrepass(NoteState::RENDERABLE, ns, ev,
                                      prev_renderable ? last_ev : nullptr,
                                      has_found_oto ? &found_oto : nullptr);
+            const double pre_ms = has_found_oto ? std::max(0.0, found_oto.preutterance) : 0.0;
+            const double ovl_ms = has_found_oto ? std::max(0.0, found_oto.overlap) : 0.0;
+            prepass[i].preutterance_samples = static_cast<int>(
+                std::llround(pre_ms * kFs / 1000.0));
+            prepass[i].overlap_samples = static_cast<int>(
+                std::llround(ovl_ms * kFs / 1000.0));
+            prepass[i].note_samples = ns + prepass[i].preutterance_samples;
+            prepass[i].timeline_samples = ns;
             if (prev_renderable) ++xfade_count;
             prev_renderable = true;
             last_ev         = ev;
@@ -1726,9 +1744,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             if (harvest_len > max_harvest_len) max_harvest_len = harvest_len;
         } else {
             prepass[i]      = NotePrepass(NoteState::NO_VOICE, ns, nullptr);
+            prepass[i].timeline_samples = ns;
             prev_renderable = false;
             last_ev         = nullptr;
         }
+        prepass[i].timeline_samples = ns;
         total_samples += ns;
     }
 
@@ -1772,14 +1792,16 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         if (prepass[i].state == NoteState::RENDERABLE)
             renderable_indices.push_back(i);
 
-    // ノートごとのグローバル時間オフセット（ビブラート位相連続化用）
+    // ノートごとのグローバル時間オフセット（ビブラート位相連続化用）。
+    // preutterance は曲上のノート位置を前倒しするだけで、次ノートの
+    // 音楽的な開始時刻そのものは変えない。
     std::vector<double> note_global_time(note_count, 0.0);
     {
         double acc_sec = 0.0;
         for (int i = 0; i < note_count; ++i) {
             note_global_time[i] = acc_sec;
-            if (prepass[i].note_samples > 0)
-                acc_sec += static_cast<double>(prepass[i].note_samples) / kFs;
+            if (prepass[i].timeline_samples > 0)
+                acc_sec += static_cast<double>(prepass[i].timeline_samples) / kFs;
         }
     }
 
@@ -1946,7 +1968,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
         if (pp.state != NoteState::RENDERABLE) {
             last_note_rendered = false;
-            timeline_offset += note_samples;
+            timeline_offset += pp.timeline_samples;
             continue;
         }
 
@@ -1958,30 +1980,37 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             // 境界で4msの完全な無音の谷間（振幅ディップ）が生じ、プチプチ・ガタガタというノイズの原因になっていた。
             // fade_out + fade_in = 1.0 の定ゲイン・クロスフェードにより、音圧の落ち込みやクリックのない
             // シームレスで滑らかなレガート接続を実現する。
-            const int declick = static_cast<int>(std::min<int64_t>(88, note_samples / 8));
+            const int64_t write_start = timeline_offset - pp.preutterance_samples;
+            const int declick = static_cast<int>(std::min<int64_t>(
+                pp.overlap_samples > 0 ? pp.overlap_samples : 88, note_samples / 8));
+            const int64_t overlap_start = timeline_offset - pp.overlap_samples;
+            const int overlap = static_cast<int>(std::min<int64_t>(
+                pp.overlap_samples, std::min<int64_t>(note_samples, timeline_offset)));
             for (int s = 0; s < declick; ++s) {
                 const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 0.5;
                 const double fade_in  = 0.5 * (1.0 - std::cos(M_PI * t));
                 const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
                 const int64_t di = timeline_offset - declick + s;
-                if (di >= 0 && di < total_samples && s < note_samples) {
-                    full_song_buffer[di] = full_song_buffer[di] * fade_out + note_bufs[idx][s] * fade_in;
+                const int64_t src = pp.preutterance_samples + s - declick;
+                if (di >= 0 && di < total_samples && src >= 0 && src < note_samples) {
+                    full_song_buffer[di] = full_song_buffer[di] * fade_out + note_bufs[idx][src] * fade_in;
                 }
             }
+            const int64_t write_start = timeline_offset - pp.preutterance_samples;
             for (int64_t s = declick; s < note_samples; ++s) {
-                const int64_t di = timeline_offset - declick + s;
+                const int64_t di = write_start + s;
                 if (di >= 0 && di < total_samples) {
                     full_song_buffer[di] = note_bufs[idx][s];
                 }
             }
-            timeline_offset += (note_samples - declick);
+            timeline_offset += pp.timeline_samples;
         } else {
             // 休符明けの立ち上がり: 3msのデクリック・フェードイン
             const int fade_in_samples = static_cast<int>(std::min<int64_t>(132, note_samples / 4));
             for (int s = 0; s < fade_in_samples; ++s) {
                 const double t = (fade_in_samples > 1) ? (static_cast<double>(s) / fade_in_samples) : 1.0;
                 const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
-                const int64_t di = timeline_offset + s;
+                const int64_t di = timeline_offset + s - pp.preutterance_samples;
                 if (di < total_samples && s < note_samples) {
                     full_song_buffer[di] = note_bufs[idx][s] * fade_in;
                 }
@@ -1992,7 +2021,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                     full_song_buffer[di] = note_bufs[idx][s];
                 }
             }
-            timeline_offset += note_samples;
+            timeline_offset += pp.timeline_samples;
         }
 
         // 次のノートがRENDERABLEでない、または曲末尾の場合: 5msのデクリック・フェードアウト
