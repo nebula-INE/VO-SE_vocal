@@ -258,8 +258,9 @@ jobs:
                   print(f"Packaged application exited during startup with code: {returncode}")
                   print(f"STDOUT:{stdout}")
                   print(f"STDERR:{stderr}")
-                  print("::error::Packaged application exited unexpectedly during startup.")
-                  raise SystemExit(returncode if returncode != 0 else 1)
+                  if returncode != 0:
+                      print("::error::Packaged application exited unexpectedly during startup.")
+                      raise SystemExit(returncode)
 
               # GUI applications are expected to keep their event loop alive.
               # Reaching this point means the packaged binary survived startup.
