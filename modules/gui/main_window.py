@@ -2850,72 +2850,45 @@ class MainWindow(
             self.timeline_widget.update()
 
     def toggle_playback(self, event=None):
-        """現在のトラックを再生/一時停止する互換再生経路。"""
+        """互換再生入口。すべてのデスクトップ音声をAudioMixerへ送る。"""
+        _ = event
         with self._playback_lock:
-            monitoring = getattr(self, "pro_monitoring", None)
-            is_playing = (
-                getattr(monitoring, "is_playing", False)
-                if monitoring is not None and not isinstance(monitoring, bool)
-                else bool(getattr(self, "is_playing", False))
-            )
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is None:
+                self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+                return
 
-            if is_playing:
-                player = getattr(self, "audio_player", None)
-                pause = getattr(player, "pause", None)
-                if callable(pause):
-                    pause()
+            if getattr(mixer, "is_playing", False):
+                mixer.pause()
                 self.is_playing = False
-                if monitoring is not None and not isinstance(monitoring, bool):
-                    setattr(monitoring, "is_playing", False)
                 self._refresh_transport_button_states()
                 self.statusBar().showMessage("一時停止", 2000)
                 return
 
             tracks = list(getattr(self, "tracks", []) or [])
-            idx = int(getattr(self, "current_track_idx", 0))
-            if not (0 <= idx < len(tracks)):
-                self.statusBar().showMessage("再生するトラックがありません。", 2000)
+            start_time = float(getattr(
+                getattr(self, "timeline_widget", None),
+                "_current_playback_time",
+                0.0,
+            ))
+
+            playable = [
+                t for t in tracks
+                if str(getattr(t, "playback_path", "") or "")
+                or str(getattr(t, "audio_path", "") or "")
+            ]
+            if not playable:
+                self.statusBar().showMessage("再生可能な音声トラックがありません。", 3000)
                 return
 
-            current_track = tracks[idx]
-            timeline = getattr(self, "timeline_widget", None)
-            start_time = float(
-                getattr(timeline, "_current_playback_time", 0.0)
-                if timeline is not None
-                else 0.0
-            )
-
-            if getattr(current_track, "track_type", "vocal") == "wave":
-                audio_path = str(getattr(current_track, "audio_path", "") or "")
-                player = getattr(self, "audio_player", None)
-                play_file = getattr(player, "play_file", None)
-
-                if not audio_path or not os.path.exists(audio_path):
-                    self.statusBar().showMessage("オーディオファイルが見つかりません。", 3000)
-                    return
-                if not callable(play_file):
-                    self.statusBar().showMessage("オーディオプレイヤーを初期化できません。", 3000)
-                    return
-
-                play_file(audio_path)
-                set_position = getattr(player, "set_position", None)
-                if callable(set_position):
-                    set_position(int(start_time * 1000))
-            else:
-                engine = getattr(self, "vo_se_engine", None)
-                notes = list(getattr(timeline, "notes_list", []) or []) if timeline is not None else []
-                play_audio = getattr(engine, "play_audio", None)
-                if notes and callable(play_audio):
-                    threading.Thread(target=play_audio, daemon=True).start()
-
-            self.is_playing = True
-            if monitoring is not None and not isinstance(monitoring, bool):
-                setattr(monitoring, "is_playing", True)
-            self.current_playback_time = start_time
-            self._refresh_transport_button_states()
-            self.statusBar().showMessage(
-                f"再生中: {self._format_timecode(start_time)}", 2000
-            )
+            try:
+                mixer.set_tracks(tracks)
+                mixer.play(start_time)
+                self.is_playing = True
+                self._refresh_transport_button_states()
+            except Exception as exc:
+                self.is_playing = False
+                self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
 
     def refresh_canvas(self):
         """キャンバス（描画領域）を再描画する"""
