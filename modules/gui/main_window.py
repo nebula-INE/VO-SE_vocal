@@ -2312,7 +2312,8 @@ class MainWindow(
 
         self.stop_btn = QPushButton(icon("stop"), " 停止")
         self.stop_btn.setObjectName("SegmentMid")
-        self.stop_btn.setCheckable(True)
+        # Stop is an action, not a persistent toggle.
+        self.stop_btn.setCheckable(False)
         self.stop_btn.clicked.connect(self.stop_and_clear_playback)
         self.toolbar.addWidget(self.stop_btn)
 
