@@ -118,15 +118,23 @@ class AudioMixer:
         data = self._resample(data, source_rate)
         stereo = self._to_stereo(data)
 
+        class _BufferTrack:
+            volume = 1.0
+            pan = 0.0
+            is_muted = False
+            is_solo = False
+
+        track = _BufferTrack()
         with self._lock:
-            self._tracks = []
-            self._buffers = {-1: stereo}
+            self._tracks = [track]
+            self._buffers = {id(track): stereo}
             self._position = max(0, min(int(start_sec * self.sample_rate), len(stereo) - 1))
 
         self._stream = sd.OutputStream(
             samplerate=self.sample_rate,
             channels=2,
             dtype="float32",
+            blocksize=self.block_size,
             callback=self._callback,
         )
         self._stream.start()
