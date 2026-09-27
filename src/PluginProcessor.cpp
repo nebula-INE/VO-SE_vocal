@@ -265,9 +265,10 @@ void VoseAudioProcessor::resolveAndPushNote (int trackIndex, const std::vector<d
     trackIndex = juce::jlimit (0, kMaxTracks - 1, trackIndex);
     auto& track = tracks[(size_t) trackIndex];
 
+    const auto previousLyric = prevLyrics[(size_t) trackIndex];
     juce::String prevVowel;
-    if (track.otoDb.hasVcv() && prevLyric.isNotEmpty())
-        prevVowel = vowelClassifier.trailingVowel (prevLyric);
+    if (track.otoDb.hasVcv() && previousLyric.isNotEmpty())
+        prevVowel = vowelClassifier.trailingVowel (previousLyric);
 
     const auto* entry = track.otoDb.resolveAlias (lyric, prevVowel);
 
@@ -282,7 +283,7 @@ void VoseAudioProcessor::resolveAndPushNote (int trackIndex, const std::vector<d
     track.voice.pushNote (nextNoteId++, aliasToUse, pitchCurveHz, genderCurve, tensionCurve, breathCurve,
                            portamentoOffsetsCents);
 
-    prevLyric = lyric;
+    prevLyrics[(size_t) trackIndex] = lyric;
 }
 
 bool VoseAudioProcessor::loadUstFile (const juce::File& ustFile)
