@@ -33,6 +33,7 @@ class AudioMixer:
         self._tracks: list[Any] = []
         self._buffers: Dict[int, np.ndarray] = {}
         self._position = 0
+        self.last_load_errors: list[str] = []
 
     @property
     def is_playing(self) -> bool:
@@ -50,6 +51,7 @@ class AudioMixer:
 
         new_tracks = list(tracks)
         buffers: Dict[int, np.ndarray] = {}
+        load_errors: list[str] = []
 
         for track in new_tracks:
             path = self._track_path(track)
@@ -58,14 +60,29 @@ class AudioMixer:
             try:
                 data, source_rate = sf.read(path, dtype="float32", always_2d=True)
             except Exception as exc:
-                raise RuntimeError(f"Failed to load audio track '{path}': {exc}") from exc
+                load_errors.append(f"{path}: {exc}")
+                continue
 
-            data = self._resample(data, int(source_rate))
-            buffers[id(track)] = self._to_stereo(data)
+            try:
+                data = self._resample(data, int(source_rate))
+                stereo = self._to_stereo(data)
+            except Exception as exc:
+                load_errors.append(f"{path}: {exc}")
+                continue
+
+            if len(stereo) == 0:
+                load_errors.append(f"{path}: empty audio")
+                continue
+            buffers[id(track)] = stereo
+
+        if not buffers:
+            details = "; ".join(load_errors) if load_errors else "no audio paths"
+            raise RuntimeError(f"No playable audio tracks ({details})")
 
         with self._lock:
             self._tracks = new_tracks
             self._buffers = buffers
+            self.last_load_errors = load_errors
 
     def update_tracks(self, tracks: Iterable[Any]) -> None:
         with self._lock:
