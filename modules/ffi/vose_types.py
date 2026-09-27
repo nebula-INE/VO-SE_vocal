@@ -20,6 +20,8 @@ class CNoteEvent(ctypes.Structure):
         ("portamento_length", ctypes.c_int),
         ("intensity", ctypes.c_double),
         ("modulation", ctypes.c_double),
+        ("preutterance_ms", ctypes.c_double),
+        ("overlap_ms", ctypes.c_double),
     ]
 
 
@@ -39,7 +41,7 @@ def validate_note_event_layout():
 
     pointer_size = ctypes.sizeof(ctypes.c_void_p)
     if pointer_size == 8:
-        expected = 104
+        expected = 120
         actual = ctypes.sizeof(CNoteEvent)
         if actual != expected:
             raise RuntimeError(
