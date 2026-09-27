@@ -343,14 +343,10 @@ class OtoParser:
         clean_lyric = re.sub(r'_?[A-Ga-g][#b]?[0-9]$', '', clean_lyric).strip() or clean_lyric
 
         def _match_pref(p: str) -> Optional[OtoEntry]:
-            if p in self._db:
-                return self._db[p]
-            p_lower = p.lower()
-            for alias, entry in self._db.items():
-                a_lower = alias.lower()
-                if a_lower.startswith(p_lower + "_") or a_lower.startswith(p_lower + " "):
-                    return entry
-            return None
+            # エイリアスは音素単位の識別子なので部分一致は禁止する。
+            # 例: 「し」が未登録なのに「しー」や「し A3」を返すと、
+            # 全く別のWAVを発音する危険がある。
+            return self._db.get(p)
 
         # 1. If raw lyric itself is explicitly a VCV/silence alias string (e.g., "a い", "- い"), match direct
         if lyric in self._db and (' ' in lyric or '_' in lyric or lyric.startswith('-')):
@@ -384,18 +380,16 @@ class OtoParser:
         if entry:
             return entry
 
-        # 5. 歌詞のみ部分一致 / インデックス参照
+        # 5. 歌詞のみの完全一致インデックス
+        # VCV/CVの同一歌詞が複数存在する場合は、_db の直接一致を優先する。
         if not hasattr(self, '_lyric_index'):
             self._build_lyric_index()
 
-        if clean_lyric in self._lyric_index and self._lyric_index[clean_lyric]:
-            return self._lyric_index[clean_lyric][0]
+        entries = self._lyric_index.get(clean_lyric, [])
+        if entries:
+            return entries[0]
 
-        # 6. Fallback: 部分一致（先頭一致や含まれるもの）
-        for alias, entry in self._db.items():
-            if clean_lyric in alias:
-                return entry
-
+        # 解決不能なら別の歌詞へ推測変換しない。
         return None
 
     def _build_lyric_index(self) -> None:
