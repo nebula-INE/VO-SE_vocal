@@ -3681,6 +3681,8 @@ class MainWindow(
     def setup_aural_ai(self):
         """診断されたプロバイダーを使用してAIモデルをロードする"""
         import os
+        # モデル未搭載環境でも再生UI全体が壊れないよう、常に明示的なNone状態を持つ。
+        self.ai_session = None
         model_path = "models/aural_dynamics.onnx"
 
         if ort is None:
@@ -3895,14 +3897,23 @@ class MainWindow(
     def predict_dynamics(self, phonemes, notes):
         """AIモデル(ONNX)を使用してパラメータを予測"""
         # [前処理] 歌詞をAIが理解できる数値に変換
-        input_data = self.preprocess_lyrics(phonemes, notes) 
+        input_data = self.preprocess_lyrics(phonemes, notes)
 
-        # [推論] NPUまたはCPUで実行
-        inputs = {self.ai_session.get_inputs()[0].name: input_data}
-        prediction = self.ai_session.run(None, inputs)
+        # AIモデルが無い環境は通常運用であり、AttributeErrorにせず
+        # 入力と同じ形状の中立値を返して再生処理を継続する。
+        session = getattr(self, "ai_session", None)
+        if session is None:
+            return np.zeros_like(input_data, dtype=np.float32)
 
-        # AIが予測したピッチ、テンション、ジェンダー等の多次元配列を返す
-        return prediction[0]
+        try:
+            inputs = {session.get_inputs()[0].name: input_data}
+            prediction = session.run(None, inputs)
+            if not prediction:
+                return np.zeros_like(input_data, dtype=np.float32)
+            return prediction[0]
+        except Exception as e:
+            self.log_startup(f"AI dynamics inference failed; using neutral fallback: {e}")
+            return np.zeros_like(input_data, dtype=np.float32)
 
     def synthesize_voice(self, dynamics_data):
         """AIの結果をC++に投げてスピーカーから鳴らす"""
