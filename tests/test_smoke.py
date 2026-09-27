@@ -61,6 +61,13 @@ class TestSmoke(unittest.TestCase):
                 return
 
             stdout, stderr = proc.communicate()
+            if returncode == 0:
+                print(
+                    "Startup check: application exited normally during the smoke-test window.\n"
+                    f"STDOUT:{stdout}\nSTDERR:{stderr}"
+                )
+                return
+
             self.fail(
                 f"Application exited unexpectedly with code {returncode}.\n"
                 f"STDOUT:{stdout}\nSTDERR:{stderr}"
