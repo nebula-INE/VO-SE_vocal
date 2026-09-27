@@ -400,16 +400,9 @@ class OtoParser:
         if entry:
             return entry
 
-        # 5. 歌詞のみの完全一致インデックス
-        # VCV/CVの同一歌詞が複数存在する場合は、_db の直接一致を優先する。
-        if not hasattr(self, '_lyric_index'):
-            self._build_lyric_index()
-
-        entries = self._lyric_index.get(clean_lyric, [])
-        if entries:
-            return entries[0]
-
-        # 解決不能なら別の歌詞へ推測変換しない。
+        # 解決不能なら別の VCV を推測して使わない。
+        # 例えば "a い" と "i い" しか存在しない音源で
+        # prev_vowel="u" のとき、任意の一方を返すと誤発音になる。
         return None
 
     def _build_lyric_index(self) -> None:
