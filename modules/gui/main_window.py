@@ -2091,19 +2091,55 @@ class MainWindow(
         self.current_voice = display_name
         self.current_voice_id = internal_id
         
-        # --- 2. C++エンジンへのキャラクター適用 ---
-        # VoSeEngine側で __INTERNAL__ (公式) か フォルダパス (UTAU) かを判別
-        if hasattr(self, 'vo_se_engine') and self.vo_se_engine:
+        # --- 2. Python側のUTAU音源を選択音源だけに限定 ---
+        # VoiceManager.scan_voices() は UTAU 音源を
+        #   {表示名: 絶対パス}
+        # として保持する。以前の実装は dict.get("path") を呼んでおり、
+        # 文字列に対する誤ったアクセスになっていた。
+        #
+        # さらに、voice_lib_path を全音源の親フォルダのままにすると、
+        # 同じ alias（例: "a い"）を持つ別音源が _db の後勝ちで上書きする。
+        # 選択した音源フォルダだけを resolver に渡し、音源間のalias衝突を防ぐ。
+        if hasattr(self, "vo_se_engine") and self.vo_se_engine:
             try:
-                self.vo_se_engine.set_active_character(internal_id)
-            
-                # 🔴 重要: oto.iniの読み込みを確認
-                voice_path = self.voice_manager.voices.get(display_name, {}).get("path", "")
+                voice_path = ""
+                voice_manager = getattr(self, "voice_manager", None)
+                voices = getattr(voice_manager, "voices", {}) if voice_manager else {}
+                selected = voices.get(display_name, "") if isinstance(voices, dict) else ""
+
+                if isinstance(selected, str):
+                    if selected.startswith("__INTERNAL__:"):
+                        char_dir = selected.split(":", 1)[1].strip()
+                        base_path = getattr(
+                            voice_manager,
+                            "base_path",
+                            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        )
+                        candidate = os.path.join(
+                            base_path, "assets", "official_voices", char_dir
+                        )
+                        if os.path.isdir(candidate):
+                            voice_path = os.path.abspath(candidate)
+                    elif not selected.startswith("__RECRUITING__:") and os.path.isdir(selected):
+                        voice_path = os.path.abspath(selected)
+
                 if voice_path:
+                    self.vo_se_engine.set_voice_library(voice_path)
+                    refresh_v2 = getattr(
+                        self.vo_se_engine, "refresh_voice_library_v2", None
+                    )
+                    if callable(refresh_v2):
+                        refresh_v2()
+
                     oto_data = self.parse_oto_ini(voice_path)
                     if not oto_data:
                         print(f"⚠️ Warning: oto.ini not found in {voice_path}")
-                    
+                else:
+                    # 募集中カード等は実音源ではないため、現在の resolver を
+                    # 誤って別音源へ切り替えない。
+                    if internal_id.startswith("__RECRUITING__:"):
+                        print(f"ℹ️ Recruiting voice selected: {display_name}")
+
             except Exception as e:
                 print(f"❌ Engine character switch failed: {e}")
 
@@ -2877,7 +2913,17 @@ class MainWindow(
                 signature_items.append(note.to_dict())
             else:
                 signature_items.append(getattr(note, "__dict__", repr(note)))
-        signature = repr((signature_items, self.current_voice_id, self.timeline_widget.tempo))
+
+        # レンダー結果はノートだけでなく、グラフパラメータと音源にも依存する。
+        # ここをキャッシュキーに含めないと、Pitch/Gender/Tension/Breath を
+        # 変更しても古いWAVが再利用され、UI上の変更が再生へ反映されない。
+        render_parameters = self._build_render_parameters()
+        signature = repr((
+            signature_items,
+            render_parameters,
+            self.current_voice_id,
+            float(getattr(self.timeline_widget, "tempo", 120.0)),
+        ))
 
         cache_dir = os.path.join(tempfile.gettempdir(), "vose_playback_cache")
         os.makedirs(cache_dir, exist_ok=True)
