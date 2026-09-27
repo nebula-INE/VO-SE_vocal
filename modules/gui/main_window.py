@@ -2970,47 +2970,9 @@ class MainWindow(
                 self.statusBar().showMessage(f"再生準備エラー: {exc}", 5000)
 
     def toggle_playback(self, event=None):
-        """互換再生入口。すべてのデスクトップ音声をAudioMixerへ送る。"""
+        """旧ショートカット互換。実際の再生処理は統一入口へ委譲する。"""
         _ = event
-        with self._playback_lock:
-            mixer = getattr(self, "audio_mixer", None)
-            if mixer is None:
-                self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
-                return
-
-            if getattr(mixer, "is_playing", False):
-                mixer.pause()
-                self.is_playing = False
-                self._refresh_transport_button_states()
-                self.statusBar().showMessage("一時停止", 2000)
-                return
-
-            tracks = list(getattr(self, "tracks", []) or [])
-            start_time = float(getattr(
-                getattr(self, "timeline_widget", None),
-                "_current_playback_time",
-                0.0,
-            ))
-
-            playable = [
-                t for t in tracks
-                if str(getattr(t, "playback_path", "") or "")
-                or str(getattr(t, "audio_path", "") or "")
-            ]
-            if not playable:
-                self.statusBar().showMessage("再生可能な音声トラックがありません。", 3000)
-                return
-
-            try:
-                mixer.set_tracks(tracks)
-                mixer.play(start_time)
-                self.is_playing = True
-                self.current_playback_time = start_time
-                self.playback_timer.start()
-                self._refresh_transport_button_states()
-            except Exception as exc:
-                self.is_playing = False
-                self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
+        return self.on_play_pause_toggled()
 
     def refresh_canvas(self):
         """キャンバス（描画領域）を再描画する"""
