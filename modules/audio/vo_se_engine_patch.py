@@ -184,7 +184,12 @@ def _refresh_voice_library_v2(self) -> None:
         for fname in files:
             if fname.lower().endswith(".wav"):
                 lyric = os.path.splitext(fname)[0]
-                self.oto_map[lyric] = os.path.abspath(os.path.join(root, fname))
+                # oto.ini の正式エイリアスを basename fallback で上書きしない。
+                # 同一WAV名を持つ音源が混在していても、登録済みaliasを維持する。
+                self.oto_map.setdefault(
+                    lyric,
+                    os.path.abspath(os.path.join(root, fname)),
+                )
 
     self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
     logger.info(
