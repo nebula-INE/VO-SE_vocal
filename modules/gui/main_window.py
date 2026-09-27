@@ -4459,122 +4459,67 @@ class MainWindow(
             with self._playback_lock:
                 self.is_playing = False
 
-    @Slot() 
+    @Slot()
     def on_play_pause_toggled(self):
-        """
-        再生/停止を切り替えるハンドラ（Ruff/Pyright/Pylance/VSCode 全エラー根絶版）
-        一切の省略なし、完全防衛型コード。
-        """
-        
-        # --- 0. 徹底的な型キャストと安全な属性取得 ---
-        # getattrを使用し、かつ None チェックを行うことで reportOptionalMemberAccess を完全に防ぎます
-        play_btn = cast(QPushButton, getattr(self, 'play_btn', None) or getattr(self, 'play_button', None))
-        status_lbl = cast(QLabel, getattr(self, 'status_label', None))
-        timeline = cast(Any, getattr(self, 'timeline_widget', None))
-        timer = cast(Any, getattr(self, 'playback_timer', None))
+        """Start/stop the unified desktop playback path."""
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+            return
 
-        # --- 1. 再生中の場合の停止ロジック (代表の設計を完全維持) ---
-        if self.is_playing:
+        play_btn = cast(QPushButton, getattr(self, "play_btn", None) or getattr(self, "play_button", None))
+        status_lbl = cast(QLabel, getattr(self, "status_label", None))
+
+        if getattr(mixer, "is_playing", False):
+            mixer.stop()
             self.is_playing = False
-            
-            # タイマーの停止
-            if timer is not None and hasattr(timer, 'stop'):
-                timer.stop()
-            
-            # エンジンの停止処理（動的チェック）
-            engine = getattr(self, 'vo_se_engine', None)
-            if engine is not None and hasattr(engine, 'stop_playback'):
-                engine.stop_playback()
-            
-            # スレッドの終了待ち
-            thread = cast(threading.Thread, getattr(self, 'playback_thread', None))
-            if thread is not None and thread.is_alive():
-                thread.join(timeout=0.2) 
-
-            # UIの更新（Ruff対策で改行、Pyright対策で None チェック）
             if play_btn is not None:
                 play_btn.setText("▶ 再生")
-            self._refresh_transport_button_states()
-            if status_lbl is not None: 
+            if status_lbl is not None:
                 status_lbl.setText("停止しました")
-            self.statusBar().showMessage(f"停止: {self._format_timecode(self.current_playback_time)}", 2000)
-                
-            self.playing_notes = {}
+            self._refresh_transport_button_states()
             return
 
-        # --- 2. 停止中の場合の再生開始ロジック ---
-        # 録音中なら止める（getattrで安全に確認）
-        if getattr(self, 'is_recording', False):
-            # 録音停止メソッドを安全に呼び出す
-            on_record = getattr(self, 'on_record_toggled', None)
-            if on_record is not None:
-                on_record()
+        timeline = cast(Any, getattr(self, "timeline_widget", None))
+        start_time = float(getattr(timeline, "_current_playback_time", 0.0)) if timeline is not None else 0.0
+        tracks = list(getattr(self, "tracks", []) or [])
 
-        # タイムラインが存在しない場合は何もしない
-        if timeline is None:
-            return
-            
-        # timeline.notes_list が型不明と言われないよう cast
-        notes = cast(List[Any], getattr(timeline, 'notes_list', []))
+        playable = [
+            t for t in tracks
+            if str(getattr(t, "playback_path", "") or "")
+            or str(getattr(t, "audio_path", "") or "")
+        ]
 
         try:
-            if status_lbl is not None: 
-                status_lbl.setText("音声生成中...")
-            
-            # GUIをフリーズさせないためのイベントループ処理
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
-
-            # 再生開始位置の取得（型安全なフォールバック付き）
-            start_time = float(getattr(timeline, '_current_playback_time', self.current_playback_time))
-            if hasattr(timeline, 'get_selected_notes_range'):
-                range_data = timeline.get_selected_notes_range()
-                if range_data and isinstance(range_data, tuple) and len(range_data) >= 2:
-                    start_time = float(range_data[0])
-            
-            self.is_playing = True
-            self.current_playback_time = start_time
-            self.playback_start_time = start_time
-            self.playback_end_time = self._get_project_duration_seconds()
-            self.playback_started_monotonic = time.monotonic()
-            self._set_transport_time(start_time)
-            
-            # UI表示の更新
-            if play_btn is not None: 
-                play_btn.setText("■ 停止")
-            self._refresh_transport_button_states()
-            if status_lbl is not None: 
-                status_lbl.setText(f"再生中: {start_time:.2f}s -")
-            if not notes:
-                self.statusBar().showMessage("ノートなし: タイムラインのみ再生します", 3000)
+            if playable:
+                mixer.set_tracks(tracks)
+                mixer.play(start_time)
+                self.is_playing = True
+            elif timeline is not None and getattr(timeline, "notes_list", []):
+                # Vocal-only projects still use the existing render path, but its
+                # resulting WAV is routed back through AudioMixer.play_file().
+                self.is_playing = True
+                threading.Thread(
+                    target=self.handle_playback,
+                    daemon=True,
+                    name="VO-SE-Vocal-Playback",
+                ).start()
             else:
-                self.statusBar().showMessage(f"再生中: {self._format_timecode(start_time)}", 3000)
+                self.statusBar().showMessage("再生する音声がありません。", 3000)
+                return
 
-            # 再生スレッドの構築
-            engine_for_play = getattr(self, 'vo_se_engine', None)
-            if notes and engine_for_play is not None and hasattr(engine_for_play, 'play_audio'):
-                new_thread = threading.Thread(
-                    target=engine_for_play.play_audio, 
-                    daemon=True
-                )
-                # スレッドを属性に保持
-                self.playback_thread = new_thread
-                new_thread.start()
-            
-            # UI更新タイマーの開始
-            if timer is not None and hasattr(timer, 'start'):
-                timer.start(20)
-
-        except Exception as e:
-            # 例外発生時も安全にUIを復元
+            if play_btn is not None:
+                play_btn.setText("■ 停止")
             if status_lbl is not None:
-                status_lbl.setText(f"再生エラー: {e}")
-            
+                status_lbl.setText(f"再生中: {start_time:.2f}s")
+            self._refresh_transport_button_states()
+        except Exception as exc:
             self.is_playing = False
-            
             if play_btn is not None:
                 play_btn.setText("▶ 再生")
-            self._refresh_transport_button_states()
+            if status_lbl is not None:
+                status_lbl.setText(f"再生エラー: {exc}")
+            self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
 
     @Slot()
     def on_record_toggled(self):
