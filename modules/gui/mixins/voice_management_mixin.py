@@ -266,8 +266,34 @@ class VoiceManagementMixin:
             return
 
         voice_data = voices_dict[character_name]
-        path = voice_data.get("path", "")
+
+        # VoiceManager の実装には、
+        #   {表示名: {"path": "...", ...}}
+        # と {表示名: "..."} の2系統が存在する。
+        # どちらから選択されても同じ音源ロード経路へ入れる。
+        if isinstance(voice_data, dict):
+            path = str(voice_data.get("path", "") or "")
+        elif isinstance(voice_data, str):
+            path = voice_data
+        else:
+            path = ""
+
         if not path:
+            return
+
+        # 内蔵音源は実ファイルパスへ変換してから oto.ini を読む。
+        if path.startswith("__INTERNAL__:"):
+            char_dir = path.split(":", 1)[1].strip()
+            base_path = getattr(self, "base_path", os.getcwd())
+            official_path = os.path.join(
+                base_path, "assets", "official_voices", char_dir
+            )
+            if os.path.isdir(official_path):
+                path = os.path.abspath(official_path)
+            else:
+                return
+        elif path.startswith("__INTERNAL__"):
+            # VoiceManager.scan_voices() の旧形式。
             return
 
         try:
