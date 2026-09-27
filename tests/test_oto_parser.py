@@ -105,3 +105,29 @@ def test_resolve_alias_supports_vcv_then_cv_fallback():
 
     assert parser.resolve_alias("い", "a").alias == "a い"
     assert parser.resolve_alias("い", "i").alias == "- い"
+
+
+def test_resolve_alias_does_not_pick_arbitrary_vcv_context():
+    parser = OtoParser()
+    parser._db["a い"] = OtoEntry(
+        alias="a い",
+        filename="a_i.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+    parser._db["i い"] = OtoEntry(
+        alias="i い",
+        filename="i_i.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+
+    assert parser.resolve_alias("い", "u") is None
