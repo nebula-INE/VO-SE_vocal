@@ -1130,26 +1130,7 @@ class ProjectIOMixin:
             # 呼び出し側で無視できる None を返す。
             return None, current_time_sec
 
-    # ダミーメソッド（main_window.py側で実装）
-    def update_timeline_with_notes(self: Any, notes_data):
-        """[LIVE] ノートをタイムラインに反映"""
-        pass
-
-    def update_tempo_from_input(self: Any):
-        """[LIVE] テンポ入力反映"""
-        pass
-
-    def update_scrollbar_range(self: Any):
-        """[LIVE] 横スクロールバー更新"""
-        pass
-
-    def update_scrollbar_v_range(self: Any):
-        """[LIVE] 縦スクロールバー更新"""
-        pass
-
-    def stop_and_clear_playback(self: Any):
-        """[LIVE] 再生停止"""
-        pass
+    # MainWindow 側の実装を MRO で隠さないため、ここにはダミー実装を置かない。
 
     def export_to_midi_file(self: Any):
         """[LIVE] MIDIエクスポート"""
