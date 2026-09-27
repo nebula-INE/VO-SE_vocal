@@ -792,26 +792,37 @@ jobs:
           # --- 必須: クリーンアップ関数 ---
           # hdiutil は detach 直後もデバイスを保持することがあるため、
           # 「detach → 状態確認 → 待機」を必ず行う。
+          MOUNT_POINT="/Volumes/${VOLUME_NAME}"
           cleanup() {
             echo "🧹 DMG残留マウントを確認中..."
 
-            if mount | grep -Fq "on /Volumes/VO-SE vocal "; then
-              echo "  Detaching: /Volumes/VO-SE vocal"
-              hdiutil detach "/Volumes/VO-SE vocal" -force 2>/dev/null || true
+            # マウントされている場合だけ detach を実行する。
+            # grep が見つからない場合は正常状態なので、set -e で終了しないよう
+            # 条件式として扱う。
+            if mount | grep -Fq "on ${MOUNT_POINT} "; then
+              echo "  Detaching: ${MOUNT_POINT}"
+              hdiutil detach "${MOUNT_POINT}" -force 2>/dev/null || true
             fi
 
             for _ in {1..20}; do
-              if ! mount | grep -Fq "on /Volumes/VO-SE vocal "; then
+              if ! mount | grep -Fq "on ${MOUNT_POINT} "; then
                 break
               fi
               sleep 0.5
             done
 
-            hdiutil info 2>/dev/null | grep -B 5 -F "/Volumes/VO-SE vocal" |
-              awk '/^\/dev\// {print $1}' | while read -r device; do
-                [ -n "$device" ] || continue
-                hdiutil detach "$device" -force 2>/dev/null || true
-              done
+            # grep は対象が無い場合に終了コード1を返すため、
+            # pipefail + set -e でも cleanup 自体を失敗扱いにしない。
+            devices=$(hdiutil info 2>/dev/null \
+              | grep -B 5 -F "${MOUNT_POINT}" \
+              | awk '/^\\/dev\\// {print $1}' \
+              || true)
+
+            while read -r device; do
+              [ -n "$device" ] || continue
+              echo "  Detaching leftover device: $device"
+              hdiutil detach "$device" -force 2>/dev/null || true
+            done <<< "$devices"
 
             sleep 1
           }
