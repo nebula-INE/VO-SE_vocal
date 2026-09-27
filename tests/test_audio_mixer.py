@@ -58,3 +58,37 @@ def test_resample_preserves_channel_count():
     assert result.shape == (200, 2)
     assert np.allclose(result[:, 0], 1.0)
     assert np.allclose(result[:, 1], 0.0)
+
+
+def test_callback_mixes_multiple_tracks_with_mute_and_volume():
+    mixer = AudioMixer(sample_rate=4, block_size=4)
+    audible = _track(volume=0.5)
+    muted = _track(volume=1.0, is_muted=True)
+
+    mixer._tracks = [audible, muted]
+    mixer._buffers = {
+        id(audible): np.ones((4, 2), dtype=np.float32),
+        id(muted): np.ones((4, 2), dtype=np.float32) * 0.75,
+    }
+
+    out = np.zeros((4, 2), dtype=np.float32)
+    mixer._callback(out, 4, None, None)
+
+    assert np.allclose(out, 0.5)
+
+
+def test_callback_solo_excludes_non_solo_tracks():
+    mixer = AudioMixer(sample_rate=4, block_size=4)
+    normal = _track(volume=1.0)
+    solo = _track(volume=0.25, is_solo=True)
+
+    mixer._tracks = [normal, solo]
+    mixer._buffers = {
+        id(normal): np.ones((4, 2), dtype=np.float32),
+        id(solo): np.ones((4, 2), dtype=np.float32),
+    }
+
+    out = np.zeros((4, 2), dtype=np.float32)
+    mixer._callback(out, 4, None, None)
+
+    assert np.allclose(out, 0.25)
