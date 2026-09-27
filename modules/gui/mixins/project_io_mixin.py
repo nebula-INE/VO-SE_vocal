@@ -786,6 +786,77 @@ class ProjectIOMixin:
         """マルチトラック対応のVO-SEプロジェクト保存。"""
         return bool(self.on_save_project_clicked())
 
+    def on_save_project_clicked(self: Any) -> bool:
+        """現在のプロジェクト全体を安全に保存する。"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "プロジェクトを保存",
+            "project.vose",
+            "VO-SE Project (*.vose);;JSON Files (*.json);;All Files (*)",
+        )
+        if not file_path:
+            return False
+
+        tmp_file_path = f"{file_path}.tmp"
+        try:
+            tracks = list(getattr(self, "tracks", []) or [])
+            timeline = getattr(self, "timeline_widget", None)
+            current_idx = int(getattr(self, "current_track_idx", 0))
+
+            if timeline is not None and 0 <= current_idx < len(tracks):
+                tracks[current_idx].notes = list(getattr(timeline, "notes_list", []) or [])
+
+            tempo = float(getattr(timeline, "tempo", 120.0)) if timeline is not None else 120.0
+            serialized_tracks = []
+            for track in tracks:
+                serialized_tracks.append({
+                    "name": str(getattr(track, "name", "Track")),
+                    "type": str(getattr(track, "track_type", "vocal")),
+                    "audio_path": str(getattr(track, "audio_path", "") or ""),
+                    "volume": float(getattr(track, "volume", 1.0)),
+                    "pan": float(getattr(track, "pan", 0.0)),
+                    "is_muted": bool(getattr(track, "is_muted", False)),
+                    "is_solo": bool(getattr(track, "is_solo", False)),
+                    "engine_type": str(getattr(track, "engine_type", "Aural")),
+                    "color_label": str(getattr(track, "color_label", "")),
+                    "notes": [
+                        n.to_dict() if hasattr(n, "to_dict") else dict(n)
+                        for n in (getattr(track, "notes", []) or [])
+                    ],
+                })
+
+            project_data = {
+                "app_id": "VO_SE_Pro_2026",
+                "version": "1.4.0",
+                "project_name": os.path.splitext(os.path.basename(file_path))[0],
+                "tempo": tempo,
+                "current_track_idx": max(0, current_idx),
+                "current_time": float(getattr(self, "current_playback_time", 0.0)),
+                "tracks": serialized_tracks,
+            }
+
+            with open(tmp_file_path, "w", encoding="utf-8") as f:
+                json.dump(project_data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_file_path, file_path)
+            self.statusBar().showMessage(
+                f"保存完了: {os.path.basename(file_path)}", 3000
+            )
+            return True
+
+        except Exception as exc:
+            if os.path.exists(tmp_file_path):
+                try:
+                    os.remove(tmp_file_path)
+                except OSError:
+                    pass
+            logger.exception("プロジェクト保存エラー: %s", exc)
+            QMessageBox.critical(
+                self,
+                "保存エラー",
+                f"プロジェクトの保存に失敗しました:\n{exc}",
+            )
+            return False
+
     def export_analysis_to_oto_ini(self: Any):
         """[LIVE] 解析結果 → oto.ini"""
         import shutil
