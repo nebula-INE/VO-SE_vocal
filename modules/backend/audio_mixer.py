@@ -89,6 +89,35 @@ class AudioMixer:
         )
         self._stream.start()
 
+    def play_file(self, file_path: str, start_sec: float = 0.0) -> None:
+        """Play one rendered file through the same mixer path used by tracks."""
+        class _PlaybackTrack:
+            def __init__(self, path: str) -> None:
+                self.audio_path = path
+                self.playback_path = ""
+                self.volume = 1.0
+                self.pan = 0.0
+                self.is_muted = False
+                self.is_solo = False
+
+        track = _PlaybackTrack(file_path)
+        self.set_tracks([track])
+        self.play(start_sec)
+
+    def pause(self) -> None:
+        """Pause while preserving the current sample position."""
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            try:
+                stream.stop()
+            finally:
+                stream.close()
+
+    def set_position(self, position_ms: int) -> None:
+        with self._lock:
+            self._position = max(0, int(float(position_ms) * self.sample_rate / 1000.0))
+
     def stop(self) -> None:
         stream = self._stream
         self._stream = None
@@ -97,6 +126,8 @@ class AudioMixer:
                 stream.stop()
             finally:
                 stream.close()
+        with self._lock:
+            self._position = 0
 
     def _callback(self, outdata: np.ndarray, frames: int, _time: Any, status: Any) -> None:
         if status:
