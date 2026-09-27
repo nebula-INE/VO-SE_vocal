@@ -2886,6 +2886,8 @@ class MainWindow(
                 mixer.set_tracks(tracks)
                 mixer.play(start_time)
                 self.is_playing = True
+                self.current_playback_time = start_time
+                self.playback_timer.start()
                 self._refresh_transport_button_states()
             except Exception as exc:
                 self.is_playing = False
@@ -3545,6 +3547,55 @@ class MainWindow(
         self.audio_mixer = AudioMixer(sample_rate=44100)
         self.audio_player = self.audio_mixer
         self.audio_output = None
+
+        # QMediaPlayer の positionChanged に代わる軽量なUI同期。
+        # AudioMixer は sounddevice のコールバック駆動なので、Qt側から
+        # 一定間隔で現在位置を読み取り、タイムラインへ反映する。
+        timer = getattr(self, "playback_timer", None)
+        if timer is not None:
+            timer.setInterval(20)
+            try:
+                timer.timeout.disconnect(self._sync_audio_mixer_to_ui)
+            except (TypeError, RuntimeError):
+                pass
+            timer.timeout.connect(self._sync_audio_mixer_to_ui)
+
+    def _sync_audio_mixer_to_ui(self) -> None:
+        """AudioMixer の再生位置をタイムライン/UIへ同期する。"""
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            return
+
+        playing = bool(getattr(mixer, "is_playing", False))
+        position = float(getattr(mixer, "position_sec", 0.0))
+        self.current_playback_time = position
+
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is not None:
+            timeline._current_playback_time = position
+            if hasattr(timeline, "set_playback_time"):
+                try:
+                    timeline.set_playback_time(position)
+                except Exception:
+                    pass
+            timeline.update()
+
+        if playing:
+            self.is_playing = True
+            return
+
+        # ファイル終端で CallbackStop() になった場合も、UIを確実に停止状態へ戻す。
+        if self.is_playing:
+            self.is_playing = False
+            self.playback_timer.stop()
+            self._refresh_transport_button_states()
+            play_btn = cast(QPushButton, getattr(self, "play_btn", None) or getattr(self, "play_button", None))
+            if play_btn is not None:
+                play_btn.setText("▶ 再生")
+
+            status_lbl = cast(QLabel, getattr(self, "status_label", None))
+            if status_lbl is not None:
+                status_lbl.setText("再生終了")
 
     def sync_ui_to_audio(self, ms):
         """Legacy compatibility hook for the old QMediaPlayer path."""
@@ -4464,6 +4515,7 @@ class MainWindow(
         if getattr(mixer, "is_playing", False):
             mixer.stop()
             self.is_playing = False
+            self.playback_timer.stop()
             if play_btn is not None:
                 play_btn.setText("▶ 再生")
             if status_lbl is not None:
@@ -4486,6 +4538,8 @@ class MainWindow(
                 mixer.set_tracks(tracks)
                 mixer.play(start_time)
                 self.is_playing = True
+                self.current_playback_time = start_time
+                self.playback_timer.start()
             elif timeline is not None and getattr(timeline, "notes_list", []):
                 # Vocal-only projects still use the existing render path, but its
                 # resulting WAV is routed back through AudioMixer.play_file().
@@ -4567,6 +4621,7 @@ class MainWindow(
         if callable(stop_mixer):
             stop_mixer()
 
+        self.playback_timer.stop()
         self.audio_player = mixer
 
         # 2. 内部フラグの安全なリセット
