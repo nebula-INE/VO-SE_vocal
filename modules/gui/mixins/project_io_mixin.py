@@ -421,12 +421,13 @@ class ProjectIOMixin:
 
                 if hasattr(self, "refresh_track_list_ui"):
                     self.refresh_track_list_ui()
-                if hasattr(self, "switch_track"):
-                    self.switch_track(self.current_track_idx)
-                elif getattr(self, "timeline_widget", None) is not None:
-                    self.timeline_widget.set_notes(
-                        self.tracks[self.current_track_idx].notes
-                    )
+
+                # switch_track() は切替前のタイムラインを現在トラックへ退避する仕様なので、
+                # 新規プロジェクト読込直後には使わない。読込済みデータを直接表示する。
+                timeline = getattr(self, "timeline_widget", None)
+                if timeline is not None:
+                    timeline.set_notes(self.tracks[self.current_track_idx].notes)
+                    timeline.update()
 
             else:
                 # 旧1.3系JSONは現在のトラックへ読み込む。
