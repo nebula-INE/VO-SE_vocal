@@ -2088,9 +2088,12 @@ class MainWindow(
         3. 既存のノートのキャッシュを新キャラクター用に更新
         """
         # --- 1. MainWindowの状態保持 ---
-        self.current_voice = display_name
-        self.current_voice_id = internal_id
-        
+        # エンジンの切替に失敗した場合、表示だけ新音源にしてしまうと
+        # 実際には旧音源のままレンダーする危険があるため、成功確認後に確定する。
+        previous_voice = getattr(self, "current_voice", "未選択")
+        previous_voice_id = getattr(self, "current_voice_id", "NONE")
+        voice_switch_ok = False
+
         # --- 2. Python側のUTAU音源を選択音源だけに限定 ---
         # VoiceManager.scan_voices() は UTAU 音源を
         #   {表示名: 絶対パス}
@@ -2134,14 +2137,31 @@ class MainWindow(
                     oto_data = self.parse_oto_ini(voice_path)
                     if not oto_data:
                         print(f"⚠️ Warning: oto.ini not found in {voice_path}")
+
+                    self.current_voice = display_name
+                    self.current_voice_id = internal_id
+                    voice_switch_ok = True
                 else:
                     # 募集中カード等は実音源ではないため、現在の resolver を
                     # 誤って別音源へ切り替えない。
                     if internal_id.startswith("__RECRUITING__:"):
+                        self.current_voice = display_name
+                        self.current_voice_id = internal_id
+                        voice_switch_ok = False
                         print(f"ℹ️ Recruiting voice selected: {display_name}")
 
             except Exception as e:
+                self.current_voice = previous_voice
+                self.current_voice_id = previous_voice_id
                 print(f"❌ Engine character switch failed: {e}")
+
+        # エンジンが無い/選択音源が不正な場合も旧音源の状態を維持する。
+        if (
+            not voice_switch_ok
+            and not internal_id.startswith("__RECRUITING__:")
+        ):
+            self.current_voice = previous_voice
+            self.current_voice_id = previous_voice_id
 
         # --- 3. UIへのフィードバック ---
         if self.status_label:
@@ -2152,7 +2172,7 @@ class MainWindow(
         # --- 4. 既存ノートの先行レンダリング(キャッシュ)更新 ---
         # 声が変わったため、裏で作っていたキャッシュを新しい声で作り直す
         # これにより、切り替え直後に再生しても「新しい声」で即座に鳴る
-        if hasattr(self, 'on_timeline_updated'):
+        if voice_switch_ok and hasattr(self, 'on_timeline_updated'):
             self.on_timeline_updated()
 
         # --- 5. 10枠のパートナーリスト(confirmed_partners)との照合 ---
