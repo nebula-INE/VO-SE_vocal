@@ -273,7 +273,7 @@ class VoiceManagementMixin:
         try:
             # 3. 原音設定(oto.ini)の解析と保持
             oto_data = self.parse_oto_ini(path)
-            self.current_oto_data = oto_data if isinstance(oto_data, list) else []
+            self.current_oto_data = oto_data if isinstance(oto_data, dict) else {}
 
             # 4. エンジン(vo_se_engine)への音源反映
             if self.vo_se_engine is not None:
