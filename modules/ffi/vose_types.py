@@ -21,8 +21,7 @@ class CNoteEvent(ctypes.Structure):
         ("intensity", ctypes.c_double),
         ("modulation", ctypes.c_double),
         ("preutterance_ms", ctypes.c_double),
-        ("overlap_ms", ctypes.c_double),
-    ]
+undefined
 
 
 def as_c_double_array(values: Iterable[float]) -> ctypes.Array[ctypes.c_double]:
@@ -41,7 +40,7 @@ def validate_note_event_layout():
 
     pointer_size = ctypes.sizeof(ctypes.c_void_p)
     if pointer_size == 8:
-        expected = 120
+        expected = 128
         actual = ctypes.sizeof(CNoteEvent)
         if actual != expected:
             raise RuntimeError(
