@@ -141,18 +141,25 @@ class AudioMixer:
 
             mix = np.zeros((frames, 2), dtype=np.float32)
             solo_exists = any(bool(getattr(t, "is_solo", False)) for t in tracks)
+            has_audio = False
+            all_finished = True
 
             for track in tracks:
                 if not self._track_is_active(track, solo_exists):
                     continue
 
                 data = buffers.get(id(track))
-                if data is None or start >= len(data):
+                if data is None:
+                    continue
+                if start < len(data):
+                    all_finished = False
+                if start >= len(data):
                     continue
 
                 chunk = data[start:min(end, len(data))]
                 if len(chunk) == 0:
                     continue
+                has_audio = True
 
                 gain = float(np.clip(getattr(track, "volume", 1.0), 0.0, 1.0))
                 pan = float(np.clip(getattr(track, "pan", 0.0), -1.0, 1.0))
@@ -164,8 +171,12 @@ class AudioMixer:
 
             self._position = end
 
+            should_stop = bool(buffers) and all_finished and not has_audio
+
         np.clip(mix, -1.0, 1.0, out=mix)
         outdata[:] = mix
+        if should_stop and sd is not None:
+            raise sd.CallbackStop()
 
     @staticmethod
     def _track_is_active(track: Any, solo_exists: bool) -> bool:
