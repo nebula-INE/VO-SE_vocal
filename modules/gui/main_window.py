@@ -2110,7 +2110,14 @@ class MainWindow(
                 voices = getattr(voice_manager, "voices", {}) if voice_manager else {}
                 selected = voices.get(display_name, "") if isinstance(voices, dict) else ""
 
-                if isinstance(selected, str):
+                # VoiceManagementMixin.scan_utau_voices() はメタデータ辞書、
+                # VoiceManager.scan_voices() は直接パス文字列を返す。
+                # どちらのスキャン経路からでも選択音源を解決する。
+                if isinstance(selected, dict):
+                    selected_path = str(selected.get("path", "") or "")
+                    if os.path.isdir(selected_path):
+                        voice_path = os.path.abspath(selected_path)
+                elif isinstance(selected, str):
                     if selected.startswith("__INTERNAL__:"):
                         char_dir = selected.split(":", 1)[1].strip()
                         base_path = getattr(
