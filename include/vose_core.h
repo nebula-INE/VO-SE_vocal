@@ -62,6 +62,10 @@ struct NoteEvent {
     // USTノート単位の表現パラメータ。intensity=0..200, modulation=0..100。
     double  intensity;
     double  modulation;
+
+    // UTAU oto.ini timing in milliseconds.
+    double  preutterance_ms;
+    double  overlap_ms;
 };
 #pragma pack(pop)
 
