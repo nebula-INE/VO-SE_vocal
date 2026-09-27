@@ -47,3 +47,19 @@ class TestOtoParser:
         parser = OtoParser()
         parser.load_oto_file(str(ini_file))
         assert parser.get("あ") is not None
+
+
+def test_resolve_alias_does_not_substitute_unrelated_phoneme():
+    parser = OtoParser()
+    parser._db["- か"] = OtoEntry(
+        alias="- か",
+        filename="ka.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+
+    assert parser.resolve_alias("し", None) is None
