@@ -442,15 +442,18 @@ def main():
         for item in missing:
             print(f"  - {item}")
         if is_smoke_test:
-            print("[SmokeTest] 依存関係情報出力完了 (Smoke Test OK).")
-            return 0
+            print("[SmokeTest] 依存関係不足のため失敗しました。")
+            return 1
         print("requirements.txt と OS 依存ライブラリをインストールして再実行してください。")
         install_hint = OS_DEPENDENCY_INSTALL_HINTS.get(platform.system())
         if install_hint:
             print(f"例: {install_hint}")
         sys.exit(1)
 
-    if platform.system() == "Linux":
+    if is_smoke_test:
+        # CI のGUIセッション有無に左右されず、実際のQt/MainWindow初期化を検証する。
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    elif platform.system() == "Linux":
         if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
             os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
             print("[Info] Linux headless mode detected. QT_QPA_PLATFORM=offscreen を使用します。")
@@ -481,14 +484,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("VO-SE Pro")
 
-    # CI Smoke Test は重い C++ エンジン/ MainWindow 初期化を行わず、
-    # PyInstaller バンドル内で Qt と MainWindow モジュールをロードできることを確認する。
-    # 実際の MainWindow / エンジン初期化は通常起動時のみに実行する。
-    if is_smoke_test:
-        print("[SmokeTest] VO-SE Pro modules initialized successfully.")
-        app.quit()
-        return 0
-
+    # CI Smoke Test でも通常起動と同じ C++ エンジン / MainWindow 初期化を実行する。
+    # 「importできた」だけではなく、実バイナリがGUI起動処理まで到達できることを検証する。
     for icon_rel in ("assets/icon.png", "assets/icon.icns", "assets/icon.ico"):
         icon_path = get_resource_path(icon_rel)
         if os.path.exists(icon_path):
@@ -497,6 +494,9 @@ def main():
 
     dll_path = get_engine_library_path()
     if not os.path.exists(dll_path):
+        if is_smoke_test:
+            print(f"[SmokeTest] Core Engine が見つかりません: {dll_path}")
+            return 1
         QMessageBox.warning(
             None,
             "コアエンジン未検出",
@@ -550,6 +550,10 @@ def main():
     QTimer.singleShot(0, show_main_window)
     QTimer.singleShot(300, show_main_window)
     QTimer.singleShot(1200, release_startup_frontmost_hint)
+
+    if is_smoke_test:
+        print("[SmokeTest] MainWindow / C++ Engine initialization succeeded.")
+        QTimer.singleShot(3000, app.quit)
 
     result = app.exec()
     config_handler.save_config(config)
