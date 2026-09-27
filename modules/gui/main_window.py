@@ -2927,7 +2927,16 @@ class MainWindow(
 
         cache_dir = os.path.join(tempfile.gettempdir(), "vose_playback_cache")
         os.makedirs(cache_dir, exist_ok=True)
-        cache_path = os.path.join(cache_dir, f"track_{track_index}.wav")
+
+        # トラック番号だけをファイル名にすると、トラックの並べ替えや削除後に
+        # 別トラックのキャッシュを上書きしやすい。署名そのものをSHA-256化し、
+        # 「同じ内容なら同じWAV」「内容が違えば別WAV」にする。
+        import hashlib
+        cache_key = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:24]
+        cache_path = os.path.join(
+            cache_dir,
+            f"track_{track_index}_{cache_key}.wav",
+        )
 
         if (
             getattr(track, "_playback_signature", None) == signature
