@@ -2849,107 +2849,72 @@ class MainWindow(
             self.timeline_widget.update()
 
     def toggle_playback(self, event=None):
-        """
-        Spac eキーまたは再生ボタンでの再生/停止切り替え（完全安全版）
-        """
-        # 0. スレッドロックを使用して競合状態を防ぐ
+        """現在のトラックを再生/一時停止する互換再生経路。"""
         with self._playback_lock:
-            # 1. 現在の再生状態を安全に取得
-            monitoring = getattr(self, 'pro_monitoring', None)
-        
-            if monitoring and not isinstance(monitoring, bool):
-                is_playing = getattr(monitoring, 'is_playing', False)
-            else:
-                is_playing = getattr(self, 'is_playing', False)
+            monitoring = getattr(self, "pro_monitoring", None)
+            is_playing = (
+                getattr(monitoring, "is_playing", False)
+                if monitoring is not None and not isinstance(monitoring, bool)
+                else bool(getattr(self, "is_playing", False))
+            )
 
-            if not is_playing:
-                # ==========================================
-                # 再生開始処理
-                # ==========================================
-                print("▶ VO-SE Engine: 再生開始")
-            
-                # ステータスバー更新
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage("再生中...")
-            
-                # 1. トラックの取得
-                tracks = getattr(self, 'tracks', [])
-                idx = getattr(self, 'current_track_idx', 0)
-            
-                if 0 <= idx < len(tracks):
-                    current_track = tracks[idx]
-                
-                    # 2. 伴奏トラック（Wave）の場合
-                    if current_track.track_type == "wave" and current_track.audio_path:
-                        player = getattr(self, 'audio_player', None)
-                        output = getattr(self, 'audio_output', None)
-                    
-                        if player and hasattr(player, 'setSource'):
-                            from PySide6.QtCore import QUrl
-                            url = QUrl.fromLocalFile(current_track.audio_path)
-                            player.setSource(url)
-                        
-                        if output and hasattr(output, 'setVolume'):
-                             output.setVolume(current_track.volume)
-                        
-                        if player and hasattr(player, 'play'):
-                            player.play()
-                
-                    # 3. 再生位置の設定
-                    timeline = getattr(self, 'timeline_widget', None)
-                    if timeline:
-                        start_time = getattr(timeline, '_current_playback_time', 0.0)
-                        if start_time is None:
-                            start_time = 0.0
-                    
-                        # Waveトラックの場合は位置をシーク
-                        if current_track.track_type == "wave":
-                            player = getattr(self, 'audio_player', None)
-                            if player and hasattr(player, 'setPosition'):
-                                player.setPosition(int(start_time * 1000))
-
-                 # 4. フラグ更新
-                if monitoring and not isinstance(monitoring, bool):
-                    setattr(monitoring, 'is_playing', True)
-            
-                self.is_playing = True
-            
-                # 5. 再生ボタンの表示更新
-                play_btn = getattr(self, 'play_button', None)
-                if play_btn:
-                    play_btn.setText("■ 停止")
-
-            else:
-                # ==========================================
-                # 再生停止処理
-                # ==========================================
-                print("■ VO-SE Engine: 再生停止")
-            
-                # ステータスバー更新
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage("一時停止")
-            
-                # 1. すべての音を停止
-                player = getattr(self, 'audio_player', None)
-                if player and hasattr(player, 'pause'):
-                    player.pause()
-            
-                # 2. フラグ更新
-                if monitoring and not isinstance(monitoring, bool):
-                    setattr(monitoring, 'is_playing', False)
-            
+            if is_playing:
+                player = getattr(self, "audio_player", None)
+                pause = getattr(player, "pause", None)
+                if callable(pause):
+                    pause()
                 self.is_playing = False
-            
-                # 3. 再生ボタンの表示更新
-                play_btn = getattr(self, 'play_button', None)
-                if play_btn:
-                    play_btn.setText("▶ 再生")
+                if monitoring is not None and not isinstance(monitoring, bool):
+                    setattr(monitoring, "is_playing", False)
+                self._refresh_transport_button_states()
+                self.statusBar().showMessage("一時停止", 2000)
+                return
 
-            # UI全体の再描画
-            self.update()
+            tracks = list(getattr(self, "tracks", []) or [])
+            idx = int(getattr(self, "current_track_idx", 0))
+            if not (0 <= idx < len(tracks)):
+                self.statusBar().showMessage("再生するトラックがありません。", 2000)
+                return
 
+            current_track = tracks[idx]
+            timeline = getattr(self, "timeline_widget", None)
+            start_time = float(
+                getattr(timeline, "_current_playback_time", 0.0)
+                if timeline is not None
+                else 0.0
+            )
+
+            if getattr(current_track, "track_type", "vocal") == "wave":
+                audio_path = str(getattr(current_track, "audio_path", "") or "")
+                player = getattr(self, "audio_player", None)
+                play_file = getattr(player, "play_file", None)
+
+                if not audio_path or not os.path.exists(audio_path):
+                    self.statusBar().showMessage("オーディオファイルが見つかりません。", 3000)
+                    return
+                if not callable(play_file):
+                    self.statusBar().showMessage("オーディオプレイヤーを初期化できません。", 3000)
+                    return
+
+                play_file(audio_path)
+                set_position = getattr(player, "set_position", None)
+                if callable(set_position):
+                    set_position(int(start_time * 1000))
+            else:
+                engine = getattr(self, "vo_se_engine", None)
+                notes = list(getattr(timeline, "notes_list", []) or []) if timeline is not None else []
+                play_audio = getattr(engine, "play_audio", None)
+                if notes and callable(play_audio):
+                    threading.Thread(target=play_audio, daemon=True).start()
+
+            self.is_playing = True
+            if monitoring is not None and not isinstance(monitoring, bool):
+                setattr(monitoring, "is_playing", True)
+            self.current_playback_time = start_time
+            self._refresh_transport_button_states()
+            self.statusBar().showMessage(
+                f"再生中: {self._format_timecode(start_time)}", 2000
+            )
 
     def refresh_canvas(self):
         """キャンバス（描画領域）を再描画する"""
