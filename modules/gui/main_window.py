@@ -3553,8 +3553,23 @@ class MainWindow(
 
     def _on_strip_pan(self, track, value: float):
         if track in self.tracks:
-            track.pan = value
-            p_str = f"L{int(abs(value)*100)}" if value < -0.01 else (f"R{int(value*100)}" if value > 0.01 else "C")
+            track.pan = max(-1.0, min(1.0, float(value)))
+
+            # 現在再生中のWaveトラックは、実際のAudioPlayerへパンを即時反映する。
+            if (
+                getattr(track, "track_type", "") == "wave"
+                and self.tracks.index(track) == self.current_track_idx
+            ):
+                audio_player = getattr(self, "audio_player", None)
+                set_pan = getattr(audio_player, "set_pan", None)
+                if callable(set_pan):
+                    set_pan(track.pan)
+
+            p_str = (
+                f"L{int(abs(track.pan) * 100)}"
+                if track.pan < -0.01
+                else (f"R{int(track.pan * 100)}" if track.pan > 0.01 else "C")
+            )
             self.statusBar().showMessage(f"{track.name} Pan: {p_str}")
 
     def _on_strip_renamed(self, track, new_name: str):
