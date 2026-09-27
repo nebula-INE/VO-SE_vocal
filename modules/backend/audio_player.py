@@ -32,6 +32,10 @@ class AudioPlayer(QObject):
         """0.0 ～ 1.0 の範囲で音量を設定"""
         self.audio_output.setVolume(value)
 
+    def set_position(self, position_ms: int) -> None:
+        """再生位置をミリ秒単位で変更する。"""
+        self.player.setPosition(max(0, int(position_ms)))
+
     def stop(self):
         self.player.stop()
 
