@@ -346,6 +346,7 @@ class VoseTrack:
         # --- AI & エフェクト管理（将来の拡張用） ---
         self.engine_type = "Aural"     # このトラックに使うAIエンジンの種類
         self.effects = []              # リバーブやコンプレッサーの設定保持用
+        self.playback_path = ""         # レンダー済み再生ファイル（Wave/ボーカル共通）
         self.color_label = "#64D2FF"   # UIで見分けるためのトラックカラー
 
     def to_dict(self):
@@ -3537,33 +3538,19 @@ class MainWindow(
         if track in self.tracks:
             track.volume = value
             # 再生中のWaveトラックなら即時反映
-            if getattr(track, 'track_type', '') == 'wave' and self.tracks.index(track) == self.current_track_idx:
-                # Waveトラックは AudioPlayer ラッパー側の QAudioOutput が実再生経路。
-                # MainWindow.audio_output は別の QMediaPlayer 用なので、こちらを操作しても
-                # 実際の伴奏音量が変わらない。ラッパーAPIを優先して同期する。
-                audio_player = getattr(self, 'audio_player', None)
-                set_volume = getattr(audio_player, 'set_volume', None)
-                if callable(set_volume):
-                    set_volume(value)
-                else:
-                    audio_output = getattr(self, 'audio_output', None)
-                    if audio_output is not None:
-                        audio_output.setVolume(value)
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is not None:
+                mixer.update_tracks(self.tracks)
             self.statusBar().showMessage(f"{track.name} Volume: {int(value * 100)}%")
 
     def _on_strip_pan(self, track, value: float):
         if track in self.tracks:
             track.pan = max(-1.0, min(1.0, float(value)))
 
-            # 現在再生中のWaveトラックは、実際のAudioPlayerへパンを即時反映する。
-            if (
-                getattr(track, "track_type", "") == "wave"
-                and self.tracks.index(track) == self.current_track_idx
-            ):
-                audio_player = getattr(self, "audio_player", None)
-                set_pan = getattr(audio_player, "set_pan", None)
-                if callable(set_pan):
-                    set_pan(track.pan)
+            # Mixer callback reads track.pan directly; no second audio path is needed.
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is not None:
+                mixer.update_tracks(self.tracks)
 
             p_str = (
                 f"L{int(abs(track.pan) * 100)}"
@@ -3579,28 +3566,18 @@ class MainWindow(
 
 
     def init_audio_playback(self):
-        """オーディオ再生機能の初期設定（MainWindowの__init__から呼び出し）"""
-        from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-        
-        # 伴奏（Wave）再生用の心臓部
-        self.audio_player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-        self.audio_player.setAudioOutput(self.audio_output)
-        
-        # 再生位置が動いた時にタイムラインのカーソルを同期させる
-        self.audio_player.positionChanged.connect(self.sync_ui_to_audio)
-        
-        # 再生が終わった時の処理
-        self.audio_player.playbackStateChanged.connect(self.on_playback_state_changed)
+        """Desktop audio is routed through the single callback-based mixer."""
+        from modules.backend.audio_mixer import AudioMixer
+        self.audio_mixer = AudioMixer(sample_rate=44100)
+        self.audio_player = self.audio_mixer
+        self.audio_output = None
 
     def sync_ui_to_audio(self, ms):
-        """オーディオの再生位置（ms）をUIの秒数に反映"""
-        if self.audio_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            current_sec = ms / 1000.0
-            # タイムラインのカーソル位置を更新
+        """Legacy compatibility hook for the old QMediaPlayer path."""
+        current_sec = float(ms) / 1000.0
+        if self.timeline_widget is not None:
             self.timeline_widget._current_playback_time = current_sec
-            if self.timeline_widget:
-                self.timeline_widget.update()
+            self.timeline_widget.update()
 
     @Slot(object)
     def on_playback_state_changed(self, state: Any) -> None:
@@ -3828,26 +3805,65 @@ class MainWindow(
             start_time = item.x() / 100.0  
             duration = item.rect().width() / 100.0
             
-            # 歌詞（あ）を音素（a）に変換
-            phoneme_label = self.convert_lyrics_to_phoneme(item.lyrics)
+            # 実際の歌詞を必ず NoteEvent に保持する。
+            # 旧実装は歌詞を捨てて「あ/い/う/え/お以外=ん」としていたため、
+            # UTAU の oto.ini alias 解決に到達する前に情報を失っていた。
+            prev_lyric = note_events[-1].lyric if note_events else None
+            phoneme_label = self.convert_lyrics_to_phoneme(item.lyrics, prev_lyric)
 
-            # C++構造体 NoteEvent を作成
             event = NoteEvent(
+                lyric=str(item.lyrics or ""),
                 phonemes=phoneme_label,
-                note_number=item.note_number,
-                duration=duration,
-                start_time=start_time,
-                velocity=item.velocity
+                note_number=int(item.note_number),
+                duration=float(duration),
+                start_time=float(start_time),
+                velocity=int(item.velocity)
             )
             note_events.append(event)
 
         self.log_startup(f"Timeline Scan: {len(note_events)} notes collected.")
         return note_events
 
-    def convert_lyrics_to_phoneme(self, lyrics):
-        """簡単な歌詞→音素変換（辞書）"""
-        dic = {"あ": "a", "い": "i", "う": "u", "え": "e", "お": "o"}
-        return dic.get(lyrics, "n") # 見つからなければ「ん」にする
+    def convert_lyrics_to_phoneme(self, lyrics: str, prev_lyric: Optional[str] = None) -> str:
+        """歌詞を現在の音源に存在する UTAU alias へ解決する。
+
+        ここでは独自の「あいうえお辞書」を使わず、OtoParser/VcvResolverを
+        唯一の音源解決源として使う。解決できない場合も別音素へ勝手に置換せず、
+        元の歌詞を返して後段で無音として扱えるようにする。
+        """
+        lyric = str(lyrics or "").strip()
+        if not lyric:
+            return ""
+
+        engine = getattr(self, "vo_se_engine", None)
+        resolver = getattr(engine, "vcv_resolver", None)
+        if resolver is not None:
+            try:
+                alias, entry = resolver.resolve_note(lyric, prev_lyric)
+                if entry is not None:
+                    return str(alias)
+            except Exception as exc:
+                self.log_startup(f"UTAU alias resolution failed for '{lyric}': {exc}")
+
+        oto_parser = getattr(engine, "oto_parser", None)
+        if oto_parser is not None:
+            try:
+                entry = oto_parser.resolve_alias(lyric)
+                if entry is not None:
+                    return str(entry.alias)
+            except Exception as exc:
+                self.log_startup(f"oto.ini alias lookup failed for '{lyric}': {exc}")
+
+        text_analyzer = getattr(engine, "text_analyzer", None)
+        if text_analyzer is not None:
+            try:
+                phonemes = text_analyzer._lyric_to_phonemes(lyric)
+                if phonemes:
+                    return " ".join(str(p) for p in phonemes)
+            except Exception as exc:
+                self.log_startup(f"Japanese phoneme analysis failed for '{lyric}': {exc}")
+
+        return lyric
 
     def handle_playback(self):
         """
@@ -4040,46 +4056,24 @@ class MainWindow(
         pass
 
     def play_audio(self, path: str) -> None:
-        """オーディオファイルを安全に再生（構文エラー・型チェック対策済）"""
-    
-        # 1. パスのチェック
+        """Play a rendered audio file through the unified desktop mixer."""
         if not path or not os.path.exists(path):
             print(f"エラー: ファイルが見つかりません: {path}")
             return
- 
-        # 2. プレイヤーの取得と型確定
-        # getattrの戻り値をcastすることで、その後の hasattr チェックを有効にします
-        player = cast(Any, getattr(self, 'player', None))
-    
-        # 3. プレイヤーが有効かチェック
-        if player is None or isinstance(player, bool):
-            print("警告: プレイヤーが初期化されていません")
+
+        mixer = getattr(self, "audio_mixer", None)
+        play_file = getattr(mixer, "play_file", None)
+        if not callable(play_file):
+            print("警告: AudioMixer が初期化されていません")
             return
 
-        # 4. 再生処理
         try:
-            # 🔴 重要: インデントを修正 (ここがズレていると invalid-syntax になります)
-            from PySide6.QtCore import QUrl
-        
-            # 停止処理
-            if hasattr(player, 'stop'):
-                player.stop()
-         
-            # ソースを設定
-            if hasattr(player, 'setSource'):
-                # 絶対パスを取得して QUrl に変換
-                abs_path = os.path.abspath(path)
-                file_url = QUrl.fromLocalFile(abs_path)
-                player.setSource(file_url)
-        
-            # 再生開始
-            if hasattr(player, 'play'):
-                player.play()
-                print(f"再生開始: {path}")
-    
-        except Exception as e:
-            # ここも上の try と垂直に揃える必要があります
-            print(f"再生エラー: {e}")
+            play_file(os.path.abspath(path))
+            self.is_playing = True
+            print(f"再生開始: {path}")
+        except Exception as exc:
+            self.is_playing = False
+            print(f"再生エラー: {exc}")
             
     # ==========================================================================
     #  アップデートデート自動確認　　　　　　　　　　　　　　　　　　　　　　　　　
@@ -4658,21 +4652,13 @@ class MainWindow(
         再生を停止し、内部状態とUIを初期状態にリセットする。
         3678行目のエラーを根絶し、すべての属性アクセスを安全に行います。
         """
-        # 1. プレイヤーの停止 (AttributeAccessIssue 対策)
-        # self.player が bool (False) や None の場合にメソッドを呼ぼうとしてクラッシュするのを防ぐ
-        player_obj = getattr(self, 'player', None)
-        if player_obj is not None and not isinstance(player_obj, bool):
-            # stop メソッドが存在するか確認してから実行
-            if hasattr(player_obj, 'stop'):
-                stop_func = player_obj.stop
-                if callable(stop_func):
-                    stop_func()
+        # Unified desktop mixer is the only real-time playback path.
+        mixer = getattr(self, "audio_mixer", None)
+        stop_mixer = getattr(mixer, "stop", None)
+        if callable(stop_mixer):
+            stop_mixer()
 
-        # 1b. WAV/伴奏トラックの停止
-        audio_player = getattr(self, "audio_player", None)
-        audio_stop = getattr(audio_player, "stop", None)
-        if callable(audio_stop):
-            audio_stop()
+        self.audio_player = mixer
 
         # 2. 内部フラグの安全なリセット
         # Pyright の reportAttributeAccessIssue を防ぐため、確実に属性を更新
@@ -5847,12 +5833,10 @@ class MainWindow(
             )
 
     def play_rendered_audio(self, wav_path: str) -> None:
-        """生成されたWAVをAudioPlayerで再生する"""
-        if self.player and os.path.exists(wav_path):
-            # PySide6.QtMultimedia.QMediaPlayer を想定
-            from PySide6.QtCore import QUrl
-            self.player.setSource(QUrl.fromLocalFile(wav_path))
-            self.player.play()
+        """生成されたWAVをUnified AudioMixerで再生する。"""
+        if not wav_path or not os.path.exists(wav_path):
+            return
+        self.play_audio(wav_path)
 
 
 # ==============================================================================
