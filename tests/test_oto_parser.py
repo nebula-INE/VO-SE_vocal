@@ -63,3 +63,45 @@ def test_resolve_alias_does_not_substitute_unrelated_phoneme():
     )
 
     assert parser.resolve_alias("し", None) is None
+
+
+def test_resolve_alias_does_not_use_partial_alias():
+    parser = OtoParser()
+    parser._db["しー"] = OtoEntry(
+        alias="しー",
+        filename="shi_long.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+    assert parser.resolve_alias("し", None) is None
+
+
+def test_resolve_alias_supports_vcv_then_cv_fallback():
+    parser = OtoParser()
+    parser._db["a い"] = OtoEntry(
+        alias="a い",
+        filename="a_i.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+    parser._db["- い"] = OtoEntry(
+        alias="- い",
+        filename="i.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+
+    assert parser.resolve_alias("い", "a").alias == "a い"
+    assert parser.resolve_alias("い", "i").alias == "- い"
