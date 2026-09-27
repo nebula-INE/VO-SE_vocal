@@ -1026,10 +1026,15 @@ class ProjectIOMixin:
             return
 
         try:
-            # 関数の __name__ はパッチによる代入後も _export_to_wav_v2 のままなので、
-            # __name__ ではなく「どの属性から取得したか」で v1/v2 を判定する。
+            # v2 を優先。v2 は mode_flag を受け取れるため、Pro/Free の
+            # レンダリングモードをファイル書き出しにも確実に渡す。
             if callable(v2_export_fn):
-                result = v2_export_fn(notes, parameters, file_path)
+                result = v2_export_fn(
+                    notes,
+                    parameters,
+                    file_path,
+                    mode_flag=mode_flag,
+                )
             elif callable(v1_export_fn):
                 result = v1_export_fn(
                     notes,
@@ -1118,15 +1123,12 @@ class ProjectIOMixin:
 
             return note, current_time_sec + duration_sec
 
-        except (ValueError, TypeError, Exception) as e:
+        except (ValueError, TypeError) as e:
             print(f"DEBUG: UST Parse Error in note: {e}")
-            
-            dummy_note = NoteEventCls(lyrics=" ", note_number=64, start_time=current_time_sec, duration=0.0)
-            setattr(dummy_note, 'length', 0)
-            setattr(dummy_note, 'lyric', " ")
-            setattr(dummy_note, 'note_num', 64)
-            
-            return dummy_note, current_time_sec
+            # 壊れたノートをダミーの無音ノートとして混入させると、
+            # タイムライン上の位置や後続ノートの時間計算を壊すため、
+            # 呼び出し側で無視できる None を返す。
+            return None, current_time_sec
 
     # ダミーメソッド（main_window.py側で実装）
     def update_timeline_with_notes(self: Any, notes_data):
