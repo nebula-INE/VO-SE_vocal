@@ -3554,50 +3554,20 @@ class MainWindow(
 
     @Slot(object)
     def on_playback_state_changed(self, state: Any) -> None:
-        """再生状態の変化をUIと内部フラグに同期する。"""
-        is_playing = state == QMediaPlayer.PlaybackState.PlayingState
-        self.is_playing = is_playing
-        if hasattr(self, "play_btn") and self.play_btn:
-            self.play_btn.setText("⏸ 停止" if is_playing else "▶ 再生")
+        """Legacy Qt-media callback retained for compatibility."""
+        _ = state
+        mixer = getattr(self, "audio_mixer", None)
+        self.is_playing = bool(mixer is not None and getattr(mixer, "is_playing", False))
 
     def setup_audio_interface(self) -> None:
-        """
-        オーディオ再生エンジンの初期化（PySide6完全対応版）。
-
-        以前はここで音量スライダーUIも構築していたが、
-        setup_mixer_controls() の vol_slider と同名属性が重複し、
-        後から呼ばれた方が上書きしてしまう問題があったため、
-        UI構築は setup_mixer_controls 側に一本化し、
-        ここでは再生エンジン(QMediaPlayer/QAudioOutput)の構築に専念する。
-        """
-        from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-
-        # --- 再生エンジンの構築 ---
-        self.player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-    
-        player = self.player
-        audio_output = self.audio_output
-        if player is None or audio_output is None:
-            return
-        player.setAudioOutput(audio_output)
-        audio_output.setVolume(0.5)
-        player.playbackStateChanged.connect(self.on_playback_state_changed)
-
+        """Initialize the single desktop playback/mixing path."""
+        self.init_audio_playback()
+        self.player = None
 
     def get_current_playback_state(self) -> bool:
-        """
-
-        """
-        if not hasattr(self, 'player') or self.player is None:
-            return False
-            
-        # 旧: self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-        # 新: PySide6 の正確な Enum 比較
-        from PySide6.QtMultimedia import QMediaPlayer
-        # getattr を使って、解析ツール(Pyright)の警告を完全にスルーします
-        current_state = getattr(self.player, 'playbackState', None)
-        return current_state == QMediaPlayer.PlaybackState.PlayingState
+        """Return whether the unified desktop mixer is currently active."""
+        mixer = getattr(self, "audio_mixer", None)
+        return bool(mixer is not None and getattr(mixer, "is_playing", False))
 
     # --- [2] 連続音（VCV）解決メソッド ---
 
