@@ -82,8 +82,14 @@ class VowelClassifier:
             try:
                 import pyopenjtalk as _ojt  # noqa: F401
                 self._g2p_available = True
-            except ImportError:
-                logger.info("pyopenjtalk が利用不可。文字ベースの母音判定に切り替えます。")
+            except Exception as exc:
+                # pyopenjtalk は Cython/NumPy ABI に依存するため、
+                # import 時の ValueError 等も「G2P 利用不可」として扱う。
+                # VCV 解決自体は文字ベースの母音判定で継続できる。
+                logger.warning(
+                    "pyopenjtalk が利用不可。文字ベースの母音判定に切り替えます: %s",
+                    exc,
+                )
 
     def trailing_vowel(self, lyric: str) -> Optional[str]:
         """
