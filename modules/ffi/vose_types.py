@@ -4,7 +4,7 @@ from typing import Iterable
 
 
 class CNoteEvent(ctypes.Structure):
-    """`include/vose_core.h` の NoteEvent と ABI を一致させる。"""
+    """ABI-compatible NoteEvent definition from include/vose_core.h."""
 
     _fields_ = [
         ("wav_path", ctypes.c_char_p),
@@ -21,8 +21,9 @@ class CNoteEvent(ctypes.Structure):
         ("intensity", ctypes.c_double),
         ("modulation", ctypes.c_double),
         ("preutterance_ms", ctypes.c_double),
-undefined
-
+        ("overlap_ms", ctypes.c_double),
+        ("timing_override", ctypes.c_int),
+    ]
 
 def as_c_double_array(values: Iterable[float]) -> ctypes.Array[ctypes.c_double]:
     """Python iterable を C の `double[]` に変換する。"""
@@ -33,9 +34,8 @@ def as_c_double_array(values: Iterable[float]) -> ctypes.Array[ctypes.c_double]:
 def validate_note_event_layout():
     """CNoteEvent のレイアウト検証。
 
-    C++ 側の NoteEvent は 64bit 環境で pointer x 8 + int x 3 + double x 2 の
-    8-byte alignment になるため 104 bytes になる。
-    （2026-08-04 現在の vose_core.h の定義に基づく）
+    C++ 側の NoteEvent は 64bit 環境で 8-byte alignment され、
+    現在の定義では 128 bytes になる。
     """
 
     pointer_size = ctypes.sizeof(ctypes.c_void_p)
