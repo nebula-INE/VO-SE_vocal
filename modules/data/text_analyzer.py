@@ -135,8 +135,8 @@ class TextAnalyzer:
                 oto_entry: Optional[OtoEntry] = r[1] 
 
             # 3. 先行発声・オーバーラップ決定 (UST 上書き > oto.ini > デフォルト)
-            if getattr(note, "pre_utterance", None) is not None and note.pre_utterance > 0:
-                # UST の PreUtterance= 上書き値 (ms) を秒に変換
+            if getattr(note, "pre_utterance", None) is not None and note.pre_utterance >= 0:
+                # UST の PreUtterance= は 0ms も有効な明示的上書き値。
                 preutterance_sec = note.pre_utterance / 1000.0
             elif oto_entry is not None:
                 preutterance_sec = oto_entry.preutterance_sec
