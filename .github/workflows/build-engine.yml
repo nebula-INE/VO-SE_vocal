@@ -205,6 +205,50 @@ jobs:
             chmod +x dist_out/VO-SE_PRO_Linux
           fi
 
+
+      - name: "🧪 Startup Smoke Test (real packaged binary)"
+        shell: bash
+        env:
+          VOSE_STARTUP_SMOKE_TEST: "1"
+        run: |
+          set -euo pipefail
+          case "${{ matrix.os }}" in
+            windows-latest)
+              EXE="./dist_out/VO-SE_PRO_Win.exe"
+              ;;
+            macos-latest)
+              EXE="./dist_out/VO-SE_PRO_Mac.app/Contents/MacOS/VO-SE_PRO_Mac"
+              ;;
+            ubuntu-latest)
+              EXE="./dist_out/VO-SE_PRO_Linux"
+              ;;
+          esac
+
+          test -f "$EXE"
+          echo "Starting packaged binary: $EXE"
+
+          python - "$EXE" <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          exe = sys.argv[1]
+          env = os.environ.copy()
+          env["VOSE_STARTUP_SMOKE_TEST"] = "1"
+          env.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+          try:
+              result = subprocess.run([exe], env=env, timeout=20)
+          except subprocess.TimeoutExpired:
+              print("::error::Packaged application did not exit within 20 seconds.")
+              raise SystemExit(1)
+
+          print(f"Packaged application exit code: {result.returncode}")
+          if result.returncode != 0:
+              print("::error::Packaged application failed to start cleanly.")
+              raise SystemExit(result.returncode)
+          PY
+
       - name: "🔍 Debug: List files before release"
         shell: bash
         run: |
