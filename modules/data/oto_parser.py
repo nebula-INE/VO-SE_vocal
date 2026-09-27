@@ -150,6 +150,10 @@ class OtoParser:
             entry = self._parse_line(line, voice_dir)
             if entry is not None:
                 self._db[entry.alias] = entry
+                # 新しいoto.iniをロードした後も、以前構築した逆引きindexを
+                # 使い続けると追加エイリアスが見えなくなる。
+                if hasattr(self, "_lyric_index"):
+                    self._lyric_index.clear()
                 count += 1
 
             # Low RAM throttle: pause slightly and collect garbage every 300 lines
