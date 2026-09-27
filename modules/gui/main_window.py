@@ -2915,60 +2915,6 @@ class MainWindow(
                 paths.append(path)
         return paths
 
-    def on_play_pause_toggled(self) -> None:
-        """ツールバーの再生/一時停止をAudioMixerへ統一する。"""
-        mixer = getattr(self, "audio_mixer", None)
-        if mixer is None:
-            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
-            return
-
-        with self._playback_lock:
-            if mixer.is_playing:
-                mixer.pause()
-                self.is_playing = False
-                self.playback_timer.stop()
-                self._refresh_transport_button_states()
-                self.statusBar().showMessage("一時停止", 2000)
-                return
-
-            tracks = list(getattr(self, "tracks", []) or [])
-            try:
-                # 現在の編集内容を必ず選択中トラックへ退避してから、
-                # 全Vocalトラックを個別レンダーする。
-                current_idx = int(getattr(self, "current_track_idx", 0))
-                if 0 <= current_idx < len(tracks):
-                    current_track = tracks[current_idx]
-                    current_track.notes = deepcopy(
-                        getattr(getattr(self, "timeline_widget", None), "notes_list", [])
-                    )
-
-                self._prepare_all_vocal_playback()
-
-                start_time = float(
-                    getattr(getattr(self, "timeline_widget", None), "_current_playback_time", 0.0)
-                )
-                playable = [
-                    track for track in tracks
-                    if str(getattr(track, "playback_path", "") or "")
-                    or str(getattr(track, "audio_path", "") or "")
-                ]
-                if not playable:
-                    self.statusBar().showMessage("再生可能な音声トラックがありません。", 3000)
-                    return
-
-                mixer.set_tracks(tracks)
-                mixer.play(start_time)
-                self.is_playing = True
-                self.current_playback_time = start_time
-                self.playback_timer.start()
-                self._refresh_transport_button_states()
-                self.statusBar().showMessage("再生中")
-            except Exception as exc:
-                self.is_playing = False
-                self.playback_timer.stop()
-                self._refresh_transport_button_states()
-                self.statusBar().showMessage(f"再生準備エラー: {exc}", 5000)
-
     def toggle_playback(self, event=None):
         """旧ショートカット互換。実際の再生処理は統一入口へ委譲する。"""
         _ = event
@@ -4610,17 +4556,21 @@ class MainWindow(
                 self.is_playing = False
 
     @Slot()
+    @Slot()
     def on_play_pause_toggled(self):
-        """Start/stop the unified desktop playback path."""
+        """Start/stop the unified desktop playback path, including all Vocal tracks."""
         mixer = getattr(self, "audio_mixer", None)
         if mixer is None:
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
 
-        play_btn = cast(QPushButton, getattr(self, "play_btn", None) or getattr(self, "play_button", None))
+        play_btn = cast(
+            QPushButton,
+            getattr(self, "play_btn", None) or getattr(self, "play_button", None),
+        )
         status_lbl = cast(QLabel, getattr(self, "status_label", None))
 
-        if getattr(mixer, "is_playing", False):
+        if mixer.is_playing:
             mixer.stop()
             self.is_playing = False
             self.playback_timer.stop()
@@ -4631,35 +4581,40 @@ class MainWindow(
             self._refresh_transport_button_states()
             return
 
-        timeline = cast(Any, getattr(self, "timeline_widget", None))
-        start_time = float(getattr(timeline, "_current_playback_time", 0.0)) if timeline is not None else 0.0
         tracks = list(getattr(self, "tracks", []) or [])
-
-        playable = [
-            t for t in tracks
-            if str(getattr(t, "playback_path", "") or "")
-            or str(getattr(t, "audio_path", "") or "")
-        ]
-
         try:
-            if playable:
-                mixer.set_tracks(tracks)
-                mixer.play(start_time)
-                self.is_playing = True
-                self.current_playback_time = start_time
-                self.playback_timer.start()
-            elif timeline is not None and getattr(timeline, "notes_list", []):
-                # Vocal-only projects still use the existing render path, but its
-                # resulting WAV is routed back through AudioMixer.play_file().
-                self.is_playing = True
-                threading.Thread(
-                    target=self.handle_playback,
-                    daemon=True,
-                    name="VO-SE-Vocal-Playback",
-                ).start()
-            else:
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            if 0 <= current_idx < len(tracks):
+                current_track = tracks[current_idx]
+                if getattr(current_track, "track_type", "") == "vocal":
+                    current_track.notes = deepcopy(
+                        getattr(getattr(self, "timeline_widget", None), "notes_list", [])
+                    )
+
+            # Vocalは各トラックを独立WAVへレンダーしてMixerへ渡す。
+            self._prepare_all_vocal_playback()
+
+            timeline = cast(Any, getattr(self, "timeline_widget", None))
+            start_time = (
+                float(getattr(timeline, "_current_playback_time", 0.0))
+                if timeline is not None
+                else 0.0
+            )
+
+            playable = [
+                t for t in tracks
+                if str(getattr(t, "playback_path", "") or "")
+                or str(getattr(t, "audio_path", "") or "")
+            ]
+            if not playable:
                 self.statusBar().showMessage("再生する音声がありません。", 3000)
                 return
+
+            mixer.set_tracks(tracks)
+            mixer.play(start_time)
+            self.is_playing = True
+            self.current_playback_time = start_time
+            self.playback_timer.start()
 
             if play_btn is not None:
                 play_btn.setText("■ 停止")
@@ -4668,11 +4623,14 @@ class MainWindow(
             self._refresh_transport_button_states()
         except Exception as exc:
             self.is_playing = False
+            self.playback_timer.stop()
             if play_btn is not None:
                 play_btn.setText("▶ 再生")
             if status_lbl is not None:
                 status_lbl.setText(f"再生エラー: {exc}")
+            self._refresh_transport_button_states()
             self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
+
 
     @Slot()
     def on_record_toggled(self):
