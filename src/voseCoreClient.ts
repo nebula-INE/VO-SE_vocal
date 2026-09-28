@@ -379,10 +379,17 @@ async function renderViaCore(
     const startTimeMs = Math.max(0, startTimeSec * 1000.0);
 
     if (key !== null && note) {
-      const hasPre = typeof note.pre_utterance === 'number' ||
-        note._ust_preutterance_explicit === true;
-      const hasOverlap = typeof note.overlap === 'number' ||
-        note._ust_overlap_explicit === true;
+      // NoteEvent の dataclass 既定値は 0.0 なので、値が存在するだけでは
+      // UST の明示指定とは限らない。明示フラグを最優先し、後方互換として
+      // 正の上書き値だけは従来のWebデータからも受け付ける。
+      const preValue = typeof note.pre_utterance === 'number'
+        ? Number(note.pre_utterance) : NaN;
+      const overlapValue = typeof note.overlap === 'number'
+        ? Number(note.overlap) : NaN;
+      const hasPre = note._ust_preutterance_explicit === true ||
+        (Number.isFinite(preValue) && preValue > 0);
+      const hasOverlap = note._ust_overlap_explicit === true ||
+        (Number.isFinite(overlapValue) && overlapValue > 0);
 
       workerNotes.push({
         key,
@@ -390,8 +397,8 @@ async function renderViaCore(
         intensity: typeof note.intensity === 'number' ? note.intensity : 100,
         modulation: typeof note.modulation === 'number' ? note.modulation : 0,
         startTimeMs,
-        preutteranceMs: hasPre ? Number(note.pre_utterance) : -1,
-        overlapMs: hasOverlap ? Number(note.overlap) : -1
+        preutteranceMs: hasPre ? preValue : -1,
+        overlapMs: hasOverlap ? overlapValue : -1
       });
     } else {
       workerNotes.push({
