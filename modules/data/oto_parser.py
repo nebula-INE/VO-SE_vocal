@@ -278,3 +278,158 @@ class OtoParser:
 
         return total
 
+
+    def get(self, alias: str) -> Optional[OtoEntry]:
+        """Alias の完全一致検索。"""
+        return self._db.get(alias)
+
+    def resolve_alias(
+        self,
+        lyric: str,
+        prev_vowel: Optional[str] = None,
+    ) -> Optional[OtoEntry]:
+        """VCV -> CV -> 単独音の順で、現在ノートに対応する oto.ini エントリを解決する."""
+        if not lyric:
+            return None
+
+        clean_lyric = re.sub(
+            r"^[-aieuon_]\s*",
+            "",
+            lyric,
+            flags=re.IGNORECASE,
+        ).strip() or lyric
+        clean_lyric = re.sub(
+            r"_?[A-Ga-g][#b]?[0-9]$",
+            "",
+            clean_lyric,
+        ).strip() or clean_lyric
+
+        def match_pref(prefix: str) -> Optional[OtoEntry]:
+            entry = self._db.get(prefix)
+            if entry is not None:
+                return entry
+            prefix_lower = prefix.lower()
+            for alias, candidate in self._db.items():
+                alias_lower = alias.lower()
+                if (
+                    alias_lower.startswith(prefix_lower + "_")
+                    or alias_lower.startswith(prefix_lower + " ")
+                ):
+                    return candidate
+            return None
+
+        # 明示的な VCV/CV alias はそのまま優先する。
+        if lyric in self._db and (
+            " " in lyric or "_" in lyric or lyric.startswith("-")
+        ):
+            return self._db[lyric]
+
+        if prev_vowel:
+            entry = (
+                match_pref(f"{prev_vowel} {clean_lyric}")
+                or match_pref(f"{prev_vowel}_{clean_lyric}")
+                or match_pref(f"{prev_vowel}{clean_lyric}")
+            )
+            if entry is not None:
+                return entry
+
+        entry = (
+            match_pref(f"- {clean_lyric}")
+            or match_pref(f"_{clean_lyric}")
+            or match_pref(f"-{clean_lyric}")
+        )
+        if entry is not None:
+            return entry
+
+        if lyric in self._db:
+            return self._db[lyric]
+
+        entry = match_pref(clean_lyric)
+        if entry is not None:
+            return entry
+
+        if not hasattr(self, "_lyric_index"):
+            self._build_lyric_index()
+        indexed = self._lyric_index.get(clean_lyric, [])
+        if indexed:
+            return indexed[0]
+
+        for alias, candidate in self._db.items():
+            if clean_lyric in alias:
+                return candidate
+        return None
+
+    def _build_lyric_index(self) -> None:
+        """Alias 末尾の歌詞部分から逆引きインデックスを構築する。"""
+        self._lyric_index: Dict[str, List[OtoEntry]] = {}
+        for alias, entry in self._db.items():
+            parts = alias.strip().split()
+            pure_lyric = parts[-1] if parts else alias
+            self._lyric_index.setdefault(pure_lyric, []).append(entry)
+
+    def clear(self) -> None:
+        """ロード済み oto.ini データをすべて破棄する。"""
+        self._db.clear()
+        if hasattr(self, "_lyric_index"):
+            self._lyric_index.clear()
+
+    def get_preutterance_sec(self, alias: str, default: float = 0.05) -> float:
+        entry = self.get(alias)
+        return entry.preutterance_sec if entry else default
+
+    def get_overlap_sec(self, alias: str, default: float = 0.02) -> float:
+        entry = self.get(alias)
+        return entry.overlap_sec if entry else default
+
+    def all_aliases(self) -> List[str]:
+        return list(self._db.keys())
+
+    def has_vcv(self) -> bool:
+        """スペースを含む alias が存在する場合に VCV 対応音源と判定する。"""
+        return any(" " in alias for alias in self._db)
+
+    @staticmethod
+    def _read_safe(path: str) -> str:
+        """Shift-JIS / UTF-8 / latin-1 の順で oto.ini を読む。"""
+        for enc in ("cp932", "utf-8-sig", "utf-8", "latin-1"):
+            try:
+                with open(path, "r", encoding=enc, errors="strict") as f:
+                    return f.read()
+            except (UnicodeDecodeError, LookupError):
+                continue
+        with open(path, "r", encoding="cp932", errors="ignore") as f:
+            return f.read()
+
+    @staticmethod
+    def _parse_line(line: str, voice_dir: str) -> Optional[OtoEntry]:
+        """filename.wav=alias,offset,consonant,cutoff,preutterance,overlap を読む。"""
+        try:
+            filename_part, params_part = line.split("=", 1)
+            filename_part = filename_part.strip()
+            parts = [part.strip() for part in params_part.split(",")]
+            alias = (
+                parts[0]
+                if parts and parts[0]
+                else os.path.splitext(filename_part)[0]
+            )
+
+            def as_float(index: int, fallback: float = 0.0) -> float:
+                try:
+                    value = parts[index]
+                    return float(value) if value else fallback
+                except (IndexError, TypeError, ValueError):
+                    return fallback
+
+            return OtoEntry(
+                alias=alias,
+                filename=filename_part,
+                voice_dir=voice_dir,
+                left_blank=as_float(1),
+                fixed_range=as_float(2),
+                right_blank=as_float(3),
+                preutterance=as_float(4),
+                overlap=as_float(5),
+            )
+        except Exception as exc:
+            logger.debug("oto.ini 行のパース失敗 (%s): %s", exc, line)
+            return None
