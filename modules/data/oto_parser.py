@@ -45,9 +45,11 @@ def get_voice_dir_file_map(voice_dir: str) -> Dict[str, str]:
     if os.path.exists(voice_dir):
         for root, _dirs, files in os.walk(voice_dir):
             for f in files:
-                f_lower = f.lower()
-                if f_lower not in file_map:
-                    file_map[f_lower] = os.path.join(root, f)
+                full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path, voice_dir)
+                rel_key = rel_path.replace("\\", "/").lower()
+                if rel_key not in file_map:
+                    file_map[rel_key] = full_path
     _DIR_FILE_MAP_CACHE[voice_dir] = file_map
     return file_map
 
@@ -72,20 +74,35 @@ class OtoEntry:
     @property
     def wav_path(self) -> str:
         """フルパスで WAV へのパスを返す (大文字小文字表記ブレ・拡張子自動解決、高速化)"""
-        exact_path = os.path.join(self.voice_dir, self.filename)
-        if os.path.exists(exact_path):
+        # oto.ini は Windows 環境で "\\" 区切りを保存することがある。
+        # 実行環境の区切り文字へ正規化してから解決する。
+        normalized_filename = self.filename.replace("\\", os.sep).replace("/", os.sep)
+        if os.path.isabs(normalized_filename):
+            exact_path = os.path.normpath(normalized_filename)
+        else:
+            exact_path = os.path.normpath(
+                os.path.join(self.voice_dir, normalized_filename)
+            )
+        if os.path.isfile(exact_path):
             return exact_path
 
-        # Case-insensitive & relative path resolution using cached file map
-        target_lower = os.path.basename(self.filename).lower()
+        # Case-insensitive & nested-path resolution using a relative-path cache.
+        # 旧実装は basename だけをキーにしていたため、サブフォルダ内の
+        # 同名 WAV がある音源では別ファイルを誤選択する可能性があった。
         file_map = get_voice_dir_file_map(self.voice_dir)
+        target_lower = os.path.normpath(normalized_filename).replace(os.sep, "/").lower()
+        resolved = file_map.get(target_lower)
+        if resolved:
+            return resolved
 
-        if target_lower in file_map:
-            return file_map[target_lower]
-        if (target_lower + ".wav") in file_map:
-            return file_map[target_lower + ".wav"]
+        # 拡張子省略の oto.ini にも対応するが、相対パス全体をキーにする。
+        if not target_lower.endswith(".wav"):
+            resolved = file_map.get(target_lower + ".wav")
+            if resolved:
+                return resolved
 
-        # Fallback to exact path
+        # ファイルがまだ存在しない場合でも、呼び出し側が存在確認できる
+        # 一貫したパスを返す。
         return exact_path
 
     @property
@@ -186,6 +203,8 @@ class OtoParser:
         """
         if reset:
             self.clear()
+            # 音源切替・再スキャン時に、前回のファイル一覧を使わない。
+            clear_voice_dir_file_map_cache()
 
         if not os.path.exists(voice_dir):
             return 0
