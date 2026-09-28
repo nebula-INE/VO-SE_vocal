@@ -43,15 +43,22 @@ class ProjectIOMixin:
 
     def _capture_project_edit_state(self: Any) -> Dict[str, Any]:
         """ファイル読み込み前後のプロジェクト状態を履歴用に取得する。"""
+        timeline = getattr(self, "timeline_widget", None)
+        graph = getattr(self, "graph_editor_widget", None)
+        tempo = float(getattr(timeline, "tempo", 120.0))
         return {
             "tracks": deepcopy(list(getattr(self, "tracks", []) or [])),
             "current_track_idx": int(getattr(self, "current_track_idx", 0)),
-            "tempo": float(getattr(getattr(self, "timeline_widget", None), "tempo", 120.0)),
+            "tempo": tempo,
+            "graph_tempo": float(getattr(graph, "tempo", tempo)),
+            "graph_parameters": deepcopy(
+                getattr(graph, "all_parameters", {}) or {}
+            ),
             "current_playback_time": float(getattr(self, "current_playback_time", 0.0)),
         }
 
     def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
-        """ファイル読み込みのUndo/Redoでプロジェクト状態を復元する。"""
+        """ファイル読み込みのUndo/Redoでプロジェクト状態を完全に復元する。"""
         self.tracks = deepcopy(state.get("tracks", []))
         if self.tracks:
             requested_idx = int(state.get("current_track_idx", 0))
@@ -59,9 +66,10 @@ class ProjectIOMixin:
         else:
             self.current_track_idx = 0
 
+        tempo = float(state.get("tempo", 120.0))
         timeline = getattr(self, "timeline_widget", None)
         if timeline is not None:
-            timeline.tempo = float(state.get("tempo", 120.0))
+            timeline.tempo = tempo
             notes = self.tracks[self.current_track_idx].notes if self.tracks else []
             if hasattr(timeline, "set_notes"):
                 timeline.set_notes(notes)
@@ -69,9 +77,29 @@ class ProjectIOMixin:
                 timeline.notes_list = list(notes)
             timeline.update()
 
+        graph = getattr(self, "graph_editor_widget", None)
+        if graph is not None:
+            graph.tempo = float(state.get("graph_tempo", tempo))
+            graph_parameters = deepcopy(state.get("graph_parameters", {}))
+            if hasattr(graph, "_restore_parameters_snapshot"):
+                graph._restore_parameters_snapshot(graph_parameters)
+            else:
+                graph.all_parameters = graph_parameters
+                if hasattr(graph, "parameters_changed"):
+                    graph.parameters_changed.emit(graph.all_parameters)
+            graph.update()
+
         tempo_input = getattr(self, "tempo_input", None)
         if tempo_input is not None:
-            tempo_input.setText(str(int(round(float(state.get("tempo", 120.0))))))
+            tempo_input.blockSignals(True)
+            tempo_input.setText(str(tempo))
+            tempo_input.blockSignals(False)
+
+        # Undo/Redo 後も合成エンジン側のテンポを UI と一致させる。
+        engine = getattr(self, "vo_se_engine", None)
+        set_tempo = getattr(engine, "set_tempo", None)
+        if callable(set_tempo):
+            set_tempo(tempo)
 
         self.current_playback_time = float(state.get("current_playback_time", 0.0))
         set_time = getattr(self, "_set_transport_time", None)
@@ -81,6 +109,12 @@ class ProjectIOMixin:
         refresh = getattr(self, "refresh_track_list_ui", None)
         if callable(refresh):
             refresh()
+        sync_strips = getattr(self, "_sync_track_strips", None)
+        if callable(sync_strips):
+            sync_strips()
+        self.update_scrollbar_range() if callable(
+            getattr(self, "update_scrollbar_range", None)
+        ) else None
 
     def _record_project_state_edit(
         self: Any,
