@@ -605,16 +605,19 @@ class TimelineWidget(QWidget):
         self.set_playback_time(t)
 
     def add_note_from_midi(self, pitch: int, start_beat: float, duration_beat: float) -> None:
+        """MIDI入力で追加したノートも通常の編集操作としてUndo対象にする。"""
+        before_snapshot = self._snapshot_notes()
         new_note = NoteEventClass(
-            note_number=pitch,                              # ✅ 修正
-            start_time=self.beats_to_seconds(start_beat),   # ✅ 修正
-            duration=self.beats_to_seconds(duration_beat),  # ✅ 修正
+            note_number=pitch,
+            start_time=self.beats_to_seconds(start_beat),
+            duration=self.beats_to_seconds(duration_beat),
             lyric="la"
         )
         new_note.phoneme = "la"
         self.notes_list.append(new_note)
         self._invalidate_note_rects()
         self.notes_changed_signal.emit()
+        self._commit_edit(before_snapshot, "MIDIノート追加")
         self.update()
 
     # ============================================================
@@ -1455,11 +1458,26 @@ class TimelineWidget(QWidget):
         self.update()
 
     def _reset_selected_lyrics(self) -> None:
-        for n in self.notes_list:
-            if getattr(n, 'is_selected', False):
+        """選択ノートの歌詞を「la」に戻す編集もUndo/Redo対象にする。"""
+        selected = [
+            n for n in self.notes_list
+            if getattr(n, "is_selected", False)
+        ]
+        if not selected:
+            return
+
+        before_snapshot = self._snapshot_notes()
+        changed = False
+        for n in selected:
+            if getattr(n, "lyrics", None) != "la" or getattr(n, "phoneme", None) != "la":
                 n.lyrics = "la"
                 n.phoneme = "la"
-        self.update()
+                changed = True
+
+        if changed:
+            self.notes_changed_signal.emit()
+            self._commit_edit(before_snapshot, "歌詞を 'la' にリセット")
+            self.update()
 
     def _split_note(self, n: Any, chars: List[str]) -> None:
         if n not in self.notes_list:
