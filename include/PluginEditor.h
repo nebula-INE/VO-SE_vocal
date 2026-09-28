@@ -321,8 +321,7 @@ public:
         graphEditorTab.getGraphEditor().onCurvesChanged = [this] (const AutomationCurves& c)
         {
             latestCurves = c;
-            juce::Logger::writeToLog ("VO-SE: AutomationCurvesが更新されましたが、"
-                                       "まだ合成パイプラインへは未接続です（TODO）。");
+            voseProcessor.setAutomationCurves (c);
         };
 
         controls.onUstLoaded = [this] { refreshPianoRollFromProcessor(); };
