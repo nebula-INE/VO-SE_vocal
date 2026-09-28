@@ -1507,7 +1507,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     try {
     for (int j = 0; j < output_frames; ++j) {
         const double t_out_ms = j * kFramePeriod;
-        const double t_src_ms = map_time(t_out_ms, current_oto, src_ms, note_ms);
+        const double t_src_ms = map_time_with_preutterance(
+            t_out_ms, current_oto, src_ms, note_ms, pp.preutterance_ms);
         const int src_frame   = clamp(
             static_cast<int>(t_src_ms / kFramePeriod), 0, cache_cur->length - 1);
 
@@ -1519,8 +1520,11 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                     spec_bins, ar);
 
         // ---- 1. ベースF0を計算 ----
+        const int curve_idx = std::max(0, j - lead_frames);
+        const int curve_frames = std::max(1, output_frames - lead_frames);
         double base_f0_val = n.pitch_curve
-            ? resample_curve(n.pitch_curve, n.pitch_length, j, output_frames)
+            ? resample_curve(n.pitch_curve, n.pitch_length,
+                             std::min(curve_idx, curve_frames - 1), curve_frames)
             : 440.0;
 
         // ---- 2. UST Modulation: 原音解析F0の揺れを指定割合だけ残す ----
@@ -1546,13 +1550,15 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
         // ---- 3. その他のパラメータ ----
         const double gender  = n.gender_curve
-            ? resample_curve(n.gender_curve,  n.pitch_length, j, output_frames) : 0.5;
+            ? resample_curve(n.gender_curve, n.pitch_length,
+                             std::min(curve_idx, curve_frames - 1), curve_frames) : 0.5;
         const double tension = n.tension_curve
-            ? resample_curve(n.tension_curve, n.pitch_length, j, output_frames) : 0.5;
-        // デフォルト息パラメータは 0.0 (純粋な有声調波・息ノイズなし)
-        // 0.5 だと意図しないヒスノイズが乗るため、明示的な指定がない限り息漏れは0とする
+            ? resample_curve(n.tension_curve, n.pitch_length,
+                             std::min(curve_idx, curve_frames - 1), curve_frames) : 0.5;
+        // Keep the preutterance lead-in at the first note expression value.
         double breath  = n.breath_curve
-            ? resample_curve(n.breath_curve,  n.pitch_length, j, output_frames) : 0.0;
+            ? resample_curve(n.breath_curve, n.pitch_length,
+                             std::min(curve_idx, curve_frames - 1), curve_frames) : 0.0;
         // ★修正: breath は本来 0.0〜1.0 (0.5=無変化) の規約だが、上流 (UI/UST/レガシー
         // パス) が 0〜100 スケールのままのカーブを渡してくるケースがあり、その場合
         // breath_allowance が桁違いに膨張して下の max_ap クランプが事実上無効化され、
