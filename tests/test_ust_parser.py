@@ -38,7 +38,7 @@ class TestUstParser(unittest.TestCase):
         note = project.notes[0]
         self.assertEqual(note.pre_utterance, 0.0)
         self.assertEqual(note.overlap, 0.0)
-def test_parse_ust_basic(self):
+    def test_parse_ust_basic(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
             with open(ust_file, "w", encoding="cp932") as f:
