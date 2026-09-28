@@ -109,11 +109,12 @@ class VO_SE_Engine:
         # 古い OtoParser/VcvResolver を参照し続ける。
         refresh_v2 = getattr(self, "refresh_voice_library_v2", None)
         if callable(refresh_v2):
+            # refresh_voice_library_v2() が OTO をネイティブへ同期する。
+            # ここで再送すると音源切替時に同じDBを二重登録することになる。
             refresh_v2()
         else:
             self.refresh_voice_library()
-
-        self.set_oto_data(getattr(self.oto_parser, "_db", {}))
+            self.set_oto_data(getattr(self.oto_parser, "_db", {}))
 
     def set_oto_data(self, oto_data) -> None:
         """oto.ini のメタデータをPython/ネイティブ両方へ同期する。"""
