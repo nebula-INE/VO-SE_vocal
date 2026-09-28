@@ -396,6 +396,9 @@ class OtoParser:
         self._db.clear()
         if hasattr(self, "_lyric_index"):
             self._lyric_index.clear()
+        # 音源切替後に、削除・追加・リネームされた WAV の古い
+        # ケース非依存パス解決結果を再利用しない。
+        clear_voice_dir_file_map_cache()
 
     def get_preutterance_sec(self, alias: str, default: float = 0.05) -> float:
         entry = self.get(alias)
