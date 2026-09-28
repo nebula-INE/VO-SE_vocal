@@ -1281,9 +1281,38 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
+          set -euo pipefail
+
+          # PySide6/Qt6 が offscreen で起動するために必要な
+          # EGL/OpenGL/XCB 系のランタイムを先に導入する。
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libopengl0 \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxrender1 \
+            libxi6 \
+            libsm6 \
+            libxext6 \
+            libfontconfig1 \
+            libdbus-1-3 \
+            libglib2.0-0 \
+            libpulse0 \
+            libasound2t64
+
           python -m pip install --upgrade pip wheel setuptools
-          python -m pip install -r requirements.txt || true
+          python -m pip install -r requirements.txt
           python -m pip install Pillow PySide6 pytest
+
+          # Qt の import を pytest より先に検証し、
+          # 共有ライブラリ不足を分かりやすく検出する。
+          python - <<'PY'
+          from PySide6 import QtCore, QtGui, QtWidgets
+          print("Qt import OK:", QtCore.qVersion())
+          PY
 
       - name: Run smoke tests
         shell: bash
