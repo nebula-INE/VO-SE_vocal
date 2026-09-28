@@ -137,7 +137,20 @@ class VoiceManager:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with zipfile.ZipFile(zip_path, 'r') as zf:
-                zf.extractall(tmp_dir)
+                root = os.path.realpath(tmp_dir)
+                for member in zf.infolist():
+                    member_name = member.filename.replace("\\\\", "/")
+                    if os.path.isabs(member_name) or member_name.startswith("/"):
+                        raise ValueError(f"不正なZIPパスです: {member.filename}")
+                    destination = os.path.realpath(os.path.join(tmp_dir, member_name))
+                    if os.path.commonpath([root, destination]) != root:
+                        raise ValueError(f"ZIP展開先が対象フォルダ外です: {member.filename}")
+                    if member.is_dir():
+                        os.makedirs(destination, exist_ok=True)
+                        continue
+                    os.makedirs(os.path.dirname(destination), exist_ok=True)
+                    with zf.open(member) as source, open(destination, "wb") as target:
+                        shutil.copyfileobj(source, target)
 
             candidates = []
             for root, _, files in os.walk(tmp_dir):
