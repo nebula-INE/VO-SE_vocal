@@ -135,7 +135,8 @@ void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
                    double global_time_offset_sec,
                    const double* depth_curve,
                    const double* rate_curve,
-                   int curve_length);
+                   int curve_length,
+                   int lead_frames = 0);
 
 // ノート合成 (execute_render / synth_loop 共通)
 void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_buf);
