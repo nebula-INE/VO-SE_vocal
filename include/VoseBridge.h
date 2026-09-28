@@ -57,6 +57,9 @@ struct NoteEvent {
 
     double      intensity;
     double      modulation;
+    double      start_time_ms;
+    double      preutterance_ms;
+    double      overlap_ms;
 };
 
 #pragma pack(pop)
