@@ -22,7 +22,7 @@ import sys
 import logging
 from typing import Optional
 
-from modules.ffi.vose_types import CNoteEvent
+from modules.ffi.vose_types import CNoteEvent, COtoEntry
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,11 @@ def bind_all(lib: ctypes.CDLL) -> None:
     _bind(lib, "load_embedded_resource", [
         ctypes.c_char_p,
         ctypes.POINTER(ctypes.c_int16),
+        ctypes.c_int,
+    ], None)
+
+    _bind(lib, "set_oto_data", [
+        ctypes.POINTER(COtoEntry),
         ctypes.c_int,
     ], None)
 
