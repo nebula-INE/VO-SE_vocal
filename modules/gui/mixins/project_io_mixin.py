@@ -21,7 +21,7 @@ from copy import deepcopy
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from modules.data.data_models import NoteEvent
+from modules.data.data_models import NoteEvent, PitchEvent
 from modules.data.ust_parser import UstParser, UstConverter
 
 logger = logging.getLogger(__name__)
@@ -530,6 +530,34 @@ class ProjectIOMixin:
             if timeline is not None:
                 timeline.tempo = tempo
 
+            # Graph Editor のオートメーションもプロジェクトデータから復元する。
+            # これを保存しないと、Pitch/Gender/Tension/Breath の編集が
+            # ファイル保存→再読込で消えてしまう。
+            graph = getattr(self, "graph_editor_widget", None)
+            raw_parameters = data.get("parameters")
+            if graph is not None and isinstance(raw_parameters, dict):
+                restored_parameters = {}
+                for name in ("Pitch", "Gender", "Tension", "Breath"):
+                    raw_events = raw_parameters.get(name, [])
+                    if isinstance(raw_events, list):
+                        restored_parameters[name] = [
+                            PitchEvent.from_dict(event)
+                            for event in raw_events
+                            if isinstance(event, dict)
+                            and "time" in event
+                            and "value" in event
+                        ]
+                for name in ("Pitch", "Gender", "Tension", "Breath"):
+                    restored_parameters.setdefault(name, [])
+                if hasattr(graph, "_restore_parameters_snapshot"):
+                    graph._restore_parameters_snapshot(restored_parameters)
+                else:
+                    graph.all_parameters = restored_parameters
+                    if hasattr(graph, "parameters_changed"):
+                        graph.parameters_changed.emit(graph.all_parameters)
+                graph.tempo = tempo
+                graph.update()
+
             tempo_input = getattr(self, "tempo_input", None)
             if tempo_input is not None:
                 tempo_input.setText(str(int(round(tempo))))
@@ -1006,13 +1034,27 @@ class ProjectIOMixin:
                     ],
                 })
 
+            graph = getattr(self, "graph_editor_widget", None)
+            all_parameters = getattr(graph, "all_parameters", {}) if graph is not None else {}
+            serialized_parameters = {
+                name: [
+                    event.to_dict() if hasattr(event, "to_dict") else {
+                        "time": float(getattr(event, "time", 0.0)),
+                        "value": float(getattr(event, "value", 0.0)),
+                    }
+                    for event in (all_parameters.get(name, []) or [])
+                ]
+                for name in ("Pitch", "Gender", "Tension", "Breath")
+            }
+
             project_data = {
                 "app_id": "VO_SE_Pro_2026",
-                "version": "1.4.0",
+                "version": "1.5.0",
                 "project_name": os.path.splitext(os.path.basename(file_path))[0],
                 "tempo": tempo,
                 "current_track_idx": max(0, current_idx),
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
+                "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
             }
 
