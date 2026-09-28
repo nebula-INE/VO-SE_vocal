@@ -277,8 +277,11 @@ class VoiceManagementMixin:
 
             # 4. エンジン(vo_se_engine)への音源反映
             if self.vo_se_engine is not None:
+                # set_voice_library() 内の refresh_voice_library_v2() が
+                # parser の OTO をネイティブへ同期する。
+                # ここで GUI 用 dict を再送すると、OtoEntry ではないため
+                # 空の OTO エントリでネイティブ DB を上書きしてしまう。
                 self.vo_se_engine.set_voice_library(path)
-                self.vo_se_engine.set_oto_data(self.current_oto_data)
 
             self.current_voice = character_name
 
