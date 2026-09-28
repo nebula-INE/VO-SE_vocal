@@ -38,6 +38,7 @@ constexpr const T& clamp(const T& v, const T& lo, const T& hi) {
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <string>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -105,35 +106,42 @@ struct QueuedNote {
     std::vector<double> portamento_curve;
 };
 
-// ② NoteQueue::push メソッド内で portamento をコピー（既存の push 実装に追記）
-void push(const VoseStreamNote& n) {
-    QueuedNote qn;
-    qn.note_id      = n.note_id;
-    qn.pitch_length = n.pitch_length;
-    qn.wav_path     = n.wav_path ? n.wav_path : "";
+class NoteQueue {
+public:
+    // NoteQueue::push — portamento を含むノートデータをコピーしてキューへ追加。
+    // 同一 note_id が既にある場合は、古い待機ノートを削除して最新値を残す。
+    void push(const VoseStreamNote& n) {
+        QueuedNote qn;
+        qn.note_id      = n.note_id;
+        qn.pitch_length = n.pitch_length;
+        qn.wav_path     = n.wav_path ? n.wav_path : "";
 
-    auto fill = [&](const double* src, std::vector<double>& dst, double def) {
-        dst.resize(n.pitch_length);
-        if (src) std::copy(src, src + n.pitch_length, dst.begin());
-        else     std::fill(dst.begin(), dst.end(), def);
-    };
-    fill(n.pitch_curve,   qn.pitch_curve,   440.0);
-    fill(n.gender_curve,  qn.gender_curve,  0.5);
-    fill(n.tension_curve, qn.tension_curve, 0.5);
-    fill(n.breath_curve,  qn.breath_curve,  0.0);
+        auto fill = [&](const double* src, std::vector<double>& dst, double def) {
+            dst.resize(n.pitch_length);
+            if (src) std::copy(src, src + n.pitch_length, dst.begin());
+            else     std::fill(dst.begin(), dst.end(), def);
+        };
+        fill(n.pitch_curve,   qn.pitch_curve,   440.0);
+        fill(n.gender_curve,  qn.gender_curve,  0.5);
+        fill(n.tension_curve, qn.tension_curve, 0.5);
+        fill(n.breath_curve,  qn.breath_curve,  0.0);
 
-    // ★ ポルタメントカーブのコピー（データがあれば）
-    if (n.portamento_offsets && n.portamento_length > 0) {
-        qn.portamento_curve.resize(n.portamento_length);
-        std::copy(n.portamento_offsets, n.portamento_offsets + n.portamento_length,
-                  qn.portamento_curve.begin());
-    } else {
-        qn.portamento_curve.clear();
-    }
+        // ポルタメントカーブのコピー（データがあれば）
+        if (n.portamento_offsets && n.portamento_length > 0) {
+            qn.portamento_curve.resize(n.portamento_length);
+            std::copy(n.portamento_offsets,
+                      n.portamento_offsets + n.portamento_length,
+                      qn.portamento_curve.begin());
+        } else {
+            qn.portamento_curve.clear();
+        }
 
         std::unique_lock<std::mutex> lk(mu_);
         for (auto it = q_.begin(); it != q_.end(); ++it) {
-            if (it->note_id == n.note_id) { q_.erase(it, q_.end()); break; }
+            if (it->note_id == n.note_id) {
+                q_.erase(it, q_.end());
+                break;
+            }
         }
         q_.push_back(std::move(qn));
         cv_.notify_one();
@@ -148,7 +156,10 @@ void push(const VoseStreamNote& n) {
         return true;
     }
 
-    void cancel() { std::unique_lock<std::mutex> lk(mu_); cv_.notify_all(); }
+    void cancel() {
+        std::unique_lock<std::mutex> lk(mu_);
+        cv_.notify_all();
+    }
 
 private:
     std::mutex              mu_;
@@ -183,17 +194,6 @@ public:
     void   set_tempo(float bpm)                { tempo_bpm_.store(bpm); }
 
 private:
-    // ============================================================
-    // synth_loop — 合成スレッド本体
-    //
-    //   synthesize_note_impl を呼ぶことで execute_render と
-    //   完全に同一の合成パイプラインを使う。音質の差ゼロ。
-    //
-    //   バッファ制御:
-    //     buffer_ms の 75% を超えたら 10ms 待機 (CPU 節約)
-    //     buffer_ms の 75% を下回ったら即座に次ノートを合成開始
-    //     → 再生カーソルに対して常に ~N ms 先行して PCM を供給
-    // ============================================================
     void synth_loop() {
         CheapTrickOption ct_opt;
         InitializeCheapTrickOption(kFs_internal, &ct_opt);
@@ -205,26 +205,21 @@ private:
         std::vector<float>  chunk;
 
         while (!cancelled_.load()) {
-            // バッファが十分埋まっていたら待機
             while (!cancelled_.load() &&
                    buffered_ms() > static_cast<double>(cfg_.buffer_ms) * 0.75) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             if (cancelled_.load()) break;
 
-            // 次ノートを取得（ブロッキング）
             QueuedNote qn;
             if (!note_queue_.pop(qn, cancelled_)) break;
-
 
             const int pl = qn.pitch_length;
             if (pl <= 0) { prev_ev = nullptr; continue; }
 
-            // ボイス解決
             auto ev = find_voice_ref(qn.wav_path.c_str());
             if (!ev) { prev_ev = nullptr; continue; }
 
-            // NoteEvent を一時構築（カーブはスタック上のベクタを直接ポイント）
             NoteEvent tmp_n = {};
             tmp_n.wav_path      = qn.wav_path.c_str();
             tmp_n.pitch_length  = qn.pitch_length;
@@ -236,14 +231,9 @@ private:
             tmp_n.portamento_offsets = qn.portamento_curve.empty() ? nullptr : qn.portamento_curve.data();
             tmp_n.portamento_length  = static_cast<int>(qn.portamento_curve.size());
 
-
-            // oto.ini エントリ取得（streaming でも正しくタイムマッピングする）
-            // g_oto_db は音源切替時に再構築されるため、内部要素への
-            // ポインタをロック解放後まで保持せず、値コピーを使う。
             OtoEntry found_oto{};
             const bool has_found_oto = find_oto_for_key(qn.wav_path.c_str(), found_oto);
 
-            // note_samples (execute_render と同じ計算式)
             const int64_t note_samples = static_cast<int64_t>(
                 std::llround(
                     static_cast<double>(std::max(1, pl)) *
@@ -251,25 +241,17 @@ private:
                 )
             );
 
-            // NotePrepass 構築
-            // prev_ev を渡すことで blend_transition_spectra が自動的に適用される
             NotePrepass pp(
                 NoteState::RENDERABLE,
                 note_samples,
                 ev,
-                prev_ev,    // クロスフェード用前ノートボイス
-                has_found_oto ? &found_oto : nullptr   // oto.ini エントリ（タイムマッピングに使用）
+                prev_ev,
+                has_found_oto ? &found_oto : nullptr
             );
 
-            // ===================================================
-            // 合成 — execute_render と完全同一のパイプライン
-            //   Harvest → CheapTrick → D4C → VOSE_Synthesis
-            //   gender/tension/breath/vibrato/blend も全て適用
-            // ===================================================
             SynthNoteParams params{ pp, tmp_n, fft_size, spec_bins };
             synthesize_note_impl(params, note_buf);
 
-            // クロスフェードのフェードイン (先頭だけ前ノートとブレンド)
             const int xfade = (prev_ev != nullptr) ? kCrossfadeSamples_internal : 0;
             const int64_t out_len = static_cast<int64_t>(note_buf.size());
 
@@ -283,7 +265,6 @@ private:
                 chunk[s] = static_cast<float>(clamp(v, -1.0, 1.0));
             }
 
-            // RingBuffer に書き込み（満杯なら待機してリトライ）
             size_t written = 0;
             while (written < static_cast<size_t>(out_len) && !cancelled_.load()) {
                 const size_t remain = static_cast<size_t>(out_len) - written;
@@ -298,13 +279,11 @@ private:
                 }
             }
 
-            // タイムスタンプ更新（クロスフェード分を差し引く）
-            // std::atomic<double>はfetch_add未サポートのためload/setで加算
             double pos = position_ms_.load();
             pos += static_cast<double>(out_len - xfade) / kFs_internal * 1000.0;
             position_ms_.store(pos);
 
-            prev_ev = ev;  // 次ノートのクロスフェード用
+            prev_ev = ev;
         }
     }
 
@@ -313,8 +292,8 @@ private:
     NoteQueue               note_queue_;
     std::thread             worker_;
     std::atomic<bool>       cancelled_;
-    std::atomic<double>     position_ms_;
-    std::atomic<float>      tempo_bpm_;
+    std::atomic<double>      position_ms_;
+    std::atomic<float>       tempo_bpm_;
 };
 
 // ============================================================
@@ -328,24 +307,27 @@ DLLEXPORT VoseStreamHandle streaming_render_create(const VoseStreamConfig* cfg) 
 }
 
 DLLEXPORT void streaming_render_push_note(VoseStreamHandle h, const VoseStreamNote* n) {
-    if (h && n) static_cast<StreamingSynthesizer*>(h)->push_note(*n);
+    if (!h || !n) return;
+    static_cast<StreamingSynthesizer*>(h)->push_note(*n);
 }
 
-DLLEXPORT int streaming_render_pull(VoseStreamHandle h, float* buf, int max_samples) {
-    if (!h || !buf || max_samples <= 0) return 0;
-    return static_cast<StreamingSynthesizer*>(h)->pull(buf, max_samples);
-}
-
-DLLEXPORT double streaming_render_buffered_ms(VoseStreamHandle h) {
-    return h ? static_cast<StreamingSynthesizer*>(h)->buffered_ms() : 0.0;
+DLLEXPORT int streaming_render_pull(VoseStreamHandle h, float* out, int max_samples) {
+    if (!h || !out || max_samples <= 0) return 0;
+    return static_cast<StreamingSynthesizer*>(h)->pull(out, max_samples);
 }
 
 DLLEXPORT void streaming_render_set_tempo(VoseStreamHandle h, float bpm) {
-    if (h && bpm > 0.0f) static_cast<StreamingSynthesizer*>(h)->set_tempo(bpm);
+    if (!h || bpm <= 0.0f) return;
+    static_cast<StreamingSynthesizer*>(h)->set_tempo(bpm);
+}
+
+DLLEXPORT double streaming_render_buffered_ms(VoseStreamHandle h) {
+    if (!h) return 0.0;
+    return static_cast<StreamingSynthesizer*>(h)->buffered_ms();
 }
 
 DLLEXPORT void streaming_render_destroy(VoseStreamHandle h) {
     delete static_cast<StreamingSynthesizer*>(h);
 }
 
-} // extern "C"
+}
