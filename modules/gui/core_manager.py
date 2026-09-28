@@ -66,6 +66,9 @@ class VoseCoreManager:
                 self._initialized = True
                 return
             raise OSError("Unified VOSE Core loader could not load the engine")
+        except Exception as exc:
+            self._disabled_reason = str(exc)
+            self.lib = None
 
         # [FIX-1] DLL未検出時は理由を記録し、後から get_lib() で参照できるようにする
         reason = "DLL not found in any candidate path"
