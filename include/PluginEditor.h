@@ -416,5 +416,5 @@ private:
     VoiceGalleryComponent voiceGallery;
     TrackMixerComponent trackMixer;
 
-    AutomationCurves latestCurves; // TODO: 合成パイプラインへの接続待ち
+    AutomationCurves latestCurves; // GraphEditor の最新オートメーション
 };
