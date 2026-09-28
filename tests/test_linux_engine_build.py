@@ -69,6 +69,20 @@ def test_linux_build_script_verifies_ctypes_load():
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason="Linux固有のABIテストのため")
+def test_python_note_event_contains_absolute_timing_fields():
+    """The appended NoteEvent fields preserve the timing contract."""
+    from modules.ffi.vose_types import CNoteEvent
+
+    field_names = [name for name, _ in CNoteEvent._fields_]
+    assert field_names[-3:] == [
+        "start_time_ms",
+        "preutterance_ms",
+        "overlap_ms",
+    ]
+    if ctypes.sizeof(ctypes.c_void_p) == 8:
+        assert ctypes.sizeof(CNoteEvent) == 128
+
+
 def test_python_note_event_matches_cpp_linux_engine_abi():
     """CNoteEvent のレイアウトが C++ の NoteEvent と一致することを確認する"""
     validate_note_event_layout()
