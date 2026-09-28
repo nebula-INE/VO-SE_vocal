@@ -196,11 +196,11 @@ class OtoParser:
         # 2. Try loading from .oto_cache.json if valid
         if use_cache and os.path.exists(cache_path):
             try:
-                cache_mtime = os.path.getmtime(cache_path)
-                if cache_mtime >= latest_mtime:
-                    import json
-                    with open(cache_path, "r", encoding="utf-8") as f:
-                        cached_data = json.load(f)
+                import json
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                cached_signature = cached_data.get("source_signature")
+                if cached_signature == source_signature:
                     for item in cached_data.get("entries", []):
                         entry = OtoEntry(
                             alias=item["alias"],
@@ -213,7 +213,11 @@ class OtoParser:
                             overlap=float(item.get("overlap", 0))
                         )
                         self._db[entry.alias] = entry
-                    logger.info("oto.ini キャッシュから超高速ロード成功 (%d エントリ): %s", len(self._db), voice_dir)
+                    logger.info(
+                        "oto.ini キャッシュから超高速ロード成功 (%d エントリ): %s",
+                        len(self._db),
+                        voice_dir,
+                    )
                     return len(self._db)
             except Exception as ex:
                 logger.warning("oto.ini キャッシュ読み込みスキップ (%s)", ex)
