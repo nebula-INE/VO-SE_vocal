@@ -918,6 +918,58 @@ double get_source_ms(const EmbeddedVoice& ev) {
     return static_cast<double>(ev.waveform.size()) / ev.fs * 1000.0;
 }
 
+// Absolute-timeline variant of map_time(). The rendered buffer includes
+// preutterance samples before the musical note boundary. The source cursor moves
+// through the OTO preutterance region first, then continues with the normal
+// fixed/stretch mapping. This preserves start_time + duration at the output.
+static double map_time_with_preutterance(double t_out_ms, const OtoEntry& oto,
+                                         double source_wav_len_ms, double note_duration_ms,
+                                         double preutterance_ms)
+{
+    const double pre = std::max(0.0, preutterance_ms);
+    if (pre <= 0.0) {
+        return map_time(t_out_ms, oto, source_wav_len_ms, note_duration_ms);
+    }
+
+    const double offset = std::max(0.0, oto.offset);
+    double fixed = std::max(0.0, oto.consonant);
+    if (note_duration_ms > 0.0 && fixed >= note_duration_ms) {
+        fixed = std::max(5.0, note_duration_ms * 0.45);
+    }
+
+    double cutoff_pos;
+    if (oto.cutoff < 0.0) {
+        cutoff_pos = offset - oto.cutoff;
+    } else if (oto.cutoff > 0.0) {
+        cutoff_pos = source_wav_len_ms - oto.cutoff;
+    } else {
+        cutoff_pos = source_wav_len_ms;
+    }
+    cutoff_pos = std::min(cutoff_pos, source_wav_len_ms);
+    if (cutoff_pos <= offset + fixed) {
+        cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
+    }
+
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
+    const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
+    const double safe_pre = std::min(pre, std::max(0.0, safe_cutoff_pos - offset));
+
+    if (t_out_ms < safe_pre) {
+        return clamp(offset + t_out_ms, 0.0, std::max(0.0, safe_cutoff_pos));
+    }
+
+    const double musical_t = t_out_ms - safe_pre;
+    const double fixed_after_pre = std::max(0.0, fixed - safe_pre);
+    if (musical_t < fixed_after_pre) {
+        return clamp(offset + safe_pre + musical_t, 0.0, std::max(0.0, safe_cutoff_pos));
+    }
+
+    const double output_stretch = std::max(1.0, note_duration_ms - fixed_after_pre);
+    const double ratio = (source_stretch > 0.0) ? (source_stretch / output_stretch) : 1.0;
+    const double mapped = (offset + fixed) + (musical_t - fixed_after_pre) * ratio;
+    return clamp(mapped, 0.0, std::max(0.0, safe_cutoff_pos));
+}
+
 double map_time(double t_out_ms, const OtoEntry& oto,
                 double source_wav_len_ms, double note_duration_ms)
 {
