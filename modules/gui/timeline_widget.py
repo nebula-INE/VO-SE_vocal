@@ -1416,8 +1416,6 @@ class TimelineWidget(QWidget):
         data = self.parameters[layer]
         if len(data) < 3:
             return
-
-        before_snapshot = self._snapshot_notes()
         keys = sorted(data.keys())
         smoothed = {}
         for i, t in enumerate(keys):
@@ -1425,8 +1423,6 @@ class TimelineWidget(QWidget):
             smoothed[t] = sum(window) / len(window)
         self.parameters[layer] = smoothed
         self.notes_changed_signal.emit()
-        self._commit_edit(before_snapshot, f"{layer} パラメーター平滑化")
-        self.update()
 
     def _clear_selected_params(self) -> None:
         """選択中のノートの時間範囲にある、現在のレイヤーのパラメーターポイントを削除する。
