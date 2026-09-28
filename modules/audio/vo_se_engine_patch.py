@@ -202,6 +202,15 @@ def _refresh_voice_library_v2(self) -> None:
     )
 
 
+def _note_duration_frames(note, frame_period_ms: float = 5.0) -> int:
+    """NoteEvent の実時間をネイティブ用フレーム数へ変換する。"""
+    try:
+        duration_sec = max(0.0, float(getattr(note, "duration", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        duration_sec = 0.0
+    return max(1, int(round(duration_sec * 1000.0 / frame_period_ms)))
+
+
 def _export_to_wav_v2(
     self,
     notes,
@@ -253,8 +262,7 @@ def _export_to_wav_v2(
         # 実際のノート長を表す 5ms フレーム数。
         # 以前は常に128を渡していたため、短いノートも長いノートも
         # すべて約635msとしてレンダリングされ、曲全体の時間軸が崩れていた。
-        duration_sec = max(0.0, float(getattr(note, "duration", 0.0) or 0.0))
-        res = max(1, int(round(duration_sec * 1000.0 / 5.0)))
+        res = _note_duration_frames(note)
         p_curve = self._get_sampled_curve(parameters["Pitch"], note, res, is_pitch=True).astype(np.float64)
         g_curve = self._get_sampled_curve(parameters["Gender"], note, res).astype(np.float64)
         t_curve = self._get_sampled_curve(parameters["Tension"], note, res).astype(np.float64)
