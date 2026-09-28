@@ -158,6 +158,30 @@ static std::string generate_cache_hash(const std::string& wav_path) {
 std::map<std::string, OtoEntry> g_oto_db;
 VoseMutex g_oto_db_mutex;
 
+// Look up oto.ini metadata by either its canonical alias or the WAV path
+// carried by NoteEvent. Desktop UTAU rendering uses the real WAV path as
+// the voice-cache key, while set_oto_data() is keyed by alias.
+static bool find_oto_for_key_locked(const char* key, OtoEntry& out)
+{
+    if (!key || key[0] == '\0')
+        return false;
+
+    auto it = g_oto_db.find(key);
+    if (it != g_oto_db.end()) {
+        out = it->second;
+        return true;
+    }
+
+    for (const auto& item : g_oto_db) {
+        if (std::strncmp(item.second.wav_path, key, sizeof(item.second.wav_path)) == 0) {
+            out = item.second;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 extern "C" void set_oto_data(const OtoEntry* entries, int count) {
     VoseUniqueLock lock(g_oto_db_mutex);
     g_oto_db.clear();
@@ -1707,11 +1731,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         bool     has_found_oto = false;
         {
             VoseUniqueLock lock(g_oto_db_mutex);
-            auto oto_it = g_oto_db.find(notes[i].wav_path);
-            if (oto_it != g_oto_db.end()) {
-                found_oto     = oto_it->second;   // 値コピー（ロック内で確定）
-                has_found_oto = true;
-            }
+            has_found_oto = find_oto_for_key_locked(notes[i].wav_path, found_oto);
         }
 
         if (ev) {
