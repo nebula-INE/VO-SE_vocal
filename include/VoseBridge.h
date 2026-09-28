@@ -8,15 +8,13 @@
 // ここでも同じ pack(8) 指定を忘れないこと（忘れるとフィールドオフセットが
 // ズレて即クラッシュする）。
 //
-// VoseStreamConfig / VoseStreamNote は include/vose_streaming.h の実物を
-// 反映済み（2026-07-05確定）。フィールド順が1つでも変わったら必ず追従すること。
+// VoseStreamConfig / VoseStreamNote は include/vose_streaming_api.h と共有する。
+// フィールド順や型を変更する場合は、コアとプラグインの両方を同時に更新すること。
 
 #pragma once
 
 #include <cstdint>
 #include <juce_core/juce_core.h>
-
-extern "C" {
 
 // vose_core.h より: pack指定なし（デフォルトアライメント）
 struct OtoEntry {
@@ -64,7 +62,9 @@ struct NoteEvent {
 
 #pragma pack(pop)
 
-#include "vose_streaming_api.h"\n\n// ============================================================
+#include "vose_streaming_api.h"
+
+// ============================================================
 // 関数ポインタ型（vose_core.h / vose_streaming.h の extern "C" ブロックと1:1対応）
 // ============================================================
 using Fn_load_embedded_resource    = void (*)(const char*, const int16_t*, int);
