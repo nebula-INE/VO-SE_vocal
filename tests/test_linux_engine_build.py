@@ -73,7 +73,7 @@ def test_python_note_event_contains_absolute_timing_fields():
     """The appended NoteEvent fields preserve the timing contract."""
     from modules.ffi.vose_types import CNoteEvent
 
-    field_names = [name for name, _ in CNoteEvent._fields_]
+    field_names = [field[0] for field in CNoteEvent._fields_]
     assert field_names[-3:] == [
         "start_time_ms",
         "preutterance_ms",
