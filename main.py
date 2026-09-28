@@ -144,88 +144,38 @@ class VoSeEngine:
         self._load_c_engine()
 
     def _load_c_engine(self):
-        """
-        OSに応じたライブラリ（DLL/dylib）を最適なパスからロードします。
-        Windows では依存DLLのパス問題を解決するため、add_dll_directory と winmode を使用します。
-        """
-        dll_path = get_engine_library_path()
-
-        # --- macOS: バンドル内の代替パスをチェック ---
-        if self.os_name == "Darwin":
-            if not os.path.exists(dll_path):
-                meipass = getattr(sys, '_MEIPASS', None)
-                if meipass:
-                    bundle_dir = os.path.dirname(os.path.dirname(meipass))
-                    alt_path = os.path.join(bundle_dir, "Frameworks", "bin", os.path.basename(dll_path))
-                    if os.path.exists(alt_path):
-                        dll_path = alt_path
-                        print(f"[Info] Mac Frameworks path used: {dll_path}")
-
-        # --- ファイル存在チェック ---
-        if not os.path.exists(dll_path):
-            print(f"[Warning] C-Engine file not found at: {dll_path}")
-            self.c_engine = None
-            return
-
-        abs_dll_path = os.path.abspath(dll_path)
-        dll_dir = os.path.dirname(abs_dll_path)
-
+        """VO-SE Coreを共通FFIローダー経由で読み込む。"""
         try:
-            # --- Windows 固有のDLLロード処理 ---
-            if self.os_name == "Windows":
-                # 1. 依存DLL（MSVCランタイムなど）の検索パスにDLLディレクトリを追加
-                if hasattr(os, "add_dll_directory"):
-                    try:
-                        # getattr を使って静的解析のエラーを回避
-                        getattr(os, "add_dll_directory")(dll_dir)
-                        print(f"[Info] Added DLL directory: {dll_dir}")
-                    except Exception as e:
-                        print(f"[Warning] add_dll_directory failed: {e}")
+            from modules.ffi.vose_api import load_engine
 
-                # 2. WinDLL を使用し、LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR フラグ (0x0008) を指定
-                #    これにより、DLLのあるディレクトリが優先的に検索される
-                if hasattr(ctypes, "WinDLL"):
-                    try:
-                        # getattr を使って静的解析のエラーを回避
-                        self.c_engine = getattr(ctypes, "WinDLL")(abs_dll_path, winmode=0x0008)
-                    except Exception as e:
-                        print(f"[Warning] WinDLL with winmode failed, falling back to CDLL: {e}")
-                        self.c_engine = ctypes.CDLL(abs_dll_path)
-                else:
-                    # 古い環境 / 非Windows でのフォールバック（実際にはここには来ない）
-                    self.c_engine = ctypes.CDLL(abs_dll_path)
-            else:
-                # macOS / Linux: RTLD_GLOBAL (mode=10) でロード
-                self.c_engine = ctypes.CDLL(abs_dll_path, mode=10)  # RTLD_GLOBAL
+            dll_path = get_engine_library_path()
+            if not os.path.exists(dll_path):
+                print(f"[Warning] C-Engine file not found at: {dll_path}")
+                self.c_engine = None
+                return
 
-            # --- 関数シグネチャの設定（process_voice が存在する場合のみ） ---
-            if hasattr(self.c_engine, 'process_voice'):
-                self.c_engine.process_voice.argtypes = [
-                    ctypes.POINTER(ctypes.c_float),
-                    ctypes.c_int,
-                    ctypes.POINTER(ctypes.c_float)
-                ]
-                self.c_engine.process_voice.restype = None
-                print(f"[Success] C-Engine loaded: {abs_dll_path}")
+            self.c_engine = load_engine(search_dirs=[os.path.dirname(os.path.abspath(dll_path))])
+            if self.c_engine is None:
+                print(f"[Warning] C-Engine could not be loaded: {dll_path}")
+                return
+
+            process_voice = getattr(self.c_engine, "process_voice", None)
+            if process_voice is None:
+                print("[Warning] C-Engine loaded but 'process_voice' not found")
             else:
-                # process_voice が無い場合は非対応エンジンとして扱うが、一応ロードは成功とみなす
-                print(f"[Warning] C-Engine loaded but 'process_voice' not found: {abs_dll_path}")
-                # 必要に応じてここで self.c_engine = None にしても良いが、他の関数が使える可能性もあるので残す
+                print(f"[Success] C-Engine loaded via unified FFI loader: {dll_path}")
 
         except OSError as e:
-            # OSError（例：依存DLL不足）は特に詳細に表示
             print(f"[Error] Failed to load C-Engine (OSError): {e}")
             if self.os_name == "Windows":
                 print("[Hint] Microsoft Visual C++ Redistributable がインストールされているか確認してください。")
-            import traceback
-            traceback.print_exc()
             self.c_engine = None
         except Exception as e:
             print(f"[Error] Failed to load C-Engine: {e}")
             import traceback
             traceback.print_exc()
             self.c_engine = None
-            
+
     def analyze_intonation(self, text):
         """【読み上げ用】音韻解析"""
         print(f"\n--- 読み上げ解析実行: '{text}' ---")
