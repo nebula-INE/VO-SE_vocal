@@ -1939,9 +1939,13 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     {
         double acc_sec = 0.0;
         for (int i = 0; i < note_count; ++i) {
-            note_global_time[i] = acc_sec;
-            if (prepass[i].note_samples > 0)
-                acc_sec += static_cast<double>(prepass[i].note_samples) / kFs;
+            if (prepass[i].absolute_timing) {
+                note_global_time[i] = std::max(0.0, prepass[i].start_time_ms / 1000.0);
+            } else {
+                note_global_time[i] = acc_sec;
+                if (prepass[i].note_samples > 0)
+                    acc_sec += static_cast<double>(prepass[i].note_samples) / kFs;
+            }
         }
     }
 
