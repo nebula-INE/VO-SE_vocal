@@ -69,7 +69,9 @@ self.onerror = (e) => {
 // ------------------------------------------------------------
 // NoteEvent構造体レイアウト (vose_core.h より。wasm32=ポインタ4バイト前提。
 // #pragma pack(push, 8) のため、末尾のdoubleは8バイト境界へアラインされる。
-// intensity: offset 48, modulation: offset 56、合計64バイト。
+// intensity: offset 48, modulation: offset 56,
+// start_time_ms: offset 64, preutterance_ms: offset 72,
+// overlap_ms: offset 80、合計88バイト。
 // ------------------------------------------------------------
 const NOTE_EVENT_SIZE = 88;
 const OFF_WAV_PATH = 0;
