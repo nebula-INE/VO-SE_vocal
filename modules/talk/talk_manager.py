@@ -220,52 +220,34 @@ def generate_talk_events(
 class VoseRendererBridge:
     def __init__(self, dll_path: str) -> None:
         self.lib = None
+        self.dll_cookie = None
         try:
-            # 1. パスの絶対パス化と存在確認
+            from modules.ffi.vose_api import load_engine
+
             dll_path = os.path.abspath(dll_path)
-            dll_dir = os.path.dirname(dll_path)
-            
             if not os.path.exists(dll_path):
                 print(f"❌ File not found: {dll_path}")
                 return
 
-            # 2. Windows特有の検索パス問題への対処
-            if platform.system() == "Windows" and hasattr(os, "add_dll_directory"):
-                # DLLのディレクトリを検索パスに明示的に追加
-                # これにより、libvo_se.dll が依存する他のDLL（bin内のもの）が見つかるようになります
-                self.dll_cookie = os.add_dll_directory(dll_dir) # type: ignore
+            # 共通ローダーを使い、execute_render / init_official_engine の
+            # argtypes / restype を一元管理する。
+            self.lib = load_engine(search_dirs=[os.path.dirname(dll_path)])
+            if self.lib is None:
+                print(f"❌ VO-SE Core load failed: {dll_path}")
+                return
 
-            # 3. DLLロード試行
-            if platform.system() == "Darwin":
-                # macOS (RTLD_GLOBALが必要なケースに対応[cite: 22])
-                self.lib = ctypes.CDLL(dll_path, mode=ctypes.RTLD_GLOBAL)
-            else:
-                # Windows / Linux
-                self.lib = ctypes.CDLL(dll_path)
+            init_engine = getattr(self.lib, "init_official_engine", None)
+            execute_render = getattr(self.lib, "execute_render", None)
+            if init_engine is None or execute_render is None:
+                raise AttributeError(
+                    "required VO-SE Core symbols are missing: "
+                    "init_official_engine / execute_render"
+                )
 
-            # 4. シンボルの存在確認[cite: 22]
-            if not hasattr(self.lib, "init_official_engine"):
-                raise AttributeError("init_official_engine not found in DLL")
-            if not hasattr(self.lib, "execute_render"):
-                raise AttributeError("execute_render not found in DLL")
-
-            # 5. 関数シグネチャの設定[cite: 22]
-            self.lib.init_official_engine.argtypes = []
-            self.lib.init_official_engine.restype = None
-            self.lib.execute_render.argtypes = [
-                ctypes.POINTER(CNoteEvent), # vose_types.py で定義[cite: 21]
-                ctypes.c_int,
-                ctypes.c_char_p,
-                ctypes.c_int,
-            ]
-            self.lib.execute_render.restype = None
-
-            # 6. エンジン初期化実行[cite: 22]
-            self.lib.init_official_engine()
+            init_engine()
             print(f"✅ VO-SE Engine Initialized: {dll_path}")
 
         except OSError as e:
-            # OSError (WinError 126 など) は依存DLL不足の可能性が高い
             print(f"❌ OS Error (Dependency issue?): {e}")
             if platform.system() == "Windows":
                 print("Hint: MSVC Redistributable がインストールされているか確認してください。")
