@@ -36,6 +36,9 @@ class CNoteEvent(ctypes.Structure):
         ("portamento_length", ctypes.c_int),
         ("intensity", ctypes.c_double),
         ("modulation", ctypes.c_double),
+        ("start_time_ms", ctypes.c_double),
+        ("preutterance_ms", ctypes.c_double),
+        ("overlap_ms", ctypes.c_double),
     ]
 
 
@@ -48,14 +51,14 @@ def as_c_double_array(values: Iterable[float]) -> ctypes.Array[ctypes.c_double]:
 def validate_note_event_layout():
     """CNoteEvent のレイアウト検証。
 
-    C++ 側の NoteEvent は 64bit 環境で pointer x 8 + int x 3 + double x 2 の
-    8-byte alignment になるため 104 bytes になる。
-    （2026-08-04 現在の vose_core.h の定義に基づく）
+    C++ 側の NoteEvent は 64bit 環境で pointer x 8 + int x 3 + double x 5 の
+    8-byte alignment になるため 128 bytes になる。
+    （2026-09-28 現在の vose_core.h の定義に基づく）
     """
 
     pointer_size = ctypes.sizeof(ctypes.c_void_p)
     if pointer_size == 8:
-        expected = 104
+        expected = 128
         actual = ctypes.sizeof(CNoteEvent)
         if actual != expected:
             raise RuntimeError(
