@@ -17,6 +17,7 @@ import logging
 import multiprocessing
 import os
 from typing import Any, Dict, List, Optional, cast
+from copy import deepcopy
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
@@ -37,6 +38,72 @@ class ProjectIOMixin:
     """
 
     # ------------------------------------------------------------------
+    # プロジェクト全体のUndo/Redo
+    # ------------------------------------------------------------------
+
+    def _capture_project_edit_state(self: Any) -> Dict[str, Any]:
+        """ファイル読み込み前後のプロジェクト状態を履歴用に取得する。"""
+        return {
+            "tracks": deepcopy(list(getattr(self, "tracks", []) or [])),
+            "current_track_idx": int(getattr(self, "current_track_idx", 0)),
+            "tempo": float(getattr(getattr(self, "timeline_widget", None), "tempo", 120.0)),
+            "current_playback_time": float(getattr(self, "current_playback_time", 0.0)),
+        }
+
+    def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
+        """ファイル読み込みのUndo/Redoでプロジェクト状態を復元する。"""
+        self.tracks = deepcopy(state.get("tracks", []))
+        if self.tracks:
+            requested_idx = int(state.get("current_track_idx", 0))
+            self.current_track_idx = min(max(requested_idx, 0), len(self.tracks) - 1)
+        else:
+            self.current_track_idx = 0
+
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is not None:
+            timeline.tempo = float(state.get("tempo", 120.0))
+            notes = self.tracks[self.current_track_idx].notes if self.tracks else []
+            if hasattr(timeline, "set_notes"):
+                timeline.set_notes(notes)
+            else:
+                timeline.notes_list = list(notes)
+            timeline.update()
+
+        tempo_input = getattr(self, "tempo_input", None)
+        if tempo_input is not None:
+            tempo_input.setText(str(int(round(float(state.get("tempo", 120.0))))))
+
+        self.current_playback_time = float(state.get("current_playback_time", 0.0))
+        set_time = getattr(self, "_set_transport_time", None)
+        if callable(set_time):
+            set_time(self.current_playback_time)
+
+        refresh = getattr(self, "refresh_track_list_ui", None)
+        if callable(refresh):
+            refresh()
+
+    def _record_project_state_edit(
+        self: Any,
+        before_state: Dict[str, Any],
+        after_state: Dict[str, Any],
+        description: str,
+    ) -> None:
+        """既に適用済みのプロジェクト変更をUndo履歴へ登録する。"""
+        if before_state == after_state:
+            return
+        history = getattr(self, "history", None)
+        if history is None:
+            return
+
+        from modules.gui.main_window import EditCommand
+
+        history.push(EditCommand(
+            lambda: self._restore_project_edit_state(after_state),
+            lambda: self._restore_project_edit_state(before_state),
+            description,
+        ))
+
+    # ------------------------------------------------------------------
     # UST 読み込み
     # ------------------------------------------------------------------
 
@@ -52,6 +119,7 @@ class ProjectIOMixin:
             True なら成功
         """
         try:
+            before_state = self._capture_project_edit_state()
             parser = UstParser()
             project = parser.load(file_path)
             note_dicts = UstConverter.to_note_dicts(project)
@@ -132,6 +200,11 @@ class ProjectIOMixin:
             logger.info(
                 "UST ロード: %d ノート, Tempo=%.1f (%s)",
                 len(notes), project.tempo, os.path.basename(file_path)
+            )
+            self._record_project_state_edit(
+                before_state,
+                self._capture_project_edit_state(),
+                "UST読み込み",
             )
             return True
 
@@ -347,6 +420,7 @@ class ProjectIOMixin:
     def load_json_project(self: Any, file_path: str) -> bool:
         """旧単一トラックJSONと新マルチトラックVOSE/JSONの両方を読み込む。"""
         try:
+            before_state = self._capture_project_edit_state()
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
@@ -436,6 +510,11 @@ class ProjectIOMixin:
                 f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})",
                 3000,
             )
+            self._record_project_state_edit(
+                before_state,
+                self._capture_project_edit_state(),
+                "JSONプロジェクト読み込み",
+            )
             return True
 
         except Exception as exc:
@@ -451,6 +530,7 @@ class ProjectIOMixin:
         """MIDI ファイルを読み込んでタイムラインに設定する"""
         from modules.data.midi_manager import load_midi_file
 
+        before_state = self._capture_project_edit_state()
         note_dicts = load_midi_file(file_path)
         if not note_dicts:
             self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
@@ -473,6 +553,11 @@ class ProjectIOMixin:
 
         self.statusBar().showMessage(
             f"MIDI 読み込み完了: {len(notes)} ノート ({os.path.basename(file_path)})"
+        )
+        self._record_project_state_edit(
+            before_state,
+            self._capture_project_edit_state(),
+            "MIDI読み込み",
         )
         return True
 
@@ -589,6 +674,10 @@ class ProjectIOMixin:
                         rel_path = normalized_fname
                         
                     target_path = os.path.join(target_voice_dir, rel_path)
+                    root_path = os.path.realpath(target_voice_dir)
+                    target_real_path = os.path.realpath(target_path)
+                    if os.path.commonpath([root_path, target_real_path]) != root_path:
+                        raise ValueError(f"不正なZIPパスです: {filename}")
                     
                     if info.is_dir():
                         os.makedirs(target_path, exist_ok=True)
