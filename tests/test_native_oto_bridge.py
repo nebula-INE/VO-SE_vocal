@@ -1,4 +1,5 @@
 import ctypes
+from typing import Any, cast
 
 from modules.audio.vo_se_engine import VO_SE_Engine
 from modules.data.oto_parser import OtoEntry
@@ -20,7 +21,8 @@ def test_oto_entry_abi_layout():
 
 def test_set_oto_data_syncs_alias_and_wav_path():
     engine = VO_SE_Engine.__new__(VO_SE_Engine)
-    engine.lib = _FakeLib()
+    fake_lib = _FakeLib()
+    engine.lib = cast(Any, fake_lib)
 
     entry = OtoEntry(
         alias="a い",
@@ -35,8 +37,8 @@ def test_set_oto_data_syncs_alias_and_wav_path():
 
     engine.set_oto_data({"a い": entry})
 
-    assert len(engine.lib.calls) == 1
-    entries, count = engine.lib.calls[0]
+    assert len(fake_lib.calls) == 1
+    entries, count = fake_lib.calls[0]
     assert count == 1
     assert entries[0].alias == "a い".encode("utf-8")
     assert entries[0].wav_path == b"/tmp/voice/a.wav"
