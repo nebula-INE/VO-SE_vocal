@@ -113,6 +113,7 @@ jobs:
             cmd //c "cl.exe /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES \
               /Fe:bin\\vose_core.dll \
               src\\vose_core.cpp \
+              src/vose_streaming_final.cpp \
               src\\world\\cheaptrick.cpp \
               src\\world\\common.cpp \
               src\\world\\d4c.cpp \
@@ -142,6 +143,7 @@ jobs:
               -I./src -I./include -I./src/world \
               -o bin/libvose_core.dylib \
               src/vose_core.cpp \
+              src/vose_streaming_final.cpp \
               build/macos-world/*.o
           else
             mkdir -p build/linux-world
@@ -159,6 +161,7 @@ jobs:
               -I./src -I./include -I./src/world \
               -o bin/libvose_core.so \
               src/vose_core.cpp \
+              src/vose_streaming_final.cpp \
               build/linux-world/*.o
           fi
 
