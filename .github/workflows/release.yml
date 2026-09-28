@@ -179,7 +179,7 @@ jobs:
           :: vose_core.cpp と WORLDのオブジェクトをまとめてDLLにリンク
           cl.exe /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES ^
             /Fe:bin\vose_core.dll ^
-            src\vose_core.cpp *.obj ^
+            src\vose_core.cpp src\vose_streaming_final.cpp *.obj ^
             /I src /I include /I src\world ^
             /link
 
@@ -221,6 +221,7 @@ jobs:
             -I./src/world \
             -o bin/libvose_core.dylib \
             src/vose_core.cpp \
+            src/vose_streaming_final.cpp \
             src/world/*.o
 
           echo "✅ Build Complete: bin/libvose_core.dylib"
@@ -251,6 +252,7 @@ jobs:
             -I./src -I./include -I./src/world \
             -o bin/libvose_core.so \
             src/vose_core.cpp \
+            src/vose_streaming_final.cpp \
             build/linux-world/*.o
 
           echo "✅ Build Complete: bin/libvose_core.so"
