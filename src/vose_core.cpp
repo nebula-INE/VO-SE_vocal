@@ -538,7 +538,12 @@ static constexpr int    kMaxPitchLength   = 120000;
 static constexpr int    kTransitionFrames = static_cast<int>(60.0 / kFramePeriod);
 
 static int64_t note_samples_safe(int p) {
-    return (static_cast<int64_t>(p) - 1) * kFramePeriod / 1000.0 * kFs + 1;
+    // pitch_length は 5ms フレーム数。N フレームなら N * 5ms を
+    // 実際の出力長として扱い、Python側の note.duration と一致させる。
+    return static_cast<int64_t>(
+        std::llround(static_cast<double>(std::max(1, p)) *
+                     kFramePeriod / 1000.0 * kFs)
+    );
 }
 
 // ============================================================
