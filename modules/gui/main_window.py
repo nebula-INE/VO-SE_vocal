@@ -1602,7 +1602,7 @@ class MainWindow(
     playing_notes: Dict[int, Any]
 
     oto_dict: Dict[str, Any]
-    current_oto_data: List[Any]
+    current_oto_data: Dict[str, Any]
 
     current_voice: str
     volume: float
@@ -1777,7 +1777,7 @@ class MainWindow(
         self.pitch_data = []
         self.playing_notes = {}
         self.oto_dict = {}
-        self.current_oto_data = [] # ここが List[Any] 宣言なら [] でOK
+        self.current_oto_data = {}
         
         self.current_track_idx = 0
         self.selected_index = -1 
