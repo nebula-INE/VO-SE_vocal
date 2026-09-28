@@ -4,6 +4,7 @@ import platform
 from typing import Optional
 
 from modules.ffi import CNoteEvent, validate_note_event_layout
+from modules.ffi.vose_api import load_engine
 
 
 class VoseCoreManager:
@@ -51,20 +52,20 @@ class VoseCoreManager:
             print(f"⚠️ VOSE Core disabled: {self._disabled_reason}")
             return
 
-        load_errors: list[str] = []
-        for path in self._candidate_paths():
-            if not os.path.exists(path):
-                continue
-            try:
-                self.lib = ctypes.CDLL(path)
-                self._setup_prototypes()
+        try:
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            search_dirs = [
+                os.path.join(repo_root, "bin"),
+                os.path.join(os.path.dirname(__file__), "..", "bin"),
+                os.path.join(os.getcwd(), "bin"),
+            ]
+            self.lib = load_engine(search_dirs=search_dirs)
+            if self.lib is not None:
                 self._load_bigvgan_model()
-                print(f"[OK] VOSE Core Engine Loaded: {path}")
+                print("[OK] VOSE Core Engine Loaded via unified FFI loader")
                 self._initialized = True
                 return
-            except Exception as e:
-                load_errors.append(f"  {path}: {e}")
-                print(f"[Error] Load Error: {path} ({e})")
+            raise OSError("Unified VOSE Core loader could not load the engine")
 
         # [FIX-1] DLL未検出時は理由を記録し、後から get_lib() で参照できるようにする
         reason = "DLL not found in any candidate path"
