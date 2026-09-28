@@ -2113,75 +2113,141 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // ----------------------------------------------------------------
     // パス2-B: 書き込みフェーズ
     // ----------------------------------------------------------------
-    int64_t timeline_offset    = 0;
-    bool    last_note_rendered = false;
+    int64_t timeline_offset = 0;
+    bool last_note_rendered = false;
 
     for (int idx = 0; idx < note_count; ++idx) {
         const NotePrepass& pp = prepass[idx];
         const int64_t note_samples = pp.note_samples;
 
         if (pp.state != NoteState::RENDERABLE) {
-            last_note_rendered = false;
-            timeline_offset += note_samples;
+            if (!pp.absolute_timing) {
+                last_note_rendered = false;
+                timeline_offset += note_samples;
+            }
             continue;
         }
 
-        // ノート境界での滑らかな接続
+        if (pp.absolute_timing) {
+            // Absolute placement:
+            //   musical start = start_time_ms
+            //   rendered start = start_time_ms - preutterance
+            //   previous voice remains audible for overlap_ms, then the
+            //   current note takes over. This is the UTAU-style timing model.
+            const int64_t nominal_start = static_cast<int64_t>(std::llround(
+                pp.start_time_ms * kFs / 1000.0));
+            const int64_t render_start = std::max<int64_t>(
+                0, nominal_start - pp.preutterance_samples);
+            const int64_t overlap_samples = std::min<int64_t>(
+                note_samples,
+                std::min<int64_t>(
+                    pp.preutterance_samples,
+                    static_cast<int64_t>(std::llround(pp.overlap_ms * kFs / 1000.0))));
+
+            const int64_t write_len = std::min<int64_t>(
+                note_samples,
+                total_samples - render_start);
+
+            if (write_len > 0) {
+                if (overlap_samples > 0) {
+                    const int64_t safe_xfade = std::min(overlap_samples, write_len);
+                    for (int64_t s = 0; s < safe_xfade; ++s) {
+                        const double t = (safe_xfade > 1)
+                            ? static_cast<double>(s) / static_cast<double>(safe_xfade)
+                            : 1.0;
+                        const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
+                        const double fade_out = 1.0 - fade_in;
+                        full_song_buffer[render_start + s] =
+                            full_song_buffer[render_start + s] * fade_out +
+                            note_bufs[idx][static_cast<size_t>(s)] * fade_in;
+                    }
+                    for (int64_t s = safe_xfade; s < write_len; ++s) {
+                        full_song_buffer[render_start + s] =
+                            note_bufs[idx][static_cast<size_t>(s)];
+                    }
+                } else {
+                    for (int64_t s = 0; s < write_len; ++s) {
+                        full_song_buffer[render_start + s] =
+                            note_bufs[idx][static_cast<size_t>(s)];
+                    }
+                }
+            }
+
+            // If the next musical note does not overlap this one, apply a small
+            // release fade at the actual musical end (not at the preuttered start).
+            const bool next_absolute_rendered =
+                (idx + 1 < note_count &&
+                 prepass[idx + 1].state == NoteState::RENDERABLE &&
+                 prepass[idx + 1].absolute_timing);
+            if (!next_absolute_rendered) {
+                const int64_t end_sample = std::min<int64_t>(
+                    total_samples, nominal_start +
+                    note_samples - pp.preutterance_samples);
+                const int fade_out_samples = static_cast<int>(std::min<int64_t>(
+                    220, std::max<int64_t>(0, end_sample - render_start) / 4));
+                for (int s = 0; s < fade_out_samples; ++s) {
+                    const double t = (fade_out_samples > 1)
+                        ? static_cast<double>(s) / fade_out_samples : 1.0;
+                    const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
+                    const int64_t di = end_sample - fade_out_samples + s;
+                    if (di >= 0 && di < total_samples)
+                        full_song_buffer[di] *= fade_out;
+                }
+            }
+            continue;
+        }
+
+        // Legacy sequential placement for callers that do not provide
+        // start_time_ms. This keeps older ctypes clients backward compatible.
         if (last_note_rendered) {
-            // 直前ノートと連続している場合:
-            // 直前ノートの末尾と現在ノートの先頭を 2ms (88サンプル) でオーバーラップ・クロスフェード接続する。
-            // 以前のような「直前ノートを0にフェードアウトしてから次ノートを0からフェードインする」処理だと
-            // 境界で4msの完全な無音の谷間（振幅ディップ）が生じ、プチプチ・ガタガタというノイズの原因になっていた。
-            // fade_out + fade_in = 1.0 の定ゲイン・クロスフェードにより、音圧の落ち込みやクリックのない
-            // シームレスで滑らかなレガート接続を実現する。
             const int declick = static_cast<int>(std::min<int64_t>(88, note_samples / 8));
             for (int s = 0; s < declick; ++s) {
-                const double t = (declick > 1) ? (static_cast<double>(s) / declick) : 0.5;
+                const double t = (declick > 1) ? static_cast<double>(s) / declick : 0.5;
                 const double fade_in  = 0.5 * (1.0 - std::cos(M_PI * t));
                 const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
                 const int64_t di = timeline_offset - declick + s;
                 if (di >= 0 && di < total_samples && s < note_samples) {
-                    full_song_buffer[di] = full_song_buffer[di] * fade_out + note_bufs[idx][s] * fade_in;
+                    full_song_buffer[di] =
+                        full_song_buffer[di] * fade_out + note_bufs[idx][s] * fade_in;
                 }
             }
             for (int64_t s = declick; s < note_samples; ++s) {
                 const int64_t di = timeline_offset - declick + s;
-                if (di >= 0 && di < total_samples) {
+                if (di >= 0 && di < total_samples)
                     full_song_buffer[di] = note_bufs[idx][s];
-                }
             }
             timeline_offset += (note_samples - declick);
         } else {
-            // 休符明けの立ち上がり: 3msのデクリック・フェードイン
-            const int fade_in_samples = static_cast<int>(std::min<int64_t>(132, note_samples / 4));
+            const int fade_in_samples = static_cast<int>(
+                std::min<int64_t>(132, note_samples / 4));
             for (int s = 0; s < fade_in_samples; ++s) {
-                const double t = (fade_in_samples > 1) ? (static_cast<double>(s) / fade_in_samples) : 1.0;
+                const double t = (fade_in_samples > 1)
+                    ? static_cast<double>(s) / fade_in_samples : 1.0;
                 const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
                 const int64_t di = timeline_offset + s;
-                if (di < total_samples && s < note_samples) {
+                if (di < total_samples && s < note_samples)
                     full_song_buffer[di] = note_bufs[idx][s] * fade_in;
-                }
             }
             for (int64_t s = fade_in_samples; s < note_samples; ++s) {
                 const int64_t di = timeline_offset + s;
-                if (di < total_samples) {
+                if (di < total_samples)
                     full_song_buffer[di] = note_bufs[idx][s];
-                }
             }
             timeline_offset += note_samples;
         }
 
-        // 次のノートがRENDERABLEでない、または曲末尾の場合: 5msのデクリック・フェードアウト
-        const bool next_rendered = (idx + 1 < note_count && prepass[idx + 1].state == NoteState::RENDERABLE);
+        const bool next_rendered =
+            (idx + 1 < note_count && prepass[idx + 1].state == NoteState::RENDERABLE);
         if (!next_rendered) {
-            const int fade_out_samples = static_cast<int>(std::min<int64_t>(220, note_samples / 4));
+            const int fade_out_samples = static_cast<int>(
+                std::min<int64_t>(220, note_samples / 4));
             for (int s = 0; s < fade_out_samples; ++s) {
-                const double t = (fade_out_samples > 1) ? (static_cast<double>(s) / fade_out_samples) : 1.0;
+                const double t = (fade_out_samples > 1)
+                    ? static_cast<double>(s) / fade_out_samples : 1.0;
                 const double fade_out = 0.5 * (1.0 + std::cos(M_PI * t));
                 const int64_t di = timeline_offset - fade_out_samples + s;
-                if (di >= 0 && di < total_samples) {
+                if (di >= 0 && di < total_samples)
                     full_song_buffer[di] *= fade_out;
-                }
             }
         }
 
