@@ -1425,27 +1425,24 @@ class TimelineWidget(QWidget):
             window = [data[keys[j]] for j in range(max(0, i - 1), min(len(keys), i + 2))]
             smoothed[t] = sum(window) / len(window)
         self.parameters[layer] = smoothed
+        after = copy.deepcopy(self.parameters)
 
         main_window = self.window()
         history = getattr(main_window, "history", None)
-        edit_command = getattr(main_window, "EditCommand", None)
         if history is not None:
-            try:
-                from modules.gui.main_window import EditCommand
-                after = copy.deepcopy(self.parameters)
+            def apply_snapshot(snapshot):
+                self.parameters = copy.deepcopy(snapshot)
+                self.notes_changed_signal.emit()
+                self.update()
 
-                def apply(snapshot):
-                    self.parameters = copy.deepcopy(snapshot)
-                    self.notes_changed_signal.emit()
-                    self.update()
+            class _ParameterHistoryCommand:
+                def redo(command_self):
+                    apply_snapshot(after)
 
-                history.push(EditCommand(
-                    lambda: apply(after),
-                    lambda: apply(before),
-                    f"{layer} パラメーター平滑化",
-                ))
-            except Exception:
-                pass
+                def undo(command_self):
+                    apply_snapshot(before)
+
+            history.push(_ParameterHistoryCommand())
 
         self.notes_changed_signal.emit()
         self.update()
