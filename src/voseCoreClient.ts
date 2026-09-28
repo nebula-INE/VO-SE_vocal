@@ -9,10 +9,8 @@
 // Promise<string|null>) を持つ renderStudioCore() をエクスポートする。
 //
 // [vose_core.cpp / vose_core.h 確認済み事項]
-//   - NoteEventに絶対時刻フィールドは無い。ノートは pitch_length
-//     (5msフレーム数)ぶんの長さで単純に連結される。よって休符や
-//     ノート間のギャップは「wav_path=null の無声NoteEvent」として
-//     明示的に埋めないと、曲全体のタイミングがズレる。
+//   - NoteEvent carries an absolute start_time_ms plus optional per-note
+//     preutterance/overlap overrides. The C++ core owns final timeline placement.
 //   - g_vocal_timeline(set_vocal_timelineが書き込む方)はレンダリング
 //     コードから一切読まれていない(書き込み専用/未使用)。呼ばなくてよい。
 //   - oto.ini相当のタイミング(offset/consonant/cutoff/preutterance/
@@ -363,74 +361,68 @@ async function renderViaCore(
     samples.push({ key: wasmKey, pcmF32: s.pcmF32.buffer.slice(0), oto: s.oto, origAlias });
   }
 
-  // 4. NoteEvent列を正確なサンプル蓄積・タイムライン整合で構築する
-  // C++ vose_core.wasm の note_samples_safe(p) は:
-  //   note_samples = (p - 1) * 220.5 + 1  (44.1kHz, 5ms周期)
-  // かつ連続有声ノート接続時に declick (最大88サンプル = 2ms) をオーバーラップ・減算する。
-  // 各イベントごとに目標サンプル時刻との差分を累積して p を決定することで、
-  // 5msの欠落やデクリックによる累積誤差を完全にゼロ化する。
+  // 4. Build NoteEvents with their real musical positions.
+  // The C++ core now owns the absolute timeline, so gaps no longer need to be
+  // converted into artificial sequential padding to preserve timing.
   const workerNotes: WorkerNoteEntry[] = [];
-  let cursorTick = 0;
-  let accumulatedTimelineSamples = 0;
-  let lastWasVoiced = false;
 
   const pushEvent = (
     key: string | null,
     note: any | null,
-    targetEndTimeSec: number,
+    startTimeSec: number,
     durationMs: number
   ) => {
-    const targetEndSample = Math.round(targetEndTimeSec * 44100);
-    const neededAdvance = targetEndSample - accumulatedTimelineSamples;
-    if (neededAdvance <= 0 && key === null) {
-      return;
-    }
+    const p = Math.max(
+      2,
+      Math.round(Math.max(1, durationMs) / PITCH_FRAME_PERIOD_MS) + 1
+    );
+    const startTimeMs = Math.max(0, startTimeSec * 1000.0);
 
-    const isVoiced = key !== null;
-    const declickEst = (isVoiced && lastWasVoiced) ? 88 : 0;
-    const neededSamples = Math.max(0, neededAdvance + declickEst);
+    if (key !== null && note) {
+      // NoteEvent の dataclass 既定値は 0.0 なので、値が存在するだけでは
+      // UST の明示指定とは限らない。明示フラグを最優先し、後方互換として
+      // 正の上書き値だけは従来のWebデータからも受け付ける。
+      const preValue = typeof note.pre_utterance === 'number'
+        ? Number(note.pre_utterance) : NaN;
+      const overlapValue = typeof note.overlap === 'number'
+        ? Number(note.overlap) : NaN;
+      const hasPre = note._ust_preutterance_explicit === true ||
+        (Number.isFinite(preValue) && preValue > 0);
+      const hasOverlap = note._ust_overlap_explicit === true ||
+        (Number.isFinite(overlapValue) && overlapValue > 0);
 
-    // (p - 1) * 220.5 + 1 ≈ neededSamples
-    const pMinus1 = Math.round(Math.max(1, neededSamples - 1) / 220.5);
-    const p = Math.max(2, pMinus1 + 1);
-
-    const actualSamples = (p - 1) * 220.5 + 1;
-    const actualDeclick = (isVoiced && lastWasVoiced)
-      ? Math.min(88, Math.floor(actualSamples / 8))
-      : 0;
-    const actualAdvance = actualSamples - actualDeclick;
-    accumulatedTimelineSamples += actualAdvance;
-
-    if (isVoiced && note) {
       workerNotes.push({
         key,
         pitchCurveHz: buildPitchCurveHz(note, p, durationMs),
         intensity: typeof note.intensity === 'number' ? note.intensity : 100,
-        modulation: typeof note.modulation === 'number' ? note.modulation : 0
+        modulation: typeof note.modulation === 'number' ? note.modulation : 0,
+        startTimeMs,
+        preutteranceMs: hasPre ? preValue : -1,
+        overlapMs: hasOverlap ? overlapValue : -1
       });
-      lastWasVoiced = true;
     } else {
       workerNotes.push({
         key: null,
-        pitchCurveHz: silentFrames(p)
+        pitchCurveHz: silentFrames(p),
+        startTimeMs,
+        preutteranceMs: -1,
+        overlapMs: -1
       });
-      lastWasVoiced = false;
     }
   };
 
+  let cursorTick = 0;
   for (let i = 0; i < sortedNotes.length; i++) {
     const n = sortedNotes[i];
     const startTick = Math.max(0, n.tick || 0);
     const length = Math.max(1, n.length || 480);
     const endTick = startTick + length;
 
-    // 前のノートとの間にギャップ（無音）があれば無音イベントを挿入
     if (startTick > cursorTick) {
       const gapStartSec = tickToTimeSec(cursorTick);
       const gapEndSec = tickToTimeSec(startTick);
       const gapDurationMs = (gapEndSec - gapStartSec) * 1000;
-      pushEvent(null, null, gapEndSec, gapDurationMs);
-      cursorTick = startTick;
+      pushEvent(null, null, gapStartSec, gapDurationMs);
     }
 
     const noteStartSec = tickToTimeSec(startTick);
@@ -438,11 +430,12 @@ async function renderViaCore(
     const noteDurationMs = (noteEndSec - noteStartSec) * 1000;
 
     if (isRest(n.lyric)) {
-      pushEvent(null, null, noteEndSec, noteDurationMs);
+      pushEvent(null, null, noteStartSec, noteDurationMs);
     } else {
       const lyric = n.lyric || 'あ';
       const prevNote = i > 0 ? sortedNotes[i - 1] : null;
-      const isContinuous = prevNote && !isRest(prevNote.lyric) && (startTick - ((prevNote.tick || 0) + (prevNote.length || 480)) <= 240);
+      const isContinuous = prevNote && !isRest(prevNote.lyric) &&
+        (startTick - ((prevNote.tick || 0) + (prevNote.length || 480)) <= 240);
       const prevLyric = isContinuous ? prevNote.lyric : undefined;
       const noteNum = n.noteNum || 60;
       const key = `${voicebank}:${lyric}:${prevLyric || ''}:${noteNum}`;
@@ -450,10 +443,9 @@ async function renderViaCore(
       const s = rawSampleMap.get(key);
       const wasmKey = cacheKeyToWasmKey.get(key);
       if (!s || !wasmKey) {
-        // サンプル取得失敗時は無音で埋めてタイミングを保持
-        pushEvent(null, null, noteEndSec, noteDurationMs);
+        pushEvent(null, null, noteStartSec, noteDurationMs);
       } else {
-        pushEvent(wasmKey, n, noteEndSec, noteDurationMs);
+        pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
       }
     }
 

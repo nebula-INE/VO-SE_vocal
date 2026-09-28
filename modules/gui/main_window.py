@@ -271,6 +271,25 @@ def prepare_c_note_event(python_note: dict) -> CNoteEvent:
     c_event.vibrato_rate_curve = ctypes.cast(vib_rate_arr, ctypes.POINTER(ctypes.c_double))
     c_event.vibrato_curve_length = len(pitch_data)
 
+    # Absolute timeline fields. Negative values preserve legacy/fallback behavior.
+    raw_start = python_note.get("start_time")
+    try:
+        start_ms = float(raw_start) * 1000.0 if raw_start is not None else -1.0
+    except (TypeError, ValueError):
+        start_ms = -1.0
+    c_event.start_time_ms = start_ms if np.isfinite(start_ms) and start_ms >= 0.0 else -1.0
+
+    explicit_pre = bool(python_note.get("_ust_preutterance_explicit", False))
+    explicit_ov = bool(python_note.get("_ust_overlap_explicit", False))
+    c_event.preutterance_ms = (
+        float(python_note.get("pre_utterance", 0.0))
+        if explicit_pre and python_note.get("pre_utterance") is not None else -1.0
+    )
+    c_event.overlap_ms = (
+        float(python_note.get("overlap", 0.0))
+        if explicit_ov and python_note.get("overlap") is not None else -1.0
+    )
+
     # 配列自体は呼び出し元（SynthesisWorker）で keep_alive に保持される
     return c_event
 
@@ -723,8 +742,10 @@ class SynthesisWorker(QRunnable):
                 self.signals.error.emit("レンダリングするノートがありません。")
                 return
 
-            # チャンクサイズの決定（最大50チャンク、1チャンク最低1ノート）
-            chunk_size = max(1, min(50, total // 20 + 1))
+            # Absolute NoteEvent timing must remain in one core render call.
+            # Splitting here would create independent timelines and destroy
+            # preutterance/overlap relationships across chunk boundaries.
+            chunk_size = total
 
             temp_dir = tempfile.mkdtemp(prefix="vose_render_")
             combined_audio = []

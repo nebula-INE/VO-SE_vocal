@@ -132,12 +132,12 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/wasm/vose_core.js public/wasm/vose_core.wasm
+          # The PR checkout can be a shallow/detached checkout while Git LFS\n          # objects from the branch history are not present locally. Fetch the LFS\n          # objects reachable from the PR head before the push, otherwise Git LFS\n          # rejects an otherwise valid branch push with a missing-object error.\n          git lfs fetch origin "${{ github.head_ref || github.ref_name }}"\n\n          git add public/wasm/vose_core.js public/wasm/vose_core.wasm
           if git diff --cached --quiet; then
             echo "No changes to commit (build output identical to previous commit)."
           else
             git commit -m "chore: update vose_core.wasm build [skip ci]"
-            git push
+            git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
           fi
 
       - name: Upload WebAssembly Artifacts

@@ -69,9 +69,11 @@ self.onerror = (e) => {
 // ------------------------------------------------------------
 // NoteEvent構造体レイアウト (vose_core.h より。wasm32=ポインタ4バイト前提。
 // #pragma pack(push, 8) のため、末尾のdoubleは8バイト境界へアラインされる。
-// intensity: offset 48, modulation: offset 56、合計64バイト。
+// intensity: offset 48, modulation: offset 56,
+// start_time_ms: offset 64, preutterance_ms: offset 72,
+// overlap_ms: offset 80、合計88バイト。
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 64;
+const NOTE_EVENT_SIZE = 88;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
@@ -85,6 +87,9 @@ const OFF_PORTAMENTO_OFFSETS = 36;
 const OFF_PORTAMENTO_LENGTH = 40;
 const OFF_INTENSITY = 48;
 const OFF_MODULATION = 56;
+const OFF_START_TIME_MS = 64;
+const OFF_PREUTTERANCE_MS = 72;
+const OFF_OVERLAP_MS = 80;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
@@ -235,6 +240,11 @@ export interface WorkerNoteEntry {
   pitchCurveHz: number[];
   intensity?: number;
   modulation?: number;
+  // Absolute musical position in milliseconds. Negative = legacy sequential mode.
+  startTimeMs?: number;
+  // Negative = resolve from oto.ini. Explicit 0 is preserved as 0.
+  preutteranceMs?: number;
+  overlapMs?: number;
 }
 
 export interface RenderRequestMsg {
@@ -360,6 +370,21 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_INTENSITY, intensity ?? 100, 'double');
       mod.setValue(base + OFF_MODULATION, modulation ?? 0, 'double');
+      mod.setValue(
+        base + OFF_START_TIME_MS,
+        typeof notes[i].startTimeMs === 'number' ? notes[i].startTimeMs : -1,
+        'double'
+      );
+      mod.setValue(
+        base + OFF_PREUTTERANCE_MS,
+        typeof notes[i].preutteranceMs === 'number' ? notes[i].preutteranceMs : -1,
+        'double'
+      );
+      mod.setValue(
+        base + OFF_OVERLAP_MS,
+        typeof notes[i].overlapMs === 'number' ? notes[i].overlapMs : -1,
+        'double'
+      );
     }
 
     // 4. レンダリング実行 (execute_render_cancelable で進捗をメインスレッドへ

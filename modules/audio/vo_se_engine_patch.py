@@ -353,6 +353,40 @@ def _export_to_wav_v2(
         c_notes_array[i].intensity = float(np.clip(getattr(note, "_ust_intensity", 100.0), 0.0, 200.0))
         c_notes_array[i].modulation = float(np.clip(getattr(note, "_ust_modulation", 0.0), 0.0, 100.0))
 
+        # The v2 UST/VCV path has already resolved PreUtterance/VoiceOverlap
+        # in align_vocal_timing(). Serialize those resolved values explicitly
+        # so the native renderer does not mistake ctypes' zero-initialized
+        # fields for an intentional 0 ms override.
+        try:
+            start_time_sec = float(getattr(note, "start_time", 0.0))
+        except (TypeError, ValueError):
+            start_time_sec = 0.0
+        c_notes_array[i].start_time_ms = (
+            start_time_sec * 1000.0
+            if np.isfinite(start_time_sec) and start_time_sec >= 0.0
+            else -1.0
+        )
+
+        try:
+            preutterance_ms = float(getattr(note, "pre_utterance", 0.0))
+        except (TypeError, ValueError):
+            preutterance_ms = 0.0
+        try:
+            overlap_ms = float(getattr(note, "overlap", 0.0))
+        except (TypeError, ValueError):
+            overlap_ms = 0.0
+
+        c_notes_array[i].preutterance_ms = (
+            max(0.0, preutterance_ms)
+            if np.isfinite(preutterance_ms)
+            else -1.0
+        )
+        c_notes_array[i].overlap_ms = (
+            max(0.0, overlap_ms)
+            if np.isfinite(overlap_ms)
+            else -1.0
+        )
+
         if callable(progress_callback):
             progress_callback(int(((i + 1) / max(note_count, 1)) * 90.0))
 

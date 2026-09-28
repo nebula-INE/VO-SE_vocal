@@ -62,7 +62,7 @@ class PipelineBridge:
             set_timeline = getattr(self.c_engine, "set_vocal_timeline", None)
             if set_timeline and callable(set_timeline):
                 # 配列の先頭アドレスをポインタキャストしてC++へトス
-                set_timeline(ctypes.cast(c_frames, ctypes.POINTER(VoseFrame)), frame_count)
+                set_timeline(ctypes.cast(c_frames, ctypes.POINTER(CVoseFrame)), frame_count)
                 return True
 
         except Exception as e:

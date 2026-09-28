@@ -41,6 +41,13 @@ struct NotePrepass {
     OtoEntry                             oto          = {};
     bool                                 has_oto      = false;
 
+    // Absolute musical timeline. Legacy callers keep sequential behavior.
+    bool                                 absolute_timing = false;
+    double                               start_time_ms = -1.0;
+    double                               preutterance_ms = 0.0;
+    double                               overlap_ms = 0.0;
+    int64_t                              preutterance_samples = 0;
+
     NotePrepass() = default;
     NotePrepass(NoteState s, int64_t ns,
                 std::shared_ptr<const EmbeddedVoice> e,
@@ -128,7 +135,8 @@ void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
                    double global_time_offset_sec,
                    const double* depth_curve,
                    const double* rate_curve,
-                   int curve_length);
+                   int curve_length,
+                   int lead_frames = 0);
 
 // ノート合成 (execute_render / synth_loop 共通)
 void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_buf);

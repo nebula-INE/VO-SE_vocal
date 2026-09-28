@@ -156,6 +156,12 @@ private:
             // intensity=0（完全ミュート）/modulation=0になってしまう。
             cNotes[i].intensity           = 100.0;
             cNotes[i].modulation          = 0.0;
+
+            // This legacy C++ scheduling API has no absolute-position contract.
+            // Keep it on the sequential renderer path explicitly.
+            cNotes[i].start_time_ms       = -1.0;
+            cNotes[i].preutterance_ms     = -1.0;
+            cNotes[i].overlap_ms          = -1.0;
         }
 
         auto tempFile = juce::File::getSpecialLocation (juce::File::tempDirectory)
