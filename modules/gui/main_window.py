@@ -2572,46 +2572,6 @@ class MainWindow(
         self.open_button.clicked.connect(self.open_file_dialog_and_load_midi)
         panel_layout.addWidget(self.open_button)
 
-    def open_file_dialog_and_load_midi(self) -> None:
-        """ファイルダイアログからプロジェクト/音声ファイルを拡張子に応じて読み込む。"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "プロジェクトを開く",
-            "",
-            "VO-SE Files (*.vose *.json *.ust *.ustx *.vsqx *.mid *.midi);;"
-            "MIDI Files (*.mid *.midi);;"
-            "UTAU Files (*.ust *.ustx);;"
-            "VSQX Files (*.vsqx);;"
-            "VO-SE/JSON Files (*.vose *.json);;"
-            "All Files (*)",
-        )
-        if not file_path:
-            return
-
-        loader = getattr(self, "load_file_from_path", None)
-        if callable(loader):
-            loader(file_path)
-            return
-
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext in (".mid", ".midi"):
-            midi_loader = getattr(self, "load_midi_file_from_path", None)
-            if callable(midi_loader):
-                midi_loader(file_path)
-                return
-        if ext == ".ust":
-            ust_loader = getattr(self, "load_ust_file", None)
-            if callable(ust_loader):
-                ust_loader(file_path)
-                return
-
-        QMessageBox.warning(
-            self,
-            "読み込みエラー",
-            "このファイル形式を読み込む機能がまだ初期化されていません。",
-        )
-
-
         # 音源フォルダの再スキャン
         self.rescan_voices_button = QPushButton(icon("rescan"), " 音源再スキャン")
         self.rescan_voices_button.setObjectName("SecondaryButton")
@@ -2673,6 +2633,46 @@ class MainWindow(
         panel_layout.addStretch()
         self.main_layout.addLayout(panel_layout)
 
+
+
+    def open_file_dialog_and_load_midi(self) -> None:
+        """ファイルダイアログからプロジェクト/音声ファイルを拡張子に応じて読み込む。"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "プロジェクトを開く",
+            "",
+            "VO-SE Files (*.vose *.json *.ust *.ustx *.vsqx *.mid *.midi);;"
+            "MIDI Files (*.mid *.midi);;"
+            "UTAU Files (*.ust *.ustx);;"
+            "VSQX Files (*.vsqx);;"
+            "VO-SE/JSON Files (*.vose *.json);;"
+            "All Files (*)",
+        )
+        if not file_path:
+            return
+
+        loader = getattr(self, "load_file_from_path", None)
+        if callable(loader):
+            loader(file_path)
+            return
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in (".mid", ".midi"):
+            midi_loader = getattr(self, "load_midi_file_from_path", None)
+            if callable(midi_loader):
+                midi_loader(file_path)
+                return
+        if ext == ".ust":
+            ust_loader = getattr(self, "load_ust_file", None)
+            if callable(ust_loader):
+                ust_loader(file_path)
+                return
+
+        QMessageBox.warning(
+            self,
+            "読み込みエラー",
+            "このファイル形式を読み込む機能がまだ初期化されていません。",
+        )
 
 
     def setup_status_bar(self):
