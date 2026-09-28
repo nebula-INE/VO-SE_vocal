@@ -66,6 +66,7 @@ def test_missing_ust_overrides_uses_oto(monkeypatch):
     )
 
     note = NoteEvent(
+        note_number=60,
         lyric="a",
         start_time=1.0,
         duration=0.5,
@@ -73,7 +74,7 @@ def test_missing_ust_overrides_uses_oto(monkeypatch):
         overlap=None,
     )
 
-    notes, _timeline = analyzer.align_vocal_timing([note], object())
+    notes, _timeline = analyzer.align_vocal_timing([note], cast(OtoParser, object()))
 
     assert notes[0].pre_utterance == 120.0
     assert notes[0].overlap == 30.0
