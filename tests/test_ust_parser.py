@@ -23,7 +23,25 @@ PBY=0,5
 """
 @pytest.mark.smoke
 class TestUstParser(unittest.TestCase):
-    def test_parse_ust_basic(self):
+    def test_explicit_zero_timing_is_distinct_from_missing():
+    from modules.data.ust_parser import UstParser
+
+    project = UstParser()._parse([
+        "[#SETTING]",
+        "Tempo=120",
+        "[#0000]",
+        "Length=480",
+        "Lyric=a",
+        "NoteNum=60",
+        "PreUtterance=0",
+        "VoiceOverlap=0",
+        "[#TRACKEND]",
+    ])
+    note = project.notes[0]
+    assert note.pre_utterance == 0.0
+    assert note.overlap == 0.0
+
+def test_parse_ust_basic(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
             with open(ust_file, "w", encoding="cp932") as f:
