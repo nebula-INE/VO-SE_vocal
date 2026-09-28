@@ -21,7 +21,6 @@ VO-SE Cut Studio — コアエンジン統合モジュール
 from __future__ import annotations
 
 import os
-import ctypes
 import platform
 import tempfile
 import traceback
