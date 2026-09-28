@@ -71,9 +71,7 @@ class VoseCoreManager:
             self.lib = None
 
         # [FIX-1] DLL未検出時は理由を記録し、後から get_lib() で参照できるようにする
-        reason = "DLL not found in any candidate path"
-        if load_errors:
-            reason = "DLL found but failed to load:\n" + "\n".join(load_errors)
+        reason = self._disabled_reason or "DLL not found in any candidate path"
         self._disabled_reason = reason
         print(f"[Warning] VOSE Core DLL not found. Engine is offline.\n  Reason: {reason}")
         self.lib = None
