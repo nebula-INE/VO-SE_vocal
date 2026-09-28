@@ -135,20 +135,30 @@ class TextAnalyzer:
                 oto_entry: Optional[OtoEntry] = r[1] 
 
             # 3. 先行発声・オーバーラップ決定 (UST 上書き > oto.ini > デフォルト)
-            if getattr(note, "pre_utterance", None) is not None and note.pre_utterance > 0:
-                # UST の PreUtterance= 上書き値 (ms) を秒に変換
-                preutterance_sec = note.pre_utterance / 1000.0
+            # UST の PreUtterance=/VoiceOverlap= は「正の値だけ」ではなく、
+            # 明示された数値そのものを上書き値として扱う。
+            # 0ms を指定して oto.ini の値に戻ってしまうと、UST側で
+            # 「先行発声なし / オーバーラップなし」を指定できない。
+            pre_override = getattr(note, "pre_utterance", None)
+            if pre_override is not None:
+                preutterance_sec = float(pre_override) / 1000.0
             elif oto_entry is not None:
                 preutterance_sec = oto_entry.preutterance_sec
             else:
                 preutterance_sec = DEFAULT_PREUTTERANCE
 
-            if getattr(note, "overlap", None) is not None and note.overlap > 0:
-                overlap_sec = note.overlap / 1000.0
+            overlap_override = getattr(note, "overlap", None)
+            if overlap_override is not None:
+                overlap_sec = float(overlap_override) / 1000.0
             elif oto_entry is not None:
                 overlap_sec = oto_entry.overlap_sec
             else:
                 overlap_sec = DEFAULT_OVERLAP
+
+            # 不正な負値で発声タイムラインを過去方向へ無制限に伸ばさない。
+            # USTの明示値は0を有効値として尊重しつつ、負値は0に丸める。
+            preutterance_sec = max(0.0, preutterance_sec)
+            overlap_sec = max(0.0, overlap_sec)
 
             # 4. 実際の発声開始・オーバーラップ開始時刻
             vocal_start_sec   = note.start_time - preutterance_sec
