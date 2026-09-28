@@ -1800,51 +1800,98 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     for (int i = 0; i < note_count; ++i) {
         const int pitch_len = notes[i].pitch_length;
         if (pitch_len <= 0 || pitch_len > kMaxPitchLength) {
-            prepass[i]      = NotePrepass(NoteState::INVALID, 0, nullptr);
+            prepass[i] = NotePrepass(NoteState::INVALID, 0, nullptr);
             prev_renderable = false;
-            last_ev         = nullptr;
+            last_ev = nullptr;
             continue;
         }
 
-        const int64_t ns = note_samples_safe(pitch_len);
+        const int64_t base_note_samples = note_samples_safe(pitch_len);
+        const bool absolute_timing =
+            std::isfinite(notes[i].start_time_ms) && notes[i].start_time_ms >= 0.0;
+
         if (!notes[i].wav_path) {
-            prepass[i]      = NotePrepass(NoteState::NO_VOICE, ns, nullptr);
+            prepass[i] = NotePrepass(NoteState::NO_VOICE, base_note_samples, nullptr);
+            prepass[i].absolute_timing = absolute_timing;
+            prepass[i].start_time_ms = absolute_timing ? notes[i].start_time_ms : -1.0;
             prev_renderable = false;
-            last_ev         = nullptr;
-            total_samples  += ns;
+            last_ev = nullptr;
+
+            if (absolute_timing) {
+                const int64_t end_sample = static_cast<int64_t>(std::llround(
+                    notes[i].start_time_ms * kFs / 1000.0)) + base_note_samples;
+                total_samples = std::max(total_samples, end_sample);
+            } else {
+                total_samples += base_note_samples;
+            }
             continue;
         }
+
         auto ev = find_voice_ref(notes[i].wav_path);
 
-        // [修正] found_oto は以前 g_oto_db 内部要素への生ポインタを
-        // ロック解放後まで持ち出していた。set_oto_data() は g_oto_db を
-        // clear() して再構築するため、ロック解放後にこのポインタを
-        // dereference する窓（NotePrepass構築時）で use-after-free の
-        // 可能性があった。ロック内で値コピーを確定させ、ロック外では
-        // ローカル変数 found_oto（実体）だけを参照するように変更。
+        // Copy OTO metadata while holding the DB lock. This also supplies the
+        // fallback for per-note timing fields when the UST did not override them.
         OtoEntry found_oto{};
-        bool     has_found_oto = false;
+        bool has_found_oto = false;
         {
             VoseUniqueLock lock(g_oto_db_mutex);
             has_found_oto = find_oto_for_key_locked(notes[i].wav_path, found_oto);
         }
 
         if (ev) {
-            prepass[i] = NotePrepass(NoteState::RENDERABLE, ns, ev,
-                                     prev_renderable ? last_ev : nullptr,
-                                     has_found_oto ? &found_oto : nullptr);
+            prepass[i] = NotePrepass(
+                NoteState::RENDERABLE,
+                base_note_samples,
+                ev,
+                prev_renderable ? last_ev : nullptr,
+                has_found_oto ? &found_oto : nullptr);
+
+            const double oto_pre = has_found_oto ? std::max(0.0, found_oto.preutterance) : 0.0;
+            const double oto_ov  = has_found_oto ? std::max(0.0, found_oto.overlap) : 0.0;
+            const double pre_ms = (notes[i].preutterance_ms >= 0.0)
+                ? std::max(0.0, notes[i].preutterance_ms) : oto_pre;
+            const double ov_ms = (notes[i].overlap_ms >= 0.0)
+                ? std::max(0.0, notes[i].overlap_ms) : oto_ov;
+
+            prepass[i].absolute_timing = absolute_timing;
+            prepass[i].start_time_ms = absolute_timing ? notes[i].start_time_ms : -1.0;
+            prepass[i].preutterance_ms = pre_ms;
+            prepass[i].overlap_ms = std::min(ov_ms, pre_ms);
+            prepass[i].preutterance_samples = static_cast<int64_t>(std::llround(
+                pre_ms * kFs / 1000.0));
+            prepass[i].note_samples = base_note_samples + prepass[i].preutterance_samples;
+
             if (prev_renderable) ++xfade_count;
             prev_renderable = true;
-            last_ev         = ev;
-            const int wav_len     = static_cast<int>(ev->waveform.size());
+            last_ev = ev;
+
+            const int wav_len = static_cast<int>(ev->waveform.size());
             const int harvest_len = GetSamplesForHarvest(ev->fs, wav_len, kFramePeriod);
             if (harvest_len > max_harvest_len) max_harvest_len = harvest_len;
+
+            if (absolute_timing) {
+                const int64_t start_sample = static_cast<int64_t>(std::llround(
+                    notes[i].start_time_ms * kFs / 1000.0));
+                const int64_t end_sample = start_sample + base_note_samples;
+                total_samples = std::max(total_samples, end_sample);
+            } else {
+                total_samples += prepass[i].note_samples;
+            }
         } else {
-            prepass[i]      = NotePrepass(NoteState::NO_VOICE, ns, nullptr);
+            prepass[i] = NotePrepass(NoteState::NO_VOICE, base_note_samples, nullptr);
+            prepass[i].absolute_timing = absolute_timing;
+            prepass[i].start_time_ms = absolute_timing ? notes[i].start_time_ms : -1.0;
             prev_renderable = false;
-            last_ev         = nullptr;
+            last_ev = nullptr;
+
+            if (absolute_timing) {
+                const int64_t end_sample = static_cast<int64_t>(std::llround(
+                    notes[i].start_time_ms * kFs / 1000.0)) + base_note_samples;
+                total_samples = std::max(total_samples, end_sample);
+            } else {
+                total_samples += base_note_samples;
+            }
         }
-        total_samples += ns;
     }
 
     if (total_samples <= 0) return;
