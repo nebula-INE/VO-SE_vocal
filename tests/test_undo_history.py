@@ -58,3 +58,40 @@ def test_reset_selected_lyrics_does_not_record_when_already_la():
     widget._reset_selected_lyrics()
 
     assert calls == []
+
+
+@pytest.mark.smoke
+def test_smooth_param_records_undo_and_redo():
+    from modules.gui.timeline_widget import TimelineWidget
+
+    class History:
+        def __init__(self):
+            self.commands = []
+
+        def push(self, command):
+            self.commands.append(command)
+
+    class Signal:
+        def emit(self):
+            pass
+
+    history = History()
+    parent = type("Window", (), {"history": history})()
+    widget = TimelineWidget.__new__(TimelineWidget)
+    widget.current_param_layer = "Pitch"
+    widget.parameters = {"Pitch": {0.0: 0.0, 1.0: 1.0, 2.0: 0.0}}
+    widget.notes_changed_signal = Signal()
+    widget.update = lambda: None
+    widget.window = lambda: parent
+
+    widget._smooth_param()
+
+    expected = {0.0: 0.5, 1.0: 1 / 3, 2.0: 0.5}
+    assert widget.parameters["Pitch"] == expected
+    assert len(history.commands) == 1
+
+    history.commands[0].undo()
+    assert widget.parameters["Pitch"] == {0.0: 0.0, 1.0: 1.0, 2.0: 0.0}
+
+    history.commands[0].redo()
+    assert widget.parameters["Pitch"] == expected
