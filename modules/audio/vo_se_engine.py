@@ -23,7 +23,7 @@ except Exception:
 # ==========================================================================
 # 1. C言語互換構造体（パラメーターを1つも漏らさずC++へ）
 # ==========================================================================
-from modules.ffi.vose_types import CNoteEvent
+from modules.ffi.vose_types import CNoteEvent, COtoEntry
 # 🚀 【新規追加】C++側の 8バイトアライメント（24バイト固定長）に完全準拠した構造体定義
 class CVoseFrame(ctypes.Structure):
     _pack_ = 8
@@ -103,6 +103,10 @@ class VO_SE_Engine:
         """音源フォルダを動的に切り替え、oto.ini/VCV 解決状態を再構築する。"""
         self.voice_lib_path = os.path.abspath(path)
 
+        clear_cache = getattr(self.lib, "clear_engine_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
         # MainWindow 起動時に vo_se_engine_patch が適用済みなら、
         # 通常スキャンではなく VCV 対応版を必ず使う。
         # これを base refresh_voice_library() のままにすると、音源切替後も
@@ -113,9 +117,57 @@ class VO_SE_Engine:
         else:
             self.refresh_voice_library()
 
-    def set_oto_data(self, oto_data: list) -> None:
-        """oto.ini のパース結果をエンジン側で保持（VCV解決時に使用）"""
+        self.set_oto_data(getattr(self.oto_parser, "_db", {}))
+
+    def set_oto_data(self, oto_data) -> None:
+        """oto.ini のメタデータをPython/ネイティブ両方へ同期する。"""
         self.oto_data = oto_data
+
+        set_oto = getattr(self.lib, "set_oto_data", None)
+        if not callable(set_oto):
+            return
+
+        if isinstance(oto_data, dict):
+            entries = list(oto_data.values())
+        elif isinstance(oto_data, (list, tuple)):
+            entries = list(oto_data)
+        else:
+            entries = []
+
+        c_entries = (COtoEntry * len(entries))()
+        for i, entry in enumerate(entries):
+            alias = str(getattr(entry, "alias", "") or "")
+            wav_path = str(getattr(entry, "wav_path", "") or "")
+            if not alias or not wav_path:
+                continue
+
+            def fixed_utf8(value: str, limit: int) -> bytes:
+                raw = value.encode("utf-8")
+                if len(raw) < limit:
+                    return raw
+                raw = raw[: limit - 1]
+                while raw:
+                    try:
+                        raw.decode("utf-8")
+                        return raw
+                    except UnicodeDecodeError:
+                        raw = raw[:-1]
+                return b""
+
+            c_entries[i].filename = None
+            c_entries[i].cutoff = float(getattr(entry, "right_blank", 0.0))
+            c_entries[i].alias = fixed_utf8(alias, 64)
+            c_entries[i].wav_path = fixed_utf8(os.path.abspath(wav_path), 512)
+            c_entries[i].offset = float(getattr(entry, "left_blank", 0.0))
+            c_entries[i].consonant = float(getattr(entry, "fixed_range", 0.0))
+            c_entries[i].blank = float(getattr(entry, "right_blank", 0.0))
+            c_entries[i].preutterance = float(getattr(entry, "preutterance", 0.0))
+            c_entries[i].overlap = float(getattr(entry, "overlap", 0.0))
+
+        if entries:
+            set_oto(c_entries, len(entries))
+        else:
+            set_oto(None, 0)
 
     def prepare_cache(self, notes: list) -> None:
         """再生前に波形の先行キャッシュ（現状はスルーでOK。将来的に最適化）"""
