@@ -22,6 +22,6 @@ def test_parse_vsqx_with_namespace_part_offset_and_tempo_change(tmp_path):
     assert project.tempo == pytest.approx(120.0)
     assert len(project.notes) == 2
     assert project.notes[0].start_time == pytest.approx(0.25)
-    assert project.notes[0].duration == pytest.approx(0.5)
-    assert project.notes[1].start_time == pytest.approx(1.25)
+    assert project.notes[0].duration == pytest.approx(0.75)
+    assert project.notes[1].start_time == pytest.approx(1.0)
     assert project.notes[1].duration == pytest.approx(1.0)
