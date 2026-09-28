@@ -3,6 +3,22 @@ import ctypes
 from typing import Iterable
 
 
+class COtoEntry(ctypes.Structure):
+    """C++ struct OtoEntry from include/vose_core.h."""
+
+    _fields_ = [
+        ("filename", ctypes.c_char_p),
+        ("cutoff", ctypes.c_double),
+        ("alias", ctypes.c_char * 64),
+        ("wav_path", ctypes.c_char * 512),
+        ("offset", ctypes.c_double),
+        ("consonant", ctypes.c_double),
+        ("blank", ctypes.c_double),
+        ("preutterance", ctypes.c_double),
+        ("overlap", ctypes.c_double),
+    ]
+
+
 class CNoteEvent(ctypes.Structure):
     """`include/vose_core.h` の NoteEvent と ABI を一致させる。"""
 
@@ -49,4 +65,21 @@ def validate_note_event_layout():
 
 
 
-__all__ = ["CNoteEvent", "as_c_double_array", "validate_note_event_layout"]
+def validate_oto_entry_layout():
+    """Validate the native OtoEntry ABI on 64-bit hosts."""
+    if ctypes.sizeof(ctypes.c_void_p) == 8:
+        expected = 632
+        actual = ctypes.sizeof(COtoEntry)
+        if actual != expected:
+            raise RuntimeError(
+                f"COtoEntry ABI mismatch: expected {expected} bytes, got {actual} bytes"
+            )
+
+
+__all__ = [
+    "COtoEntry",
+    "CNoteEvent",
+    "as_c_double_array",
+    "validate_note_event_layout",
+    "validate_oto_entry_layout",
+]
