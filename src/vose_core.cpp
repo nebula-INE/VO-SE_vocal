@@ -1207,15 +1207,21 @@ void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
                    double global_time_offset_sec,
                    const double* depth_curve,
                    const double* rate_curve,
-                   int curve_length)
+                   int curve_length,
+                   int lead_frames)
 {
     if (!f0 || f0_length <= 0) return;
     // ユーザーが明示的にビブラートを指定していない場合は、ピッチを忠実に保つ
     if (!depth_curve || curve_length <= 0) return;
 
-    const int vib_start = f0_length / 2;
+    // Preutterance is a lead-in before the musical note. Vibrato belongs to
+    // the musical duration, not to that lead-in, so exclude lead frames from
+    // both the 50% onset calculation and curve resampling.
+    const int lead = std::max(0, std::min(lead_frames, f0_length));
+    const int musical_len = f0_length - lead;
+    const int vib_start = lead + musical_len / 2;
     const int vib_len   = f0_length - vib_start;
-    if (vib_len <= 0) return;
+    if (musical_len <= 0 || vib_len <= 0) return;
 
     constexpr double kVibDepthMax = 0.00868;  // 15cent
     constexpr double kVibFreqDef  = 6.0;
@@ -1229,16 +1235,17 @@ void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
 
         if (f0[j] <= 0.0) continue;
 
+        const int musical_idx = j - lead;
         const double depth = depth_curve
-            ? resample_curve(depth_curve, curve_length, j, f0_length)
+            ? resample_curve(depth_curve, curve_length, musical_idx, musical_len)
             : 0.0;
         if (depth <= 0.0) continue;
 
         const double rate  = rate_curve
-            ? std::max(1.0, resample_curve(rate_curve, curve_length, j, f0_length))
+            ? std::max(1.0, resample_curve(rate_curve, curve_length, musical_idx, musical_len))
             : kVibFreqDef;
 
-        const double t_global = global_time_offset_sec + static_cast<double>(j) * frame_sec;
+        const double t_global = global_time_offset_sec + static_cast<double>(musical_idx) * frame_sec;
         const double vib = std::sin(2.0 * M_PI * rate * t_global)
                            * kVibDepthMax * depth * f0[j] * fade_in;
         f0[j] = std::max(50.0, f0[j] + vib);
@@ -1633,7 +1640,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     const int     vib_clen  = n.vibrato_curve_length > 0 ? n.vibrato_curve_length : 0;
 
     apply_vibrato(tl_scratch.f0.data(), output_frames, kFramePeriod,
-                  p.global_time_sec, vib_depth, vib_rate, vib_clen);
+                  p.global_time_sec, vib_depth, vib_rate, vib_clen,
+                  lead_frames);
 
     // voice_seed: 音源キー(エイリアス文字列)のハッシュ。ノートごとに
     // ジッター/シマーの位相をずらし、複数ノートが完全に同期して
