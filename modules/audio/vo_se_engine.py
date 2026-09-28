@@ -3,8 +3,6 @@ from typing import Optional
 import os
 import platform
 import numpy as np
-import tempfile
-import shutil
 from typing import List, Dict, Any, Callable, cast
 try:
     import sounddevice as sd
