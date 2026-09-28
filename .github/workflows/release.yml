@@ -1301,7 +1301,9 @@ jobs:
             libdbus-1-3 \
             libglib2.0-0 \
             libpulse0 \
-            libasound2t64
+            libasound2t64 \
+            libportaudio2 \
+            portaudio19-dev
 
           python -m pip install --upgrade pip wheel setuptools
           python -m pip install -r requirements.txt
