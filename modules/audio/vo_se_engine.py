@@ -100,9 +100,18 @@ class VO_SE_Engine:
             print(f"Device error: {e}")
 
     def set_voice_library(self, path: str) -> None:
-        """音源フォルダを動的に切り替え、oto.ini を再読み込みする"""
-        self.voice_lib_path = path
-        self.refresh_voice_library()
+        """音源フォルダを動的に切り替え、oto.ini/VCV 解決状態を再構築する。"""
+        self.voice_lib_path = os.path.abspath(path)
+
+        # MainWindow 起動時に vo_se_engine_patch が適用済みなら、
+        # 通常スキャンではなく VCV 対応版を必ず使う。
+        # これを base refresh_voice_library() のままにすると、音源切替後も
+        # 古い OtoParser/VcvResolver を参照し続ける。
+        refresh_v2 = getattr(self, "refresh_voice_library_v2", None)
+        if callable(refresh_v2):
+            refresh_v2()
+        else:
+            self.refresh_voice_library()
 
     def set_oto_data(self, oto_data: list) -> None:
         """oto.ini のパース結果をエンジン側で保持（VCV解決時に使用）"""
