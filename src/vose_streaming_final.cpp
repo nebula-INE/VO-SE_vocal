@@ -46,11 +46,6 @@ constexpr const T& clamp(const T& v, const T& lo, const T& hi) {
 
 // ============================================================
 // lock-free Ring Buffer (Single-Producer / Single-Consumer)
-//
-// head_ (書き込み位置) は合成スレッドのみが進める。
-// tail_ (読み出し位置) は pull 呼び出し側のみが進める。
-// → ミューテックス不要。キャッシュライン競合を避けるため
-//   head_ と tail_ は別々の atomic に分離している。
 // ============================================================
 template<typename T>
 class RingBuffer {
@@ -60,7 +55,6 @@ public:
         , buf_(mask_ + 1)
         , head_(0), tail_(0) {}
 
-    // 生産者 (合成スレッド): n 要素書き込む
     bool write(const T* src, size_t n) {
         const uint64_t h = head_.load(std::memory_order_relaxed);
         const uint64_t t = tail_.load(std::memory_order_acquire);
@@ -70,7 +64,6 @@ public:
         return true;
     }
 
-    // 消費者 (pull / コールバック): 最大 n 要素読み出す
     size_t read(T* dst, size_t n) {
         const uint64_t t      = tail_.load(std::memory_order_relaxed);
         const uint64_t h      = head_.load(std::memory_order_acquire);
@@ -95,9 +88,6 @@ private:
     std::atomic<uint64_t> head_, tail_;
 };
 
-// ============================================================
-// QueuedNote / NoteQueue
-// ============================================================
 struct QueuedNote {
     int64_t             note_id      = 0;
     int                 pitch_length = 0;
@@ -108,8 +98,6 @@ struct QueuedNote {
 
 class NoteQueue {
 public:
-    // NoteQueue::push — portamento を含むノートデータをコピーしてキューへ追加。
-    // 同一 note_id が既にある場合は、古い待機ノートを削除して最新値を残す。
     void push(const VoseStreamNote& n) {
         QueuedNote qn;
         qn.note_id      = n.note_id;
@@ -126,7 +114,6 @@ public:
         fill(n.tension_curve, qn.tension_curve, 0.5);
         fill(n.breath_curve,  qn.breath_curve,  0.0);
 
-        // ポルタメントカーブのコピー（データがあれば）
         if (n.portamento_offsets && n.portamento_length > 0) {
             qn.portamento_curve.resize(n.portamento_length);
             std::copy(n.portamento_offsets,
@@ -139,7 +126,7 @@ public:
         std::unique_lock<std::mutex> lk(mu_);
         for (auto it = q_.begin(); it != q_.end(); ++it) {
             if (it->note_id == n.note_id) {
-                q_.erase(it, q_.end());
+                q_.erase(it);
                 break;
             }
         }
@@ -167,9 +154,6 @@ private:
     std::deque<QueuedNote>  q_;
 };
 
-// ============================================================
-// StreamingSynthesizer
-// ============================================================
 class StreamingSynthesizer {
 public:
     explicit StreamingSynthesizer(const VoseStreamConfig& cfg)
@@ -227,7 +211,6 @@ private:
             tmp_n.gender_curve  = qn.gender_curve.data();
             tmp_n.tension_curve = qn.tension_curve.data();
             tmp_n.breath_curve  = qn.breath_curve.data();
-
             tmp_n.portamento_offsets = qn.portamento_curve.empty() ? nullptr : qn.portamento_curve.data();
             tmp_n.portamento_length  = static_cast<int>(qn.portamento_curve.size());
 
@@ -292,13 +275,10 @@ private:
     NoteQueue               note_queue_;
     std::thread             worker_;
     std::atomic<bool>       cancelled_;
-    std::atomic<double>      position_ms_;
-    std::atomic<float>       tempo_bpm_;
+    std::atomic<double>     position_ms_;
+    std::atomic<float>      tempo_bpm_;
 };
 
-// ============================================================
-// C API
-// ============================================================
 extern "C" {
 
 DLLEXPORT VoseStreamHandle streaming_render_create(const VoseStreamConfig* cfg) {
