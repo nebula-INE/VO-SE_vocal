@@ -182,6 +182,12 @@ static bool find_oto_for_key_locked(const char* key, OtoEntry& out)
     return false;
 }
 
+bool find_oto_for_key(const char* key, OtoEntry& out)
+{
+    std::lock_guard<std::mutex> lock(g_oto_db_mutex);
+    return find_oto_for_key_locked(key, out);
+}
+
 extern "C" void set_oto_data(const OtoEntry* entries, int count) {
     VoseUniqueLock lock(g_oto_db_mutex);
     g_oto_db.clear();
