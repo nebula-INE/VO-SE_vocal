@@ -103,10 +103,6 @@ class VO_SE_Engine:
         """音源フォルダを動的に切り替え、oto.ini/VCV 解決状態を再構築する。"""
         self.voice_lib_path = os.path.abspath(path)
 
-        clear_cache = getattr(self.lib, "clear_engine_cache", None)
-        if callable(clear_cache):
-            clear_cache()
-
         # MainWindow 起動時に vo_se_engine_patch が適用済みなら、
         # 通常スキャンではなく VCV 対応版を必ず使う。
         # これを base refresh_voice_library() のままにすると、音源切替後も
