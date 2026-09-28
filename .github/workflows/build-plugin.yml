@@ -29,7 +29,7 @@ jobs:
           submodules: recursive
 
       # --- Debug: 古いキャッシュの出所を調査 ---
-      - name: Debug: where does the stale cache come from?
+      - name: "Debug: where does the stale cache come from?"
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
