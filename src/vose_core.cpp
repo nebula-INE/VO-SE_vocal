@@ -412,6 +412,13 @@ struct NotePrepass {
     OtoEntry                             oto          = {};
     bool                                 has_oto      = false;
 
+    // Absolute musical timeline. Legacy callers keep sequential behavior.
+    bool                                 absolute_timing = false;
+    double                               start_time_ms = -1.0;
+    double                               preutterance_ms = 0.0;
+    double                               overlap_ms = 0.0;
+    int64_t                              preutterance_samples = 0;
+
     NotePrepass() = default;
     NotePrepass(NoteState s, int64_t ns,
                 std::shared_ptr<const EmbeddedVoice> e,
@@ -917,6 +924,11 @@ get_or_analyze(std::shared_ptr<const EmbeddedVoice> ev_sp, int fft_size, int spe
 double get_source_ms(const EmbeddedVoice& ev) {
     return static_cast<double>(ev.waveform.size()) / ev.fs * 1000.0;
 }
+
+// Forward declaration: the absolute-timeline wrapper below also supports the
+// legacy map_time() path when no preutterance is present.
+double map_time(double t_out_ms, const OtoEntry& oto,
+                double source_wav_len_ms, double note_duration_ms);
 
 // Absolute-timeline variant of map_time(). The rendered buffer includes
 // preutterance samples before the musical note boundary. The source cursor moves
