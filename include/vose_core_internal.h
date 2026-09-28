@@ -17,6 +17,9 @@ struct EmbeddedVoice {
     std::string         path;
     std::vector<double> waveform;
     int                 fs;
+    bool                file_backed = false;
+    int64_t             source_mtime = 0;
+    int64_t             source_size = 0;
 };
 
 struct AnalysisCache {
