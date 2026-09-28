@@ -238,12 +238,10 @@ private:
 
 
             // oto.ini エントリ取得（streaming でも正しくタイムマッピングする）
-            const OtoEntry* found_oto = nullptr;
-            {
-                std::unique_lock<std::mutex> lk(g_oto_db_mutex);
-                auto it = g_oto_db.find(qn.wav_path);
-                if (it != g_oto_db.end()) found_oto = &it->second;
-            }
+            // g_oto_db は音源切替時に再構築されるため、内部要素への
+            // ポインタをロック解放後まで保持せず、値コピーを使う。
+            OtoEntry found_oto{};
+            const bool has_found_oto = find_oto_for_key(qn.wav_path.c_str(), found_oto);
 
             // note_samples (execute_render と同じ計算式)
             const int64_t note_samples =
@@ -257,7 +255,7 @@ private:
                 note_samples,
                 ev,
                 prev_ev,    // クロスフェード用前ノートボイス
-                found_oto   // oto.ini エントリ（タイムマッピングに使用）
+                has_found_oto ? &found_oto : nullptr   // oto.ini エントリ（タイムマッピングに使用）
             );
 
             // ===================================================
