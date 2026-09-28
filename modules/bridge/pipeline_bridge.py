@@ -3,13 +3,9 @@
 import ctypes
 from typing import List, Dict, Any, Optional
 
-# 1. C++と完全にメモリ配置を一致させた ctypes 構造体の定義
-class VoseFrame(ctypes.Structure):
-    _fields_ = [
-        ("time", ctypes.c_double),
-        ("phoneme", ctypes.c_char * 8),  # 8バイトの固定長チャー配列（NULL文字含む）
-        ("weight", ctypes.c_double)
-    ]
+from modules.ffi.vose_api import CVoseFrame
+
+# C++側と共有する唯一のVoseFrame定義。FFIバインド側と同じ型を使う。
 
 class PipelineBridge:
     def __init__(self, c_engine_dll: Optional[ctypes.CDLL] = None):
@@ -28,7 +24,7 @@ class PipelineBridge:
         # 配列の先頭ポインタと、配列の要素数を安全にトスするための設定です
         set_timeline = getattr(self.c_engine, "set_vocal_timeline", None)
         if set_timeline is not None:
-            set_timeline.argtypes = [ctypes.POINTER(VoseFrame), ctypes.c_int]
+            set_timeline.argtypes = [ctypes.POINTER(CVoseFrame), ctypes.c_int]
             set_timeline.restype = None
 
     def send_timeline_to_core(self, timeline_data: List[Dict[str, Any]]) -> bool:
@@ -49,7 +45,7 @@ class PipelineBridge:
             
             # 2. C言語の連続した配列用の型を動的に生成
             # 例: VoseFrame * 1200 のようなメモリ空間を確保
-            FrameArrayType = VoseFrame * frame_count
+            FrameArrayType = CVoseFrame * frame_count
             c_frames = FrameArrayType()
 
             # 3. 高速シリアライズ・ループ
