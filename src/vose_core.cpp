@@ -204,6 +204,9 @@ struct EmbeddedVoice {
     std::string         path;
     std::vector<double> waveform;
     int                 fs;
+    bool                file_backed = false;
+    int64_t             source_mtime = 0;
+    int64_t             source_size = 0;
 };
 
 // ============================================================
@@ -591,22 +594,51 @@ static double parse_pitch_tag_hz(const std::string& path)
 
 std::shared_ptr<const EmbeddedVoice> find_voice_ref(const char* key)
 {
+    const std::string cache_key = key ? key : "";
+
     {
-        auto cached = g_voice_db.get(key ? key : "");
-        if (cached) return cached;
+        auto cached = g_voice_db.get(cache_key);
+        if (cached) {
+            // 内蔵音源はファイルを持たないため、そのまま利用する。
+            // 外部WAVは mtime/size が変わったら古い波形キャッシュを破棄する。
+            if (!cached->file_backed) {
+                return cached;
+            }
+
+            struct stat st {};
+            if (stat(cache_key.c_str(), &st) == 0) {
+                const int64_t mtime = static_cast<int64_t>(st.st_mtime);
+                const int64_t size = static_cast<int64_t>(st.st_size);
+                if (mtime == cached->source_mtime && size == cached->source_size) {
+                    return cached;
+                }
+            }
+
+            // 削除・置換・更新されたWAVは古いキャッシュを使わない。
+            g_voice_db.erase(cache_key);
+        }
     }
-    
-    // Fallback: load from disk (MEMFS)
+
+    // Fallback: load from disk (MEMFS / native filesystem)
     if (key) {
-        int audio_len = GetAudioLength(key);
+        struct stat st {};
+        if (stat(cache_key.c_str(), &st) != 0) {
+            return nullptr;
+        }
+
+        const int audio_len = GetAudioLength(key);
         if (audio_len > 0) {
             auto ev = std::make_shared<EmbeddedVoice>();
-            ev->path = key;
+            ev->path = cache_key;
+            ev->file_backed = true;
+            ev->source_mtime = static_cast<int64_t>(st.st_mtime);
+            ev->source_size = static_cast<int64_t>(st.st_size);
+
             int nbit = 0;
             ev->waveform.resize(audio_len);
             wavread(key, &ev->fs, &nbit, ev->waveform.data());
-            
-            g_voice_db.put(key, ev);
+
+            g_voice_db.put(cache_key, ev);
             return ev;
         }
     }
