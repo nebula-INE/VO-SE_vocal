@@ -249,7 +249,12 @@ def _export_to_wav_v2(
             # 「あ」が見つからないから「か」を歌う、といった誤発音になる。
             # 解決不能なノートは wav_path を空のままにし、C++ 側で無音として扱う。
 
-        res = 128
+        # C++ 側の pitch_length は「固定128点の表示解像度」ではなく、
+        # 実際のノート長を表す 5ms フレーム数。
+        # 以前は常に128を渡していたため、短いノートも長いノートも
+        # すべて約635msとしてレンダリングされ、曲全体の時間軸が崩れていた。
+        duration_sec = max(0.0, float(getattr(note, "duration", 0.0) or 0.0))
+        res = max(1, int(round(duration_sec * 1000.0 / 5.0)))
         p_curve = self._get_sampled_curve(parameters["Pitch"], note, res, is_pitch=True).astype(np.float64)
         g_curve = self._get_sampled_curve(parameters["Gender"], note, res).astype(np.float64)
         t_curve = self._get_sampled_curve(parameters["Tension"], note, res).astype(np.float64)
