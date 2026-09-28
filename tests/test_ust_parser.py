@@ -38,11 +38,6 @@ class TestUstParser(unittest.TestCase):
         note = project.notes[0]
         self.assertEqual(note.pre_utterance, 0.0)
         self.assertEqual(note.overlap, 0.0)
-        self.assertTrue(note_dict := {
-            "_ust_preutterance_explicit": True,
-            "_ust_overlap_explicit": True,
-        })
-
 def test_parse_ust_basic(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             ust_file = os.path.join(tmp_dir, "test.ust")
