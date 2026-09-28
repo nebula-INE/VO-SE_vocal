@@ -166,6 +166,9 @@ def _refresh_voice_library_v2(self) -> None:
     if not os.path.exists(self.voice_lib_path):
         os.makedirs(self.voice_lib_path, exist_ok=True)
         self.vcv_resolver = None
+        sync_oto = getattr(self, "set_oto_data", None)
+        if callable(sync_oto):
+            sync_oto({})
         return
 
     if not hasattr(self, "oto_parser") or self.oto_parser is None:
@@ -187,6 +190,11 @@ def _refresh_voice_library_v2(self) -> None:
                 self.oto_map[lyric] = os.path.abspath(os.path.join(root, fname))
 
     self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
+
+    sync_oto = getattr(self, "set_oto_data", None)
+    if callable(sync_oto):
+        sync_oto(getattr(self.oto_parser, "_db", {}))
+
     logger.info(
         "音源ライブラリ更新: %d WAV / VCV=%s",
         len(self.oto_map),
