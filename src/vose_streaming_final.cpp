@@ -244,9 +244,12 @@ private:
             const bool has_found_oto = find_oto_for_key(qn.wav_path.c_str(), found_oto);
 
             // note_samples (execute_render と同じ計算式)
-            const int64_t note_samples =
-                (static_cast<int64_t>(pl) - 1) *
-                kFramePeriod_internal / 1000.0 * kFs_internal + 1;
+            const int64_t note_samples = static_cast<int64_t>(
+                std::llround(
+                    static_cast<double>(std::max(1, pl)) *
+                    kFramePeriod_internal / 1000.0 * kFs_internal
+                )
+            );
 
             // NotePrepass 構築
             // prev_ev を渡すことで blend_transition_spectra が自動的に適用される
