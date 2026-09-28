@@ -16,7 +16,7 @@
 //      /I world /link world.lib /OUT:vose.dll
 // ============================================================
 
-#include "vose_streaming.h"
+#include "vose_streaming_api.h"
 #include "vose_core_internal.h"
 #include "world/cheaptrick.h"   // GetFFTSizeForCheapTrick
 
