@@ -94,6 +94,9 @@ extern thread_local SynthesisScratchPad tl_scratch;
 // ボイスDB検索
 std::shared_ptr<const EmbeddedVoice> find_voice_ref(const char* key);
 
+// Thread-safe OTO metadata lookup by alias or WAV path.
+bool find_oto_for_key(const char* key, OtoEntry& out);
+
 // 解析キャッシュ (メモリ + ディスク 2段キャッシュ)
 std::shared_ptr<const AnalysisCache>
 get_or_analyze(std::shared_ptr<const EmbeddedVoice> ev_sp, int fft_size, int spec_bins);
