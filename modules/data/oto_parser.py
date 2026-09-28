@@ -161,14 +161,32 @@ class OtoParser:
         logger.debug("oto.ini ロード完了 (%d エントリ): %s", count, ini_path)
         return count
 
-    def load_voice_dir(self, voice_dir: str, use_cache: bool = True) -> int:
+    def load_voice_dir(
+        self,
+        voice_dir: str,
+        use_cache: bool = True,
+        reset: bool = True,
+    ) -> int:
         """
         指定フォルダ（サブフォルダ含む）の oto.ini を全部ロードする。
-        キャッシュ有効時（デフォルト）は .oto_cache.json を参照して 0.001秒で超高速ロードする。
+
+        load_oto_file() は複数ファイルを意図的にマージするAPIですが、
+        load_voice_dir() は通常「1つの音源バンクをロードする」APIです。
+        そのためデフォルトでは前の音源のエントリを破棄し、音源切替時の
+        エントリ混入を防ぎます。複数バンクを明示的に統合したい場合は
+        reset=False を指定してください。
 
         Returns:
-            合計エントリ数
+            この呼び出しでロード対象になったエントリ数
         """
+        if reset:
+            self.clear()
+
+        if not os.path.exists(voice_dir):
+            return 0
+
+        cache_path = os.path.join(voice_dir, ".oto_cache.json")
+
         if not os.path.exists(voice_dir):
             return 0
 
@@ -260,249 +278,3 @@ class OtoParser:
 
         return total
 
-    def load_from_zip(self, zip_path: str) -> int:
-        """
-        ZIP アーカイブから WAV を事前展開せずに直接 oto.ini を高速読み込みする（超軽量・スロットリング対応）。
-        CP932 / UTF-8 ファイル名エンコーディングに自動対応。
-
-        Returns:
-            合計エントリ数
-        """
-        import zipfile
-        if not os.path.isfile(zip_path):
-            logger.warning("ZIPファイルが見つかりません: %s", zip_path)
-            return 0
-
-        total = 0
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                for zidx, zinfo in enumerate(zf.infolist()):
-                    name = self._fix_zip_filename(zinfo)
-                    base = os.path.basename(name)
-                    # oto.ini または oto2.ini 等
-                    if base.lower().startswith("oto") and base.lower().endswith(".ini"):
-                        try:
-                            raw_data = zf.read(zinfo)
-                            text = self._decode_bytes_safe(raw_data)
-                            v_dir = os.path.dirname(name)
-                            lines = text.splitlines()
-                            for idx, raw_line in enumerate(lines):
-                                line = raw_line.strip()
-                                if not line or "=" not in line:
-                                    continue
-                                entry = self._parse_line(line, v_dir)
-                                if entry is not None:
-                                    self._db[entry.alias] = entry
-                                    total += 1
-
-                                if IS_LOW_RAM and idx > 0 and idx % 300 == 0:
-                                    time.sleep(0.003)
-                                    if idx % 1200 == 0:
-                                        gc.collect()
-                        except Exception as e:
-                            logger.warning("ZIP内 oto.ini (%s) 読込エラー: %s", name, e)
-                    
-                    if IS_LOW_RAM and zidx > 0 and zidx % 50 == 0:
-                        time.sleep(0.005)
-                        gc.collect()
-        except Exception as err:
-            logger.error("ZIPファイルオープン失敗: %s", err)
-
-        return total
-
-    @staticmethod
-    def _fix_zip_filename(zinfo) -> str:
-        """zipfile の文字化け(CP437)を CP932 / UTF-8 に復元"""
-        filename = zinfo.filename
-        if zinfo.flag_bits & 0x800:
-            # UTF-8 フラグが立っている場合
-            return filename
-        try:
-            # CP437 からバイト列に戻して CP932 でデコードを試みる
-            raw_bytes = filename.encode('cp437')
-            return raw_bytes.decode('cp932')
-        except Exception:
-            return filename
-
-    @staticmethod
-    def _decode_bytes_safe(raw_data: bytes) -> str:
-        """バイナリデータを Shift-JIS / UTF-8 / latin-1 でデコード"""
-        for enc in ("cp932", "utf-8-sig", "utf-8", "latin-1"):
-            try:
-                return raw_data.decode(enc)
-            except (UnicodeDecodeError, LookupError):
-                continue
-        return raw_data.decode("cp932", errors="ignore")
-
-    def get(self, alias: str) -> Optional[OtoEntry]:
-        """
-        alias で完全一致検索。見つからなければ None。
-        """
-        return self._db.get(alias)
-
-    def resolve_alias(self, lyric: str, prev_vowel: Optional[str] = None) -> Optional[OtoEntry]:
-        """
-        VCV → CV → 単独音 の優先順でエントリを解決する（高速参照・音階サフィックス対応）。
-
-        Args:
-            lyric:       対象の歌詞 (例: "い", "い_C4")
-            prev_vowel:  前ノートの末尾母音ラベル ("a"/"i"/"u"/"e"/"o"/"n"/"") or None
-
-        Returns:
-            最初に見つかった OtoEntry、全て失敗なら None
-        """
-        if not lyric:
-            return None
-
-        clean_lyric = re.sub(r'^[-aieuon_]\s*', '', lyric, flags=re.IGNORECASE).strip() or lyric
-        clean_lyric = re.sub(r'_?[A-Ga-g][#b]?[0-9]$', '', clean_lyric).strip() or clean_lyric
-
-        def _match_pref(p: str) -> Optional[OtoEntry]:
-            if p in self._db:
-                return self._db[p]
-            p_lower = p.lower()
-            for alias, entry in self._db.items():
-                a_lower = alias.lower()
-                if a_lower.startswith(p_lower + "_") or a_lower.startswith(p_lower + " "):
-                    return entry
-            return None
-
-        # 1. If raw lyric itself is explicitly a VCV/silence alias string (e.g., "a い", "- い"), match direct
-        if lyric in self._db and (' ' in lyric or '_' in lyric or lyric.startswith('-')):
-            return self._db[lyric]
-
-        # 2. VCV: "a い", "a_い", "aい" (前の母音がある場合は最優先)
-        if prev_vowel:
-            entry = _match_pref(f"{prev_vowel} {clean_lyric}") or \
-                    _match_pref(f"{prev_vowel}_{clean_lyric}") or \
-                    _match_pref(f"{prev_vowel}{clean_lyric}")
-            if entry:
-                return entry
-
-        # 3. CV with silence: "- い", "_い", "-い"
-        # prev_vowel の有無に関わらず常に試す（C++ 版 OtoDatabase::resolveAlias と挙動を一致させる）。
-        # VCV エイリアスが oto.ini に存在しない組み合わせだった場合、ここでフォールバックしないと
-        # タイミング計算（Python側）と実再生（C++側）で異なるエイリアスを参照してしまい、
-        # 連続音の繋ぎ目が破綻する原因になっていた。
-        entry = _match_pref(f"- {clean_lyric}") or \
-                _match_pref(f"_{clean_lyric}") or \
-                _match_pref(f"-{clean_lyric}")
-        if entry:
-            return entry
-
-        # 4. Direct exact match
-        if lyric in self._db:
-            return self._db[lyric]
-
-        # 4. Direct clean lyric match
-        entry = _match_pref(clean_lyric)
-        if entry:
-            return entry
-
-        # 5. 歌詞のみ部分一致 / インデックス参照
-        if not hasattr(self, '_lyric_index'):
-            self._build_lyric_index()
-
-        if clean_lyric in self._lyric_index and self._lyric_index[clean_lyric]:
-            return self._lyric_index[clean_lyric][0]
-
-        # 6. Fallback: 部分一致（先頭一致や含まれるもの）
-        for alias, entry in self._db.items():
-            if clean_lyric in alias:
-                return entry
-
-        return None
-
-    def _build_lyric_index(self) -> None:
-        """解析済みデータベースから歌詞逆引き用インデックスを事前構築"""
-        self._lyric_index: Dict[str, List[OtoEntry]] = {}
-        for alias, entry in self._db.items():
-            # "a い" → "い" や "- い" → "い"
-            parts = alias.strip().split()
-            pure_lyric = parts[-1] if parts else alias
-            if pure_lyric not in self._lyric_index:
-                self._lyric_index[pure_lyric] = []
-            self._lyric_index[pure_lyric].append(entry)
-
-    def clear(self) -> None:
-        """ロード済みデータをリセット"""
-        self._db.clear()
-        if hasattr(self, '_lyric_index'):
-            self._lyric_index.clear()
-
-    def get_preutterance_sec(self, alias: str, default: float = 0.05) -> float:
-        """先行発声を秒で返す。エントリが無ければ default。"""
-        entry = self.get(alias)
-        return entry.preutterance_sec if entry else default
-
-    def get_overlap_sec(self, alias: str, default: float = 0.02) -> float:
-        """オーバーラップを秒で返す。エントリが無ければ default。"""
-        entry = self.get(alias)
-        return entry.overlap_sec if entry else default
-
-    def all_aliases(self) -> List[str]:
-        """ロード済み全エイリアスのリストを返す"""
-        return list(self._db.keys())
-
-    def has_vcv(self) -> bool:
-        """VCV エイリアス（スペース区切りの母音接続エイリアス）が 1 つ以上あれば True。
-
-        注: "- あ" のようなフレーズ先頭の無音接続エイリアスは単独音（CV）バンクにも
-        一般的に存在するため、startswith("-") や startswith("_") を条件に含めると
-        単独音バンクを VCV バンクと誤判定してしまう（実際に発生していたバグ）。
-        C++ 版 OtoDatabase::hasVcv() と判定基準を統一し、スペースの有無のみで判定する。
-        """
-        return any(" " in alias for alias in self._db)
-
-    # ------------------------------------------------------------------
-    # 内部ユーティリティ
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _read_safe(path: str) -> str:
-        """Shift-JIS / UTF-8 / latin-1 の順で試みて文字列を返す"""
-        for enc in ("cp932", "utf-8-sig", "utf-8", "latin-1"):
-            try:
-                with open(path, "r", encoding=enc, errors="strict") as f:
-                    return f.read()
-            except (UnicodeDecodeError, LookupError):
-                continue
-        # 最終フォールバック
-        with open(path, "r", encoding="cp932", errors="ignore") as f:
-            return f.read()
-
-    @staticmethod
-    def _parse_line(line: str, voice_dir: str) -> Optional[OtoEntry]:
-        """
-        1 行をパースして OtoEntry を返す。
-
-        oto.ini 行フォーマット:
-            filename.wav=alias,left_blank,fixed_range,right_blank,preutterance,overlap
-        """
-        try:
-            filename_part, params_part = line.split("=", 1)
-            filename_part = filename_part.strip()
-            parts = [p.strip() for p in params_part.split(",")]
-
-            # alias が空の場合は拡張子なしファイル名を使う
-            alias = parts[0] if parts[0] else os.path.splitext(filename_part)[0]
-
-            def _f(idx: int, fallback: float = 0.0) -> float:
-                try:
-                    return float(parts[idx]) if idx < len(parts) and parts[idx] != "" else fallback
-                except ValueError:
-                    return fallback
-
-            return OtoEntry(
-                alias=alias,
-                filename=filename_part,
-                voice_dir=voice_dir,
-                left_blank=_f(1),
-                fixed_range=_f(2),
-                right_blank=_f(3),
-                preutterance=_f(4),
-                overlap=_f(5),
-            )
-        except Exception as exc:
-            logger.debug("oto.ini 行のパース失敗 (%s): %s", exc, line)
-            return None
