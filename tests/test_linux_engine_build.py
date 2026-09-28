@@ -81,6 +81,9 @@ def test_python_note_event_contains_absolute_timing_fields():
     ]
     if ctypes.sizeof(ctypes.c_void_p) == 8:
         assert ctypes.sizeof(CNoteEvent) == 128
+        assert CNoteEvent.start_time_ms.offset == 96
+        assert CNoteEvent.preutterance_ms.offset == 104
+        assert CNoteEvent.overlap_ms.offset == 112
 
 
 def test_python_note_event_matches_cpp_linux_engine_abi():
