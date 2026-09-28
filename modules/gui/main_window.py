@@ -5206,13 +5206,18 @@ class MainWindow(
                 )
                 new_notes.append(note)
 
-            # 4. タイムラインへの反映
+            # 4. タイムラインへの反映（Undo/Redo対応）
             if new_notes:
-                # timeline_widgetの存在を担保
-                if hasattr(self, 'timeline_widget') and self.timeline_widget is not None:
-                    self.timeline_widget.set_notes(new_notes)
-                    if self.timeline_widget:
-                        self.timeline_widget.update()
+                timeline = getattr(self, "timeline_widget", None)
+                if timeline is not None:
+                    before = timeline._snapshot_notes()
+                    timeline.set_notes(new_notes)
+                    current_idx = int(getattr(self, "current_track_idx", 0))
+                    tracks = getattr(self, "tracks", [])
+                    if 0 <= current_idx < len(tracks):
+                        tracks[current_idx].notes = list(new_notes)
+                    timeline._commit_edit(before, "AI自動歌詞配置")
+                    timeline.update()
                 
                 # statusBarの存在確認（Noneになる可能性があるため）
                 status_bar = self.statusBar()
@@ -5242,32 +5247,53 @@ class MainWindow(
         self.timeline_widget.text_color = "#FFFFFF"
 
     def apply_lyrics_to_notes(self, text: str):
-        """歌詞を既存ノートに割り当て"""
+        """歌詞を既存ノートに割り当て（Undo/Redo対応）"""
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is None:
+            return
+
         lyrics = [char for char in text if char.strip()]
-        notes = self.timeline_widget.notes_list
-        
+        notes = timeline.notes_list
+        before = timeline._snapshot_notes()
+        changed = False
+
         for i, note in enumerate(notes):
-            if i < len(lyrics):
+            if i < len(lyrics) and getattr(note, "lyrics", "") != lyrics[i]:
                 note.lyrics = lyrics[i]
-        
-        if self.timeline_widget:
-            self.timeline_widget.update()
+                note.phoneme = timeline.analyze_lyric_to_phoneme(lyrics[i])
+                changed = True
+
+        if changed:
+            timeline.notes_changed_signal.emit()
+            timeline._commit_edit(before, "歌詞一括適用")
+            timeline.update()
 
     @Slot()
     def on_click_apply_lyrics_bulk(self):
-        """歌詞の一括流し込み"""
+        """歌詞の一括流し込み（Undo/Redo対応）"""
         text, ok = QInputDialog.getMultiLineText(self, "歌詞の一括入力", "歌詞を入力:")
         if not (ok and text):
             return
-        
+
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is None:
+            return
+
         lyric_list = [char for char in text if char.strip() and char not in "、。！？"]
-        notes = sorted(self.timeline_widget.notes_list, key=lambda n: n.start_time)
-        
+        notes = sorted(timeline.notes_list, key=lambda n: n.start_time)
+        before = timeline._snapshot_notes()
+        changed = False
+
         for i in range(min(len(lyric_list), len(notes))):
-            notes[i].lyrics = lyric_list[i]
-            
-        if self.timeline_widget:
-            self.timeline_widget.update()
+            if getattr(notes[i], "lyrics", "") != lyric_list[i]:
+                notes[i].lyrics = lyric_list[i]
+                notes[i].phoneme = timeline.analyze_lyric_to_phoneme(lyric_list[i])
+                changed = True
+
+        if changed:
+            timeline.notes_changed_signal.emit()
+            timeline._commit_edit(before, "歌詞一括流し込み")
+            timeline.update()
         
         if hasattr(self, 'pro_monitoring') and self.pro_monitoring:
             self.sync_notes = True
