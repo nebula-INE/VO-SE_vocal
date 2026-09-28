@@ -137,7 +137,7 @@ jobs:
             echo "No changes to commit (build output identical to previous commit)."
           else
             git commit -m "chore: update vose_core.wasm build [skip ci]"
-            git push
+            git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
           fi
 
       - name: Upload WebAssembly Artifacts
