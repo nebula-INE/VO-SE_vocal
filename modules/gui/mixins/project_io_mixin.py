@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from modules.data.data_models import NoteEvent, PitchEvent
 from modules.data.ust_parser import UstParser, UstConverter
+from modules.data.vsqx_parser import parse_vsqx
 
 logger = logging.getLogger(__name__)
 
@@ -624,16 +625,58 @@ class ProjectIOMixin:
         return True
 
     # ------------------------------------------------------------------
-    # 内部: .vsqx 読み込み (現状は未実装)
+    # 内部: .vsqx 読み込み
     # ------------------------------------------------------------------
 
-    def _load_vsqx(self: Any, file_path: str) -> None:
-        """Vocaloid .vsqx 読み込み (未実装 — プレースホルダー)"""
-        QMessageBox.information(
-            self,
-            "未対応形式",
-            ".vsqx の読み込みは現在未実装です。\nUST または JSON 形式をお使いください。",
-        )
+    def _load_vsqx(self: Any, file_path: str) -> bool:
+        """VOCALOID 3/4 .vsqx を読み込み、現在のトラックへ反映する。"""
+        try:
+            before_state = self._capture_project_edit_state()
+            project = parse_vsqx(file_path)
+            if not project.notes:
+                raise ValueError("VSQX に有効なノートがありません。")
+            tracks = list(getattr(self, "tracks", []) or [])
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            if not tracks or not (0 <= current_idx < len(tracks)):
+                raise ValueError("読み込み先のトラックがありません。")
+            tracks[current_idx].notes = list(project.notes)
+            self.tracks = tracks
+            timeline = getattr(self, "timeline_widget", None)
+            if timeline is not None:
+                timeline.tempo = project.tempo
+                if hasattr(timeline, "set_notes"):
+                    timeline.set_notes(project.notes)
+                else:
+                    timeline.notes_list = list(project.notes)
+                    timeline.update()
+            tempo_input = getattr(self, "tempo_input", None)
+            if tempo_input is not None:
+                tempo_input.blockSignals(True)
+                tempo_input.setText(str(int(round(project.tempo))))
+                tempo_input.blockSignals(False)
+            graph = getattr(self, "graph_editor_widget", None)
+            if graph is not None:
+                graph.tempo = project.tempo
+                graph.update()
+            engine = getattr(self, "vo_se_engine", None)
+            set_tempo = getattr(engine, "set_tempo", None)
+            if callable(set_tempo):
+                set_tempo(project.tempo)
+            refresh = getattr(self, "refresh_track_list_ui", None)
+            if callable(refresh):
+                refresh()
+            self.statusBar().showMessage(
+                f"VSQX 読み込み完了: {len(project.notes)} ノート / Tempo {project.tempo:.2f} BPM"
+            )
+            self._record_project_state_edit(before_state, self._capture_project_edit_state(), "VSQX読み込み")
+            return True
+        except FileNotFoundError:
+            self.statusBar().showMessage(f"ファイルが見つかりません: {file_path}")
+            return False
+        except Exception as exc:
+            logger.exception("VSQX 読み込みエラー: %s", exc)
+            QMessageBox.critical(self, "読み込みエラー", f"VSQX の読み込みに失敗しました:\\n{exc}")
+            return False
 
     # oto.ini 書き出し（AutoOtoEngine の結果を保存する用途）
     def save_oto_ini(self: Any, voice_dir: str, oto_data: List[Dict[str, Any]]) -> bool:
