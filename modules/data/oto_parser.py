@@ -158,6 +158,11 @@ class OtoParser:
                 if idx % 1200 == 0:
                     gc.collect()
 
+        # Alias 逆引きインデックスを既に構築していた場合は、
+        # 新しい oto.ini の追加内容を反映するため無効化する。
+        if hasattr(self, "_lyric_index"):
+            self._lyric_index.clear()
+
         logger.debug("oto.ini ロード完了 (%d エントリ): %s", count, ini_path)
         return count
 
