@@ -66,6 +66,7 @@ class GraphEditorWidget(QWidget):
         """Undo/Redo 用：パラメータスナップショットを復元（ディープコピーで安全に）"""
         import copy
         self.all_parameters = copy.deepcopy(snapshot)
+        self.parameters_changed.emit(self.all_parameters)
         self.update()
 
     def _commit_edit(self, before_snapshot: Optional[Dict[str, Any]], description: str) -> None:
