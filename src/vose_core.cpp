@@ -1445,8 +1445,12 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     }
 
     const int64_t note_samples  = pp.note_samples;
-    const int     output_frames = std::max(1, p.n.pitch_length);
-    const double  note_ms       = static_cast<double>(output_frames) * kFramePeriod;
+    const int     lead_frames = static_cast<int>(
+        std::max<int64_t>(0, pp.preutterance_samples) /
+        static_cast<int64_t>(std::llround(kFramePeriod * kFs / 1000.0)));
+    const int     output_frames = std::max(1, p.n.pitch_length + lead_frames);
+    // note_ms is the musical duration; preutterance is an output-side lead-in.
+    const double  note_ms       = static_cast<double>(p.n.pitch_length) * kFramePeriod;
     const double  src_ms        = get_source_ms(*pp.ev);
     const OtoEntry& current_oto = pp.has_oto ? pp.oto : kDefaultOto;
 
