@@ -41,6 +41,13 @@ struct NotePrepass {
     OtoEntry                             oto          = {};
     bool                                 has_oto      = false;
 
+    // Absolute musical timeline. Legacy callers keep sequential behavior.
+    bool                                 absolute_timing = false;
+    double                               start_time_ms = -1.0;
+    double                               preutterance_ms = 0.0;
+    double                               overlap_ms = 0.0;
+    int64_t                              preutterance_samples = 0;
+
     NotePrepass() = default;
     NotePrepass(NoteState s, int64_t ns,
                 std::shared_ptr<const EmbeddedVoice> e,
