@@ -140,7 +140,12 @@ class TextAnalyzer:
             # 0ms を指定して oto.ini の値に戻ってしまうと、UST側で
             # 「先行発声なし / オーバーラップなし」を指定できない。
             pre_override = getattr(note, "pre_utterance", None)
-            if pre_override is not None:
+            pre_explicit = bool(
+                getattr(note, "_ust_preutterance_explicit", False)
+            )
+            if pre_override is not None and (
+                pre_explicit or float(pre_override) > 0.0
+            ):
                 preutterance_sec = float(pre_override) / 1000.0
             elif oto_entry is not None:
                 preutterance_sec = oto_entry.preutterance_sec
@@ -148,7 +153,12 @@ class TextAnalyzer:
                 preutterance_sec = DEFAULT_PREUTTERANCE
 
             overlap_override = getattr(note, "overlap", None)
-            if overlap_override is not None:
+            overlap_explicit = bool(
+                getattr(note, "_ust_overlap_explicit", False)
+            )
+            if overlap_override is not None and (
+                overlap_explicit or float(overlap_override) > 0.0
+            ):
                 overlap_sec = float(overlap_override) / 1000.0
             elif oto_entry is not None:
                 overlap_sec = oto_entry.overlap_sec
