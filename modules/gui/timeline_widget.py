@@ -1436,10 +1436,10 @@ class TimelineWidget(QWidget):
                 self.update()
 
             class _ParameterHistoryCommand:
-                def redo(command_self):
+                def redo(self):
                     apply_snapshot(after)
 
-                def undo(command_self):
+                def undo(self):
                     apply_snapshot(before)
 
             history.push(_ParameterHistoryCommand())
