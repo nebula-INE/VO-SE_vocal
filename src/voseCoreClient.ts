@@ -9,10 +9,8 @@
 // Promise<string|null>) を持つ renderStudioCore() をエクスポートする。
 //
 // [vose_core.cpp / vose_core.h 確認済み事項]
-//   - NoteEventに絶対時刻フィールドは無い。ノートは pitch_length
-//     (5msフレーム数)ぶんの長さで単純に連結される。よって休符や
-//     ノート間のギャップは「wav_path=null の無声NoteEvent」として
-//     明示的に埋めないと、曲全体のタイミングがズレる。
+//   - NoteEvent carries an absolute start_time_ms plus optional per-note
+//     preutterance/overlap overrides. The C++ core owns final timeline placement.
 //   - g_vocal_timeline(set_vocal_timelineが書き込む方)はレンダリング
 //     コードから一切読まれていない(書き込み専用/未使用)。呼ばなくてよい。
 //   - oto.ini相当のタイミング(offset/consonant/cutoff/preutterance/
