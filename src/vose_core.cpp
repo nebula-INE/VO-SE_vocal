@@ -2136,16 +2136,21 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             //   current note takes over. This is the UTAU-style timing model.
             const int64_t nominal_start = static_cast<int64_t>(std::llround(
                 pp.start_time_ms * kFs / 1000.0));
-            const int64_t render_start = std::max<int64_t>(
-                0, nominal_start - pp.preutterance_samples);
-            const int64_t overlap_samples = std::min<int64_t>(
+            const int64_t unclamped_start = nominal_start - pp.preutterance_samples;
+            const int64_t render_start = std::max<int64_t>(0, unclamped_start);
+            // If preutterance reaches before t=0, skip that leading part of the
+            // synthesized buffer rather than accidentally truncating the note tail.
+            const int64_t source_skip = std::max<int64_t>(0, -unclamped_start);
+            const int64_t overlap_samples = (source_skip > 0) ? 0 : std::min<int64_t>(
                 note_samples,
                 std::min<int64_t>(
                     pp.preutterance_samples,
                     static_cast<int64_t>(std::llround(pp.overlap_ms * kFs / 1000.0))));
 
+            const int64_t available_note_samples =
+                std::max<int64_t>(0, note_samples - source_skip);
             const int64_t write_len = std::min<int64_t>(
-                note_samples,
+                available_note_samples,
                 total_samples - render_start);
 
             if (write_len > 0) {
@@ -2159,16 +2164,16 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         const double fade_out = 1.0 - fade_in;
                         full_song_buffer[render_start + s] =
                             full_song_buffer[render_start + s] * fade_out +
-                            note_bufs[idx][static_cast<size_t>(s)] * fade_in;
+                            note_bufs[idx][static_cast<size_t>(source_skip + s)] * fade_in;
                     }
                     for (int64_t s = safe_xfade; s < write_len; ++s) {
                         full_song_buffer[render_start + s] =
-                            note_bufs[idx][static_cast<size_t>(s)];
+                            note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 } else {
                     for (int64_t s = 0; s < write_len; ++s) {
                         full_song_buffer[render_start + s] =
-                            note_bufs[idx][static_cast<size_t>(s)];
+                            note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 }
             }
