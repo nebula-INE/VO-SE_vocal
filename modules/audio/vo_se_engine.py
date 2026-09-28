@@ -141,16 +141,9 @@ class VO_SE_Engine:
         self._tempo = float(tempo)
 
     def _load_core_library(self):
-        """OS判別ロード（Win/Mac/Linux対応）"""
-        system = platform.system()
-        if system == "Windows":
-            lib_names = ("vose_core.dll",)
-        elif system == "Darwin":
-            lib_names = ("libvose_core.dylib", "vose_core.dylib")
-        else:
-            lib_names = ("libvose_core.so", "vose_core.so")
-        
-        # 探索候補
+        """VO-SE Coreを共通FFIローダー経由で読み込む。"""
+        from modules.ffi.vose_api import load_engine
+
         base_dir = os.path.dirname(__file__)
         search_dirs = [
             base_dir,
@@ -158,34 +151,10 @@ class VO_SE_Engine:
             os.path.join(os.getcwd(), "bin"),
             os.getcwd(),
         ]
-        search_paths = [os.path.join(directory, lib_name) for directory in search_dirs for lib_name in lib_names]
-        
-        for path in search_paths:
-            if os.path.exists(path):
-                try:
-                    lib = ctypes.CDLL(os.path.abspath(path))
-                    
-                    # 既存のレンダリング関数のバインド
-                    lib.execute_render.argtypes = [
-                        ctypes.POINTER(CNoteEvent), 
-                        ctypes.c_int, 
-                        ctypes.c_char_p,
-                        ctypes.c_int,
-                    ]
-                    
-                    # 🚀 【新規追加】タイムライン連続フレーム転送関数のバインド定義
-                    if hasattr(lib, "set_vocal_timeline"):
-                        lib.set_vocal_timeline.argtypes = [
-                            ctypes.POINTER(CVoseFrame),
-                            ctypes.c_int
-                        ]
-                        lib.set_vocal_timeline.restype = None
-                    
-                    print(f"○ Engine Core Connected: {path}")
-                    return lib
-                except Exception as e:
-                    print(f"Load Error: {e}")
-        return None
+        lib = load_engine(search_dirs=search_dirs)
+        if lib is not None:
+            print("○ Engine Core Connected via unified FFI loader")
+        return lib
 
     @staticmethod
     def _duration_sec_to_frames(duration_sec: float) -> int:
