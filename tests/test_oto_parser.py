@@ -47,3 +47,25 @@ class TestOtoParser:
         parser = OtoParser()
         parser.load_oto_file(str(ini_file))
         assert parser.get("あ") is not None
+
+    def test_nested_and_windows_style_wav_path_resolution(self, tmp_path):
+        voice_dir = tmp_path / "voice"
+        nested = voice_dir / "SubVoice"
+        nested.mkdir(parents=True)
+        wav_file = nested / "A.wav"
+        wav_file.write_bytes(b"RIFF")
+
+        entry = OtoEntry(
+            alias="あ",
+            filename="subvoice\\A.wav",
+            voice_dir=str(voice_dir),
+            left_blank=0,
+            fixed_range=0,
+            right_blank=0,
+            preutterance=0,
+            overlap=0,
+        )
+
+        # Windows の oto.ini にある \\ 区切りと大文字小文字の違いを
+        # macOS/Linux 上でも同じ実ファイルへ解決できることを確認する。
+        assert entry.wav_path == str(wav_file)
