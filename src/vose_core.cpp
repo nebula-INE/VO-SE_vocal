@@ -2122,6 +2122,63 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // パス2-B: 書き込みフェーズ
     // ----------------------------------------------------------------
     int64_t timeline_offset = 0;
+    // Absolute-timeline overlap/release decisions must use actual musical
+    // positions, not merely the neighboring array element. A rest, missing
+    // voice, or an out-of-order note must not be treated as an overlapping
+    // predecessor/successor.
+    auto has_prior_absolute_audio = [&](int current_idx,
+                                        int64_t render_start,
+                                        int64_t nominal_start) -> bool {
+        for (int j = 0; j < note_count; ++j) {
+            if (j == current_idx ||
+                prepass[j].state != NoteState::RENDERABLE ||
+                !prepass[j].absolute_timing) {
+                continue;
+            }
+
+            const int64_t other_start = static_cast<int64_t>(std::llround(
+                prepass[j].start_time_ms * kFs / 1000.0));
+            const int64_t other_end = other_start +
+                std::max<int64_t>(0, prepass[j].note_samples -
+                                     prepass[j].preutterance_samples);
+
+            // Only a note that is actually before this note and whose musical
+            // audio reaches the current render start can participate in the
+            // requested VoiceOverlap crossfade.
+            if (other_start < nominal_start && other_end > render_start)
+                return true;
+        }
+        return false;
+    };
+
+    auto has_following_absolute_overlap = [&](int current_idx,
+                                               int64_t musical_end) -> bool {
+        const int64_t current_start = static_cast<int64_t>(std::llround(
+            prepass[current_idx].start_time_ms * kFs / 1000.0));
+
+        for (int j = 0; j < note_count; ++j) {
+            if (j == current_idx ||
+                prepass[j].state != NoteState::RENDERABLE ||
+                !prepass[j].absolute_timing) {
+                continue;
+            }
+
+            const int64_t other_start = static_cast<int64_t>(std::llround(
+                prepass[j].start_time_ms * kFs / 1000.0));
+            if (other_start < current_start)
+                continue;
+
+            const int64_t other_render_start = other_start -
+                prepass[j].preutterance_samples;
+
+            // The next note's preuttered audio reaches into this note's
+            // musical tail, so do not apply a release fade here.
+            if (other_render_start < musical_end)
+                return true;
+        }
+        return false;
+    };
+
     bool last_note_rendered = false;
 
     for (int idx = 0; idx < note_count; ++idx) {
@@ -2149,11 +2206,16 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             // If preutterance reaches before t=0, skip that leading part of the
             // synthesized buffer rather than accidentally truncating the note tail.
             const int64_t source_skip = std::max<int64_t>(0, -unclamped_start);
-            const int64_t overlap_samples = (source_skip > 0) ? 0 : std::min<int64_t>(
-                note_samples,
-                std::min<int64_t>(
-                    pp.preutterance_samples,
-                    static_cast<int64_t>(std::llround(pp.overlap_ms * kFs / 1000.0))));
+            const bool prior_audio_overlaps = source_skip == 0 &&
+                has_prior_absolute_audio(idx, render_start, nominal_start);
+            const int64_t overlap_samples = (source_skip > 0 || !prior_audio_overlaps)
+                ? 0
+                : std::min<int64_t>(
+                    note_samples,
+                    std::min<int64_t>(
+                        pp.preutterance_samples,
+                        static_cast<int64_t>(std::llround(
+                            pp.overlap_ms * kFs / 1000.0))));
 
             const int64_t available_note_samples =
                 std::max<int64_t>(0, note_samples - source_skip);
@@ -2188,11 +2250,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
             // If the next musical note does not overlap this one, apply a small
             // release fade at the actual musical end (not at the preuttered start).
-            const bool next_absolute_rendered =
-                (idx + 1 < note_count &&
-                 prepass[idx + 1].state == NoteState::RENDERABLE &&
-                 prepass[idx + 1].absolute_timing);
-            if (!next_absolute_rendered) {
+            const int64_t musical_end = nominal_start +
+                std::max<int64_t>(0, note_samples - pp.preutterance_samples);
+            const bool next_absolute_overlap =
+                has_following_absolute_overlap(idx, musical_end);
+            if (!next_absolute_overlap) {
                 const int64_t end_sample = std::min<int64_t>(
                     total_samples, nominal_start +
                     note_samples - pp.preutterance_samples);
