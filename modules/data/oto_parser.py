@@ -174,20 +174,24 @@ class OtoParser:
 
         cache_path = os.path.join(voice_dir, ".oto_cache.json")
 
-        # 1. Check latest mtime of all oto.ini files in directory
-        latest_mtime = 0.0
+        # 1. Build a complete source signature. Checking only the newest mtime
+        #    leaves stale cache entries when an oto.ini is deleted or replaced.
         ini_files = []
+        source_signature = []
         for root, _dirs, files in os.walk(voice_dir):
             for fname in files:
                 if fname.lower() == "oto.ini":
-                    full_p = os.path.join(root, fname)
+                    full_p = os.path.abspath(os.path.join(root, fname))
                     ini_files.append(full_p)
                     try:
-                        mtime = os.path.getmtime(full_p)
-                        if mtime > latest_mtime:
-                            latest_mtime = mtime
-                    except Exception:
-                        pass
+                        stat = os.stat(full_p)
+                        source_signature.append(
+                            [full_p, stat.st_mtime_ns, stat.st_size]
+                        )
+                    except OSError:
+                        continue
+        ini_files.sort()
+        source_signature.sort(key=lambda item: item[0])
 
         # 2. Try loading from .oto_cache.json if valid
         if use_cache and os.path.exists(cache_path):
@@ -238,7 +242,14 @@ class OtoParser:
                     "overlap": entry.overlap
                 })
             with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump({"entries": cache_entries, "mtime": latest_mtime}, f, ensure_ascii=False)
+                json.dump(
+                    {
+                        "entries": cache_entries,
+                        "source_signature": source_signature,
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
             logger.info("oto.ini 高速キャッシュ保存完了: %s", cache_path)
         except Exception as ex_save:
             logger.warning("oto.ini キャッシュ保存エラー (%s)", ex_save)
