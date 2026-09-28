@@ -431,6 +431,11 @@ class UstConverter:
                 # 先行発声・オーバーラップ (ms、None なら oto.ini 値を使う)
                 "pre_utterance": pre_ms,
                 "overlap":       ov_ms,
+                # 明示的な0msも「USTが指定した値」として区別できるようにする。
+                # 通常のNoteEventは後方互換のため0.0を持つ場合があるため、
+                # 値だけでは「未指定」と「明示的な0」を区別できない。
+                "_ust_preutterance_explicit": pre_ms is not None,
+                "_ust_overlap_explicit": ov_ms is not None,
 
                 # UST 拡張フィールド (エンジン側が参照可能)
                 # ノート側にFlagsキーが無い場合だけ[#SETTING] Flagsを継承する。
