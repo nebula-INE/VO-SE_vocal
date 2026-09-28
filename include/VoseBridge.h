@@ -64,40 +64,7 @@ struct NoteEvent {
 
 #pragma pack(pop)
 
-// ------------------------------------------------------------------
-// ストリーミングAPI用構造体 (include/vose_streaming.h と1:1対応)
-// フィールド順は実物のヘッダの順序を厳守すること。
-// ------------------------------------------------------------------
-using VoseChunkCallback = void (*) (const float* samples, int sample_count,
-                                     double position_ms, void* user_data);
-
-struct VoseStreamConfig {
-    int    sample_rate;          // 出力サンプルレート (通常 44100)
-    int    buffer_ms;             // 先行バッファ量 [ms] (推奨: 200〜500)
-    int    mode_flag;             // 0=Free(16bit), 1=Pro(32bit)
-    float  initial_tempo_bpm;    // 初期テンポ（後から変更可）
-    VoseChunkCallback on_chunk_ready; // nullptrならpullモード
-    void*  callback_user_data;
-};
-
-struct VoseStreamNote {
-    const char*   wav_path;       // 音源キー (oto.ini alias)
-    int           pitch_length;   // ピッチフレーム数
-    const double* pitch_curve;    // [pitch_length]
-    const double* gender_curve;   // [pitch_length] (null = 0.5)
-    const double* tension_curve;  // [pitch_length] (null = 0.5)
-    const double* breath_curve;   // [pitch_length] (null = 0.5)
-    int64_t       note_id;        // 更新/差し替えに使用するID
-
-    const double* portamento_offsets; // セント単位。nullptr可
-    int           portamento_length;  // 0なら無効
-};
-
-using VoseStreamHandle = void*;
-
-} // extern "C"
-
-// ============================================================
+#include "vose_streaming_api.h"\n\n// ============================================================
 // 関数ポインタ型（vose_core.h / vose_streaming.h の extern "C" ブロックと1:1対応）
 // ============================================================
 using Fn_load_embedded_resource    = void (*)(const char*, const int16_t*, int);
