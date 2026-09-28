@@ -3521,21 +3521,63 @@ class MainWindow(
             if idx != self.current_track_idx:
                 self.track_list_widget.setCurrentRow(idx)
 
+    def _record_track_property_change(self, track, attr: str, old_value: Any, new_value: Any, description: str) -> None:
+        """Mixer/track property変更を既に適用済みの状態からUndo履歴へ登録する。"""
+        if old_value == new_value:
+            return
+
+        def apply(value):
+            setattr(track, attr, value)
+            self.refresh_track_list_ui()
+            if track in self.tracks and self.tracks.index(track) == self.current_track_idx:
+                if attr == "volume":
+                    audio_player = getattr(self, "audio_player", None)
+                    setter = getattr(audio_player, "set_volume", None)
+                    if callable(setter):
+                        setter(float(value))
+                    elif getattr(self, "audio_output", None) is not None:
+                        self.audio_output.setVolume(float(value))
+                elif attr == "pan":
+                    audio_player = getattr(self, "audio_player", None)
+                    setter = getattr(audio_player, "set_pan", None)
+                    if callable(setter):
+                        setter(float(value))
+
+        def redo():
+            apply(new_value)
+
+        def undo():
+            apply(old_value)
+
+        self.history.push(EditCommand(redo, undo, description))
+
     def _on_strip_mute(self, track, is_muted: bool):
         if track in self.tracks:
-            track.is_muted = is_muted
+            old_value = bool(getattr(track, "is_muted", False))
+            new_value = bool(is_muted)
+            track.is_muted = new_value
             self._sync_track_strips()
-            self.statusBar().showMessage(f"{track.name} Muted: {is_muted}")
+            self._record_track_property_change(
+                track, "is_muted", old_value, new_value, "トラックMute変更"
+            )
+            self.statusBar().showMessage(f"{track.name} Muted: {new_value}")
 
     def _on_strip_solo(self, track, is_solo: bool):
         if track in self.tracks:
-            track.is_solo = is_solo
+            old_value = bool(getattr(track, "is_solo", False))
+            new_value = bool(is_solo)
+            track.is_solo = new_value
             self._sync_track_strips()
-            self.statusBar().showMessage(f"{track.name} Solo: {is_solo}")
+            self._record_track_property_change(
+                track, "is_solo", old_value, new_value, "トラックSolo変更"
+            )
+            self.statusBar().showMessage(f"{track.name} Solo: {new_value}")
 
     def _on_strip_volume(self, track, value: float):
         if track in self.tracks:
-            track.volume = value
+            old_value = float(getattr(track, "volume", 1.0))
+            new_value = float(value)
+            track.volume = new_value
             # 再生中のWaveトラックなら即時反映
             if getattr(track, 'track_type', '') == 'wave' and self.tracks.index(track) == self.current_track_idx:
                 # Waveトラックは AudioPlayer ラッパー側の QAudioOutput が実再生経路。
@@ -3549,11 +3591,16 @@ class MainWindow(
                     audio_output = getattr(self, 'audio_output', None)
                     if audio_output is not None:
                         audio_output.setVolume(value)
-            self.statusBar().showMessage(f"{track.name} Volume: {int(value * 100)}%")
+            self._record_track_property_change(
+                track, "volume", old_value, new_value, "トラックVolume変更"
+            )
+            self.statusBar().showMessage(f"{track.name} Volume: {int(new_value * 100)}%")
 
     def _on_strip_pan(self, track, value: float):
         if track in self.tracks:
-            track.pan = max(-1.0, min(1.0, float(value)))
+            old_value = float(getattr(track, "pan", 0.0))
+            new_value = max(-1.0, min(1.0, float(value)))
+            track.pan = new_value
 
             # 現在再生中のWaveトラックは、実際のAudioPlayerへパンを即時反映する。
             if (
@@ -3563,19 +3610,29 @@ class MainWindow(
                 audio_player = getattr(self, "audio_player", None)
                 set_pan = getattr(audio_player, "set_pan", None)
                 if callable(set_pan):
-                    set_pan(track.pan)
+                    set_pan(new_value)
 
             p_str = (
-                f"L{int(abs(track.pan) * 100)}"
-                if track.pan < -0.01
-                else (f"R{int(track.pan * 100)}" if track.pan > 0.01 else "C")
+                f"L{int(abs(new_value) * 100)}"
+                if new_value < -0.01
+                else (f"R{int(new_value * 100)}" if new_value > 0.01 else "C")
+            )
+            self._record_track_property_change(
+                track, "pan", old_value, new_value, "トラックPan変更"
             )
             self.statusBar().showMessage(f"{track.name} Pan: {p_str}")
 
     def _on_strip_renamed(self, track, new_name: str):
         if track in self.tracks:
-            track.name = new_name
-            self.statusBar().showMessage(f"Track renamed to: {new_name}")
+            old_value = str(getattr(track, "name", ""))
+            new_value = str(new_name).strip()
+            if not new_value:
+                return
+            track.name = new_value
+            self._record_track_property_change(
+                track, "name", old_value, new_value, "トラック名変更"
+            )
+            self.statusBar().showMessage(f"Track renamed to: {new_value}")
 
 
     def init_audio_playback(self):
@@ -5343,6 +5400,16 @@ class MainWindow(
             if not (30.0 <= new_tempo <= 300.0):
                 raise ValueError("テンポは30.0〜300.0の範囲で入力してください")
 
+            # 同じ値の再入力は編集履歴を増やさない。
+            old_tempo = None
+            if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
+                old_tempo = float(self.timeline_widget.tempo)
+            elif hasattr(self, "timeline") and self.timeline is not None:
+                old_tempo = float(self.timeline.tempo)
+
+            if old_tempo is not None and old_tempo == float(new_tempo):
+                return
+
             # 3. 各コンポーネントへの伝播
             # [FIX] int() → float() に変更。小数テンポの精度を保持する。
             # TimelineWidgetへの反映
@@ -5372,6 +5439,32 @@ class MainWindow(
                 self.status_label.setText(f"テンポ: {new_tempo:.1f} BPM")
             elif self.statusBar():
                 self.statusBar().showMessage(f"Tempo changed to: {new_tempo:.1f}", 2000)
+
+            # テンポ変更はプロジェクト編集なのでUndo/Redo対象にする。
+            if old_tempo is not None:
+                def apply_tempo(value: float) -> None:
+                    if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
+                        self.timeline_widget.tempo = float(value)
+                        self.timeline_widget.update()
+                    elif hasattr(self, "timeline") and self.timeline is not None:
+                        self.timeline.tempo = float(value)
+                        self.timeline.update()
+                    if hasattr(self, "graph_editor_widget") and self.graph_editor_widget is not None:
+                        self.graph_editor_widget.tempo = float(value)
+                        self.graph_editor_widget.update()
+                    if getattr(self, "vo_se_engine", None) is not None:
+                        self.vo_se_engine.set_tempo(float(value))
+                    self.update_scrollbar_range()
+                    if getattr(self, "tempo_input", None) is not None:
+                        self.tempo_input.blockSignals(True)
+                        self.tempo_input.setText(str(float(value)))
+                        self.tempo_input.blockSignals(False)
+
+                self.history.push(EditCommand(
+                    lambda: apply_tempo(float(new_tempo)),
+                    lambda: apply_tempo(float(old_tempo)),
+                    "テンポ変更",
+                ))
 
             print(f"DEBUG: System tempo synchronized to {new_tempo} BPM")
 
