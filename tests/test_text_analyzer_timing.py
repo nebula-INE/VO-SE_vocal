@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 from modules.data.data_models import NoteEvent
 from modules.data.oto_parser import OtoParser
@@ -43,8 +43,8 @@ def test_explicit_zero_preutterance_and_overlap_override_oto(monkeypatch):
         pre_utterance=0.0,
         overlap=0.0,
     )
-    note._ust_preutterance_explicit = True
-    note._ust_overlap_explicit = True
+    cast(Any, note)._ust_preutterance_explicit = True
+    cast(Any, note)._ust_overlap_explicit = True
 
     notes, _timeline = analyzer.align_vocal_timing([note], cast(OtoParser, object()))
 
@@ -70,8 +70,6 @@ def test_missing_ust_overrides_uses_oto(monkeypatch):
         lyric="a",
         start_time=1.0,
         duration=0.5,
-        pre_utterance=None,
-        overlap=None,
     )
 
     notes, _timeline = analyzer.align_vocal_timing([note], cast(OtoParser, object()))
