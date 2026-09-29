@@ -2022,11 +2022,25 @@ class MainWindow(
     def update_playback_ui(self):
         """再生位置・時間表示・タイムラインのプレイヘッドを同期する。"""
         if getattr(self, 'is_playing', False):
-            # AudioMixer は全バッファ終了時に CallbackStop で自然停止する。
-            # UIタイマーだけがプロジェクト終端まで走り続けると、音が止まっても
-            # 「再生中」のままになるため、実際のストリーム状態をここで同期する。
             mixer = getattr(self, "audio_mixer", None)
+
+            # AudioMixer は全バッファ終了時に CallbackStop で自然停止する。
+            # ループ中はここで再スタートし、通常再生時だけ停止処理へ進む。
+            # 先に stop_and_clear_playback() を呼ぶとループ状態まで解除されるため、
+            # 自然終了とユーザー操作による停止を明確に分ける。
             if mixer is not None and not bool(getattr(mixer, "is_playing", False)):
+                if getattr(self, "is_looping", False):
+                    try:
+                        mixer.play(0.0)
+                        self.current_playback_time = 0.0
+                        self.playback_start_time = 0.0
+                        self.playback_started_monotonic = time.monotonic()
+                        self._set_transport_time(0.0)
+                        return
+                    except Exception as exc:
+                        self.statusBar().showMessage(
+                            f"ループ再生の再開に失敗しました: {exc}", 5000
+                        )
                 self.stop_and_clear_playback()
                 return
 
