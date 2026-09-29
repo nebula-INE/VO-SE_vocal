@@ -164,7 +164,7 @@ class VO_SE_Engine:
             c_entries[i].filename = None
             c_entries[i].cutoff = float(getattr(entry, "right_blank", 0.0))
             c_entries[i].alias = fixed_utf8(alias, 64)
-            # OtoEntry.wav_path は既に解決済みのパス。ここで abspath() を通すと\n            # Windows 上で POSIX 形式の絶対パス (例: /tmp/voice/a.wav) まで\n            # 実行環境のドライブ付きパスへ変換され、元のパス情報が壊れる。\n            c_entries[i].wav_path = fixed_utf8(wav_path, 512)
+            # OtoEntry.wav_path は既に解決済みのパス。ここで abspath() を通すと\n            # Windows 上で POSIX 形式の絶対パス (例: /tmp/voice/a.wav) まで\n            # 実行環境のドライブ付きパスへ変換され、元のパス情報が壊れる。\n            # macOS の ctypes で固定長 char 配列フィールドへの代入結果が\n            # 不安定にならないよう、対象フィールドへ明示的にゼロ初期化して書き込む。\n            wav_bytes = fixed_utf8(wav_path, 512)\n            wav_addr = ctypes.addressof(c_entries[i]) + COtoEntry.wav_path.offset\n            ctypes.memset(wav_addr, 0, 512)\n            if wav_bytes:\n                ctypes.memmove(wav_addr, wav_bytes, len(wav_bytes))
             c_entries[i].offset = float(getattr(entry, "left_blank", 0.0))
             c_entries[i].consonant = float(getattr(entry, "fixed_range", 0.0))
             c_entries[i].blank = float(getattr(entry, "right_blank", 0.0))
