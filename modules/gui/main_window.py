@@ -1838,6 +1838,9 @@ class MainWindow(
         # タイマーはここで実体化させる (Noneアクセスを未然に防ぐ)
         self.render_timer = QTimer(self)
         self.playback_timer = QTimer(self)
+        # 再生位置UIは約30fpsで十分。start()単体だと既定の0ms間隔になり、
+        # イベントループを不必要に占有するため明示的に設定する。
+        self.playback_timer.setInterval(33)
         
         # ロック
         import threading
@@ -4652,6 +4655,8 @@ class MainWindow(
             mixer.play(start_time)
             self.is_playing = True
             self.current_playback_time = start_time
+            self.playback_start_time = start_time
+            self.playback_started_monotonic = time.monotonic()
             self.playback_timer.start()
             if play_btn is not None:
                 play_btn.setText("■ 停止")
