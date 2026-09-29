@@ -2019,6 +2019,14 @@ class MainWindow(
     def update_playback_ui(self):
         """再生位置・時間表示・タイムラインのプレイヘッドを同期する。"""
         if getattr(self, 'is_playing', False):
+            # AudioMixer は全バッファ終了時に CallbackStop で自然停止する。
+            # UIタイマーだけがプロジェクト終端まで走り続けると、音が止まっても
+            # 「再生中」のままになるため、実際のストリーム状態をここで同期する。
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is not None and not bool(getattr(mixer, "is_playing", False)):
+                self.stop_and_clear_playback()
+                return
+
             elapsed = max(0.0, time.monotonic() - float(getattr(self, 'playback_started_monotonic', 0.0)))
             current_time = float(getattr(self, 'playback_start_time', 0.0)) + elapsed
             end_time = max(float(getattr(self, 'playback_end_time', 0.0)), self._get_project_duration_seconds())
