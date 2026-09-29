@@ -1075,12 +1075,51 @@ function getTrailingVowel(rawLyric) {
 // Cache for detected WAV base midi pitch to avoid repeated disk reads / analysis
 const wavBaseMidiCache = new Map();
 
+function getWavBaseMidiCacheSignature(wavPath) {
+  if (!wavPath) return null;
+
+  try {
+    const stat = fs.statSync(wavPath);
+    const frqCandidates = [
+      wavPath.replace(/\.wav$/i, '_wav.frq'),
+      wavPath.replace(/\.wav$/i, '.frq')
+    ];
+    const frqSignature = frqCandidates.map((frqPath) => {
+      try {
+        const frqStat = fs.statSync(frqPath);
+        return [frqPath, frqStat.mtimeMs, frqStat.size];
+      } catch (e) {
+        return [frqPath, null, null];
+      }
+    });
+
+    return JSON.stringify([
+      wavPath,
+      stat.mtimeMs,
+      stat.size,
+      frqSignature
+    ]);
+  } catch (e) {
+    return null;
+  }
+}
+
+function cacheWavBaseMidi(wavPath, signature, midi) {
+  if (wavPath && signature) {
+    wavBaseMidiCache.set(wavPath, { signature, midi });
+  }
+}
+
 function detectWavBaseMidi(wavPath, alias = '', filename = '') {
   const taggedMidi = getMidiFromPitchTag(alias) || getMidiFromPitchTag(filename);
   if (taggedMidi && taggedMidi !== 60) return taggedMidi;
 
-  if (wavPath && wavBaseMidiCache.has(wavPath)) {
-    return wavBaseMidiCache.get(wavPath);
+  const cacheSignature = getWavBaseMidiCacheSignature(wavPath);
+  if (wavPath && cacheSignature) {
+    const cached = wavBaseMidiCache.get(wavPath);
+    if (cached && cached.signature === cacheSignature) {
+      return cached.midi;
+    }
   }
 
   // 1. Try reading .frq file e.g. _あ_wav.frq or _あ.frq
@@ -1099,7 +1138,7 @@ function detectWavBaseMidi(wavPath, alias = '', filename = '') {
             if (avgFreq > 40 && avgFreq < 2000) {
               const midi = 69 + 12 * Math.log2(avgFreq / 440);
               const res = Math.round(midi * 10) / 10;
-              wavBaseMidiCache.set(wavPath, res);
+              cacheWavBaseMidi(wavPath, cacheSignature, res);
               return res;
             }
           }
@@ -1160,7 +1199,7 @@ function detectWavBaseMidi(wavPath, alias = '', filename = '') {
             if (f0 >= 60 && f0 <= 1000) {
               const midi = 69 + 12 * Math.log2(f0 / 440);
               const res = Math.round(midi * 10) / 10;
-              wavBaseMidiCache.set(wavPath, res);
+              cacheWavBaseMidi(wavPath, cacheSignature, res);
               return res;
             }
           }
@@ -1170,7 +1209,7 @@ function detectWavBaseMidi(wavPath, alias = '', filename = '') {
   }
 
   const fallback = taggedMidi || 60;
-  if (wavPath) wavBaseMidiCache.set(wavPath, fallback);
+  cacheWavBaseMidi(wavPath, cacheSignature, fallback);
   return fallback;
 }
 
