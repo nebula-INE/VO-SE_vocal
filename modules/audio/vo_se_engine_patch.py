@@ -250,8 +250,21 @@ def _export_to_wav_v2(
         wav_path = ""
 
         if vcv_resolver is not None:
-            prev_lyric = notes[i - 1].lyric if i > 0 else None
-            _alias, oto_entry = vcv_resolver.resolve_note(note.lyric, prev_lyric)
+            prev_note = notes[i - 1] if i > 0 else None
+            prev_lyric = getattr(prev_note, "lyric", None) if prev_note is not None else None
+            gap_sec = float("inf")
+            if prev_note is not None:
+                try:
+                    prev_end = float(prev_note.start_time) + max(0.0, float(prev_note.duration))
+                    gap_sec = max(0.0, float(note.start_time) - prev_end)
+                except (TypeError, ValueError, AttributeError):
+                    gap_sec = float("inf")
+            is_continuous = prev_note is not None and gap_sec <= 0.25
+            _alias, oto_entry = vcv_resolver.resolve_note(
+                note.lyric,
+                prev_lyric,
+                is_continuous=is_continuous,
+            )
             if oto_entry is not None:
                 wav_path = oto_entry.wav_path
 
