@@ -83,6 +83,36 @@ class OtoEntry:
             exact_path = os.path.normpath(
                 os.path.join(self.voice_dir, normalized_filename)
             )
+        # 先に実ファイルシステム上の実際の名前へ解決する。
+        # macOS/Windows の case-insensitive filesystem では
+        # os.path.isfile(exact_path) が表記違いでも True になるため、
+        # これを先に行わないと `SubVoice` が `subvoice` のまま返る。
+        if not os.path.isabs(normalized_filename):
+            current = os.path.abspath(self.voice_dir)
+            components = [
+                part
+                for part in normalized_filename.replace("\\", "/").split("/")
+                if part not in ("", ".")
+            ]
+            for component in components:
+                if component == "..":
+                    current = os.path.dirname(current)
+                    continue
+                try:
+                    entries = os.listdir(current)
+                except OSError:
+                    break
+                matched = next(
+                    (name for name in entries if name.casefold() == component.casefold()),
+                    None,
+                )
+                if matched is None:
+                    break
+                current = os.path.join(current, matched)
+            else:
+                if os.path.isfile(current):
+                    return current
+
         if os.path.isfile(exact_path):
             return exact_path
 
