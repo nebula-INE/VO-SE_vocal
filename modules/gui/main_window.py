@@ -365,6 +365,8 @@ class VoseTrack:
         # --- AI & エフェクト管理（将来の拡張用） ---
         self.engine_type = "Aural"     # このトラックに使うAIエンジンの種類
         self.effects = []              # リバーブやコンプレッサーの設定保持用
+        self.playback_path = ""         # レンダー済み再生ファイル（Wave/ボーカル共通）
+        self._playback_signature = ""
         self.color_label = "#64D2FF"   # UIで見分けるためのトラックカラー
 
     def to_dict(self):
@@ -1598,6 +1600,7 @@ class MainWindow(
     player: Optional[Any]
     audio_player: Any
     audio_output: Any
+    audio_mixer: Any
 
     # === AI / エンジン系（実体保証できないため Any） ===
     vo_se_engine: Any
@@ -1774,6 +1777,7 @@ class MainWindow(
         self.midi_manager = None  
         self.audio_output = None
         self.audio_player = None
+        self.audio_mixer = None
         self.vose_core = None
         self.text_analyzer = None
         self.playback_thread = None
@@ -1935,9 +1939,9 @@ class MainWindow(
         except TypeError:
             self.voice_manager = cast(Any, VoiceManager())
 
-        # オーディオ・プレイヤー系
-        AudioPlayer = safe_import("modules.backend.audio_player", "AudioPlayer", MockAudioPlayer)
-        self.audio_player = AudioPlayer(volume=getattr(self, 'volume', 0.8))
+        # 実デスクトップ再生は setup_audio_interface() で構築する
+        # AudioMixer に統一する。ここでは旧 AudioPlayer を生成して
+        # 別の再生経路を残さない。
 
         # トーク解析系（Talk機能用）
         IntonationAnalyzer = safe_import("modules.talk.talk_manager", "IntonationAnalyzer", lambda: None)
@@ -3591,18 +3595,10 @@ class MainWindow(
             setattr(track, attr, value)
             self.refresh_track_list_ui()
             if track in self.tracks and self.tracks.index(track) == self.current_track_idx:
-                if attr == "volume":
-                    audio_player = getattr(self, "audio_player", None)
-                    setter = getattr(audio_player, "set_volume", None)
-                    if callable(setter):
-                        setter(float(value))
-                    elif getattr(self, "audio_output", None) is not None:
-                        self.audio_output.setVolume(float(value))
-                elif attr == "pan":
-                    audio_player = getattr(self, "audio_player", None)
-                    setter = getattr(audio_player, "set_pan", None)
-                    if callable(setter):
-                        setter(float(value))
+                if attr in {"volume", "pan", "is_muted", "is_solo"}:
+                    mixer = getattr(self, "audio_mixer", None)
+                    if mixer is not None:
+                        mixer.update_tracks(self.tracks)
 
         def redo():
             apply(new_value)
@@ -3639,19 +3635,9 @@ class MainWindow(
             old_value = float(getattr(track, "volume", 1.0))
             new_value = float(value)
             track.volume = new_value
-            # 再生中のWaveトラックなら即時反映
-            if getattr(track, 'track_type', '') == 'wave' and self.tracks.index(track) == self.current_track_idx:
-                # Waveトラックは AudioPlayer ラッパー側の QAudioOutput が実再生経路。
-                # MainWindow.audio_output は別の QMediaPlayer 用なので、こちらを操作しても
-                # 実際の伴奏音量が変わらない。ラッパーAPIを優先して同期する。
-                audio_player = getattr(self, 'audio_player', None)
-                set_volume = getattr(audio_player, 'set_volume', None)
-                if callable(set_volume):
-                    set_volume(value)
-                else:
-                    audio_output = getattr(self, 'audio_output', None)
-                    if audio_output is not None:
-                        audio_output.setVolume(value)
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is not None:
+                mixer.update_tracks(self.tracks)
             self._record_track_property_change(
                 track, "volume", old_value, new_value, "トラックVolume変更"
             )
@@ -3663,15 +3649,9 @@ class MainWindow(
             new_value = max(-1.0, min(1.0, float(value)))
             track.pan = new_value
 
-            # 現在再生中のWaveトラックは、実際のAudioPlayerへパンを即時反映する。
-            if (
-                getattr(track, "track_type", "") == "wave"
-                and self.tracks.index(track) == self.current_track_idx
-            ):
-                audio_player = getattr(self, "audio_player", None)
-                set_pan = getattr(audio_player, "set_pan", None)
-                if callable(set_pan):
-                    set_pan(new_value)
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is not None:
+                mixer.update_tracks(self.tracks)
 
             p_str = (
                 f"L{int(abs(new_value) * 100)}"
@@ -3697,20 +3677,8 @@ class MainWindow(
 
 
     def init_audio_playback(self):
-        """オーディオ再生機能の初期設定（MainWindowの__init__から呼び出し）"""
-        from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-        
-        # 伴奏（Wave）再生用の心臓部
-        self.audio_player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-        self.audio_player.setAudioOutput(self.audio_output)
-        
-        # 再生位置が動いた時にタイムラインのカーソルを同期させる
-        self.audio_player.positionChanged.connect(self.sync_ui_to_audio)
-        
-        # 再生が終わった時の処理
-        self.audio_player.playbackStateChanged.connect(self.on_playback_state_changed)
-
+        """Compatibility entry point for the unified desktop AudioMixer."""
+        self.setup_audio_interface()
     def sync_ui_to_audio(self, ms):
         """オーディオの再生位置（ms）をUIの秒数に反映"""
         if self.audio_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -3729,30 +3697,12 @@ class MainWindow(
             self.play_btn.setText("⏸ 停止" if is_playing else "▶ 再生")
 
     def setup_audio_interface(self) -> None:
-        """
-        オーディオ再生エンジンの初期化（PySide6完全対応版）。
+        """Initialize the single desktop callback-based AudioMixer path."""
+        from modules.backend.audio_mixer import AudioMixer
 
-        以前はここで音量スライダーUIも構築していたが、
-        setup_mixer_controls() の vol_slider と同名属性が重複し、
-        後から呼ばれた方が上書きしてしまう問題があったため、
-        UI構築は setup_mixer_controls 側に一本化し、
-        ここでは再生エンジン(QMediaPlayer/QAudioOutput)の構築に専念する。
-        """
-        from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-
-        # --- 再生エンジンの構築 ---
-        self.player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-    
-        player = self.player
-        audio_output = self.audio_output
-        if player is None or audio_output is None:
-            return
-        player.setAudioOutput(audio_output)
-        audio_output.setVolume(0.5)
-        player.playbackStateChanged.connect(self.on_playback_state_changed)
-
-
+        self.audio_mixer = AudioMixer(sample_rate=44100)
+        self.audio_player = self.audio_mixer
+        self.audio_output = None
     def get_current_playback_state(self) -> bool:
         """
 
@@ -4158,51 +4108,24 @@ class MainWindow(
         pass
 
     def play_audio(self, path: str) -> None:
-        """オーディオファイルを安全に再生（構文エラー・型チェック対策済）"""
-    
-        # 1. パスのチェック
+        """Play a rendered WAV through the unified desktop AudioMixer."""
         if not path or not os.path.exists(path):
             print(f"エラー: ファイルが見つかりません: {path}")
             return
- 
-        # 2. プレイヤーの取得と型確定
-        # getattrの戻り値をcastすることで、その後の hasattr チェックを有効にします
-        player = cast(Any, getattr(self, 'player', None))
-    
-        # 3. プレイヤーが有効かチェック
-        if player is None or isinstance(player, bool):
-            print("警告: プレイヤーが初期化されていません")
+        mixer = getattr(self, "audio_mixer", None)
+        play_file = getattr(mixer, "play_file", None)
+        if not callable(play_file):
+            print("警告: AudioMixer が初期化されていません")
             return
-
-        # 4. 再生処理
         try:
-            # 🔴 重要: インデントを修正 (ここがズレていると invalid-syntax になります)
-            from PySide6.QtCore import QUrl
-        
-            # 停止処理
-            if hasattr(player, 'stop'):
-                player.stop()
-         
-            # ソースを設定
-            if hasattr(player, 'setSource'):
-                # 絶対パスを取得して QUrl に変換
-                abs_path = os.path.abspath(path)
-                file_url = QUrl.fromLocalFile(abs_path)
-                player.setSource(file_url)
-        
-            # 再生開始
-            if hasattr(player, 'play'):
-                player.play()
-                print(f"再生開始: {path}")
-    
-        except Exception as e:
-            # ここも上の try と垂直に揃える必要があります
-            print(f"再生エラー: {e}")
-            
-    # ==========================================================================
-    #  アップデートデート自動確認　　　　　　　　　　　　　　　　　　　　　　　　　
-    # ==========================================================================
-
+            play_file(os.path.abspath(path))
+            self.is_playing = True
+            self.current_playback_time = 0.0
+            self.playback_timer.start()
+            print(f"再生開始: {path}")
+        except Exception as exc:
+            self.is_playing = False
+            print(f"再生エラー: {exc}")
     def _check_for_updates(self):
         try:
             import importlib
@@ -4611,122 +4534,125 @@ class MainWindow(
                 self.is_playing = False
 
     @Slot() 
+    def _build_render_parameters(self) -> dict:
+        """Normalize current graph parameters for per-track playback renders."""
+        graph = getattr(self, "graph_editor_widget", None)
+        all_params = getattr(graph, "all_parameters", {}) if graph is not None else {}
+        return {
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath": list(all_params.get("Breath", [])),
+        }
+
+    def _render_vocal_track_for_playback(self, track: Any, track_index: int) -> str:
+        """Render one Vocal track to a cached WAV for mixer playback."""
+        notes = list(getattr(track, "notes", []) or [])
+        if not notes:
+            return ""
+
+        export_v2 = getattr(self.vo_se_engine, "export_to_wav_v2", None)
+        if not callable(export_v2):
+            raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
+
+        signature_items = []
+        for note in notes:
+            if hasattr(note, "to_dict"):
+                signature_items.append(note.to_dict())
+            else:
+                signature_items.append(getattr(note, "__dict__", repr(note)))
+
+        signature = repr((
+            signature_items,
+            self._build_render_parameters(),
+            self.current_voice_id,
+            float(getattr(self.timeline_widget, "tempo", 120.0)),
+        ))
+
+        cache_dir = os.path.join(tempfile.gettempdir(), "vose_playback_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        import hashlib
+        cache_key = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:24]
+        cache_path = os.path.join(cache_dir, f"track_{track_index}_{cache_key}.wav")
+
+        if getattr(track, "_playback_signature", None) == signature and os.path.exists(cache_path):
+            track.playback_path = cache_path
+            return cache_path
+
+        self.statusBar().showMessage(
+            f"Vocal {track_index + 1} を再生用にレンダリング中..."
+        )
+        result = export_v2(
+            notes,
+            self._build_render_parameters(),
+            cache_path,
+            mode_flag=0,
+        )
+        if not result or not os.path.exists(result):
+            raise RuntimeError(f"Vocal {track_index + 1} のWAV生成に失敗しました。")
+
+        track.playback_path = os.path.abspath(result)
+        track._playback_signature = signature
+        return track.playback_path
+
+    def _prepare_all_vocal_playback(self) -> None:
+        """Render every Vocal track so the mixer can play all tracks together."""
+        for index, track in enumerate(getattr(self, "tracks", []) or []):
+            if getattr(track, "track_type", "") != "vocal":
+                continue
+            self._render_vocal_track_for_playback(track, index)
+
     def on_play_pause_toggled(self):
-        """
-        再生/停止を切り替えるハンドラ（Ruff/Pyright/Pylance/VSCode 全エラー根絶版）
-        一切の省略なし、完全防衛型コード。
-        """
-        
-        # --- 0. 徹底的な型キャストと安全な属性取得 ---
-        # getattrを使用し、かつ None チェックを行うことで reportOptionalMemberAccess を完全に防ぎます
-        play_btn = cast(QPushButton, getattr(self, 'play_btn', None) or getattr(self, 'play_button', None))
-        status_lbl = cast(QLabel, getattr(self, 'status_label', None))
-        timeline = cast(Any, getattr(self, 'timeline_widget', None))
-        timer = cast(Any, getattr(self, 'playback_timer', None))
-
-        # --- 1. 再生中の場合の停止ロジック (代表の設計を完全維持) ---
-        if self.is_playing:
+        """Start/stop the unified desktop playback path for all tracks."""
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+            return
+        play_btn = cast(QPushButton, getattr(self, "play_btn", None) or getattr(self, "play_button", None))
+        status_lbl = cast(QLabel, getattr(self, "status_label", None))
+        if mixer.is_playing:
+            mixer.stop()
             self.is_playing = False
-            
-            # タイマーの停止
-            if timer is not None and hasattr(timer, 'stop'):
-                timer.stop()
-            
-            # エンジンの停止処理（動的チェック）
-            engine = getattr(self, 'vo_se_engine', None)
-            if engine is not None and hasattr(engine, 'stop_playback'):
-                engine.stop_playback()
-            
-            # スレッドの終了待ち
-            thread = cast(threading.Thread, getattr(self, 'playback_thread', None))
-            if thread is not None and thread.is_alive():
-                thread.join(timeout=0.2) 
-
-            # UIの更新（Ruff対策で改行、Pyright対策で None チェック）
+            self.playback_timer.stop()
             if play_btn is not None:
                 play_btn.setText("▶ 再生")
-            self._refresh_transport_button_states()
-            if status_lbl is not None: 
+            if status_lbl is not None:
                 status_lbl.setText("停止しました")
-            self.statusBar().showMessage(f"停止: {self._format_timecode(self.current_playback_time)}", 2000)
-                
-            self.playing_notes = {}
+            self._refresh_transport_button_states()
             return
-
-        # --- 2. 停止中の場合の再生開始ロジック ---
-        # 録音中なら止める（getattrで安全に確認）
-        if getattr(self, 'is_recording', False):
-            # 録音停止メソッドを安全に呼び出す
-            on_record = getattr(self, 'on_record_toggled', None)
-            if on_record is not None:
-                on_record()
-
-        # タイムラインが存在しない場合は何もしない
-        if timeline is None:
-            return
-            
-        # timeline.notes_list が型不明と言われないよう cast
-        notes = cast(List[Any], getattr(timeline, 'notes_list', []))
-
+        tracks = list(getattr(self, "tracks", []) or [])
         try:
-            if status_lbl is not None: 
-                status_lbl.setText("音声生成中...")
-            
-            # GUIをフリーズさせないためのイベントループ処理
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
-
-            # 再生開始位置の取得（型安全なフォールバック付き）
-            start_time = float(getattr(timeline, '_current_playback_time', self.current_playback_time))
-            if hasattr(timeline, 'get_selected_notes_range'):
-                range_data = timeline.get_selected_notes_range()
-                if range_data and isinstance(range_data, tuple) and len(range_data) >= 2:
-                    start_time = float(range_data[0])
-            
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            if 0 <= current_idx < len(tracks):
+                current_track = tracks[current_idx]
+                if getattr(current_track, "track_type", "") == "vocal":
+                    current_track.notes = deepcopy(getattr(getattr(self, "timeline_widget", None), "notes_list", []))
+            self._prepare_all_vocal_playback()
+            timeline = cast(Any, getattr(self, "timeline_widget", None))
+            start_time = float(getattr(timeline, "_current_playback_time", 0.0)) if timeline is not None else 0.0
+            playable = [t for t in tracks if str(getattr(t, "playback_path", "") or "") or str(getattr(t, "audio_path", "") or "")]
+            if not playable:
+                self.statusBar().showMessage("再生する音声がありません。", 3000)
+                return
+            mixer.set_tracks(tracks)
+            mixer.play(start_time)
             self.is_playing = True
             self.current_playback_time = start_time
-            self.playback_start_time = start_time
-            self.playback_end_time = self._get_project_duration_seconds()
-            self.playback_started_monotonic = time.monotonic()
-            self._set_transport_time(start_time)
-            
-            # UI表示の更新
-            if play_btn is not None: 
+            self.playback_timer.start()
+            if play_btn is not None:
                 play_btn.setText("■ 停止")
-            self._refresh_transport_button_states()
-            if status_lbl is not None: 
-                status_lbl.setText(f"再生中: {start_time:.2f}s -")
-            if not notes:
-                self.statusBar().showMessage("ノートなし: タイムラインのみ再生します", 3000)
-            else:
-                self.statusBar().showMessage(f"再生中: {self._format_timecode(start_time)}", 3000)
-
-            # 再生スレッドの構築
-            engine_for_play = getattr(self, 'vo_se_engine', None)
-            if notes and engine_for_play is not None and hasattr(engine_for_play, 'play_audio'):
-                new_thread = threading.Thread(
-                    target=engine_for_play.play_audio, 
-                    daemon=True
-                )
-                # スレッドを属性に保持
-                self.playback_thread = new_thread
-                new_thread.start()
-            
-            # UI更新タイマーの開始
-            if timer is not None and hasattr(timer, 'start'):
-                timer.start(20)
-
-        except Exception as e:
-            # 例外発生時も安全にUIを復元
             if status_lbl is not None:
-                status_lbl.setText(f"再生エラー: {e}")
-            
+                status_lbl.setText(f"再生中: {start_time:.2f}s")
+            self._refresh_transport_button_states()
+        except Exception as exc:
             self.is_playing = False
-            
+            self.playback_timer.stop()
             if play_btn is not None:
                 play_btn.setText("▶ 再生")
+            if status_lbl is not None:
+                status_lbl.setText(f"再生エラー: {exc}")
             self._refresh_transport_button_states()
-
+            self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
     @Slot()
     def on_record_toggled(self):
         """録音開始/停止"""
@@ -4772,75 +4698,34 @@ class MainWindow(
 
 
     def stop_and_clear_playback(self) -> None:
-        """
-        再生を停止し、内部状態とUIを初期状態にリセットする。
-        3678行目のエラーを根絶し、すべての属性アクセスを安全に行います。
-        """
-        # 1. プレイヤーの停止 (AttributeAccessIssue 対策)
-        # self.player が bool (False) や None の場合にメソッドを呼ぼうとしてクラッシュするのを防ぐ
-        player_obj = getattr(self, 'player', None)
-        if player_obj is not None and not isinstance(player_obj, bool):
-            # stop メソッドが存在するか確認してから実行
-            if hasattr(player_obj, 'stop'):
-                stop_func = player_obj.stop
-                if callable(stop_func):
-                    stop_func()
-
-        # 1b. WAV/伴奏トラックの停止
-        audio_player = getattr(self, "audio_player", None)
-        audio_stop = getattr(audio_player, "stop", None)
-        if callable(audio_stop):
-            audio_stop()
-
-        # 2. 内部フラグの安全なリセット
-        # Pyright の reportAttributeAccessIssue を防ぐため、確実に属性を更新
-        self.is_playing: bool = False
-        self.current_playback_time: float = 0.0
+        """Stop the unified mixer and reset transport state/UI."""
+        mixer = getattr(self, "audio_mixer", None)
+        stop_mixer = getattr(mixer, "stop", None)
+        if callable(stop_mixer):
+            stop_mixer()
+        self.audio_player = mixer
+        self.playback_timer.stop()
+        self.is_playing = False
+        self.current_playback_time = 0.0
         self.playback_start_time = 0.0
         self.playback_started_monotonic = 0.0
         self.is_looping = False
         self.is_looping_selection = False
-
-        timer = getattr(self, 'playback_timer', None)
-        if timer is not None and hasattr(timer, 'stop'):
-            timer.stop()
-        
-        # 3. UI状態の更新 (メソッド不在エラーを回避)
-        # 循環参照や動的なメソッド追加を考慮し、hasattr でチェック
-        update_ui_func = getattr(self, 'update_playback_ui', None)
-        if callable(update_ui_func):
-            update_ui_func()
-            
-        # 4. タイムラインカーソルを 0.0 (先頭) へ戻す
-        # timeline_widget が None である可能性を考慮したガード
-        t_widget = getattr(self, 'timeline_widget', None)
-        if t_widget is not None:
-            # 引数の型を float(0.0) で確定させて呼び出し
-            if hasattr(t_widget, 'set_playback_time'):
-                t_widget.set_playback_time(0.0)
-            elif hasattr(t_widget, 'set_current_time'):
-                t_widget.set_current_time(0.0)
-                
-        # 5. グラフエディタも同期してリセット
-        g_widget = getattr(self, 'graph_editor_widget', None)
-        if g_widget is not None and hasattr(g_widget, 'set_current_time'):
-            g_widget.set_current_time(0.0)
-
-        stop_btn = cast(QPushButton, getattr(self, 'stop_btn', None))
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is not None:
+            if hasattr(timeline, "set_playback_time"):
+                timeline.set_playback_time(0.0)
+            elif hasattr(timeline, "set_current_time"):
+                timeline.set_current_time(0.0)
+        graph = getattr(self, "graph_editor_widget", None)
+        if graph is not None and hasattr(graph, "set_current_time"):
+            graph.set_current_time(0.0)
+        stop_btn = cast(QPushButton, getattr(self, "stop_btn", None))
         if stop_btn is not None:
             stop_btn.setChecked(True)
             QTimer.singleShot(140, lambda: stop_btn.setChecked(False))
         self._refresh_transport_button_states()
-
-        # 6. ステータスバーへのリセット通知
-        status_bar = self.statusBar()
-        if status_bar is not None:
-            status_bar.showMessage("Playback stopped and reset to 00:00.000")
-            
-    # ==========================================================================
-    # REAL-TIME PREVIEW ENGINE (Low-Latency Response)
-    # ==========================================================================
-
+        self.statusBar().showMessage("Playback stopped and reset to 00:00.000")
     @Slot(object)
     def on_single_note_modified(self, note):
         """
@@ -6027,52 +5912,7 @@ class MainWindow(
             )
 
     def play_rendered_audio(self, wav_path: str) -> None:
-        """生成されたWAVをAudioPlayerで再生する"""
-        if self.player and os.path.exists(wav_path):
-            # PySide6.QtMultimedia.QMediaPlayer を想定
-            from PySide6.QtCore import QUrl
-            self.player.setSource(QUrl.fromLocalFile(wav_path))
-            self.player.play()
-
-
-# ==============================================================================
-# エントリーポイント
-# ==============================================================================
-
-def main() -> None:
-    """
-    VO-SE Pro アプリケーション起動エントリーポイント。
-    """
-    #from PySide6.QtWidgets import QApplication
-
-    # 1. アプリケーションインスタンスの作成
-    # sys をインポート済みなので、sys.argv へのアクセスが安全です
-    app = QApplication(sys.argv)
-    
-    # 2. 外観の設定
-    # DAWとしての統一感を出すため、Fusionスタイルを適用
-    app.setStyle("Fusion")
-    
-    # 3. メインウィンドウの生成と表示
-    # クラス MainWindow が定義済みであることを前提にインスタンス化
-    try:
-        # 代表、ここで MainWindow を呼び出します
-        window = MainWindow()
-        window.show()
-        
-        # 4. イベントループの開始と安全な終了
-        # 戻り値を sys.exit に渡すことで、正常終了(0)を保証します
-        exit_code = app.exec()
-        sys.exit(exit_code)
-        
-    except NameError as e:
-        # MainWindow が見つからない場合のデバッグ用
-        print(f"CRITICAL ERROR: MainWindow class is not defined. {e}")
-        sys.exit(1)
-    except Exception as e:
-        # その他の予期せぬ起動エラーの捕捉
-        print(f"APPLICATION ERROR: {str(e)}")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+        """Play a rendered WAV through the unified desktop AudioMixer."""
+        if not wav_path or not os.path.exists(wav_path):
+            return
+        self.play_audio(wav_path)
