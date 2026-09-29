@@ -4538,7 +4538,17 @@ class MainWindow(
         """Render one Vocal track to a cached WAV for mixer playback."""
         notes = list(getattr(track, "notes", []) or [])
         if not notes:
+            # Never keep a previously rendered file when the track no longer
+            # contains notes; otherwise playback can silently use stale audio.
+            track.playback_path = ""
+            track._playback_signature = ""
             return ""
+
+        # Invalidate the old playback path before rendering. If rendering
+        # fails, the mixer must not fall back to stale audio from an earlier
+        # successful render.
+        track.playback_path = ""
+        track._playback_signature = ""
 
         export_v2 = getattr(self.vo_se_engine, "export_to_wav_v2", None)
         if not callable(export_v2):
