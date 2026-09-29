@@ -177,6 +177,7 @@ class VcvResolver:
         self,
         lyric: str,
         prev_lyric: Optional[str],
+        is_continuous: bool = True,
     ) -> Tuple[str, object]:
         """
         1 ノート分のエイリアスと OtoEntry を解決する。
@@ -185,11 +186,15 @@ class VcvResolver:
             lyric:      現在ノートの歌詞
             prev_lyric: 前ノートの歌詞（先頭ノートなら None）
 
+        is_continuous:
+            前ノートとの間隔が短く、VCV連続音として接続してよい場合のみ True。
+            False の場合は前ノートの母音を VCV コンテキストに使用しない。
+
         Returns:
             (resolved_alias, OtoEntry or None)
         """
         prev_vowel: Optional[str] = None
-        if prev_lyric and self._has_vcv:
+        if is_continuous and prev_lyric and self._has_vcv:
             prev_vowel = self._classifier.trailing_vowel(prev_lyric)
 
         entry = self._oto.resolve_alias(lyric, prev_vowel)
