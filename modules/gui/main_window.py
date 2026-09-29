@@ -4577,10 +4577,17 @@ class MainWindow(
             cache_path,
             mode_flag=0,
         )
-        if not result or not os.path.exists(result):
+        if not result:
             raise RuntimeError(f"Vocal {track_index + 1} のWAV生成に失敗しました。")
 
-        track.playback_path = os.path.abspath(result)
+        # export_to_wav_v2 is dynamically resolved, so Pyright sees its
+        # return value as object. Normalize it to a concrete filesystem path
+        # before passing it to os.path helpers.
+        result_path = str(result)
+        if not os.path.exists(result_path):
+            raise RuntimeError(f"Vocal {track_index + 1} のWAV生成に失敗しました。")
+
+        track.playback_path = os.path.abspath(result_path)
         track._playback_signature = signature
         return track.playback_path
 
