@@ -382,7 +382,7 @@ export async function renderStudioOffline(
 
     const lyric = n.lyric || 'あ';
     const prevNote = i > 0 ? sortedNotes[i - 1] : null;
-    const isContinuous = prevNote && (n.tick - (prevNote.tick + prevNote.length) <= 240);
+    const isContinuous = Boolean(prevNote && !isRest(prevNote.lyric) && (n.tick - (prevNote.tick + (prevNote.length || 480)) <= 240));
     const prevLyric = isContinuous ? prevNote.lyric : undefined;
     const noteNum = n.noteNum || 60;
     const startTimeSec = tickToTimeSec(n.tick || 0);
