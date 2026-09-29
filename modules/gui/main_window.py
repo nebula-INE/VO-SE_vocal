@@ -5492,6 +5492,22 @@ class MainWindow(
             return
             
         updated_notes = self.timeline_widget.notes_list
+
+        # TimelineWidget is the live editing surface, while each VoseTrack
+        # owns the persistent copy used by project save/playback. Keep the
+        # current vocal track synchronized immediately instead of waiting for
+        # a later track switch, save, or playback action.
+        current_idx = int(getattr(self, "current_track_idx", 0))
+        tracks = list(getattr(self, "tracks", []) or [])
+        if 0 <= current_idx < len(tracks):
+            current_track = tracks[current_idx]
+            if getattr(current_track, "track_type", "") == "vocal":
+                current_track.notes = deepcopy(updated_notes)
+                # Any note edit invalidates the rendered playback cache. This
+                # prevents direct mixer playback from reusing an older render.
+                current_track.playback_path = ""
+                current_track._playback_signature = ""
+
         self.notes = updated_notes # MainWindow側のリストも同期
 
         # 2. Cエンジンへの先行キャッシュ指示
