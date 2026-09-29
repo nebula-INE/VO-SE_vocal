@@ -185,10 +185,17 @@ class TextAnalyzer:
             consonants = [p for p in phonemes
                           if p not in self.ALL_VOWELS and p not in self.SPECIAL_PHONEMES]
 
-            # Oto.ini の子音固定範囲がある場合はそれを使う
+            # Oto.ini の子音固定範囲がある場合はそれを使う。
+            # テスト用・互換実装などの OtoEntry 互換オブジェクトが
+            # fixed_range_sec を持たない場合は、既定値へ安全にフォールバックする。
             consonant_total_sec = DEFAULT_CONSONANT_DUR
-            if oto_entry is not None and oto_entry.fixed_range_sec > 0:
-                consonant_total_sec = oto_entry.fixed_range_sec
+            fixed_range_sec = (
+                float(getattr(oto_entry, "fixed_range_sec", 0.0))
+                if oto_entry is not None
+                else 0.0
+            )
+            if fixed_range_sec > 0:
+                consonant_total_sec = fixed_range_sec
 
             note_end_sec = note.start_time + note.duration
 
