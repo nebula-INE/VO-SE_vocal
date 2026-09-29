@@ -32,7 +32,7 @@ public:
             return {};
 
         std::string clean (lyric.toRawUTF8());
-        static const std::regex prefix (R"(^[-aieuon_]\\s*)", std::regex_constants::icase);
+        static const std::regex prefix (R"(^[-aieuon_]\s*)", std::regex_constants::icase);
         static const std::regex pitch (R"(_?[A-Ga-g][#b]?[0-9]$)");
         const std::string original = clean;
         clean = std::regex_replace (clean, prefix, "");
