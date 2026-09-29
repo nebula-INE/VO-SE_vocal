@@ -24,13 +24,13 @@ logger = logging.getLogger(__name__)
 # System RAM check helper for 8GB or lower RAM environments
 def get_system_ram_gb() -> float:
     try:
-        import os
-        page_size = os.sysconf('SC_PAGE_SIZE')
-        
-        pages = os.sysconf('SC_PHYS_PAGES') if hasattr(os, 'sysconf') else 0
-        page_size = os.sysconf('SC_PAGE_SIZE') if hasattr(os, 'sysconf') else 0
+        sysconf = getattr(os, "sysconf", None)
+        if not callable(sysconf):
+            return 8.0
+        page_size = int(sysconf("SC_PAGE_SIZE"))
+        pages = int(sysconf("SC_PHYS_PAGES"))
         return (pages * page_size) / (1024 ** 3)
-    except Exception:
+    except (AttributeError, OSError, ValueError, TypeError):
         return 8.0
 
 IS_LOW_RAM = get_system_ram_gb() <= 8.5
