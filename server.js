@@ -1341,17 +1341,10 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     if (entry) return entry;
   }
 
-  // 3. Fallback: Try with vowel prefixes only if candidate itself is a plain vowel
-  if (prevVowel) {
-    for (const cand of candidates) {
-      const VCV_PREFIXES = ['- ', 'a ', 'i ', 'u ', 'e ', 'o ', 'n '];
-      for (const p of VCV_PREFIXES) {
-        let vcvEntry = matchPrefixOrExact(`${p}${cand}`);
-        if (vcvEntry) return vcvEntry;
-      }
-    }
-  }
-
+  // Do not substitute a different VCV context when prevVowel is explicit.
+  // If the requested VCV entry is unavailable, the plain CV/standalone
+  // fallback above is the safe choice. Falling through to another vowel
+  // (for example "a い" for a requested "u い") silently changes pronunciation.
   // 4. Exact WAV filename match (without extension, strictly full name match)
   for (const cand of candidates) {
     const candLower = cand.toLowerCase();
