@@ -125,7 +125,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" == "Windows" ]; then
-            choco install libsndfile -y
+            # SoundFile's Windows wheel bundles libsndfile, so do not depend
+            # on Chocolatey's libsndfile package or its external GitHub URL.
+            python -c "import soundfile as sf; print('SoundFile:', sf.__file__)"
           elif [ "${{ runner.os }}" == "macOS" ]; then
             brew install portaudio libsndfile
           elif [ "${{ runner.os }}" == "Linux" ]; then
