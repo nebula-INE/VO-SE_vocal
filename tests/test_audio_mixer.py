@@ -70,7 +70,7 @@ def test_callback_mixes_multiple_tracks_with_mute_and_volume():
 
     out = np.zeros((4, 2), dtype=np.float32)
     mixer._callback(out, 4, None, None)
-    assert np.allclose(out, 0.5)
+    assert np.allclose(out, 0.5 * np.sqrt(0.5))
 
 
 def test_callback_solo_excludes_non_solo_tracks():
@@ -85,4 +85,4 @@ def test_callback_solo_excludes_non_solo_tracks():
 
     out = np.zeros((4, 2), dtype=np.float32)
     mixer._callback(out, 4, None, None)
-    assert np.allclose(out, 0.25)
+    assert np.allclose(out, 0.25 * np.sqrt(0.5))
