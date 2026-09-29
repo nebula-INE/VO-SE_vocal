@@ -187,7 +187,12 @@ def _refresh_voice_library_v2(self) -> None:
         for fname in files:
             if fname.lower().endswith(".wav"):
                 lyric = os.path.splitext(fname)[0]
-                self.oto_map[lyric] = os.path.abspath(os.path.join(root, fname))
+                # Do not overwrite an alias-derived mapping with a basename
+                # fallback when the same WAV filename exists in multiple locations.
+                self.oto_map.setdefault(
+                    lyric,
+                    os.path.abspath(os.path.join(root, fname)),
+                )
 
     self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
 

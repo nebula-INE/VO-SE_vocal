@@ -408,9 +408,6 @@ class OtoParser:
         if indexed:
             return indexed[0]
 
-        for alias, candidate in self._db.items():
-            if clean_lyric in alias:
-                return candidate
         return None
 
     def _build_lyric_index(self) -> None:

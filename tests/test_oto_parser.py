@@ -69,3 +69,43 @@ class TestOtoParser:
         # Windows の oto.ini にある \\ 区切りと大文字小文字の違いを
         # macOS/Linux 上でも同じ実ファイルへ解決できることを確認する。
         assert entry.wav_path == str(wav_file)
+def test_resolve_alias_does_not_use_unrelated_partial_match():
+    parser = OtoParser()
+    parser._db["しー"] = OtoEntry(
+        alias="しー",
+        filename="shi_long.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+
+    assert parser.resolve_alias("し", None) is None
+
+
+def test_resolve_alias_keeps_vcv_context_strict():
+    parser = OtoParser()
+    parser._db["a い"] = OtoEntry(
+        alias="a い",
+        filename="a_i.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+    parser._db["i い"] = OtoEntry(
+        alias="i い",
+        filename="i_i.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+
+    assert parser.resolve_alias("い", "u") is None
