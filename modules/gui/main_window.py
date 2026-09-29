@@ -5906,3 +5906,41 @@ class MainWindow(
         if not wav_path or not os.path.exists(wav_path):
             return
         self.play_audio(wav_path)
+
+def main() -> None:
+    """
+    VO-SE Pro アプリケーション起動エントリーポイント。
+    """
+    #from PySide6.QtWidgets import QApplication
+
+    # 1. アプリケーションインスタンスの作成
+    # sys をインポート済みなので、sys.argv へのアクセスが安全です
+    app = QApplication(sys.argv)
+    
+    # 2. 外観の設定
+    # DAWとしての統一感を出すため、Fusionスタイルを適用
+    app.setStyle("Fusion")
+    
+    # 3. メインウィンドウの生成と表示
+    # クラス MainWindow が定義済みであることを前提にインスタンス化
+    try:
+        # 代表、ここで MainWindow を呼び出します
+        window = MainWindow()
+        window.show()
+        
+        # 4. イベントループの開始と安全な終了
+        # 戻り値を sys.exit に渡すことで、正常終了(0)を保証します
+        exit_code = app.exec()
+        sys.exit(exit_code)
+        
+    except NameError as e:
+        # MainWindow が見つからない場合のデバッグ用
+        print(f"CRITICAL ERROR: MainWindow class is not defined. {e}")
+        sys.exit(1)
+    except Exception as e:
+        # その他の予期せぬ起動エラーの捕捉
+        print(f"APPLICATION ERROR: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
