@@ -26,6 +26,11 @@ from modules.ffi.vose_types import CNoteEvent, COtoEntry
 
 logger = logging.getLogger(__name__)
 
+# 最後に失敗したネイティブコアのロード理由。
+# load_engine() の既存の Optional[ctypes.CDLL] 戻り値契約を維持したまま、
+# 上位層が具体的なロード失敗理由を取得できるようにする。
+_last_load_error: Optional[str] = None
+
 
 # ============================================================
 # C 互換構造体（vose_core.h の定義に厳密に準拠）
@@ -103,6 +108,11 @@ def _bind(lib: ctypes.CDLL, name: str, argtypes: list, restype) -> None:
 # DLL ローダー（OS 判別 + パス解決を一元化）
 # ============================================================
 
+def get_last_load_error() -> Optional[str]:
+    """最後に失敗した load_engine() の具体的な理由を返す。"""
+    return _last_load_error
+
+
 def load_engine(search_dirs: Optional[list] = None) -> Optional[ctypes.CDLL]:
     """
     DLL/dylib/so を探してロードし、bind_all() を適用して返す。
@@ -112,6 +122,9 @@ def load_engine(search_dirs: Optional[list] = None) -> Optional[ctypes.CDLL]:
         search_dirs: 追加の探索ディレクトリリスト。
                      None の場合は [bin/, 実行ファイルと同じ dir] を探す。
     """
+    global _last_load_error
+    _last_load_error = None
+
     system = platform.system()
     if system == "Windows":
         lib_names = ("vose_core.dll",)
@@ -151,10 +164,12 @@ def load_engine(search_dirs: Optional[list] = None) -> Optional[ctypes.CDLL]:
                 return lib
 
             except OSError as e:
+                _last_load_error = str(e)
                 logger.error("[vose_api] OSError loading %s: %s", path, e)
                 if system == "Windows":
                     logger.error("Hint: MSVC Redistributable がインストールされているか確認してください。")
             except Exception as e:
+                _last_load_error = str(e)
                 logger.error("[vose_api] Failed to load %s: %s", path, e)
 
     logger.warning("[vose_api] DLL が見つかりませんでした（探索パス: %s）", candidates)
