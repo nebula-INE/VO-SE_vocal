@@ -16,7 +16,9 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
-#include <map>\n#include <regex>\n#include <string>
+#include <map>
+#include <regex>
+#include <string>
 
 class VowelClassifier
 {
