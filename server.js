@@ -1409,13 +1409,26 @@ function resolveVoicebankPath(targetName) {
         return { resolvedName: ciMatch, resolvedPath: path.join(baseDir, ciMatch) };
       }
 
-      const subMatch = dirs.find(d => d.toLowerCase().includes(lowerTarget) || lowerTarget.includes(d.toLowerCase()));
-      if (subMatch) {
+      const subMatches = dirs.filter(d => {
+        const lowerDir = d.toLowerCase();
+        return lowerDir.includes(lowerTarget) || lowerTarget.includes(lowerDir);
+      });
+
+      if (subMatches.length === 1) {
+        const subMatch = subMatches[0];
         console.warn(
           `[VO-SE] resolveVoicebankPath: no exact match for "${targetName}", ` +
-          `using substring match "${subMatch}" instead. Consider renaming to avoid ambiguity.`
+          `using unique substring match "${subMatch}" instead. Consider renaming to avoid ambiguity.`
         );
         return { resolvedName: subMatch, resolvedPath: path.join(baseDir, subMatch) };
+      }
+
+      if (subMatches.length > 1) {
+        console.warn(
+          `[VO-SE] resolveVoicebankPath: voicebank "${targetName}" is ambiguous; ` +
+          `substring matches are [${subMatches.join(', ')}]. Refusing to select one implicitly.`
+        );
+        return null;
       }
 
       // [FIX] previously: `return { resolvedName: dirs[0], ... }` here — silently
