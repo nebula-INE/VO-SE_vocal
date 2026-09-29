@@ -124,15 +124,32 @@ class TextAnalyzer:
                 continue
 
             # 2. VCV 解決 → 先行発声・オーバーラップ取得
-            prev_lyric = note_events[i - 1].lyric if i > 0 else None
+            prev_note = note_events[i - 1] if i > 0 else None
+            prev_lyric = getattr(prev_note, "lyric", None) if prev_note is not None else None
+
+            # Web版と同じく、前ノートとの隙間が大きい場合は VCV 接続を切る。
+            # 120 BPM / 480 tick基準で240 tick = 0.25秒に相当するため、
+            # NoteEvent側では実時間で同じ境界を扱う。
+            gap_sec = float("inf")
+            if prev_note is not None:
+                try:
+                    prev_end = float(prev_note.start_time) + max(0.0, float(prev_note.duration))
+                    gap_sec = max(0.0, float(note.start_time) - prev_end)
+                except (TypeError, ValueError, AttributeError):
+                    gap_sec = float("inf")
+            is_continuous = prev_note is not None and gap_sec <= 0.25
 
             oto_entry: Optional[OtoEntry] = None
             resolved_alias: str = note.lyric
 
             if vcv_resolver is not None:
-                r = vcv_resolver.resolve_note(note.lyric, prev_lyric)
+                r = vcv_resolver.resolve_note(
+                    note.lyric,
+                    prev_lyric,
+                    is_continuous=is_continuous,
+                )
                 resolved_alias = r[0]
-                oto_entry: Optional[OtoEntry] = r[1] 
+                oto_entry: Optional[OtoEntry] = r[1]
 
             # 3. 先行発声・オーバーラップ決定 (UST 上書き > oto.ini > デフォルト)
             # UST の PreUtterance=/VoiceOverlap= は「正の値だけ」ではなく、
