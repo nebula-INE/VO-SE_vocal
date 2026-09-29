@@ -4,7 +4,7 @@ import platform
 from typing import Optional
 
 from modules.ffi import CNoteEvent, validate_note_event_layout
-from modules.ffi.vose_api import load_engine
+from modules.ffi.vose_api import get_last_load_error, load_engine
 
 
 class VoseCoreManager:
@@ -65,7 +65,9 @@ class VoseCoreManager:
                 print("[OK] VOSE Core Engine Loaded via unified FFI loader")
                 self._initialized = True
                 return
-            raise OSError("Unified VOSE Core loader could not load the engine")
+
+            load_error = get_last_load_error()
+            raise OSError(load_error or "Unified VOSE Core loader could not load the engine")
         except Exception as exc:
             self._disabled_reason = str(exc)
             self.lib = None
