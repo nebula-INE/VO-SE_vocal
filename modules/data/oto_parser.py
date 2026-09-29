@@ -73,8 +73,8 @@ class OtoEntry:
 
     @property
     def wav_path(self) -> str:
-        """フルパスで WAV へのパスを返す (大文字小文字表記ブレ・拡張子自動解決、高速化)"""
-        # oto.ini は Windows 環境で "\\" 区切りを保存することがある。
+        """フルパスで WAV へのパスを返す (区切り文字・大文字小文字差を吸収)。"""
+        # oto.ini は Windows 環境で "\" 区切りを保存することがあるため、
         # 実行環境の区切り文字へ正規化してから解決する。
         normalized_filename = self.filename.replace("\\", os.sep).replace("/", os.sep)
         if os.path.isabs(normalized_filename):
@@ -86,11 +86,42 @@ class OtoEntry:
         if os.path.isfile(exact_path):
             return exact_path
 
+        # macOS/Linux は通常 case-sensitive なので、Windows 由来の
+        # 大文字小文字の差をファイルシステム上の実在パスから解決する。
+        # 相対パス全体の lower-case map だけに依存せず、各ディレクトリを
+        # 順番に case-insensitive に探索することで、SubVoice/subvoice の
+        # ようなディレクトリ名の表記差も確実に吸収する。
+        if not os.path.isabs(normalized_filename):
+            current = os.path.abspath(self.voice_dir)
+            components = [
+                part
+                for part in normalized_filename.replace("\\", "/").split("/")
+                if part not in ("", ".")
+            ]
+            for component in components:
+                if component == "..":
+                    current = os.path.dirname(current)
+                    continue
+                try:
+                    entries = os.listdir(current)
+                except OSError:
+                    break
+                matched = next(
+                    (name for name in entries if name.casefold() == component.casefold()),
+                    None,
+                )
+                if matched is None:
+                    break
+                current = os.path.join(current, matched)
+            else:
+                if os.path.isfile(current):
+                    return current
+
         # Case-insensitive & nested-path resolution using a relative-path cache.
-        # 旧実装は basename だけをキーにしていたため、サブフォルダ内の
-        # 同名 WAV がある音源では別ファイルを誤選択する可能性があった。
         file_map = get_voice_dir_file_map(self.voice_dir)
-        target_lower = os.path.normpath(normalized_filename).replace(os.sep, "/").lower()
+        target_lower = (
+            normalized_filename.replace(os.sep, "/").replace("\\", "/").lower()
+        )
         resolved = file_map.get(target_lower)
         if resolved:
             return resolved
