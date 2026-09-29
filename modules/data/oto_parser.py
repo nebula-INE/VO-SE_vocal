@@ -402,6 +402,12 @@ class OtoParser:
         if entry is not None:
             return entry
 
+        # When a previous vowel is explicitly supplied, do not fall back to
+        # an arbitrary VCV alias with the same lyric. That would silently
+        # replace the requested context (for example u い with a い).
+        if prev_vowel:
+            return None
+
         if not hasattr(self, "_lyric_index"):
             self._build_lyric_index()
         indexed = self._lyric_index.get(clean_lyric, [])
