@@ -39,7 +39,10 @@ struct OtoEntryCpp
 
     juce::File getWavFile() const
     {
-        return juce::File (voiceDir).getChildFile (filename);
+        // oto.ini may use Windows backslashes even when the application runs
+        // on macOS/Linux. Normalize the relative WAV path before resolving it.
+        auto normalizedFilename = filename.replaceCharacter ('\\', '/');
+        return juce::File (voiceDir).getChildFile (normalizedFilename);
     }
 };
 
@@ -98,33 +101,55 @@ public:
         // Python版と同じ候補順で解決する。音源によって
         // "a い" / "a_い" / "aい" のように区切り方が異なるため、
         // VCV候補を複数表記で確認する。
+        if (lyric.isEmpty())
+            return nullptr;
+
+        // UST/音源側に付く VCV/CV プレフィックスとピッチサフィックスを
+        // Python版と同じ考え方で正規化してから候補を生成する。
+        auto cleanLyric = lyric.trim();
+        const auto lastUnderscore = cleanLyric.lastIndexOfChar ('_');
+        if (lastUnderscore >= 0 && lastUnderscore < cleanLyric.length() - 1)
+        {
+            const auto suffix = cleanLyric.substring (lastUnderscore + 1);
+            if (suffix.length() >= 2 && suffix[0] >= 'A' && suffix[0] <= 'G')
+                cleanLyric = cleanLyric.substring (0, lastUnderscore);
+        }
+
+        if (cleanLyric.startsWithIgnoreCase ("- "))
+            cleanLyric = cleanLyric.substring (2).trim();
+        else if (cleanLyric.startsWithChar ('_'))
+            cleanLyric = cleanLyric.substring (1).trim();
+
         if (prevVowel.isNotEmpty())
         {
-            if (auto* e = get (prevVowel + " " + lyric))
+            if (auto* e = get (prevVowel + " " + cleanLyric))
                 return e;
-            if (auto* e = get (prevVowel + "_" + lyric))
+            if (auto* e = get (prevVowel + "_" + cleanLyric))
                 return e;
-            if (auto* e = get (prevVowel + lyric))
+            if (auto* e = get (prevVowel + cleanLyric))
                 return e;
         }
 
         // 語頭/CV候補も Python版と同じく複数表記を扱う。
-        if (auto* e = get ("- " + lyric))
+        if (auto* e = get ("- " + cleanLyric))
             return e;
-        if (auto* e = get ("_" + lyric))
+        if (auto* e = get ("_" + cleanLyric))
             return e;
-        if (auto* e = get ("-" + lyric))
+        if (auto* e = get ("-" + cleanLyric))
             return e;
 
         if (auto* e = get (lyric))
             return e;
+        if (cleanLyric != lyric)
+            if (auto* e = get (cleanLyric))
+                return e;
 
         // 末尾一致の部分一致フォールバック（Python版の
         // match_pref(cleanLyric) 相当）。異なる歌詞を誤選択しないよう、
         // alias全体ではなく「区切り付き末尾一致」に限定する。
-        const auto suffix = " " + lyric;
+        const auto suffix = " " + cleanLyric;
         for (const auto& [alias, entry] : db)
-            if (alias == lyric || alias.endsWith (suffix))
+            if (alias == lyric || alias == cleanLyric || alias.endsWith (suffix))
                 return &entry;
 
         return nullptr;
