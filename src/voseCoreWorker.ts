@@ -266,6 +266,10 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
   if (!msg || msg.type !== 'render') return;
   const { requestId, samples, notes, modeFlag } = msg;
 
+  // ログはリクエスト単位で扱う。Worker自体は再利用されるため、
+  // 前回レンダリングの警告を次回の成功結果へ持ち越さない。
+  capturedLog.length = 0;
+
   let progressFnPtr = 0;
   const allocatedPtrs: number[] = [];
 
