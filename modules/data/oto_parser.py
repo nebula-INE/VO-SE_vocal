@@ -116,37 +116,6 @@ class OtoEntry:
         if os.path.isfile(exact_path):
             return exact_path
 
-        # macOS/Linux は通常 case-sensitive なので、Windows 由来の
-        # 大文字小文字の差をファイルシステム上の実在パスから解決する。
-        # 相対パス全体の lower-case map だけに依存せず、各ディレクトリを
-        # 順番に case-insensitive に探索することで、SubVoice/subvoice の
-        # ようなディレクトリ名の表記差も確実に吸収する。
-        if not os.path.isabs(normalized_filename):
-            current = os.path.abspath(self.voice_dir)
-            components = [
-                part
-                for part in normalized_filename.replace("\\", "/").split("/")
-                if part not in ("", ".")
-            ]
-            for component in components:
-                if component == "..":
-                    current = os.path.dirname(current)
-                    continue
-                try:
-                    entries = os.listdir(current)
-                except OSError:
-                    break
-                matched = next(
-                    (name for name in entries if name.casefold() == component.casefold()),
-                    None,
-                )
-                if matched is None:
-                    break
-                current = os.path.join(current, matched)
-            else:
-                if os.path.isfile(current):
-                    return current
-
         # Case-insensitive & nested-path resolution using a relative-path cache.
         file_map = get_voice_dir_file_map(self.voice_dir)
         target_lower = (
