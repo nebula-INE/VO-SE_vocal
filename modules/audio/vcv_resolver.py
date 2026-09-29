@@ -217,11 +217,33 @@ class VcvResolver:
         results: List[ResolvedNote] = []
         prev_lyric: Optional[str] = None
 
+        previous_note = None
         for note in notes:
             lyric: str = getattr(note, "lyric", "") or getattr(note, "lyrics", "") or ""
-            alias, entry = self.resolve_note(lyric, prev_lyric)
+
+            gap_sec = float("inf")
+            if previous_note is not None:
+                try:
+                    previous_end = (
+                        float(getattr(previous_note, "start_time"))
+                        + max(0.0, float(getattr(previous_note, "duration")))
+                    )
+                    gap_sec = max(
+                        0.0,
+                        float(getattr(note, "start_time")) - previous_end,
+                    )
+                except (TypeError, ValueError, AttributeError):
+                    gap_sec = float("inf")
+
+            is_continuous = previous_note is not None and gap_sec <= 0.25
+            alias, entry = self.resolve_note(
+                lyric,
+                prev_lyric,
+                is_continuous=is_continuous,
+            )
             results.append(ResolvedNote(note=note, alias=alias, oto_entry=entry))
             prev_lyric = lyric
+            previous_note = note
 
         return results
 
