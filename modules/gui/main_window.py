@@ -3679,22 +3679,25 @@ class MainWindow(
     def init_audio_playback(self):
         """Compatibility entry point for the unified desktop AudioMixer."""
         self.setup_audio_interface()
-    def sync_ui_to_audio(self, ms):
-        """オーディオの再生位置（ms）をUIの秒数に反映"""
-        if self.audio_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            current_sec = ms / 1000.0
-            # タイムラインのカーソル位置を更新
-            self.timeline_widget._current_playback_time = current_sec
-            if self.timeline_widget:
-                self.timeline_widget.update()
+    def sync_ui_to_audio(self, ms: int) -> None:
+        """Synchronize the timeline cursor with the unified mixer position."""
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None or not getattr(mixer, "is_playing", False):
+            return
+        current_sec = float(ms) / 1000.0
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is not None:
+            timeline._current_playback_time = current_sec
+            timeline.update()
 
     @Slot(object)
     def on_playback_state_changed(self, state: Any) -> None:
-        """再生状態の変化をUIと内部フラグに同期する。"""
-        is_playing = state == QMediaPlayer.PlaybackState.PlayingState
+        """Compatibility callback for legacy QMediaPlayer callers."""
+        is_playing = bool(state)
         self.is_playing = is_playing
-        if hasattr(self, "play_btn") and self.play_btn:
-            self.play_btn.setText("⏸ 停止" if is_playing else "▶ 再生")
+        play_btn = getattr(self, "play_btn", None)
+        if play_btn is not None:
+            play_btn.setText("⏸ 停止" if is_playing else "▶ 再生")
 
     def setup_audio_interface(self) -> None:
         """Initialize the single desktop callback-based AudioMixer path."""
@@ -3704,23 +3707,10 @@ class MainWindow(
         self.audio_player = self.audio_mixer
         self.audio_output = None
     def get_current_playback_state(self) -> bool:
-        """
+        """Return whether the unified desktop mixer is actively playing."""
+        mixer = getattr(self, "audio_mixer", None)
+        return bool(mixer is not None and getattr(mixer, "is_playing", False))
 
-        """
-        if not hasattr(self, 'player') or self.player is None:
-            return False
-            
-        # 旧: self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-        # 新: PySide6 の正確な Enum 比較
-        from PySide6.QtMultimedia import QMediaPlayer
-        # getattr を使って、解析ツール(Pyright)の警告を完全にスルーします
-        current_state = getattr(self.player, 'playbackState', None)
-        return current_state == QMediaPlayer.PlaybackState.PlayingState
-
-    # --- [2] 連続音（VCV）解決メソッド ---
-
-
-    # --- [3] 音声生成のメインループ ---
     def on_synthesize(self, notes):
         """旧API互換の合成入口。レンダーは1回だけ共通経路へ委譲する。"""
         if not notes:
