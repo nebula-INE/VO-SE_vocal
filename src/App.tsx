@@ -911,7 +911,7 @@ export default function App() {
     notes.forEach((n, idx) => {
       if (isRestLyric(n.lyric)) return;
       const prevNote = idx > 0 ? notes[idx - 1] : null;
-      const isContinuous = prevNote && (n.tick - (prevNote.tick + prevNote.length) <= 240);
+      const isContinuous = Boolean(prevNote && !isRestLyric(prevNote.lyric) && (n.tick - (prevNote.tick + (prevNote.length || 480)) <= 240));
       const prevLyric = isContinuous ? prevNote.lyric : undefined;
       const k = getSampleCacheKey(selectedVoicebank, n.lyric, prevLyric, n.noteNum);
       if (!uniqueKeys.has(k)) {
@@ -987,7 +987,7 @@ export default function App() {
           const n = sorted[i];
           if (isRestLyric(n.lyric)) continue;
           const prevNote = i > 0 ? sorted[i - 1] : null;
-          const isContinuous = prevNote && (n.tick - (prevNote.tick + prevNote.length) <= 240);
+          const isContinuous = Boolean(prevNote && !isRestLyric(prevNote.lyric) && (n.tick - (prevNote.tick + (prevNote.length || 480)) <= 240));
           const prevLyric = isContinuous ? prevNote.lyric : undefined;
           const k = getSampleCacheKey(vb, n.lyric, prevLyric, n.noteNum);
           if (!uniqueKeys.has(k)) {
@@ -2460,7 +2460,7 @@ export default function App() {
           if (noteStartCtxTime <= scheduleHorizonCtx) {
             if (!isRestLyric(note.lyric)) {
               const prevNote = ptr > 0 ? sortedNotes[ptr - 1] : null;
-              const isContinuous = prevNote && (note.tick - (prevNote.tick + prevNote.length) <= 240);
+              const isContinuous = Boolean(prevNote && !isRestLyric(prevNote.lyric) && (note.tick - (prevNote.tick + (prevNote.length || 480)) <= 240));
               const prevLyric = isContinuous ? prevNote.lyric : undefined;
               const cacheKey = getSampleCacheKey(targetVb, note.lyric, prevLyric, note.noteNum);
               const cached = sampleCacheRef.current.get(cacheKey);
