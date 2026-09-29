@@ -22,6 +22,8 @@ import logging
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from modules.data.oto_parser import OtoEntry
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -178,7 +180,7 @@ class VcvResolver:
         lyric: str,
         prev_lyric: Optional[str],
         is_continuous: bool = True,
-    ) -> Tuple[str, object]:
+    ) -> Tuple[str, Optional[OtoEntry]]:
         """
         1 ノート分のエイリアスと OtoEntry を解決する。
 
