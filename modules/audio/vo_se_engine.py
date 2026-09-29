@@ -145,6 +145,11 @@ class VO_SE_Engine:
                         if os.path.isabs(normalized_filename)
                         else os.path.normpath(os.path.join(voice_dir, normalized_filename))
                     )
+            # C++ 側へ渡すパスはプラットフォーム非依存の POSIX 形式に統一する。
+            # Windows の os.path.normpath() は \\ を生成するため、ABI へ
+            # 渡す直前に "/" へ正規化する。実ファイルのWindows絶対パス
+            # (例: C:\\voices\\a.wav) も C:/voices/a.wav として保持できる。
+            wav_path = wav_path.replace("\\", "/")
             if not alias or not wav_path:
                 continue
 
