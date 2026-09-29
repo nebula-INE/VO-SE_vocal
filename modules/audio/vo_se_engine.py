@@ -132,6 +132,19 @@ class VO_SE_Engine:
         for i, entry in enumerate(entries):
             alias = str(getattr(entry, "alias", "") or "")
             wav_path = str(getattr(entry, "wav_path", "") or "")
+            # OtoEntry 互換オブジェクトでは wav_path プロパティを
+            # 実装していない場合があるため、filename + voice_dir から
+            # 安全に補完する。実体の OtoEntry の解決済み wav_path は優先する。
+            if not wav_path:
+                filename = str(getattr(entry, "filename", "") or "")
+                voice_dir = str(getattr(entry, "voice_dir", "") or "")
+                if filename:
+                    normalized_filename = filename.replace("\\", os.sep).replace("/", os.sep)
+                    wav_path = (
+                        normalized_filename
+                        if os.path.isabs(normalized_filename)
+                        else os.path.normpath(os.path.join(voice_dir, normalized_filename))
+                    )
             if not alias or not wav_path:
                 continue
 
