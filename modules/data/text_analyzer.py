@@ -248,7 +248,9 @@ class TextAnalyzer:
                     "note_index":      i,
                     "pitch_offset":    pitch_offset,   # semitone
                     "resolved_alias":  resolved_alias,
-                    "wav_path":        oto_entry.wav_path if oto_entry else "",
+                    # OtoEntry 互換オブジェクトでは wav_path が省略される
+                    # 場合があるため、安全に空文字へフォールバックする。
+                    "wav_path":        getattr(oto_entry, "wav_path", "") if oto_entry else "",
                 })
 
                 current_time += frame_period_sec
