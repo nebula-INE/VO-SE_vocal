@@ -103,3 +103,37 @@ def test_default_note_event_zero_uses_oto(monkeypatch):
 
     assert notes[0].pre_utterance == 120.0
     assert notes[0].overlap == 30.0
+
+
+def test_vcv_is_disabled_after_a_long_gap(monkeypatch):
+    analyzer = TextAnalyzer()
+    calls = []
+
+    class _RecordingResolver:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def resolve_note(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return ("- い", None)
+
+    monkeypatch.setattr(
+        "modules.data.text_analyzer.VcvResolver",
+        _RecordingResolver,
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_lyric_to_phonemes",
+        lambda _lyric: ["a"],
+    )
+
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5),
+        NoteEvent(note_number=62, lyric="い", start_time=1.0, duration=0.5),
+    ]
+
+    analyzer.align_vocal_timing(notes, cast(OtoParser, object()))
+
+    assert len(calls) == 2
+    assert calls[0][1]["is_continuous"] is False
+    assert calls[1][1]["is_continuous"] is False
