@@ -17,18 +17,19 @@ import logging
 import gc
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
 # System RAM check helper for 8GB or lower RAM environments
 def get_system_ram_gb() -> float:
     try:
-        sysconf = getattr(os, "sysconf", None)
-        if not callable(sysconf):
+        sysconf_obj = getattr(os, "sysconf", None)
+        if not callable(sysconf_obj):
             return 8.0
-        page_size = int(sysconf("SC_PAGE_SIZE"))
-        pages = int(sysconf("SC_PHYS_PAGES"))
+        sysconf = cast(Callable[[str], int], sysconf_obj)
+        page_size = sysconf("SC_PAGE_SIZE")
+        pages = sysconf("SC_PHYS_PAGES")
         return (pages * page_size) / (1024 ** 3)
     except (AttributeError, OSError, ValueError, TypeError):
         return 8.0
