@@ -95,17 +95,33 @@ public:
     // prevVowel が空文字/nullなら VCV 候補はスキップ（Python版と同じ挙動）。
     const OtoEntryCpp* resolveAlias (const juce::String& lyric, const juce::String& prevVowel) const
     {
+        // Python版と同じ候補順で解決する。音源によって
+        // "a い" / "a_い" / "aい" のように区切り方が異なるため、
+        // VCV候補を複数表記で確認する。
         if (prevVowel.isNotEmpty())
+        {
             if (auto* e = get (prevVowel + " " + lyric))
                 return e;
+            if (auto* e = get (prevVowel + "_" + lyric))
+                return e;
+            if (auto* e = get (prevVowel + lyric))
+                return e;
+        }
 
+        // 語頭/CV候補も Python版と同じく複数表記を扱う。
         if (auto* e = get ("- " + lyric))
+            return e;
+        if (auto* e = get ("_" + lyric))
+            return e;
+        if (auto* e = get ("-" + lyric))
             return e;
 
         if (auto* e = get (lyric))
             return e;
 
-        // 末尾一致の部分一致フォールバック（Python版の endswith(" "+lyric) 相当）
+        // 末尾一致の部分一致フォールバック（Python版の
+        // match_pref(cleanLyric) 相当）。異なる歌詞を誤選択しないよう、
+        // alias全体ではなく「区切り付き末尾一致」に限定する。
         const auto suffix = " " + lyric;
         for (const auto& [alias, entry] : db)
             if (alias == lyric || alias.endsWith (suffix))
