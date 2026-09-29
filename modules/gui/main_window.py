@@ -4725,7 +4725,7 @@ class MainWindow(
         self._refresh_transport_button_states()
         if hasattr(self, 'status_label'):
             if self.is_looping:
-                self.status_label.setText("選択範囲でのループ再生を有効にしました")
+                self.status_label.setText("ループ再生を有効にしました")
             else:
                 self.status_label.setText("ループ再生を無効にしました")
 
