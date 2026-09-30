@@ -40,7 +40,7 @@ def parse_prefix_map(text: str) -> list[PrefixMapEntry]:
         line = raw.strip()
         if not line or line.startswith("#") or line.startswith(";"):
             continue
-        parts = re.split(r"\s+", line)
+        parts = line.split("\\t") if "\\t" in line else re.split(r"\\s+", line)
         if len(parts) < 2:
             continue
         boundary = note_name_to_midi(parts[0])
