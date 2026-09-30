@@ -255,3 +255,39 @@ def test_expand_notes_for_render_skips_long_gap():
 
     assert len(expanded) == 2
     assert all(getattr(note, "_cvvc_render_kind", None) != "vc" for note in expanded)
+
+def test_initial_consonant_normalizes_romanized_phoneme_syllable():
+    resolver = CvvcResolver(_parser())
+    note = NoteEvent(
+        note_number=62,
+        lyric="か",
+        start_time=0.5,
+        duration=0.5,
+        phonemes=["ka"],
+    )
+
+    assert resolver._initial_consonant(note) == "k"
+
+
+def test_initial_consonant_supports_sh_and_ts_romanized_syllables():
+    resolver = CvvcResolver(_parser())
+
+    shi = NoteEvent(note_number=62, lyric="し", start_time=0.5, duration=0.5, phonemes=["shi"])
+    tsu = NoteEvent(note_number=62, lyric="つ", start_time=0.5, duration=0.5, phonemes=["tsu"])
+
+    assert resolver._initial_consonant(shi) == "sh"
+    assert resolver._initial_consonant(tsu) == "ts"
+
+
+def test_initial_consonant_falls_back_to_lyric_without_phonemes():
+    resolver = CvvcResolver(_parser())
+    note = NoteEvent(
+        note_number=62,
+        lyric="し",
+        start_time=0.5,
+        duration=0.5,
+        phonemes=[],
+    )
+
+    assert resolver._initial_consonant(note) == "sh"
+\n
