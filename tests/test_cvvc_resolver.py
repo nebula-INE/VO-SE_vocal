@@ -217,7 +217,11 @@ def test_expand_notes_for_render_uses_following_preutterance_for_vc():
 
 
 def test_expand_notes_for_render_skips_missing_vc_without_changing_cv():
-    resolver = CvvcResolver(_parser())
+    parser = _parser()
+    # This fixture intentionally removes the exact VC transition being tested
+    # as missing. The shared parser fixture contains "a k" for other CVVC tests.
+    parser._db.pop("a k", None)
+    resolver = CvvcResolver(parser)
     notes = [
         NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
         NoteEvent(note_number=62, lyric="き", start_time=0.5, duration=0.5, phonemes=["k", "i"], pre_utterance=0.08),
