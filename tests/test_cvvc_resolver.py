@@ -290,4 +290,3 @@ def test_initial_consonant_falls_back_to_lyric_without_phonemes():
     )
 
     assert resolver._initial_consonant(note) == "sh"
-\n
