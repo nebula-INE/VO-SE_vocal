@@ -218,10 +218,13 @@ class VcvResolver:
         """
         results: List[ResolvedNote] = []
         prev_lyric: Optional[str] = None
+        # Initialize before the conversion so static analyzers can prove that
+        # the fallback value is always assigned even when float() raises.
+        default_tempo = 120.0
         try:
             default_tempo = float(tempo_bpm)
         except (TypeError, ValueError):
-            default_tempo = 120.0
+            pass
         if default_tempo <= 0.0:
             default_tempo = 120.0
 
