@@ -1,6 +1,4 @@
 from pathlib import Path
-from types import SimpleNamespace
-
 import numpy as np
 import soundfile as sf
 
@@ -8,6 +6,7 @@ from modules.audio.vo_se_engine import VO_SE_Engine
 from modules.audio.vo_se_engine_patch import _export_to_wav_v2
 from modules.data.data_models import NoteEvent
 from modules.data.oto_parser import OtoParser
+from modules.audio.vcv_resolver import VcvResolver
 
 
 def _write_tone(path: Path, frequency: float, duration: float = 0.08) -> np.ndarray:
@@ -51,11 +50,7 @@ def _make_engine(voice_dir: Path) -> tuple[VO_SE_Engine, _RenderCaptureLib]:
     engine.voice_lib_path = str(voice_dir)
     engine.oto_parser = OtoParser()
     engine.oto_parser.load_voice_dir(str(voice_dir), use_cache=False)
-    engine.vcv_resolver = SimpleNamespace(
-        resolve_note=lambda lyric, prev_lyric, is_continuous, note_num: (
-            lambda entry: (entry.alias if entry else "", entry)
-        )(engine.oto_parser.resolve_alias(lyric, prev_lyric, note_num=note_num))
-    )
+    engine.vcv_resolver = VcvResolver(engine.oto_parser, use_g2p=True)
     engine.cvvc_resolver = None
     engine.text_analyzer = SimpleNamespace(
         align_vocal_timing=lambda notes, _oto_parser, tempo_bpm=120.0: (notes, [])
