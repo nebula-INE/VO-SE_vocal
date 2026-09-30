@@ -1279,7 +1279,7 @@ function parsePrefixMapText(text) {
 }
 
 function applyPrefixMapAlias(alias, noteNum, prefixMap) {
-  if (!prefixMap || prefixMap.size === 0) return alias;
+  if (!prefixMap || prefixMap.size === 0 || noteNum === null || noteNum === undefined) return alias;
   const tone = Math.max(0, Math.min(127, Math.round(Number(noteNum))));
   const boundaries = Array.from(prefixMap.keys()).sort((a, b) => a - b);
   let selected = boundaries[0];
