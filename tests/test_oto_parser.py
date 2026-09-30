@@ -109,3 +109,54 @@ def test_resolve_alias_keeps_vcv_context_strict():
     )
 
     assert parser.resolve_alias("い", "u") is None
+
+
+def _entry(alias: str) -> OtoEntry:
+    return OtoEntry(
+        alias=alias,
+        filename=f"{alias.replace(' ', '_')}.wav",
+        voice_dir="/dummy",
+        left_blank=0,
+        fixed_range=0,
+        right_blank=0,
+        preutterance=0,
+        overlap=0,
+    )
+
+
+def test_resolve_alias_vcv_context_falls_back_to_cv_not_other_vcv():
+    parser = OtoParser()
+    parser._db["a い"] = _entry("a い")
+    parser._db["- い"] = _entry("- い")
+
+    # u い が無い場合でも、a いへ勝手に文脈を変更してはいけない。
+    # 安全なfallbackは語頭/CVの - い。
+    entry = parser.resolve_alias("い", "u")
+    assert entry is not None
+    assert entry.alias == "- い"
+
+
+def test_resolve_alias_vcv_context_returns_none_when_only_other_vcv_exists():
+    parser = OtoParser()
+    parser._db["a い"] = _entry("a い")
+
+    # 明示された u 文脈を a 文脈へ置き換えない。
+    assert parser.resolve_alias("い", "u") is None
+
+
+def test_resolve_alias_supports_initial_cv_alias_forms():
+    parser = OtoParser()
+    parser._db["_あ"] = _entry("_あ")
+
+    entry = parser.resolve_alias("あ", None)
+    assert entry is not None
+    assert entry.alias == "_あ"
+
+
+def test_resolve_alias_prefers_plain_cv_when_no_initial_marker_exists():
+    parser = OtoParser()
+    parser._db["あ"] = _entry("あ")
+
+    entry = parser.resolve_alias("あ", None)
+    assert entry is not None
+    assert entry.alias == "あ"
