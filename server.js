@@ -156,7 +156,8 @@ async function parseOtoIniFull(dirPath) {
       try {
         const buf = await fs.promises.readFile(fullPath);
         const content = decodeTextBuffer(buf);
-        const lines = content.split(/\r?\n/);
+        const lines = content.split(/\r?
+/);
 
         let linesSinceYield = 0;
 
@@ -993,10 +994,14 @@ function createDefaultVoicebank(targetName, forceRecreate = false) {
   });
 
   const otoPathFinal = path.join(targetDir, 'oto.ini');
-  fs.writeFileSync(otoPathFinal, otoLines.join('\n'), { encoding: 'utf-8' });
+  fs.writeFileSync(otoPathFinal, otoLines.join('
+'), { encoding: 'utf-8' });
 
   const charTxt = path.join(targetDir, 'character.txt');
-  fs.writeFileSync(charTxt, `name=${targetName}\nauthor=VO-SE Official Studio\nsample=vocal_00.wav\n`, { encoding: 'utf-8' });
+  fs.writeFileSync(charTxt, `name=${targetName}
+author=VO-SE Official Studio
+sample=vocal_00.wav
+`, { encoding: 'utf-8' });
 
   return targetDir;
 }
@@ -1260,7 +1265,8 @@ vbRegistry.warmBaseMidiCache = (indexed) => {
 
 function parsePrefixMapText(text) {
   const map = new Map();
-  const lines = String(text || '').split(/\r?\n/);
+  const lines = String(text || '').split(/\r?
+/);
   for (const raw of lines) {
     const trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
@@ -1376,7 +1382,14 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   if (hira && !candidates.includes(hira)) candidates.push(hira);
 
   const prevVowel = getTrailingVowel(prevLyric);
-  const matchMappedAlias = (candidate) => {\n    if (noteNum === null || noteNum === undefined) return null;\n    const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);\n    if (mapped === candidate) return null;\n    return aliasMap.get(mapped) || null;\n  };\n\n  // Helper to search direct match or pitch-suffixed key in aliasMap
+  const matchMappedAlias = (candidate) => {
+    if (noteNum === null || noteNum === undefined) return null;
+    const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);
+    if (mapped === candidate) return null;
+    return aliasMap.get(mapped) || null;
+  };
+
+  // Helper to search direct match or pitch-suffixed key in aliasMap
   const matchPrefixOrExact = (prefixStr) => {
     if (!prefixStr) return null;
     const prefNorm = prefixStr.normalize('NFC');
@@ -1418,7 +1431,31 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     return null;
   };
 
-  // 1. If previous note vowel is present, prioritize continuous VCV (連続音)\n  if (prevVowel) {\n    for (const cand of candidates) {\n      let entry = matchMappedAlias(prevVowel + ` ${cand}`) ||\n                  matchMappedAlias(prevVowel + `_${cand}`) ||\n                  matchMappedAlias(prevVowel + cand) ||\n                  matchPrefixOrExact(`${prevVowel} ${cand}`) ||\n                  matchPrefixOrExact(`${prevVowel}_${cand}`) ||\n                  matchPrefixOrExact(`${prevVowel}${cand}`);\n      if (entry) return entry;\n    }\n  }\n\n  // 2. Initial / Standalone consonant / Plain CV (単独音・語頭音)\n  for (const cand of candidates) {\n    let entry = matchMappedAlias(`- ${cand}`) ||\n                matchMappedAlias(`_${cand}`) ||\n                matchMappedAlias(`-${cand}`) ||\n                matchMappedAlias(cand) ||\n                matchPrefixOrExact(`- ${cand}`) ||\n                matchPrefixOrExact(`_${cand}`) ||\n                matchPrefixOrExact(`-${cand}`) ||\n                matchPrefixOrExact(cand);\n    if (entry) return entry;\n  }
+  // 1. If previous note vowel is present, prioritize continuous VCV (連続音)
+  if (prevVowel) {
+    for (const cand of candidates) {
+      let entry = matchMappedAlias(prevVowel + ` ${cand}`) ||
+                  matchMappedAlias(prevVowel + `_${cand}`) ||
+                  matchMappedAlias(prevVowel + cand) ||
+                  matchPrefixOrExact(`${prevVowel} ${cand}`) ||
+                  matchPrefixOrExact(`${prevVowel}_${cand}`) ||
+                  matchPrefixOrExact(`${prevVowel}${cand}`);
+      if (entry) return entry;
+    }
+  }
+
+  // 2. Initial / Standalone consonant / Plain CV (単独音・語頭音)
+  for (const cand of candidates) {
+    let entry = matchMappedAlias(`- ${cand}`) ||
+                matchMappedAlias(`_${cand}`) ||
+                matchMappedAlias(`-${cand}`) ||
+                matchMappedAlias(cand) ||
+                matchPrefixOrExact(`- ${cand}`) ||
+                matchPrefixOrExact(`_${cand}`) ||
+                matchPrefixOrExact(`-${cand}`) ||
+                matchPrefixOrExact(cand);
+    if (entry) return entry;
+  }
   // Do not substitute a different VCV context when prevVowel is explicit.
   // If the requested VCV entry is unavailable, the plain CV/standalone
   // fallback above is the safe choice. Falling through to another vowel
@@ -2044,7 +2081,8 @@ app.post('/api/py/parse-ust', (req, res) => {
   }
 
   try {
-    const lines = ustText.split(/\r?\n/);
+    const lines = ustText.split(/\r?
+/);
     let tempo = 120;
     let projectName = 'Untitled Project';
     let voicebank = '';
