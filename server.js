@@ -284,6 +284,12 @@ class VoicebankRegistryEngine {
     try {
       const stats = await fs.promises.stat(vbPath);
       latestMtime = stats.mtimeMs;
+      try {
+        const prefixStats = await fs.promises.stat(path.join(vbPath, 'prefix.map'));
+        latestMtime = Math.max(latestMtime, prefixStats.mtimeMs);
+      } catch (e) {
+        // prefix.map is optional.
+      }
     } catch (e) {
       return null;
     }
