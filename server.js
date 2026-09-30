@@ -1632,7 +1632,15 @@ app.post('/api/py/render-notes', async (req, res) => {
     const prevLyric = isContinuous ? (prevNote.lyric || null) : null;
 
     const entry = findAliasEntry(indexed, lyric, prevLyric);
-    const hasWav = entry && fs.existsSync(entry.wav_path);
+    let resolvedWavPath = null;
+    if (entry) {
+      if (fs.existsSync(entry.wav_path)) {
+        resolvedWavPath = entry.wav_path;
+      } else if (entry.filename) {
+        resolvedWavPath = resolveWavFilePath(path.dirname(entry.wav_path), entry.filename);
+      }
+    }
+    const hasWav = !!resolvedWavPath;
 
     return {
       id: n.id,
@@ -1642,7 +1650,7 @@ app.post('/api/py/render-notes', async (req, res) => {
       length: n.length || 480,
       hasWav: !!hasWav,
       aliasUsed: entry ? entry.alias : lyric,
-      wavPath: entry ? entry.wav_path : null,
+      wavPath: resolvedWavPath,
       oto: entry ? {
         left_blank: entry.left_blank,
         fixed_range: entry.fixed_range,
