@@ -301,10 +301,16 @@ def _export_to_wav_v2(
                 note_tempo = 120.0
             continuity_gap_sec = 30.0 / note_tempo
             is_continuous = prev_note is not None and gap_sec <= continuity_gap_sec
+            note_num_raw = getattr(note, "note_number", getattr(note, "note_num", 60))
+            try:
+                note_num = int(note_num_raw)
+            except (TypeError, ValueError):
+                note_num = 60
             _alias, oto_entry = vcv_resolver.resolve_note(
                 note.lyric,
                 prev_lyric,
                 is_continuous=is_continuous,
+                note_num=note_num,
             )
             if oto_entry is not None:
                 wav_path = oto_entry.wav_path
