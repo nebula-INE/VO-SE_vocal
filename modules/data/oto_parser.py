@@ -197,7 +197,19 @@ class OtoParser:
                 continue
             entry = self._parse_line(line, voice_dir)
             if entry is not None:
-                self._db[entry.alias] = entry
+                # 複数 oto.ini を再帰ロードしたとき、同名 alias を
+                # 後から読んだファイルで上書きしない。Web 側も同じ
+                # first-wins 方針なので、3経路の解決結果を一致させる。
+                if entry.alias in self._db:
+                    existing = self._db[entry.alias]
+                    logger.warning(
+                        "重複 alias をスキップ: %s (%s) / 既存=%s",
+                        entry.alias,
+                        entry.wav_path,
+                        existing.wav_path,
+                    )
+                else:
+                    self._db[entry.alias] = entry
                 count += 1
 
             # Low RAM throttle: pause slightly and collect garbage every 300 lines
