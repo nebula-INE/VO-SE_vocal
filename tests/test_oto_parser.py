@@ -298,9 +298,16 @@ def test_resolve_alias_supports_prefix_map_pitch_selection(tmp_path):
     parser = OtoParser()
     parser.load_voice_dir(str(voice_dir), use_cache=False)
 
-    assert parser.resolve_alias("あ", None, note_num=59).alias == "あ_C4"
-    assert parser.resolve_alias("あ", None, note_num=64).alias == "あ_C4"
-    assert parser.resolve_alias("あ", None, note_num=65).alias == "あ_F4"
+    # Below the first declared boundary there is no valid mapped subbank.
+    assert parser.resolve_alias("あ", None, note_num=0) is None
+    low = parser.resolve_alias("あ", None, note_num=59)
+    mid = parser.resolve_alias("あ", None, note_num=64)
+    high = parser.resolve_alias("あ", None, note_num=65)
+    assert low is not None and low.alias == "あ_C4"
+    assert mid is not None and mid.alias == "あ_C4"
+    assert high is not None and high.alias == "あ_F4"
+    assert low.wav_path == str(voice_dir / "a_c4.wav")
+    assert high.wav_path == str(voice_dir / "a_f4.wav")
 
 
 def test_resolve_alias_prefix_map_preserves_explicit_suffix(tmp_path):
@@ -318,6 +325,26 @@ def test_resolve_alias_prefix_map_preserves_explicit_suffix(tmp_path):
     entry = parser.resolve_alias("あ_F4", None, note_num=60)
     assert entry is not None
     assert entry.alias == "あ_F4"
+
+
+def test_resolve_alias_prefix_map_preserves_explicit_vcv_alias(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "prefix.map").write_text("C1\t\t_C4\nF4\t\t_F4\n", encoding="utf-8")
+    (voice_dir / "oto.ini").write_text(
+        "a_i.wav=a い,0,0,0,50,0\n"
+        "a_i_f4.wav=a い_F4,0,0,0,60,0\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "a_i.wav").write_bytes(b"RIFF")
+    (voice_dir / "a_i_f4.wav").write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    entry = parser.resolve_alias("a い", None, note_num=65)
+    assert entry is not None
+    assert entry.alias == "a い"
 
 
 def test_resolve_alias_prefix_map_applies_to_complete_vcv_alias(tmp_path):
