@@ -312,14 +312,8 @@ async function renderViaCore(
   function getInitialConsonant(note: any): string {
     const phonemes = note?.phonemes;
     const values = Array.isArray(phonemes) ? phonemes : (typeof phonemes === 'string' ? phonemes.trim().split(/\s+/) : []);
-    for (const value of values) {
-      const p = String(value || '').trim().toLowerCase();
-      if (!p || /^[aiueon]+$/.test(p)) continue;
-      if (/^(sil|pau|br|r|休|休符|・)$/.test(p)) return '';
-      return p;
-    }
-    const lyric = String(note?.lyric || '').trim().toLowerCase();
-    const initialKana: Record<string, string> = {
+
+    const kanaConsonant: Record<string, string> = {
       'か':'k','き':'k','く':'k','け':'k','こ':'k','が':'g','ぎ':'g','ぐ':'g','げ':'g','ご':'g',
       'さ':'s','し':'sh','す':'s','せ':'s','そ':'s','ざ':'z','じ':'j','ず':'z','ぜ':'z','ぞ':'z',
       'た':'t','ち':'ch','つ':'ts','て':'t','と':'t','だ':'d','ぢ':'j','づ':'z','で':'d','ど':'d',
@@ -328,7 +322,39 @@ async function renderViaCore(
       'ま':'m','み':'m','む':'m','め':'m','も':'m','や':'y','ゆ':'y','よ':'y','ら':'r','り':'r','る':'r','れ':'r','ろ':'r',
       'わ':'w','を':'w','ん':'n'
     };
-    return initialKana[lyric.slice(-1)] || '';
+
+    const romanConsonant = (value: string): string => {
+      const p = value.replace(/[^a-z]/g, '').toLowerCase();
+      if (!p || /^(?:[aiueon]+)$/.test(p)) return '';
+      const match = p.match(/^(?:ch|sh|ts|zh|jh|dz|ky|gy|ny|hy|by|py|my|ry|ty|dy|sy|zy|fy|kw|gw|[bcdfghjklmnpqrstvwxyz])/);
+      return match?.[0] || '';
+    };
+
+    for (const value of values) {
+      const p = String(value || '').trim().toLowerCase();
+      if (!p) continue;
+      if (/^(sil|pau|br|r|休|休符|・)$/.test(p)) return '';
+      if (kanaConsonant[p]) return kanaConsonant[p];
+      const roman = romanConsonant(p);
+      if (roman) return roman;
+    }
+
+    const lyric = String(note?.lyric || '').trim().toLowerCase();
+    if (kanaConsonant[lyric.slice(-1)]) return kanaConsonant[lyric.slice(-1)];
+
+    // Romanized CV lyrics such as "ka", "shi", "tsu" are common in UTAU
+    // voicebanks. Derive the consonant from the syllable rather than requiring
+    // a separate phoneme array.
+    return romanConsonant(lyric);
+  }
+
+  function isVcvMatchedAlias(alias: string, prevVowel: string): boolean {
+    const normalized = String(alias || '').trim().toLowerCase();
+    if (!normalized || !prevVowel) return false;
+    if (normalized === prevVowel) return false;
+    return normalized.startsWith(prevVowel + ' ') ||
+      normalized.startsWith(prevVowel + '_') ||
+      (normalized.startsWith(prevVowel) && normalized.length > prevVowel.length);
   }
 
   function tickToTimeSec(targetTick: number): number {
@@ -527,7 +553,7 @@ async function renderViaCore(
         // provide the corresponding VCV transition.
         const vcvMatched = continuousForCvvc &&
           !!s.matchedAlias &&
-          s.matchedAlias.trim().toLowerCase().startsWith(prevVowelForCvvc + ' ');
+          isVcvMatchedAlias(s.matchedAlias, prevVowelForCvvc);
         
         if (continuousForCvvc && !vcvMatched && vcMatchesExactly && Number.isFinite(preMs) && preMs > 0) {
           const vcWasmKey = cacheKeyToWasmKey.get(vcKey);
