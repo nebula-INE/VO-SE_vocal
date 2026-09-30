@@ -452,7 +452,11 @@ class OtoParser:
         # unqualified alias, otherwise pitch-bank selection is defeated.
         if note_num is not None and self._prefix_map:
             from modules.data.prefix_map import select_prefix_map
-            if select_prefix_map(self._prefix_map, int(note_num)) is None:
+            explicit_alias = (
+                str(lyric) in self._db
+                and (" " in str(lyric) or "_" in str(lyric) or str(lyric).startswith("-"))
+            )
+            if select_prefix_map(self._prefix_map, int(note_num)) is None and not explicit_alias:
                 if not re.search(r"(?:^|[ _/])(?:[A-Ga-g][#b]?-?\d+)(?:$|[ _/])", str(lyric)):
                     return None
 
