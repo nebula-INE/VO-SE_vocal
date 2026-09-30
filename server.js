@@ -1290,11 +1290,12 @@ function applyPrefixMapAlias(alias, noteNum, prefixMap) {
   if (!prefixMap || prefixMap.size === 0 || noteNum === null || noteNum === undefined) return alias;
   const tone = Math.max(0, Math.min(127, Math.round(Number(noteNum))));
   const boundaries = Array.from(prefixMap.keys()).sort((a, b) => a - b);
-  let selected = boundaries[0];
+  let selected = null;
   for (const boundary of boundaries) {
     if (boundary > tone) break;
     selected = boundary;
   }
+  if (selected === null) return alias;
   const mapping = prefixMap.get(selected);
   if (!mapping) return alias;
   let mapped = alias;
@@ -1383,7 +1384,12 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
 
   const prevVowel = getTrailingVowel(prevLyric);
   const matchMappedAlias = (candidate) => {
+    // An explicitly written alias must always win over automatic pitch mapping.
+    // This is especially important for explicit VCV aliases such as "a い".
+    const exact = aliasMap.get(candidate);
+    if (exact) return exact;
     if (noteNum === null || noteNum === undefined) return null;
+    if (candidate.includes('/') || candidate.includes('\\')) return null;
     const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);
     if (mapped === candidate) return null;
     return aliasMap.get(mapped) || null;
