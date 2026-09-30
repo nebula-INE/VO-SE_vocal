@@ -297,6 +297,15 @@ class OtoParser:
                     except OSError:
                         continue
         ini_files.sort()
+        prefix_map_path = os.path.join(voice_dir, "prefix.map")
+        if os.path.isfile(prefix_map_path):
+            try:
+                stat = os.stat(prefix_map_path)
+                source_signature.append(
+                    [os.path.abspath(prefix_map_path), stat.st_mtime_ns, stat.st_size]
+                )
+            except OSError:
+                pass
         source_signature.sort(key=lambda item: item[0])
 
         # 2. Try loading from .oto_cache.json if valid
