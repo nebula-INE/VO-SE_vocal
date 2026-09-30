@@ -122,25 +122,12 @@ public:
         // Normalize common pitch suffixes used by UST/voicebanks.
         // Keep this aligned with the Python/Web resolvers:
         //   あ_C4 / あC4 / あ_1 / あ↑
-        const pitchSuffix = std::regex ("_?[A-Ga-g][#b]?[0-9]$");
         {
             const auto text = cleanLyric.toStdString();
             std::smatch match;
-            if (std::regex_search (text, match, pitchSuffix)
-                && match.position() >= 0)
+            const std::regex pitchSuffix (R"((_?[A-Ga-g][#b]?[0-9]|_[0-9]|[↑↓強弱SP])$)");
+            if (std::regex_search (text, match, pitchSuffix) && match.position() >= 0)
                 cleanLyric = cleanLyric.substring (0, static_cast<int> (match.position())).trim();
-        }
-        if (cleanLyric.endsWithChar ('_') == false)
-        {
-            const auto lastUnderscore = cleanLyric.lastIndexOfChar ('_');
-            if (lastUnderscore >= 0 && lastUnderscore < cleanLyric.length() - 1)
-            {
-                const auto suffix = cleanLyric.substring (lastUnderscore + 1);
-                if (suffix.length() >= 2
-                    && suffix[0] >= 'A' && suffix[0] <= 'G'
-                    && juce::CharacterFunctions::isDigit (suffix[1]))
-                    cleanLyric = cleanLyric.substring (0, lastUnderscore).trim();
-            }
         }
 
         // Normalize initial CV/VCV markers such as "-あ", "- あ", "_あ".
