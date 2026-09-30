@@ -44,7 +44,48 @@ struct OtoEntryCpp
         // oto.ini may use Windows backslashes even when the application runs
         // on macOS/Linux. Normalize the relative WAV path before resolving it.
         auto normalizedFilename = filename.replaceCharacter ('\\', '/');
-        return juce::File (voiceDir).getChildFile (normalizedFilename);
+        const auto exactPath = juce::File (voiceDir).getChildFile (normalizedFilename);
+
+        if (exactPath.existsAsFile())
+            return exactPath;
+
+        // Linux filesystems are case-sensitive, while many UTAU voicebanks
+        // were authored on Windows/macOS and can contain case differences
+        // between oto.ini and the actual WAV path. Resolve each path
+        // component case-insensitively instead of recursively searching by
+        // basename, which could select the wrong WAV when duplicate names
+        // exist in different subfolders.
+        auto current = juce::File (voiceDir);
+        auto components = juce::StringArray::fromTokens (normalizedFilename, "/", "");
+        for (const auto& component : components)
+        {
+            if (component.isEmpty() || component == ".")
+                continue;
+
+            if (component == "..")
+            {
+                current = current.getParentDirectory();
+                continue;
+            }
+
+            juce::File matched;
+            for (const auto& child : current.findChildFiles (
+                     juce::File::findFilesAndDirectories, false, "*"))
+            {
+                if (child.getFileName().equalsIgnoreCase (component))
+                {
+                    matched = child;
+                    break;
+                }
+            }
+
+            if (! matched.exists())
+                return exactPath;
+
+            current = matched;
+        }
+
+        return current.existsAsFile() ? current : exactPath;
     }
 };
 
