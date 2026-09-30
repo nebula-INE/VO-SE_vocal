@@ -39,7 +39,7 @@ class CvvcResolver:
     Missing VC aliases are never substituted with another consonant.
     """
 
-    _VC_RE = re.compile(r"^([aiueon])\\s+(.+)$", re.IGNORECASE)
+    _VC_RE = re.compile(r"^([aiueon])\s+(.+)$", re.IGNORECASE)
 
     def __init__(self, oto_parser) -> None:
         self._oto = oto_parser
@@ -61,9 +61,11 @@ class CvvcResolver:
         if not match:
             return False
         tail = match.group(2).strip().lower()
-        # "a い" / "a ka" are VCV-like, not VC.  A VC alias must end in
-        # a consonant token; romanized clusters such as "ky"/"sh" are valid.
+        # CVVC VC aliases use a consonant token such as "k", "ky", or "sh".
+        # Japanese kana and VCV syllables such as "a か" / "a ka" are not VC.
         if not tail or tail[0] in _VOWELS:
+            return False
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", tail):
             return False
         return True
 
