@@ -47,13 +47,13 @@ def multi_pitch_voicebank(tmp_path: Path) -> Path:
     _write_test_wav(voice_dir / "a_F4.wav", 349.228231)
 
     (voice_dir / "prefix.map").write_text(
-        "C1\\t\\t_C4\\n"
-        "F4\\t\\t_F4\\n",
+        "C1\t\t_C4\n"
+        "F4\t\t_F4\n",
         encoding="utf-8",
     )
     (voice_dir / "oto.ini").write_text(
-        "a_C4.wav=あ_C4,0,20,0,60,20\\n"
-        "a_F4.wav=あ_F4,0,20,0,60,20\\n",
+        "a_C4.wav=あ_C4,0,20,0,60,20\n"
+        "a_F4.wav=あ_F4,0,20,0,60,20\n",
         encoding="utf-8",
     )
     return voice_dir
