@@ -1266,7 +1266,9 @@ function parsePrefixMapText(text) {
     if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
     const cols = raw.includes('\t') ? raw.split('\t') : trimmed.split(/\s+/);
     if (cols.length < 2) continue;
-    const midi = getMidiFromPitchTag(cols[0]);
+    const noteToken = String(cols[0] || '').trim();
+    if (!/^[A-Ga-g][#b]?-?\\d+$/.test(noteToken)) continue;
+    const midi = getMidiFromPitchTag(noteToken);
     if (!Number.isFinite(midi)) continue;
     const prefix = (cols[1] || '').trim();
     const suffix = (cols.length >= 3 ? cols[2] : '').trim();
