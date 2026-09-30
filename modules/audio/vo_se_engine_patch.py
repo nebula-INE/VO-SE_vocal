@@ -227,13 +227,25 @@ def _export_to_wav_v2(
     **kwargs,
 ) -> str:
     """VCV + UST ビブラート + ポルタメント対応の WAV export。"""
-    _ = kwargs
+    tempo_bpm = kwargs.pop("tempo_bpm", None)
+    if tempo_bpm is None:
+        tempo_bpm = getattr(self, "_tempo", 120.0)
+    try:
+        tempo_bpm = float(tempo_bpm)
+    except (TypeError, ValueError):
+        tempo_bpm = 120.0
+    if tempo_bpm <= 0.0:
+        tempo_bpm = 120.0
 
     if not self.lib:
         raise RuntimeError("Engine Core library missing!")
 
     oto_parser = getattr(self, "oto_parser", None)
-    notes, timeline = self.text_analyzer.align_vocal_timing(notes, oto_parser)
+    notes, timeline = self.text_analyzer.align_vocal_timing(
+        notes,
+        oto_parser,
+        tempo_bpm=tempo_bpm,
+    )
 
     if timeline and hasattr(self, "pipeline_bridge") and self.pipeline_bridge:
         self.pipeline_bridge.send_timeline_to_core(timeline)
@@ -259,7 +271,15 @@ def _export_to_wav_v2(
                     gap_sec = max(0.0, float(note.start_time) - prev_end)
                 except (TypeError, ValueError, AttributeError):
                     gap_sec = float("inf")
-            is_continuous = prev_note is not None and gap_sec <= 0.25
+            note_tempo_raw = getattr(note, "_ust_tempo", None)
+            try:
+                note_tempo = float(note_tempo_raw) if note_tempo_raw is not None else tempo_bpm
+            except (TypeError, ValueError):
+                note_tempo = tempo_bpm
+            if note_tempo <= 0.0:
+                note_tempo = 120.0
+            continuity_gap_sec = 30.0 / note_tempo
+            is_continuous = prev_note is not None and gap_sec <= continuity_gap_sec
             _alias, oto_entry = vcv_resolver.resolve_note(
                 note.lyric,
                 prev_lyric,
