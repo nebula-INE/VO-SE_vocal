@@ -32,6 +32,7 @@ import numpy as np
 
 from modules.data.oto_parser import OtoParser
 from modules.audio.vcv_resolver import VcvResolver
+from modules.audio.cvvc_resolver import CvvcResolver
 from modules.data.ust_parser import UstParser, UstConverter, UstVibratoParams
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,7 @@ def _refresh_voice_library_v2(self) -> None:
                 )
 
     self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
+    self.cvvc_resolver = CvvcResolver(self.oto_parser)
 
     sync_oto = getattr(self, "set_oto_data", None)
     if callable(sync_oto):
@@ -247,6 +249,10 @@ def _export_to_wav_v2(
         tempo_bpm=tempo_bpm,
     )
 
+    cvvc_resolver = getattr(self, "cvvc_resolver", None)
+    if cvvc_resolver is not None and cvvc_resolver.classify_voicebank() == "cvvc":
+        notes = cvvc_resolver.expand_notes_for_render(notes)
+
     if timeline and hasattr(self, "pipeline_bridge") and self.pipeline_bridge:
         self.pipeline_bridge.send_timeline_to_core(timeline)
 
@@ -258,10 +264,15 @@ def _export_to_wav_v2(
     for i, note in enumerate(notes):
         if callable(cancel_check) and cancel_check():
             raise RuntimeError("レンダリングがキャンセルされました")
+        render_alias = str(getattr(note, "_cvvc_render_alias", "") or "")
         vcv_resolver = getattr(self, "vcv_resolver", None)
         wav_path = ""
 
-        if vcv_resolver is not None:
+        if render_alias:
+            cvvc_entry = getattr(oto_parser, "_db", {}).get(render_alias) if oto_parser is not None else None
+            if cvvc_entry is not None:
+                wav_path = cvvc_entry.wav_path
+        elif vcv_resolver is not None:
             prev_note = notes[i - 1] if i > 0 else None
             prev_lyric = getattr(prev_note, "lyric", None) if prev_note is not None else None
             gap_sec = float("inf")
