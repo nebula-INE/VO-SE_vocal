@@ -493,7 +493,35 @@ async function renderViaCore(
       if (!s || !wasmKey) {
         pushEvent(null, null, noteStartSec, noteDurationMs);
       } else {
-        pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
+        const prevForCvvc = i > 0 ? sortedNotes[i - 1] : null;
+        const continuousForCvvc = !!prevForCvvc && !isRest(prevForCvvc.lyric) &&
+          (startTick - ((prevForCvvc.tick || 0) + (prevForCvvc.length || 480)) <= 240);
+        const prevVowelForCvvc = continuousForCvvc ? getTrailingVowelFromLyric(prevForCvvc?.lyric) : '';
+        const consonantForCvvc = getInitialConsonant(n);
+        const vcAlias = prevVowelForCvvc && consonantForCvvc
+          ? prevVowelForCvvc + ' ' + consonantForCvvc
+          : '';
+        const vcKey = vcAlias ? voicebank + ':' + vcAlias + ':DIRECT:' + noteNum : '';
+        const vcSample = vcKey ? rawSampleMap.get(vcKey) : null;
+        const preMs = Number(n.pre_utterance);
+        const vcMatchesExactly = !!vcSample &&
+          vcSample.matchedAlias.trim().toLowerCase() === vcAlias.toLowerCase();
+
+        if (continuousForCvvc && vcMatchesExactly && Number.isFinite(preMs) && preMs > 0) {
+          const vcWasmKey = cacheKeyToWasmKey.get(vcKey);
+          if (vcWasmKey) {
+            const vcStartSec = Math.max(0, noteStartSec - preMs / 1000.0);
+            pushEvent(vcWasmKey, n, vcStartSec, preMs);
+            // The VC already occupies the preutterance window. Do not apply
+            // the same preutterance a second time to the following CV.
+            const cvNote = { ...n, pre_utterance: 0, overlap: 0 };
+            pushEvent(wasmKey, cvNote, noteStartSec, noteDurationMs);
+          } else {
+            pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
+          }
+        } else {
+          pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
+        }
       }
     }
 
