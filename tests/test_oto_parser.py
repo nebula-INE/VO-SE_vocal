@@ -213,3 +213,60 @@ def test_load_voice_dir_keeps_first_entry_for_duplicate_alias(tmp_path):
     assert entry.filename == "root.wav"
     assert entry.wav_path == str(voice_dir / "root.wav")
 
+
+
+def test_load_voice_dir_keeps_first_duplicate_alias_and_exposes_scoped_aliases(tmp_path):
+    voice_dir = tmp_path / "voice"
+    low = voice_dir / "C4"
+    high = voice_dir / "D4"
+    low.mkdir(parents=True)
+    high.mkdir(parents=True)
+
+    (low / "a.wav").write_bytes(b"RIFF")
+    (high / "a.wav").write_bytes(b"RIFF")
+    (low / "oto.ini").write_text(
+        "a.wav=あ,0,20,0,50,20\n",
+        encoding="utf-8",
+    )
+    (high / "oto.ini").write_text(
+        "a.wav=あ,0,20,0,60,20\n",
+        encoding="utf-8",
+    )
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    # The unqualified alias is deterministic: first discovered oto.ini wins.
+    assert parser.get("あ") is not None
+    assert parser.get("あ").preutterance == 50.0
+
+    # Multi-pitch folders remain explicitly selectable.
+    c4 = parser.resolve_alias("C4/あ")
+    d4 = parser.resolve_alias("D4\\あ")
+    assert c4 is not None
+    assert d4 is not None
+    assert c4.preutterance == 50.0
+    assert d4.preutterance == 60.0
+
+
+def test_load_voice_dir_cache_preserves_scoped_duplicate_aliases(tmp_path):
+    voice_dir = tmp_path / "voice"
+    c4 = voice_dir / "C4"
+    d4 = voice_dir / "D4"
+    c4.mkdir(parents=True)
+    d4.mkdir(parents=True)
+
+    (c4 / "a.wav").write_bytes(b"RIFF")
+    (d4 / "a.wav").write_bytes(b"RIFF")
+    (c4 / "oto.ini").write_text("a.wav=あ,0,20,0,50,20\n", encoding="utf-8")
+    (d4 / "oto.ini").write_text("a.wav=あ,0,20,0,60,20\n", encoding="utf-8")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=True)
+
+    cached = OtoParser()
+    cached.load_voice_dir(str(voice_dir), use_cache=True)
+
+    assert cached.resolve_alias("C4/あ").preutterance == 50.0
+    assert cached.resolve_alias("D4/あ").preutterance == 60.0
+    assert cached.get("あ").preutterance == 50.0
