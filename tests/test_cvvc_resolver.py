@@ -134,3 +134,54 @@ def test_resolve_notes_prefers_analyzed_previous_vowel():
         ("cv", "か"),
         ("vc", "a k"),
     ]
+
+
+def test_expand_notes_for_render_uses_following_preutterance_for_vc():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=62, lyric="か", start_time=0.5, duration=0.5, phonemes=["k", "a"], pre_utterance=0.08),
+    ]
+
+    expanded = resolver.expand_notes_for_render(notes)
+
+    assert len(expanded) == 3
+    vc, cv = expanded[1], expanded[2]
+    assert vc._cvvc_render_kind == "vc"
+    assert vc._cvvc_render_alias == "a k"
+    assert vc.lyric == "a k"
+    assert vc.start_time == 0.42
+    assert vc.duration == 0.08
+    assert vc.pre_utterance == 0.0
+    assert cv._cvvc_render_kind == "cv"
+    assert cv.lyric == "か"
+    assert notes[1].lyric == "か"
+    assert notes[1].start_time == 0.5
+
+
+def test_expand_notes_for_render_skips_missing_vc_without_changing_cv():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=62, lyric="き", start_time=0.5, duration=0.5, phonemes=["k", "i"], pre_utterance=0.08),
+    ]
+
+    expanded = resolver.expand_notes_for_render(notes)
+
+    assert len(expanded) == 2
+    assert [getattr(note, "_cvvc_render_kind", None) for note in expanded] == ["cv", "cv"]
+    assert [note.lyric for note in expanded] == ["あ", "か"]
+
+
+def test_expand_notes_for_render_does_not_cross_rest():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=0, lyric="R", start_time=0.5, duration=0.25, phonemes=[]),
+        NoteEvent(note_number=62, lyric="か", start_time=0.75, duration=0.5, phonemes=["k", "a"], pre_utterance=0.08),
+    ]
+
+    expanded = resolver.expand_notes_for_render(notes)
+
+    assert len(expanded) == 3
+    assert all(getattr(note, "_cvvc_render_kind", None) != "vc" for note in expanded)
