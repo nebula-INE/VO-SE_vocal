@@ -32,6 +32,18 @@ def test_detects_cvvc_voicebank():
     assert resolver.has_vc()
     assert resolver.classify_voicebank() == "mixed"
 
+def test_detects_pure_cvvc_voicebank():
+    parser = OtoParser()
+    parser._db["- か"] = _entry("- か")
+    parser._db["か"] = _entry("か")
+    parser._db["a k"] = _entry("a k")
+
+    resolver = CvvcResolver(parser)
+
+    assert resolver.has_vc()
+    assert resolver.classify_voicebank() == "cvvc"
+
+
 
 def test_resolves_cv_without_using_another_vowel_context():
     resolver = CvvcResolver(_parser())
