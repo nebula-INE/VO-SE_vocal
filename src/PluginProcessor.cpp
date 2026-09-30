@@ -167,7 +167,7 @@ void VoseAudioProcessor::pushNote (int midiNoteNumber, int trackIndex)
     std::vector<double> tensionCurve (kRes, (double) apvts.getRawParameterValue ("tension")->load());
     std::vector<double> breathCurve (kRes, (double) apvts.getRawParameterValue ("breath")->load());
 
-    resolveAndPushNote (trackIndex, flatCurve, consumeNextLyric(), genderCurve, tensionCurve, breathCurve);
+    resolveAndPushNote (trackIndex, midiNoteNumber, flatCurve, consumeNextLyric(), genderCurve, tensionCurve, breathCurve);
 }
 
 std::vector<double> VoseAudioProcessor::buildAutomatedCurve (AutomationParam param, double startSec, double durationSec,
@@ -252,10 +252,10 @@ void VoseAudioProcessor::pushSongNote (const ScheduledSongNote& note)
                                               note.breathOverride01,  breathFallback,  curvesSnapshot, kRes);
 
     // USTは単一パート仕様のため、常にトラック0を使う（マルチトラックUST風合成は対象外）。
-    resolveAndPushNote (0, pitchCurve, note.lyric, genderCurve, tensionCurve, breathCurve, portamentoCents);
+    resolveAndPushNote (0, note.noteNum, pitchCurve, note.lyric, genderCurve, tensionCurve, breathCurve, portamentoCents);
 }
 
-void VoseAudioProcessor::resolveAndPushNote (int trackIndex, const std::vector<double>& pitchCurveHz,
+void VoseAudioProcessor::resolveAndPushNote (int trackIndex, int noteNum, const std::vector<double>& pitchCurveHz,
                                               const juce::String& lyric,
                                               const std::vector<double>& genderCurve,
                                               const std::vector<double>& tensionCurve,
@@ -269,7 +269,7 @@ void VoseAudioProcessor::resolveAndPushNote (int trackIndex, const std::vector<d
     if (track.otoDb.hasVcv() && prevLyric.isNotEmpty())
         prevVowel = vowelClassifier.trailingVowel (prevLyric);
 
-    const auto* entry = track.otoDb.resolveAlias (lyric, prevVowel);
+    const auto* entry = track.otoDb.resolveAlias (lyric, prevVowel, noteNum);
 
     if (entry == nullptr)
     {
