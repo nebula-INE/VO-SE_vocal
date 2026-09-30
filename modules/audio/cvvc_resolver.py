@@ -216,7 +216,7 @@ class CvvcResolver:
             previous_note = note
         return result
 
-    def expand_notes_for_render(self, notes: Sequence) -> List:
+    def expand_notes_for_render(self, notes: Sequence, tempo_bpm: float = 120.0) -> List:
         """Expand a pure CVVC note list into render-only CV/VC events.
 
         The VC length follows the following CV note preutterance, matching the
@@ -227,6 +227,19 @@ class CvvcResolver:
         previous_note = None
         for index, note in enumerate(notes):
             if previous_note is not None and not self._is_rest(previous_note) and not self._is_rest(note):
+                try:
+                    prev_end = float(getattr(previous_note, "start_time", 0.0)) + max(0.0, float(getattr(previous_note, "duration", 0.0)))
+                    gap_sec = max(0.0, float(getattr(note, "start_time", 0.0)) - prev_end)
+                except (TypeError, ValueError):
+                    gap_sec = float("inf")
+                note_tempo_raw = getattr(note, "_ust_tempo", None)
+                try:
+                    note_tempo = float(note_tempo_raw) if note_tempo_raw is not None else float(tempo_bpm)
+                except (TypeError, ValueError):
+                    note_tempo = float(tempo_bpm)
+                if note_tempo <= 0.0:
+                    note_tempo = 120.0
+                is_continuous = gap_sec <= 30.0 / note_tempo
                 previous_vowel = self._trailing_vowel_from_phonemes(previous_note)
                 if previous_vowel is None:
                     previous_vowel = VowelClassifier(use_g2p=False).trailing_vowel(
@@ -238,7 +251,7 @@ class CvvcResolver:
                     next_preutterance = max(0.0, float(getattr(note, "pre_utterance", 0.0) or 0.0))
                 except (TypeError, ValueError):
                     next_preutterance = 0.0
-                if vc_entry is not None and next_preutterance > 0.0:
+                if is_continuous and vc_entry is not None and next_preutterance > 0.0:
                     vc_note = copy.deepcopy(note)
                     vc_note.start_time = max(
                         0.0, float(getattr(note, "start_time", 0.0)) - next_preutterance
