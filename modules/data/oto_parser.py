@@ -347,6 +347,17 @@ class OtoParser:
         if not lyric:
             return None
 
+        # Keep rest markers consistent with the Web/WASM resolvers.  A rest
+        # must never be turned into an audio alias even if a voicebank happens
+        # to contain an alias with the same spelling.
+        rest_lyrics = {
+            "r", "r_", "r_0", "[r]", "息", "br", "pau", "sil",
+            "吸", "吸気", "息吸い", "", " ", "　", "休", "休符",
+            "・", "-", "ー", "~", "null",
+        }
+        if str(lyric).strip().lower() in {item.lower() for item in rest_lyrics}:
+            return None
+
         clean_lyric = re.sub(
             r"^[-aieuon_]\s*",
             "",
