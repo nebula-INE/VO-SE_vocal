@@ -17,6 +17,7 @@ import logging
 import gc
 import time
 from dataclasses import dataclass
+from modules.data.prefix_map import PrefixMapEntry, map_alias, parse_prefix_map
 from typing import Callable, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,7 @@ class OtoParser:
     def __init__(self) -> None:
         # alias → OtoEntry の辞書（複数 oto.ini をマージして保持）
         self._db: Dict[str, OtoEntry] = {}
+        self._prefix_map: List[PrefixMapEntry] = []
 
     # ------------------------------------------------------------------
     # 公開 API
@@ -264,6 +266,7 @@ class OtoParser:
         """
         if reset:
             self.clear()
+            self._load_prefix_map(voice_dir)
             # 音源切替・再スキャン時に、前回のファイル一覧を使わない。
             clear_voice_dir_file_map_cache()
 
@@ -375,6 +378,7 @@ class OtoParser:
         self,
         lyric: str,
         prev_vowel: Optional[str] = None,
+        note_num: Optional[int] = None,
     ) -> Optional[OtoEntry]:
         """VCV -> CV -> 単独音の順で、現在ノートに対応する oto.ini エントリを解決する."""
         if not lyric:
@@ -425,6 +429,31 @@ class OtoParser:
                 ):
                     return candidate
             return None
+
+        # Apply UTAU prefix.map before normal VCV/CV resolution.
+        # Explicit folder-qualified lyrics and explicit pitch suffixes are kept as-is.
+        mapped_lyric = clean_lyric
+        if note_num is not None and "/" not in clean_lyric and "\\" not in clean_lyric:
+            mapped_lyric = map_alias(clean_lyric, note_num, self._prefix_map)
+
+        if mapped_lyric != clean_lyric:
+            mapped_candidates = [
+                mapped_lyric,
+                f"- {mapped_lyric}",
+                f"_{mapped_lyric}",
+                f"-{mapped_lyric}",
+            ]
+            if prev_vowel:
+                mapped_candidates = [
+                    f"{prev_vowel} {mapped_lyric}",
+                    f"{prev_vowel}_{mapped_lyric}",
+                    f"{prev_vowel}{mapped_lyric}",
+                    *mapped_candidates,
+                ]
+            for candidate in mapped_candidates:
+                entry = self._db.get(candidate)
+                if entry is not None:
+                    return entry
 
         # 明示的な VCV/CV alias はそのまま優先する。
         if lyric in self._db and (
@@ -480,9 +509,24 @@ class OtoParser:
             pure_lyric = parts[-1] if parts else alias
             self._lyric_index.setdefault(pure_lyric, []).append(entry)
 
+    def _load_prefix_map(self, voice_dir: str) -> None:
+        """Load the optional root-level UTAU prefix.map."""
+        self._prefix_map = []
+        for name in ("prefix.map", "Prefix.map"):
+            path = os.path.join(voice_dir, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                self._prefix_map = parse_prefix_map(self._read_safe(path))
+                logger.info("prefix.map ロード完了 (%d 行): %s", len(self._prefix_map), path)
+            except OSError as exc:
+                logger.warning("prefix.map 読み込み失敗 (%s): %s", path, exc)
+            break
+
     def clear(self) -> None:
         """ロード済み oto.ini データをすべて破棄する。"""
         self._db.clear()
+        self._prefix_map = []
         if hasattr(self, "_lyric_index"):
             self._lyric_index.clear()
         # 音源切替後に、削除・追加・リネームされた WAV の古い
