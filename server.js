@@ -1305,7 +1305,7 @@ function applyPrefixMapAlias(alias, noteNum, prefixMap) {
 
 function getMidiFromPitchTag(str) {
   if (!str) return 60;
-  const match = String(str).match(/([A-Ga-g])([#b]?)(\d)/);
+  const match = String(str).match(/([A-Ga-g])([#b]?)(-?\d+)/);
   if (!match) return 60;
   const noteName = match[1].toUpperCase();
   const accidental = match[2];
