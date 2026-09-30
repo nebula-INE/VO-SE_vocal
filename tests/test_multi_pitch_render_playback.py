@@ -5,6 +5,7 @@ import math
 import os
 import wave
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -99,8 +100,14 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
     output = tmp_path / "multi_pitch_render.wav"
 
     # Spy on the actual native call while still executing the real renderer.
+    # VO_SE_Engine.lib is Optional[ctypes.CDLL], and ctypes exposes native
+    # symbols dynamically. Treat this test-only interception surface as Any
+    # after explicitly checking that the native library was loaded.
+    native_lib = engine.lib
+    assert native_lib is not None, "native VO-SE Core library is required for this integration test"
+    native_api = cast(Any, native_lib)
     captured_paths: list[str] = []
-    native_execute_render = engine.lib.execute_render
+    native_execute_render = native_api.execute_render
 
     def execute_render_spy(c_notes, note_count, output_path, mode_flag):
         for i in range(int(note_count)):
@@ -108,7 +115,7 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
             captured_paths.append(ctypes.string_at(ptr).decode("utf-8") if ptr else "")
         return native_execute_render(c_notes, note_count, output_path, mode_flag)
 
-    engine.lib.execute_render = execute_render_spy
+    native_api.execute_render = execute_render_spy
 
     rendered = engine.export_to_wav_v2(notes, params, str(output), tempo_bpm=120.0)
 
