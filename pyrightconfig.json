@@ -16,8 +16,6 @@
   "reportMissingModuleSource": "none",
   "reportAttributeAccessIssue": "warning",
   "reportGeneralTypeIssues": "warning",
-  "venvPath": ".", 
-  "venv": ".venv", 
   "extraPaths": [
     ".",
     "modules",
