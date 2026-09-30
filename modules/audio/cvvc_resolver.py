@@ -94,13 +94,14 @@ class CvvcResolver:
         return "cv"
 
     def resolve_cv(self, lyric: str) -> Tuple[str, Optional[OtoEntry]]:
-        """Resolve the CV side using the existing safe OTO fallback order."""
+        """Resolve only a true CV alias; never borrow a VCV suffix match."""
         clean = self._clean_lyric(lyric)
-        entry = self._oto.resolve_alias(clean, None)
-        if entry is not None:
-            return entry.alias, entry
+        db = getattr(self._oto, "_db", {})
+        for candidate in (clean, f"- {clean}", f"_{clean}", f"-{clean}"):
+            entry = db.get(candidate)
+            if entry is not None:
+                return entry.alias, entry
         return clean, None
-
     def resolve_vc(
         self,
         previous_vowel: str,
