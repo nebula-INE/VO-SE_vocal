@@ -390,13 +390,13 @@ private:
             return;
 
         const auto content = readSafe (mapFile);
-        for (auto line : juce::StringArray::fromLines (content))
+        for (auto rawLine : juce::StringArray::fromLines (content))
         {
-            line = line.trim();
+            const auto line = rawLine.trim();
             if (line.isEmpty() || line.startsWithChar ('#') || line.startsWithChar (';'))
                 continue;
 
-            auto columns = juce::StringArray::fromTokens (line, "\t", "");
+            auto columns = juce::StringArray::fromTokens (rawLine, "\t", "");
             if (columns.size() < 2)
                 columns = juce::StringArray::fromTokens (line, " ", "");
             if (columns.size() < 2)
