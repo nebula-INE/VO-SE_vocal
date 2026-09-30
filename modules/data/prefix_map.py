@@ -37,11 +37,13 @@ def note_name_to_midi(value: str) -> Optional[int]:
 def parse_prefix_map(text: str) -> list[PrefixMapEntry]:
     entries: list[PrefixMapEntry] = []
     for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or line.startswith(";"):
+        # Keep trailing tab columns: C1<TAB>C4/<TAB> means prefix="C4/".
+        line = raw.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#") or line.lstrip().startswith(";"):
             continue
         # prefix.map is tab-delimited, but accept arbitrary whitespace as a fallback.
-        parts = line.split("\t") if "\t" in line else re.split(r"\s+", line)
+        parts = line.split("\t") if "\t" in line else re.split(r"\s+", line.strip())
+        parts = [part.strip() for part in parts]
         if len(parts) < 2:
             continue
         boundary = note_name_to_midi(parts[0])
