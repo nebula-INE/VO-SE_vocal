@@ -161,3 +161,28 @@ def test_resolve_alias_prefers_plain_cv_when_no_initial_marker_exists():
     assert entry is not None
     assert entry.alias == "あ"
 \n\ndef test_resolve_alias_never_resolves_rest_markers():\n    parser = OtoParser()\n    for alias in ("-", "ー", "~", "r", "休符"):\n        parser._db[alias] = _entry(alias)\n\n    for lyric in ("-", "ー", "~", "r", "休符"):\n        assert parser.resolve_alias(lyric, None) is None\n
+
+def test_resolve_alias_prefers_matching_vcv_context_for_common_transitions():
+    parser = OtoParser()
+    for alias in ("か", "き", "し", "た", "ん", "a か", "a き", "a し", "a た", "a ん"):
+        parser._db[alias] = OtoEntry(alias=alias, filename=alias + ".wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
+
+    assert parser.resolve_alias("か", "a").alias == "a か"
+    assert parser.resolve_alias("き", "a").alias == "a き"
+    assert parser.resolve_alias("し", "a").alias == "a し"
+    assert parser.resolve_alias("た", "a").alias == "a た"
+    assert parser.resolve_alias("ん", "a").alias == "a ん"
+
+def test_resolve_alias_does_not_cross_substitute_vcv_contexts():
+    parser = OtoParser()
+    parser._db["い"] = OtoEntry(alias="い", filename="i.wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
+    parser._db["a い"] = OtoEntry(alias="a い", filename="a_i.wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
+    assert parser.resolve_alias("い", "u") is not None
+    assert parser.resolve_alias("い", "u").alias == "い"
+
+def test_resolve_alias_rest_markers_never_become_audio():
+    parser = OtoParser()
+    for alias in ("r", "-", "休"):
+        parser._db[alias] = OtoEntry(alias=alias, filename=alias + ".wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
+    for lyric in ("r", "r_", "r_0", "[r]", "-", "休", "休符", "ー", "~"):
+        assert parser.resolve_alias(lyric) is None
