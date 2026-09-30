@@ -90,7 +90,17 @@ class CvvcResolver:
         db = getattr(self._oto, "_db", {})
         aliases = list(db)
         has_vc = any(self._is_vc_alias(alias) for alias in aliases)
-        has_vcv = bool(getattr(self._oto, "has_vcv", lambda: False)())
+        # OtoParser.has_vcv() is intentionally broad for general lookup and
+        # also counts initial CV aliases such as "- か". For CVVC capability
+        # classification, only a vowel-led, non-VC alias is true VCV context.
+        has_vcv = any(
+            (
+                len(str(alias).strip().split()) == 2
+                and str(alias).strip().split()[0].lower() in _VOWELS
+                and not self._is_vc_alias(alias)
+            )
+            for alias in aliases
+        )
         if has_vc and has_vcv:
             return "mixed"
         if has_vc:
