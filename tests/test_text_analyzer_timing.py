@@ -163,7 +163,7 @@ def test_vcv_continuity_uses_tempo_bpm(monkeypatch):
 
     notes = [
         NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5),
-        NoteEvent(note_number=62, lyric="い", start_time=0.70, duration=0.5),
+        NoteEvent(note_number=62, lyric="い", start_time=0.76, duration=0.5),
     ]
 
     analyzer.align_vocal_timing(
