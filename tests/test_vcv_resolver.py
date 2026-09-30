@@ -52,3 +52,30 @@ def test_vcv_resolver_sequence_drops_context_after_gap():
     resolved = resolver.resolve(notes)
 
     assert resolved[1].alias == "- い"
+
+
+def test_vcv_resolver_first_note_does_not_use_vcv_context():
+    from modules.data.data_models import NoteEvent
+
+    resolver = VcvResolver(_parser(), use_g2p=False)
+    notes = [
+        NoteEvent(note_number=60, lyric="い", start_time=0.0, duration=0.5),
+    ]
+
+    resolved = resolver.resolve(notes)
+
+    assert resolved[0].alias == "- い"
+    assert resolved[0].oto_entry is not None
+
+
+def test_vcv_resolver_missing_alias_returns_unresolved_without_substitution():
+    resolver = VcvResolver(_parser(), use_g2p=False)
+
+    alias, entry = resolver.resolve_note(
+        "え",
+        "あ",
+        is_continuous=True,
+    )
+
+    assert alias == "え"
+    assert entry is None
