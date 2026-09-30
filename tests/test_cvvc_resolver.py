@@ -220,6 +220,9 @@ def test_expand_notes_for_render_skips_missing_vc_without_changing_cv():
     parser = _parser()
     # This fixture intentionally removes the exact VC transition being tested
     # as missing. The shared parser fixture contains "a k" for other CVVC tests.
+    # It also needs the CV entry for the first note because this test verifies
+    # that both CV notes remain intact when the VC transition is unavailable.
+    parser._db["あ"] = _entry("あ")
     parser._db.pop("a k", None)
     resolver = CvvcResolver(parser)
     notes = [
