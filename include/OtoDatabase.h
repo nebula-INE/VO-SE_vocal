@@ -117,18 +117,36 @@ public:
         // UST/音源側に付く VCV/CV プレフィックスとピッチサフィックスを
         // Python版と同じ考え方で正規化してから候補を生成する。
         auto cleanLyric = lyric.trim();
-        const auto lastUnderscore = cleanLyric.lastIndexOfChar ('_');
-        if (lastUnderscore >= 0 && lastUnderscore < cleanLyric.length() - 1)
+
+        // Normalize common pitch suffixes used by UST/voicebanks.
+        // Keep this aligned with the Python/Web resolvers:
+        //   あ_C4 / あC4 / あ_1 / あ↑
+        const pitchSuffix = std::regex ("_?[A-Ga-g][#b]?[0-9]$");
         {
-            const auto suffix = cleanLyric.substring (lastUnderscore + 1);
-            if (suffix.length() >= 2 && suffix[0] >= 'A' && suffix[0] <= 'G')
-                cleanLyric = cleanLyric.substring (0, lastUnderscore);
+            const auto text = cleanLyric.toStdString();
+            std::smatch match;
+            if (std::regex_search (text, match, pitchSuffix)
+                && match.position() >= 0)
+                cleanLyric = cleanLyric.substring (0, static_cast<int> (match.position())).trim();
+        }
+        if (cleanLyric.endsWithChar ('_') == false)
+        {
+            const auto lastUnderscore = cleanLyric.lastIndexOfChar ('_');
+            if (lastUnderscore >= 0 && lastUnderscore < cleanLyric.length() - 1)
+            {
+                const auto suffix = cleanLyric.substring (lastUnderscore + 1);
+                if (suffix.length() >= 2
+                    && suffix[0] >= 'A' && suffix[0] <= 'G'
+                    && juce::CharacterFunctions::isDigit (suffix[1]))
+                    cleanLyric = cleanLyric.substring (0, lastUnderscore).trim();
+            }
         }
 
-        if (cleanLyric.startsWithIgnoreCase ("- "))
-            cleanLyric = cleanLyric.substring (2).trim();
-        else if (cleanLyric.startsWithChar ('_'))
-            cleanLyric = cleanLyric.substring (1).trim();
+        // Normalize initial CV/VCV markers such as "-あ", "- あ", "_あ".
+        while (cleanLyric.startsWithChar ('_'))
+            cleanLyric = cleanLyric.substring (1).trimStart();
+        if (cleanLyric.startsWithChar ('-'))
+            cleanLyric = cleanLyric.substring (1).trimStart();
 
         if (prevVowel.isNotEmpty())
         {
