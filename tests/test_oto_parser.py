@@ -1,5 +1,12 @@
+from typing import Optional
+
 from modules.data.oto_parser import OtoParser, OtoEntry
 import pytest
+
+
+def _require_entry(entry: Optional[OtoEntry]) -> OtoEntry:
+    assert entry is not None
+    return entry
 
 @pytest.mark.smoke
 class TestOtoParser:
@@ -176,18 +183,18 @@ def test_resolve_alias_prefers_matching_vcv_context_for_common_transitions():
     for alias in ("か", "き", "し", "た", "ん", "a か", "a き", "a し", "a た", "a ん"):
         parser._db[alias] = OtoEntry(alias=alias, filename=alias + ".wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
 
-    assert parser.resolve_alias("か", "a").alias == "a か"
-    assert parser.resolve_alias("き", "a").alias == "a き"
-    assert parser.resolve_alias("し", "a").alias == "a し"
-    assert parser.resolve_alias("た", "a").alias == "a た"
-    assert parser.resolve_alias("ん", "a").alias == "a ん"
+    assert _require_entry(parser.resolve_alias("か", "a")).alias == "a か"
+    assert _require_entry(parser.resolve_alias("き", "a")).alias == "a き"
+    assert _require_entry(parser.resolve_alias("し", "a")).alias == "a し"
+    assert _require_entry(parser.resolve_alias("た", "a")).alias == "a た"
+    assert _require_entry(parser.resolve_alias("ん", "a")).alias == "a ん"
 
 def test_resolve_alias_does_not_cross_substitute_vcv_contexts():
     parser = OtoParser()
     parser._db["い"] = OtoEntry(alias="い", filename="i.wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
     parser._db["a い"] = OtoEntry(alias="a い", filename="a_i.wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
     assert parser.resolve_alias("い", "u") is not None
-    assert parser.resolve_alias("い", "u").alias == "い"
+    assert _require_entry(parser.resolve_alias("い", "u")).alias == "い"
 
 def test_resolve_alias_rest_markers_never_become_audio():
     parser = OtoParser()
@@ -247,7 +254,7 @@ def test_load_voice_dir_keeps_first_duplicate_alias_and_exposes_scoped_aliases(t
 
     # The unqualified alias is deterministic: first discovered oto.ini wins.
     assert parser.get("あ") is not None
-    assert parser.get("あ").preutterance == 50.0
+    assert _require_entry(parser.get("あ")).preutterance == 50.0
 
     # Multi-pitch folders remain explicitly selectable.
     c4 = parser.resolve_alias("C4/あ")
@@ -276,9 +283,9 @@ def test_load_voice_dir_cache_preserves_scoped_duplicate_aliases(tmp_path):
     cached = OtoParser()
     cached.load_voice_dir(str(voice_dir), use_cache=True)
 
-    assert cached.resolve_alias("C4/あ").preutterance == 50.0
-    assert cached.resolve_alias("D4/あ").preutterance == 60.0
-    assert cached.get("あ").preutterance == 50.0
+    assert _require_entry(cached.resolve_alias("C4/あ")).preutterance == 50.0
+    assert _require_entry(cached.resolve_alias("D4/あ")).preutterance == 60.0
+    assert _require_entry(cached.get("あ")).preutterance == 50.0
 
 def test_resolve_alias_supports_prefix_map_pitch_selection(tmp_path):
     voice_dir = tmp_path / "voice"
@@ -374,11 +381,11 @@ def test_prefix_map_note_name_and_boundary_helpers():
     assert note_name_to_midi("C-1") == 0
 
     entries = parse_prefix_map("C1\t\t_C4\nF4\t\t_F4\n")
-    assert select_prefix_map(entries, 59).suffix == "_C4"
-    assert select_prefix_map(entries, 60).suffix == "_C4"
-    assert select_prefix_map(entries, 64).suffix == "_C4"
-    assert select_prefix_map(entries, 65).suffix == "_F4"
-    assert select_prefix_map(entries, 127).suffix == "_F4"
+    assert _require_entry(select_prefix_map(entries, 59)).suffix == "_C4"
+    assert _require_entry(select_prefix_map(entries, 60)).suffix == "_C4"
+    assert _require_entry(select_prefix_map(entries, 64)).suffix == "_C4"
+    assert _require_entry(select_prefix_map(entries, 65)).suffix == "_F4"
+    assert _require_entry(select_prefix_map(entries, 127)).suffix == "_F4"
 
 
 def test_prefix_map_supports_explicit_prefix_and_suffix():
