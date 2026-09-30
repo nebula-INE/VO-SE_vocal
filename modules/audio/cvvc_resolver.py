@@ -182,6 +182,7 @@ class CvvcResolver:
         """
         result: List[CvvcSegment] = []
         previous_note = None
+        lyric_classifier = VowelClassifier(use_g2p=False)
         for index, note in enumerate(notes):
             cv_alias, cv_entry = self.resolve_cv(getattr(note, "lyric", ""))
             if cv_entry is not None:
@@ -197,7 +198,7 @@ class CvvcResolver:
             if previous_note is not None and not self._is_rest(note) and not self._is_rest(previous_note):
                 previous_vowel = self._trailing_vowel_from_phonemes(previous_note)
                 if previous_vowel is None:
-                    previous_vowel = VowelClassifier(use_g2p=False).trailing_vowel(
+                    previous_vowel = lyric_classifier.trailing_vowel(
                         str(getattr(previous_note, "lyric", "") or "")
                     )
                 consonant = self._initial_consonant(note)
