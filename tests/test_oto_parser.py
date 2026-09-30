@@ -337,3 +337,26 @@ def test_resolve_alias_prefix_map_applies_to_complete_vcv_alias(tmp_path):
     assert entry is not None
     assert entry.alias == "C4/a い"
 
+
+def test_prefix_map_note_name_and_boundary_helpers():
+    from modules.data.prefix_map import note_name_to_midi, parse_prefix_map, select_prefix_map
+
+    assert note_name_to_midi("C4") == 60
+    assert note_name_to_midi("F#4") == 66
+    assert note_name_to_midi("Bb3") == 58
+    assert note_name_to_midi("C-1") == 0
+
+    entries = parse_prefix_map("C1\t\t_C4\nF4\t\t_F4\n")
+    assert select_prefix_map(entries, 59).suffix == "_C4"
+    assert select_prefix_map(entries, 60).suffix == "_C4"
+    assert select_prefix_map(entries, 64).suffix == "_C4"
+    assert select_prefix_map(entries, 65).suffix == "_F4"
+    assert select_prefix_map(entries, 127).suffix == "_F4"
+
+
+def test_prefix_map_supports_explicit_prefix_and_suffix():
+    from modules.data.prefix_map import map_alias, parse_prefix_map
+
+    entries = parse_prefix_map("C4\tC4/\t_C4\n")
+    assert map_alias("a い", 60, entries) == "C4/a い_C4"
+    assert map_alias("C4/a い", 60, entries) == "C4/a い_C4"
