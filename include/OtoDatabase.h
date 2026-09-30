@@ -159,6 +159,8 @@ public:
         if (! voiceDir.isDirectory())
             return 0;
 
+        loadPrefixMap (voiceDir);
+
         auto otoFiles = voiceDir.findChildFiles (juce::File::findFiles, true, "oto.ini");
         // Make first-wins duplicate handling deterministic across filesystems.
         std::sort (
