@@ -206,7 +206,7 @@ class VcvResolver:
         # エントリが全く見つからない場合は lyric をそのまま alias として返す
         return (lyric, None)
 
-    def resolve(self, notes: Sequence) -> List["ResolvedNote"]:
+    def resolve(self, notes: Sequence, tempo_bpm: float = 120.0) -> List["ResolvedNote"]:
         """
         ノートのシーケンス全体を解決する。
 
@@ -237,7 +237,17 @@ class VcvResolver:
                 except (TypeError, ValueError, AttributeError):
                     gap_sec = float("inf")
 
-            is_continuous = previous_note is not None and gap_sec <= 0.25
+            note_tempo_raw = getattr(note, "_ust_tempo", None)
+            try:
+                note_tempo = float(note_tempo_raw) if note_tempo_raw is not None else default_tempo
+            except (TypeError, ValueError):
+                note_tempo = default_tempo
+            if note_tempo <= 0.0:
+                note_tempo = default_tempo
+            # Web版の240 tick境界（480 tick/beat）を実時間へ変換。
+            # 240 ticks = 0.5 beat = 30 / BPM seconds。
+            continuity_gap_sec = 30.0 / note_tempo
+            is_continuous = previous_note is not None and gap_sec <= continuity_gap_sec
             alias, entry = self.resolve_note(
                 lyric,
                 prev_lyric,
