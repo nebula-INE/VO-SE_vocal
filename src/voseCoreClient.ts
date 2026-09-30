@@ -318,7 +318,17 @@ async function renderViaCore(
       if (/^(sil|pau|br|r|休|休符|・)$/.test(p)) return '';
       return p;
     }
-    return '';
+    const lyric = String(note?.lyric || '').trim().toLowerCase();
+    const initialKana: Record<string, string> = {
+      'か':'k','き':'k','く':'k','け':'k','こ':'k','が':'g','ぎ':'g','ぐ':'g','げ':'g','ご':'g',
+      'さ':'s','し':'sh','す':'s','せ':'s','そ':'s','ざ':'z','じ':'j','ず':'z','ぜ':'z','ぞ':'z',
+      'た':'t','ち':'ch','つ':'ts','て':'t','と':'t','だ':'d','ぢ':'j','づ':'z','で':'d','ど':'d',
+      'な':'n','に':'n','ぬ':'n','ね':'n','の':'n','は':'h','ひ':'h','ふ':'f','へ':'h','ほ':'h',
+      'ば':'b','び':'b','ぶ':'b','べ':'b','ぼ':'b','ぱ':'p','ぴ':'p','ぷ':'p','ぺ':'p','ぽ':'p',
+      'ま':'m','み':'m','む':'m','め':'m','も':'m','や':'y','ゆ':'y','よ':'y','ら':'r','り':'r','る':'r','れ':'r','ろ':'r',
+      'わ':'w','を':'w','ん':'n'
+    };
+    return initialKana[lyric.slice(-1)] || '';
   }
 
   function tickToTimeSec(targetTick: number): number {
@@ -374,8 +384,7 @@ async function renderViaCore(
     if (gap > 240) continue;
     const prevVowel = getTrailingVowelFromLyric(prev.lyric);
     const consonant = getInitialConsonant(n);
-    const pre = Number(n.pre_utterance);
-    if (!prevVowel || !consonant || !Number.isFinite(pre) || pre <= 0) continue;
+    if (!prevVowel || !consonant) continue;
     const alias = prevVowel + ' ' + consonant;
     const key = voicebank + ':' + alias + ':DIRECT:' + (n.noteNum || 60);
     cvvcRequests.set(key, { alias, noteNum: n.noteNum || 60 });
