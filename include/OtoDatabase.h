@@ -308,7 +308,7 @@ public:
         return false;
     }
 
-    void clear() { db.clear(); }
+    void clear() { db.clear(); prefixMap.clear(); }
     int size() const { return (int) db.size(); }
 
     // --------------------------------------------------------------
