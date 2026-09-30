@@ -120,7 +120,8 @@ async function parseOtoIniFull(dirPath) {
     hasVcv: false,
     aliases: [],
     entries: [],
-    aliasMap: new Map()
+    aliasMap: new Map(),
+    prefixMap: new Map()
   };
 
   const exists = await fs.promises.access(dirPath).then(() => true).catch(() => false);
@@ -250,6 +251,17 @@ async function parseOtoIniFull(dirPath) {
     }
   };
 
+  // prefix.map is optional and lives at the voicebank root.
+  try {
+    const prefixPath = path.join(dirPath, 'prefix.map');
+    if (await fs.promises.access(prefixPath).then(() => true).catch(() => false)) {
+      const prefixText = decodeTextBuffer(await fs.promises.readFile(prefixPath));
+      result.prefixMap = parsePrefixMapText(prefixText);
+    }
+  } catch (e) {
+    // A malformed optional prefix.map must not prevent the voicebank from loading.
+  }
+
   await walkDir(dirPath);
   return result;
 }
@@ -307,7 +319,8 @@ class VoicebankRegistryEngine {
       hasVcv: parsed.hasVcv,
       aliasesPreview: parsed.aliases,
       entries: parsed.entries,
-      aliasMap: parsed.aliasMap
+      aliasMap: parsed.aliasMap,
+      prefixMap: parsed.prefixMap
     };
 
     this.cache.set(vbName, indexed);
@@ -1239,6 +1252,43 @@ vbRegistry.warmBaseMidiCache = (indexed) => {
   setImmediate(step);
 };
 
+function parsePrefixMapText(text) {
+  const map = new Map();
+  const lines = String(text || '').split(/\r?\n/);
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+    const cols = raw.includes('\t') ? raw.split('\t') : trimmed.split(/\s+/);
+    if (cols.length < 2) continue;
+    const midi = getMidiFromPitchTag(cols[0]);
+    if (!Number.isFinite(midi)) continue;
+    const prefix = (cols[1] || '').trim();
+    const suffix = (cols.length >= 3 ? cols[2] : '').trim();
+    map.set(Math.round(midi), {
+      prefix: prefix === '-' ? '' : prefix,
+      suffix: suffix === '-' ? '' : suffix
+    });
+  }
+  return map;
+}
+
+function applyPrefixMapAlias(alias, noteNum, prefixMap) {
+  if (!prefixMap || prefixMap.size === 0) return alias;
+  const tone = Math.max(0, Math.min(127, Math.round(Number(noteNum))));
+  const boundaries = Array.from(prefixMap.keys()).sort((a, b) => a - b);
+  let selected = boundaries[0];
+  for (const boundary of boundaries) {
+    if (boundary > tone) break;
+    selected = boundary;
+  }
+  const mapping = prefixMap.get(selected);
+  if (!mapping) return alias;
+  let mapped = alias;
+  if (mapping.prefix && !mapped.startsWith(mapping.prefix)) mapped = mapping.prefix + mapped;
+  if (mapping.suffix && !mapped.endsWith(mapping.suffix)) mapped += mapping.suffix;
+  return mapped;
+}
+
 function getMidiFromPitchTag(str) {
   if (!str) return 60;
   const match = String(str).match(/([A-Ga-g])([#b]?)(\d)/);
@@ -1318,6 +1368,21 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   if (hira && !candidates.includes(hira)) candidates.push(hira);
 
   const prevVowel = getTrailingVowel(prevLyric);
+  const mappedLyric = applyPrefixMapAlias(cleanLyric, noteNum, indexed.prefixMap);
+  if (mappedLyric !== cleanLyric) {
+    const mappedCandidates = [mappedLyric, `- ${mappedLyric}`, `_${mappedLyric}`, `-${mappedLyric}`];
+    if (prevVowel) {
+      mappedCandidates.unshift(
+        `${prevVowel} ${mappedLyric}`,
+        `${prevVowel}_${mappedLyric}`,
+        `${prevVowel}${mappedLyric}`
+      );
+    }
+    for (const candidate of mappedCandidates) {
+      if (aliasMap.has(candidate)) return aliasMap.get(candidate);
+    }
+  }
+
 
   // Helper to search direct match or pitch-suffixed key in aliasMap
   const matchPrefixOrExact = (prefixStr) => {
