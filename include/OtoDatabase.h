@@ -144,6 +144,13 @@ public:
             if (auto* e = get (cleanLyric))
                 return e;
 
+        // Python版と同じく、明示された prevVowel がある場合は
+        // 別のVCV文脈への部分一致fallbackを禁止する。
+        // ここまでで VCV -> CV/語頭 -> plain lyric の安全なfallbackは
+        // 完了しているため、"u い" が "a い" などへ化けることを防ぐ。
+        if (prevVowel.isNotEmpty())
+            return nullptr;
+
         // 末尾一致の部分一致フォールバック（Python版の
         // match_pref(cleanLyric) 相当）。異なる歌詞を誤選択しないよう、
         // alias全体ではなく「区切り付き末尾一致」に限定する。
