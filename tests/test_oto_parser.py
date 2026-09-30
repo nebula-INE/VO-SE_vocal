@@ -160,3 +160,4 @@ def test_resolve_alias_prefers_plain_cv_when_no_initial_marker_exists():
     entry = parser.resolve_alias("あ", None)
     assert entry is not None
     assert entry.alias == "あ"
+\n\ndef test_resolve_alias_never_resolves_rest_markers():\n    parser = OtoParser()\n    for alias in ("-", "ー", "~", "r", "休符"):\n        parser._db[alias] = _entry(alias)\n\n    for lyric in ("-", "ー", "~", "r", "休符"):\n        assert parser.resolve_alias(lyric, None) is None\n
