@@ -183,7 +183,7 @@ public:
 
     // VCV ("a い") → CV+無音 ("- い") → 単独音 ("い") → 部分一致 の順で解決。
     // prevVowel が空文字/nullなら VCV 候補はスキップ（Python版と同じ挙動）。
-    const OtoEntryCpp* resolveAlias (const juce::String& lyric, const juce::String& prevVowel) const
+    const OtoEntryCpp* resolveAlias (const juce::String& lyric, const juce::String& prevVowel, int noteNum = 60) const
     {
         // Python版と同じ候補順で解決する。音源によって
         // "a い" / "a_い" / "aい" のように区切り方が異なるため、
@@ -211,6 +211,27 @@ public:
         if (scopedLyric.containsChar ('/'))
             if (auto* e = get (scopedLyric))
                 return e;
+
+        // An explicitly qualified/suffixed lyric must win over automatic mapping.
+        if (auto* e = get (cleanLyric))
+            return e;
+
+        // Apply the optional UTAU prefix.map to the base lyric. The mapped
+        // alias is then resolved through the same VCV/CV fallback chain.
+        const auto mappedLyric = applyPrefixMap (cleanLyric, noteNum);
+        if (mappedLyric != cleanLyric)
+        {
+            if (prevVowel.isNotEmpty())
+            {
+                if (auto* e = get (prevVowel + " " + mappedLyric)) return e;
+                if (auto* e = get (prevVowel + "_" + mappedLyric)) return e;
+                if (auto* e = get (prevVowel + mappedLyric)) return e;
+            }
+            if (auto* e = get ("- " + mappedLyric)) return e;
+            if (auto* e = get ("_" + mappedLyric)) return e;
+            if (auto* e = get ("-" + mappedLyric)) return e;
+            if (auto* e = get (mappedLyric)) return e;
+        }
 
         // Normalize common pitch suffixes used by UST/voicebanks.
         // Keep this aligned with the Python/Web resolvers:
@@ -361,6 +382,86 @@ public:
     }
 
 private:
+    void loadPrefixMap (const juce::File& voiceDir)
+    {
+        prefixMap.clear();
+        const auto mapFile = voiceDir.getChildFile ("prefix.map");
+        if (! mapFile.existsAsFile())
+            return;
+
+        const auto content = readSafe (mapFile);
+        for (auto line : juce::StringArray::fromLines (content))
+        {
+            line = line.trim();
+            if (line.isEmpty() || line.startsWithChar ('#') || line.startsWithChar (';'))
+                continue;
+
+            auto columns = juce::StringArray::fromTokens (line, "\t", "");
+            if (columns.size() < 2)
+                columns = juce::StringArray::fromTokens (line, " ", "");
+            if (columns.size() < 2)
+                continue;
+
+            const auto midiForNote = [] (juce::String value) -> int
+            {
+                value = value.trim().toUpperCase();
+                if (value.length() < 2)
+                    return -1;
+                const auto note = value[0];
+                int semitone = -1;
+                switch (note)
+                {
+                    case 'C': semitone = 0; break; case 'D': semitone = 2; break;
+                    case 'E': semitone = 4; break; case 'F': semitone = 5; break;
+                    case 'G': semitone = 7; break; case 'A': semitone = 9; break;
+                    case 'B': semitone = 11; break; default: return -1;
+                }
+                int pos = 1;
+                if (pos < value.length() && (value[pos] == '#' || value[pos] == 'B'))
+                {
+                    semitone += value[pos] == '#' ? 1 : -1;
+                    ++pos;
+                }
+                const auto octave = value.substring (pos).getIntValue();
+                if (octave < -2 || octave > 10)
+                    return -1;
+                return (octave + 1) * 12 + semitone;
+            };
+
+            const int boundary = midiForNote (columns[0]);
+            if (boundary < 0)
+                continue;
+
+            const auto prefix = columns.size() >= 2 ? columns[1].trim() : juce::String();
+            const auto suffix = columns.size() >= 3 ? columns[2].trim() : juce::String();
+            prefixMap[boundary] = { prefix == "-" ? juce::String() : prefix,
+                                    suffix == "-" ? juce::String() : suffix };
+        }
+
+        juce::Logger::writeToLog ("OtoDatabase: prefix.map loaded: "
+                                  + juce::String ((int) prefixMap.size()) + " rows");
+    }
+
+    juce::String applyPrefixMap (juce::String alias, int noteNum) const
+    {
+        if (prefixMap.empty())
+            return alias;
+
+        const int tone = juce::jlimit (0, 127, noteNum);
+        auto it = prefixMap.upper_bound (tone);
+        if (it == prefixMap.begin())
+            it = prefixMap.begin();
+        else
+            --it;
+
+        const auto& mapping = it->second;
+        if (mapping.first.isNotEmpty() && ! alias.startsWith (mapping.first))
+            alias = mapping.first + alias;
+        if (mapping.second.isNotEmpty() && ! alias.endsWith (mapping.second))
+            alias += mapping.second;
+        return alias;
+    }
+
     static void copyTruncated (const juce::String& src, char* dst, size_t dstSize)
     {
         const auto utf8 = src.toRawUTF8();
@@ -413,5 +514,5 @@ private:
         return vose_text::decodeAutoEncoding (raw.getData(), raw.getSize());
     }
 
-    std::map<juce::String, OtoEntryCpp> db;
+    std::map<juce::String, OtoEntryCpp> db;\n    std::map<int, std::pair<juce::String, juce::String>> prefixMap;
 };
