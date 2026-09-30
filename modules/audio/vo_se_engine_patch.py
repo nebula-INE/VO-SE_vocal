@@ -177,17 +177,14 @@ def _refresh_voice_library_v2(self) -> None:
         self.oto_parser = OtoParser()
 
     self.oto_parser.clear()
+    oto_files = []
 
     for root, _dirs, files in os.walk(self.voice_lib_path):
         files_lower = [f.lower() for f in files]
         if "oto.ini" in files_lower:
             real_name = files[files_lower.index("oto.ini")]
             ini_path = os.path.join(root, real_name)
-            loaded = self.oto_parser.load_oto_file(
-                ini_path,
-                voice_root=self.voice_lib_path,
-            )
-            logger.debug("oto.ini ロード: %d エントリ (%s)", loaded, ini_path)
+            oto_files.append(ini_path)
 
         for fname in files:
             if fname.lower().endswith(".wav"):
@@ -198,6 +195,15 @@ def _refresh_voice_library_v2(self) -> None:
                     lyric,
                     os.path.abspath(os.path.join(root, fname)),
                 )
+
+    # Sort oto.ini paths so duplicate aliases resolve deterministically across
+    # Windows/macOS/Linux instead of depending on os.walk traversal order.
+    for ini_path in sorted(oto_files):
+        loaded = self.oto_parser.load_oto_file(
+            ini_path,
+            voice_root=self.voice_lib_path,
+        )
+        logger.debug("oto.ini ロード: %d エントリ (%s)", loaded, ini_path)
 
     self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
     self.cvvc_resolver = CvvcResolver(self.oto_parser)
