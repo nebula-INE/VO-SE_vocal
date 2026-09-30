@@ -319,3 +319,21 @@ def test_resolve_alias_prefix_map_preserves_explicit_suffix(tmp_path):
     assert entry is not None
     assert entry.alias == "あ_F4"
 
+
+def test_resolve_alias_prefix_map_applies_to_complete_vcv_alias(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "prefix.map").write_text("C1\tC4/\t\n", encoding="utf-8")
+    (voice_dir / "oto.ini").write_text(
+        "a_i.wav=C4/a い,0,0,0,50,0\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "a_i.wav").write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    entry = parser.resolve_alias("い", "a", note_num=60)
+    assert entry is not None
+    assert entry.alias == "C4/a い"
+
