@@ -180,6 +180,7 @@ class VcvResolver:
         lyric: str,
         prev_lyric: Optional[str],
         is_continuous: bool = True,
+        note_num: Optional[int] = None,
     ) -> Tuple[str, Optional[OtoEntry]]:
         """
         1 ノート分のエイリアスと OtoEntry を解決する。
@@ -199,7 +200,7 @@ class VcvResolver:
         if is_continuous and prev_lyric and self._has_vcv:
             prev_vowel = self._classifier.trailing_vowel(prev_lyric)
 
-        entry = self._oto.resolve_alias(lyric, prev_vowel)
+        entry = self._oto.resolve_alias(lyric, prev_vowel, note_num=note_num)
         if entry is not None:
             return (entry.alias, entry)
 
@@ -257,10 +258,16 @@ class VcvResolver:
             # 240 ticks = 0.5 beat = 30 / BPM seconds。
             continuity_gap_sec = 30.0 / note_tempo
             is_continuous = previous_note is not None and gap_sec <= continuity_gap_sec
+            note_num_raw = getattr(note, "note_number", getattr(note, "note_num", 60))
+            try:
+                note_num = int(note_num_raw)
+            except (TypeError, ValueError):
+                note_num = 60
             alias, entry = self.resolve_note(
                 lyric,
                 prev_lyric,
                 is_continuous=is_continuous,
+                note_num=note_num,
             )
             results.append(ResolvedNote(note=note, alias=alias, oto_entry=entry))
             prev_lyric = lyric
