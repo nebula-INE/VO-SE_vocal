@@ -218,6 +218,12 @@ class VcvResolver:
         """
         results: List[ResolvedNote] = []
         prev_lyric: Optional[str] = None
+        try:
+            default_tempo = float(tempo_bpm)
+        except (TypeError, ValueError):
+            default_tempo = 120.0
+        if default_tempo <= 0.0:
+            default_tempo = 120.0
 
         previous_note = None
         for note in notes:
