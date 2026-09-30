@@ -1387,6 +1387,38 @@ struct SynthNoteParams {
 
 static const OtoEntry kDefaultOto = {};
 
+static bool is_unvoiced_vc_alias(const std::string& str)
+{
+    // Japanese CVVC voicebanks store consonant-only transitions as aliases
+    // such as "a k" / "i sh". These are not covered by the CV alias table
+    // below, but they still need the same unvoiced-consonant attack treatment.
+    if (str.size() < 3) return false;
+
+    const char vowel = static_cast<char>(std::tolower(static_cast<unsigned char>(str[0])));
+    if (vowel != 'a' && vowel != 'i' && vowel != 'u' &&
+        vowel != 'e' && vowel != 'o' && vowel != 'n')
+        return false;
+
+    if (str[1] != ' ' && str[1] != '_')
+        return false;
+
+    std::string consonant = str.substr(2);
+    while (!consonant.empty() && std::isspace(static_cast<unsigned char>(consonant.back())))
+        consonant.pop_back();
+    std::transform(consonant.begin(), consonant.end(), consonant.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    static const char* kUnvoicedConsonants[] = {
+        "k", "ky", "s", "sh", "sy", "t", "ty", "ch", "ts",
+        "h", "hy", "f", "p", "py"
+    };
+    for (const char* candidate : kUnvoicedConsonants) {
+        if (consonant == candidate)
+            return true;
+    }
+    return false;
+}
+
 static bool is_unvoiced_phoneme_name(const std::string& str)
 {
     if (str.empty()) return false;
@@ -1601,7 +1633,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.2 * pitch_noise_suppress : 0.0;
         const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path) ||
                                   (pp.has_oto && is_unvoiced_phoneme_name(current_oto.wav_path)) ||
-                                  (pp.has_oto && is_unvoiced_phoneme_name(current_oto.alias));
+                                  (pp.has_oto && is_unvoiced_phoneme_name(current_oto.alias)) ||
+                                  (pp.has_oto && is_unvoiced_vc_alias(current_oto.alias));
         const double fixed_ms = std::max(0.0, current_oto.consonant);
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
         const bool in_consonant_friction = (t_out_ms < unvoiced_attack_ms);
