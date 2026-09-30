@@ -1,10 +1,13 @@
-from typing import Optional
+from typing import Optional, TypeVar
 
 from modules.data.oto_parser import OtoParser, OtoEntry
 import pytest
 
 
-def _require_entry(entry: Optional[OtoEntry]) -> OtoEntry:
+T = TypeVar("T")
+
+
+def _require_entry(entry: Optional[T]) -> T:
     assert entry is not None
     return entry
 
