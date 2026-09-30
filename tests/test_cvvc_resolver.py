@@ -172,6 +172,22 @@ def test_resolve_notes_prefers_analyzed_previous_vowel():
     ]
 
 
+def test_expand_notes_for_render_inserts_moraic_nasal_vc():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=62, lyric="ん", start_time=0.5, duration=0.5, phonemes=["n"], pre_utterance=0.06),
+    ]
+
+    expanded = resolver.expand_notes_for_render(notes)
+
+    assert len(expanded) == 3
+    vc = expanded[1]
+    assert vc._cvvc_render_kind == "vc"
+    assert vc._cvvc_render_alias == "a n"
+    assert vc.duration == 0.06
+
+
 def test_expand_notes_for_render_uses_following_preutterance_for_vc():
     resolver = CvvcResolver(_parser())
     notes = [
