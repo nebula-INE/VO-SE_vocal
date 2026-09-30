@@ -169,6 +169,15 @@ jobs:
         shell: bash
         run: ls -la bin/
 
+      - name: "🧪 Native multi-pitch Render → WAV → Playback regression"
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          VOSE_RUN_NATIVE_RENDER_TEST: "1"
+        run: |
+          set -euo pipefail
+          python -m pytest tests/test_multi_pitch_render_playback.py -v -m integration --maxfail=1
+
       # [FIX] 生成された共有ライブラリのサイズを可視化。
       # 想定外に大きい場合はここでビルドを止めて早期に気付けるようにする。
       - name: "📏 Sanity-check core library size"
