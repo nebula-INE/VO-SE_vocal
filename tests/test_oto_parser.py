@@ -279,3 +279,43 @@ def test_load_voice_dir_cache_preserves_scoped_duplicate_aliases(tmp_path):
     assert cached.resolve_alias("C4/あ").preutterance == 50.0
     assert cached.resolve_alias("D4/あ").preutterance == 60.0
     assert cached.get("あ").preutterance == 50.0
+
+def test_resolve_alias_supports_prefix_map_pitch_selection(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "prefix.map").write_text(
+        "C1\t\t_C4\nF4\t\t_F4\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "oto.ini").write_text(
+        "a_c4.wav=あ_C4,0,0,0,50,0\n"
+        "a_f4.wav=あ_F4,0,0,0,60,0\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "a_c4.wav").write_bytes(b"RIFF")
+    (voice_dir / "a_f4.wav").write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    assert parser.resolve_alias("あ", None, note_num=59).alias == "あ_C4"
+    assert parser.resolve_alias("あ", None, note_num=64).alias == "あ_C4"
+    assert parser.resolve_alias("あ", None, note_num=65).alias == "あ_F4"
+
+
+def test_resolve_alias_prefix_map_preserves_explicit_suffix(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "prefix.map").write_text("C1\t\t_C4\nF4\t\t_F4\n", encoding="utf-8")
+    (voice_dir / "oto.ini").write_text(
+        "a_f4.wav=あ_F4,0,0,0,60,0\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "a_f4.wav").write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+    entry = parser.resolve_alias("あ_F4", None, note_num=60)
+    assert entry is not None
+    assert entry.alias == "あ_F4"
+
