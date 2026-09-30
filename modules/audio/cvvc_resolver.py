@@ -6,6 +6,7 @@ represent a CV and a VC segment as separate timed events.
 """
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
@@ -214,6 +215,56 @@ class CvvcResolver:
                     ))
             previous_note = note
         return result
+
+    def expand_notes_for_render(self, notes: Sequence) -> List:
+        """Expand a pure CVVC note list into render-only CV/VC events.
+
+        The VC length follows the following CV note preutterance, matching the
+        standard Japanese CVVC phonemizer behavior. Timeline notes are deep-copied
+        and never mutated.
+        """
+        expanded = []
+        previous_note = None
+        for index, note in enumerate(notes):
+            if previous_note is not None and not self._is_rest(previous_note) and not self._is_rest(note):
+                previous_vowel = self._trailing_vowel_from_phonemes(previous_note)
+                if previous_vowel is None:
+                    previous_vowel = VowelClassifier(use_g2p=False).trailing_vowel(
+                        str(getattr(previous_note, "lyric", "") or "")
+                    )
+                consonant = self._initial_consonant(note)
+                vc_alias, vc_entry = self.resolve_vc(previous_vowel or "", consonant or "")
+                try:
+                    next_preutterance = max(0.0, float(getattr(note, "pre_utterance", 0.0) or 0.0))
+                except (TypeError, ValueError):
+                    next_preutterance = 0.0
+                if vc_entry is not None and next_preutterance > 0.0:
+                    vc_note = copy.deepcopy(note)
+                    vc_note.start_time = max(
+                        0.0, float(getattr(note, "start_time", 0.0)) - next_preutterance
+                    )
+                    vc_note.duration = next_preutterance
+                    vc_note.lyric = vc_alias
+                    vc_note.phonemes = [vc_alias]
+                    vc_note.pre_utterance = 0.0
+                    vc_note.overlap = 0.0
+                    vc_note.vibrato_depth = 0.0
+                    for attr in ("_ust_vibrato",):
+                        if hasattr(vc_note, attr):
+                            delattr(vc_note, attr)
+                    vc_note._cvvc_render_alias = vc_alias
+                    vc_note._cvvc_render_kind = "vc"
+                    expanded.append(vc_note)
+
+            cv_note = copy.deepcopy(note)
+            cv_alias, cv_entry = self.resolve_cv(getattr(note, "lyric", ""))
+            if cv_entry is not None:
+                cv_note.lyric = cv_alias
+                cv_note._cvvc_render_alias = cv_alias
+                cv_note._cvvc_render_kind = "cv"
+            expanded.append(cv_note)
+            previous_note = note
+        return expanded
 
     def resolve_sequence(
         self,
