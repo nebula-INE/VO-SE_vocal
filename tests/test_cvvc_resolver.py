@@ -63,7 +63,9 @@ def test_does_not_misclassify_vcv_as_vc():
     resolver = CvvcResolver(_parser())
 
     assert not resolver._is_vc_alias("a き")
+    assert not resolver._is_vc_alias("a ka")
     assert resolver._is_vc_alias("a k")
+    assert resolver._is_vc_alias("a sh")
 
 
 def test_sequence_keeps_cv_and_vc_as_distinct_segments():
