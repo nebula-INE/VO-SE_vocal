@@ -386,10 +386,15 @@ class CvvcResolver:
                 )
 
             if index > 0:
-                vc = self.resolve_transition(
-                    previous_vowels[index],
-                    next_consonants[index],
-                )
+                previous_vowel = previous_vowels[index]
+                next_consonant = next_consonants[index]
+                if previous_vowel is None or next_consonant is None:
+                    vc = None
+                else:
+                    vc = self.resolve_transition(
+                        previous_vowel,
+                        next_consonant,
+                    )
                 if vc is not None:
                     result.append(
                         CvvcSegment(
