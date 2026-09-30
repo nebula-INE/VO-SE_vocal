@@ -67,7 +67,10 @@ def select_prefix_map(entries: Sequence[PrefixMapEntry], note_num: int) -> Optio
         if entry.boundary > tone:
             break
         selected = entry
-    return selected or entries[0]
+    # A prefix.map row describes the lower boundary of a subbank.
+    # Notes below the first boundary are outside every declared subbank and
+    # must not be forced into the first mapping.
+    return selected
 
 
 def map_alias(alias: str, note_num: int, entries: Sequence[PrefixMapEntry]) -> str:
