@@ -175,7 +175,7 @@ class OtoParser:
     # 公開 API
     # ------------------------------------------------------------------
 
-    def load_oto_file(self, ini_path: str) -> int:
+    def load_oto_file(self, ini_path: str, voice_root: Optional[str] = None) -> int:
         """
         oto.ini を 1 ファイル読み込んでデータベースに追加する (8GB以下環境対応スロットリング)。
 
@@ -297,7 +297,7 @@ class OtoParser:
                             preutterance=float(item.get("preutterance", 0)),
                             overlap=float(item.get("overlap", 0))
                         )
-                        self._db[entry.alias] = entry
+                        self._db[item.get("db_key", entry.alias)] = entry
                     logger.info(
                         "oto.ini キャッシュから超高速ロード成功 (%d エントリ): %s",
                         len(self._db),
@@ -319,8 +319,9 @@ class OtoParser:
         try:
             import json
             cache_entries = []
-            for entry in self._db.values():
+            for alias_key, entry in self._db.items():
                 cache_entries.append({
+                    "db_key": alias_key,
                     "alias": entry.alias,
                     "filename": entry.filename,
                     "voice_dir": entry.voice_dir,
@@ -369,6 +370,15 @@ class OtoParser:
         }
         if str(lyric).strip().lower() in {item.lower() for item in rest_lyrics}:
             return None
+
+        # Multi-pitch USTs may carry a folder-qualified lyric such as
+        # "D4/あ" or "D4\\あ". Resolve that exact scoped key before applying
+        # VCV/CV normalization so another pitch folder cannot be selected.
+        scoped_lyric = str(lyric).strip().replace("\\\\", "/").replace("\\", "/")
+        if "/" in scoped_lyric:
+            exact_scoped = self._db.get(scoped_lyric)
+            if exact_scoped is not None:
+                return exact_scoped
 
         clean_lyric = re.sub(
             r"^[-aieuon_]\s*",
@@ -444,6 +454,8 @@ class OtoParser:
         """Alias 末尾の歌詞部分から逆引きインデックスを構築する。"""
         self._lyric_index: Dict[str, List[OtoEntry]] = {}
         for alias, entry in self._db.items():
+            if "/" in alias or "\\\\" in alias:
+                continue
             parts = alias.strip().split()
             pure_lyric = parts[-1] if parts else alias
             self._lyric_index.setdefault(pure_lyric, []).append(entry)
