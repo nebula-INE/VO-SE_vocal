@@ -447,9 +447,8 @@ private:
         const int tone = juce::jlimit (0, 127, noteNum);
         auto it = prefixMap.upper_bound (tone);
         if (it == prefixMap.begin())
-            it = prefixMap.begin();
-        else
-            --it;
+            return alias;
+        --it;
 
         const auto& mapping = it->second;
         if (mapping.first.isNotEmpty() && ! alias.startsWith (mapping.first))
@@ -511,5 +510,6 @@ private:
         return vose_text::decodeAutoEncoding (raw.getData(), raw.getSize());
     }
 
-    std::map<juce::String, OtoEntryCpp> db;\n    std::map<int, std::pair<juce::String, juce::String>> prefixMap;
+    std::map<juce::String, OtoEntryCpp> db;
+    std::map<int, std::pair<juce::String, juce::String>> prefixMap;
 };
