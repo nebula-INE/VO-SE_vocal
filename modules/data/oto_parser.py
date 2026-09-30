@@ -447,6 +447,15 @@ class OtoParser:
                 return None
             return self._db.get(mapped)
 
+        # With a prefix.map present, notes below the first declared boundary
+        # are outside every mapped subbank. Do not silently fall back to an
+        # unqualified alias, otherwise pitch-bank selection is defeated.
+        if note_num is not None and self._prefix_map:
+            from modules.data.prefix_map import select_prefix_map
+            if select_prefix_map(self._prefix_map, int(note_num)) is None:
+                if not re.search(r"(?:^|[ _/])(?:[A-Ga-g][#b]?-?\d+)(?:$|[ _/])", str(lyric)):
+                    return None
+
         # 明示的な VCV/CV alias はそのまま優先する。
         if lyric in self._db and (
             " " in lyric or "_" in lyric or lyric.startswith("-")
