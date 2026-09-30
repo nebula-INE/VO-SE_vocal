@@ -239,7 +239,12 @@ class CvvcResolver:
         previous_note = None
         lyric_classifier = VowelClassifier(use_g2p=False)
         for index, note in enumerate(notes):
-            cv_alias, cv_entry = self.resolve_cv(getattr(note, "lyric", ""))
+            note_num_raw = getattr(note, "note_number", getattr(note, "note_num", 60))
+            try:
+                note_num = int(note_num_raw)
+            except (TypeError, ValueError):
+                note_num = 60
+            cv_alias, cv_entry = self.resolve_cv(getattr(note, "lyric", ""), note_num=note_num)
             if cv_entry is not None:
                 result.append(CvvcSegment(
                     note_index=index,
