@@ -294,6 +294,33 @@ async function renderViaCore(
     }
   }
 
+  function getTrailingVowelFromLyric(lyric?: string): string {
+    const s = String(lyric || '').trim().toLowerCase();
+    const m = s.match(/[aiueo]$/);
+    if (m) return m[0];
+    if (s.endsWith('ん') || s.endsWith('n')) return 'n';
+    const kana: Record<string, string> = {
+      'あ':'a','か':'a','が':'a','さ':'a','ざ':'a','た':'a','だ':'a','な':'a','は':'a','ば':'a','ぱ':'a','ま':'a','や':'a','ら':'a','わ':'a',
+      'い':'i','き':'i','ぎ':'i','し':'i','じ':'i','ち':'i','ぢ':'i','に':'i','ひ':'i','び':'i','ぴ':'i','み':'i','り':'i',
+      'う':'u','く':'u','ぐ':'u','す':'u','ず':'u','つ':'u','づ':'u','ぬ':'u','ふ':'u','ぶ':'u','ぷ':'u','む':'u','ゆ':'u','る':'u',
+      'え':'e','け':'e','げ':'e','せ':'e','ぜ':'e','て':'e','で':'e','ね':'e','へ':'e','べ':'e','ぺ':'e','め':'e','れ':'e',
+      'お':'o','こ':'o','ご':'o','そ':'o','ぞ':'o','と':'o','ど':'o','の':'o','ほ':'o','ぼ':'o','ぽ':'o','も':'o','よ':'o','ろ':'o','を':'o'
+    };
+    return kana[s.slice(-1)] || '';
+  }
+
+  function getInitialConsonant(note: any): string {
+    const phonemes = note?.phonemes;
+    const values = Array.isArray(phonemes) ? phonemes : (typeof phonemes === 'string' ? phonemes.trim().split(/\s+/) : []);
+    for (const value of values) {
+      const p = String(value || '').trim().toLowerCase();
+      if (!p || /^[aiueon]+$/.test(p)) continue;
+      if (/^(sil|pau|br|r|休|休符|・)$/.test(p)) return '';
+      return p;
+    }
+    return '';
+  }
+
   function tickToTimeSec(targetTick: number): number {
     if (targetTick <= 0) return 0;
     let totalSec = 0;
