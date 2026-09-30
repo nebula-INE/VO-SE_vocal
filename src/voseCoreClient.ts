@@ -364,18 +364,37 @@ async function renderViaCore(
   onProgress?.(5);
 
   // 3. サンプルを並行バッチで取得
+  // VCVを優先し、直接VC aliasが存在する場合だけCVVC遷移候補として取得する。
+  const cvvcRequests = new Map<string, { alias: string; noteNum: number }>();
+  for (let i = 1; i < sortedNotes.length; i++) {
+    const prev = sortedNotes[i - 1];
+    const n = sortedNotes[i];
+    if (isRest(prev.lyric) || isRest(n.lyric)) continue;
+    const gap = (n.tick || 0) - ((prev.tick || 0) + (prev.length || 480));
+    if (gap > 240) continue;
+    const prevVowel = getTrailingVowelFromLyric(prev.lyric);
+    const consonant = getInitialConsonant(n);
+    const pre = Number(n.pre_utterance);
+    if (!prevVowel || !consonant || !Number.isFinite(pre) || pre <= 0) continue;
+    const alias = prevVowel + ' ' + consonant;
+    const key = voicebank + ':' + alias + ':DIRECT:' + (n.noteNum || 60);
+    cvvcRequests.set(key, { alias, noteNum: n.noteNum || 60 });
+  }
   const sampleEntries = Array.from(uniqueSampleMap.entries());
+  const cvvcSampleEntries = Array.from(cvvcRequests.entries());
   const rawSampleMap = new Map<string, FetchedRawSample | null>();
   const BATCH_SIZE = 8;
-  for (let i = 0; i < sampleEntries.length; i += BATCH_SIZE) {
-    const batch = sampleEntries.slice(i, i + BATCH_SIZE);
+  const allSampleEntries = [...sampleEntries, ...cvvcSampleEntries];
+  for (let i = 0; i < allSampleEntries.length; i += BATCH_SIZE) {
+    const batch = allSampleEntries.slice(i, i + BATCH_SIZE);
     await Promise.all(
       batch.map(async ([key, req]) => {
-        const s = await fetchRawSample(voicebank, req.alias, req.prevLyric, req.noteNum);
+        const directVc = cvvcRequests.has(key);
+        const s = await fetchRawSample(voicebank, req.alias, directVc ? undefined : (req as any).prevLyric, req.noteNum);
         rawSampleMap.set(key, s);
       })
     );
-    onProgress?.(Math.min(30, Math.round(5 + ((i + batch.length) / Math.max(1, sampleEntries.length)) * 25)));
+    onProgress?.(Math.min(30, Math.round(5 + ((i + batch.length) / Math.max(1, allSampleEntries.length)) * 25)));
   }
 
   const samples: WorkerSampleEntry[] = [];
@@ -386,7 +405,7 @@ async function renderViaCore(
     if (!s) continue;
     const wasmKey = `s${wasmKeySeq++}`;
     cacheKeyToWasmKey.set(key, wasmKey);
-    const origAlias = uniqueSampleMap.get(key)?.alias || '';
+    const origAlias = uniqueSampleMap.get(key)?.alias || cvvcRequests.get(key)?.alias || s.matchedAlias;
     samples.push({ key: wasmKey, pcmF32: s.pcmF32.buffer.slice(0), oto: s.oto, origAlias });
   }
 
