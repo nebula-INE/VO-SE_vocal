@@ -96,11 +96,19 @@ class CvvcResolver:
             return "vcv"
         return "cv"
 
-    def resolve_cv(self, lyric: str) -> Tuple[str, Optional[OtoEntry]]:
+    def resolve_cv(self, lyric: str, note_num: Optional[int] = None) -> Tuple[str, Optional[OtoEntry]]:
         """Resolve only a true CV alias; never borrow a VCV suffix match."""
         clean = self._clean_lyric(lyric)
         db = getattr(self._oto, "_db", {})
-        for candidate in (clean, f"- {clean}", f"_{clean}", f"-{clean}"):
+        mapped = clean
+        if note_num is not None:
+            try:
+                from modules.data.prefix_map import map_alias
+                mapped = map_alias(clean, int(note_num), getattr(self._oto, "_prefix_map", []))
+            except (TypeError, ValueError):
+                mapped = clean
+        candidates = (mapped, f"- {mapped}", f"_{mapped}", f"-{mapped}", clean, f"- {clean}", f"_{clean}", f"-{clean}")
+        for candidate in candidates:
             entry = db.get(candidate)
             if entry is not None:
                 return entry.alias, entry
