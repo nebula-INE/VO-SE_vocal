@@ -69,7 +69,16 @@ public:
             OtoEntryCpp entry;
             if (parseLine (line, voiceDir, entry))
             {
-                db[entry.alias] = entry;
+                // Multiple oto.ini files can legally contain the same alias
+                // (for example multi-pitch subfolders). Do not let traversal
+                // order silently replace an already indexed WAV.
+                const inserted = db.emplace (entry.alias, entry);
+                if (! inserted.second)
+                {
+                    juce::Logger::writeToLog (
+                        "OtoDatabase: duplicate alias skipped: " + entry.alias
+                        + " (" + entry.getWavFile().getFullPathName() + ")");
+                }
                 ++count;
             }
         }
