@@ -1374,23 +1374,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   if (hira && !candidates.includes(hira)) candidates.push(hira);
 
   const prevVowel = getTrailingVowel(prevLyric);
-  const mappedLyric = applyPrefixMapAlias(cleanLyric, noteNum, indexed.prefixMap);
-  if (mappedLyric !== cleanLyric) {
-    const mappedCandidates = [mappedLyric, `- ${mappedLyric}`, `_${mappedLyric}`, `-${mappedLyric}`];
-    if (prevVowel) {
-      mappedCandidates.unshift(
-        `${prevVowel} ${mappedLyric}`,
-        `${prevVowel}_${mappedLyric}`,
-        `${prevVowel}${mappedLyric}`
-      );
-    }
-    for (const candidate of mappedCandidates) {
-      if (aliasMap.has(candidate)) return aliasMap.get(candidate);
-    }
-  }
-
-
-  // Helper to search direct match or pitch-suffixed key in aliasMap
+  const matchMappedAlias = (candidate) => {\n    if (noteNum === null || noteNum === undefined) return null;\n    const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);\n    if (mapped === candidate) return null;\n    return aliasMap.get(mapped) || null;\n  };\n\n  // Helper to search direct match or pitch-suffixed key in aliasMap
   const matchPrefixOrExact = (prefixStr) => {
     if (!prefixStr) return null;
     const prefNorm = prefixStr.normalize('NFC');
@@ -1432,25 +1416,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     return null;
   };
 
-  // 1. If previous note vowel is present, prioritize continuous VCV (連続音)
-  if (prevVowel) {
-    for (const cand of candidates) {
-      let entry = matchPrefixOrExact(`${prevVowel} ${cand}`) ||
-                  matchPrefixOrExact(`${prevVowel}_${cand}`) ||
-                  matchPrefixOrExact(`${prevVowel}${cand}`);
-      if (entry) return entry;
-    }
-  }
-
-  // 2. Initial / Standalone consonant / Plain CV (単独音・語頭音)
-  for (const cand of candidates) {
-    let entry = matchPrefixOrExact(`- ${cand}`) ||
-                matchPrefixOrExact(`_${cand}`) ||
-                matchPrefixOrExact(`-${cand}`) ||
-                matchPrefixOrExact(cand);
-    if (entry) return entry;
-  }
-
+  // 1. If previous note vowel is present, prioritize continuous VCV (連続音)\n  if (prevVowel) {\n    for (const cand of candidates) {\n      let entry = matchMappedAlias(prevVowel + ` ${cand}`) ||\n                  matchMappedAlias(prevVowel + `_${cand}`) ||\n                  matchMappedAlias(prevVowel + cand) ||\n                  matchPrefixOrExact(`${prevVowel} ${cand}`) ||\n                  matchPrefixOrExact(`${prevVowel}_${cand}`) ||\n                  matchPrefixOrExact(`${prevVowel}${cand}`);\n      if (entry) return entry;\n    }\n  }\n\n  // 2. Initial / Standalone consonant / Plain CV (単独音・語頭音)\n  for (const cand of candidates) {\n    let entry = matchMappedAlias(`- ${cand}`) ||\n                matchMappedAlias(`_${cand}`) ||\n                matchMappedAlias(`-${cand}`) ||\n                matchMappedAlias(cand) ||\n                matchPrefixOrExact(`- ${cand}`) ||\n                matchPrefixOrExact(`_${cand}`) ||\n                matchPrefixOrExact(`-${cand}`) ||\n                matchPrefixOrExact(cand);\n    if (entry) return entry;\n  }
   // Do not substitute a different VCV context when prevVowel is explicit.
   // If the requested VCV entry is unavailable, the plain CV/standalone
   // fallback above is the safe choice. Falling through to another vowel
