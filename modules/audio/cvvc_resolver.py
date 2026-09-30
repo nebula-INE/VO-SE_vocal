@@ -140,6 +140,49 @@ class CvvcResolver:
             duration=0.0,
         )
 
+    def _initial_consonant(self, note) -> Optional[str]:
+        phonemes = getattr(note, "phonemes", None)
+        if not phonemes:
+            return None
+        for phoneme in phonemes:
+            value = str(phoneme or "").strip().lower()
+            if not value or value in {"sil", "pau", "cl"} or value in _VOWELS:
+                continue
+            return value
+        return None
+
+    def resolve_notes(self, notes: Sequence) -> List[CvvcSegment]:
+        """Resolve CV/VC segments from already-analyzed NoteEvent objects."""
+        result: List[CvvcSegment] = []
+        classifier = VowelClassifier(use_g2p=False)
+        previous_note = None
+        for index, note in enumerate(notes):
+            cv_alias, cv_entry = self.resolve_cv(getattr(note, "lyric", ""))
+            if cv_entry is not None:
+                result.append(CvvcSegment(
+                    note_index=index,
+                    kind="cv",
+                    alias=cv_alias,
+                    oto_entry=cv_entry,
+                    start_time=float(getattr(note, "start_time", 0.0)),
+                    duration=max(0.0, float(getattr(note, "duration", 0.0))),
+                ))
+            if previous_note is not None:
+                previous_vowel = classifier.trailing_vowel(getattr(previous_note, "lyric", ""))
+                consonant = self._initial_consonant(note)
+                vc_alias, vc_entry = self.resolve_vc(previous_vowel or "", consonant or "")
+                if vc_entry is not None:
+                    result.append(CvvcSegment(
+                        note_index=index,
+                        kind="vc",
+                        alias=vc_alias,
+                        oto_entry=vc_entry,
+                        start_time=float(getattr(note, "start_time", 0.0)),
+                        duration=0.0,
+                    ))
+            previous_note = note
+        return result
+
     def resolve_sequence(
         self,
         notes: Sequence,
