@@ -177,6 +177,13 @@ def _refresh_voice_library_v2(self) -> None:
         self.oto_parser = OtoParser()
 
     self.oto_parser.clear()
+    # refresh_voice_library_v2() は load_voice_dir() を経由しないため、
+    # prefix.map もここで明示的にロードする。これを行わないと
+    # multi-pitch alias (例: あ_C4 / あ_F4) が note_num に応じて切り替わらず、
+    # resolve_alias() が最初に見つかった pitch layer を返してしまう。
+    load_prefix_map = getattr(self.oto_parser, "_load_prefix_map", None)
+    if callable(load_prefix_map):
+        load_prefix_map(self.voice_lib_path)
     oto_files = []
 
     for root, _dirs, files in os.walk(self.voice_lib_path):
