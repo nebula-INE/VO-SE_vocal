@@ -45,7 +45,7 @@ struct OtoEntryCpp
         // on macOS/Linux. Normalize the relative WAV path before resolving it.
         auto normalizedFilename = filename.replaceCharacter ('\\', '/').trim();
         const auto directPath = juce::File (normalizedFilename);
-        if (directPath.isAbsolutePath())
+        if (juce::File::isAbsolutePath (normalizedFilename))
             return directPath;
 
         const auto exactPath = juce::File (voiceDir).getChildFile (normalizedFilename);
@@ -120,7 +120,7 @@ public:
                 // Multiple oto.ini files can legally contain the same alias
                 // (for example multi-pitch subfolders). Do not let traversal
                 // order silently replace an already indexed WAV.
-                const inserted = db.emplace (entry.alias, entry);
+                const auto inserted = db.emplace (entry.alias, entry);
                 if (! inserted.second)
                 {
                     juce::Logger::writeToLog (
@@ -221,7 +221,7 @@ public:
         // Apply prefix.map to the complete phoneme alias. In VCV,
         // the prefix belongs before the whole alias (e.g. C4/a い), not
         // between the previous vowel and the current lyric.
-        const mapAlias = [this, noteNum] (const juce::String& candidate) -> const OtoEntryCpp*
+        const auto mapAlias = [this, noteNum] (const juce::String& candidate) -> const OtoEntryCpp*
         {
             const auto mapped = applyPrefixMap (candidate, noteNum);
             if (mapped == candidate)
