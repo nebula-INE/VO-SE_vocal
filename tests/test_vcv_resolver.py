@@ -79,3 +79,22 @@ def test_vcv_resolver_missing_alias_returns_unresolved_without_substitution():
 
     assert alias == "え"
     assert entry is None
+
+
+def test_vcv_resolver_continuity_threshold_follows_tempo():
+    from modules.data.data_models import NoteEvent
+
+    resolver = VcvResolver(_parser(), use_g2p=False)
+    # 0.20s gap: continuous at 120 BPM (threshold 0.25s),
+    # but not at 60 BPM (threshold 0.50s) -- wait, both continuous.
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5),
+        NoteEvent(note_number=62, lyric="い", start_time=0.70, duration=0.5),
+    ]
+
+    assert resolver.resolve(notes, tempo_bpm=120.0)[1].alias == "- い"
+    assert resolver.resolve(notes, tempo_bpm=180.0)[1].alias == "- い"
+
+    notes[1].start_time = 0.69
+    assert resolver.resolve(notes, tempo_bpm=120.0)[1].alias == "a い"
+    assert resolver.resolve(notes, tempo_bpm=180.0)[1].alias == "- い"
