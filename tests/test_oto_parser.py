@@ -186,3 +186,30 @@ def test_resolve_alias_rest_markers_never_become_audio():
         parser._db[alias] = OtoEntry(alias=alias, filename=alias + ".wav", voice_dir="/dummy", left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0)
     for lyric in ("r", "r_", "r_0", "[r]", "-", "休", "休符", "ー", "~"):
         assert parser.resolve_alias(lyric) is None
+
+def test_load_voice_dir_keeps_first_entry_for_duplicate_alias(tmp_path):
+    voice_dir = tmp_path / "voice"
+    sub_dir = voice_dir / "pitch"
+    sub_dir.mkdir(parents=True)
+
+    (voice_dir / "root.wav").write_bytes(b"RIFF")
+    (sub_dir / "sub.wav").write_bytes(b"RIFF")
+
+    (voice_dir / "oto.ini").write_text(
+        "root.wav=あ,0,0,0,0,0\n",
+        encoding="utf-8",
+    )
+    (sub_dir / "oto.ini").write_text(
+        "sub.wav=あ,0,0,0,0,0\n",
+        encoding="utf-8",
+    )
+
+    parser = OtoParser()
+    count = parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    assert count == 2
+    entry = parser.get("あ")
+    assert entry is not None
+    assert entry.filename == "root.wav"
+    assert entry.wav_path == str(voice_dir / "root.wav")
+
