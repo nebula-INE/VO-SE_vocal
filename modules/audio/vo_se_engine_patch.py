@@ -167,6 +167,7 @@ def _refresh_voice_library_v2(self) -> None:
     if not os.path.exists(self.voice_lib_path):
         os.makedirs(self.voice_lib_path, exist_ok=True)
         self.vcv_resolver = None
+        self.cvvc_resolver = None
         sync_oto = getattr(self, "set_oto_data", None)
         if callable(sync_oto):
             sync_oto({})
