@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from modules.data.oto_parser import OtoEntry
+from modules.audio.vcv_resolver import VowelClassifier
 
 
 _VOWELS = frozenset("aiueon")
@@ -151,10 +152,35 @@ class CvvcResolver:
             return value
         return None
 
+    @staticmethod
+    def _trailing_vowel_from_phonemes(note) -> Optional[str]:
+        """Prefer analyzed phonemes over lyric text for the previous vowel."""
+        phonemes = getattr(note, "phonemes", None)
+        if isinstance(phonemes, str):
+            phonemes = phonemes.split()
+        if not phonemes:
+            return None
+        for phoneme in reversed(phonemes):
+            value = str(phoneme or "").strip().lower()
+            if value in _VOWELS:
+                return value
+        return None
+
+    @staticmethod
+    def _is_rest(note) -> bool:
+        lyric = str(getattr(note, "lyric", "") or "").strip().lower()
+        return lyric in {
+            "", "r", "r_", "r_0", "[r]", "息", "br", "pau", "sil",
+            "吸", "吸気", "息吸い", "休", "休符", "・", "-", "ー", "~",
+        }
+
     def resolve_notes(self, notes: Sequence) -> List[CvvcSegment]:
-        """Resolve CV/VC segments from already-analyzed NoteEvent objects."""
+        """Resolve CV/VC segments from already-analyzed NoteEvent objects.
+
+        This is still a phoneme-plan layer: it never mutates Timeline notes and
+        does not invent render timing for the VC sample.
+        """
         result: List[CvvcSegment] = []
-        classifier = VowelClassifier(use_g2p=False)
         previous_note = None
         for index, note in enumerate(notes):
             cv_alias, cv_entry = self.resolve_cv(getattr(note, "lyric", ""))
@@ -167,8 +193,13 @@ class CvvcResolver:
                     start_time=float(getattr(note, "start_time", 0.0)),
                     duration=max(0.0, float(getattr(note, "duration", 0.0))),
                 ))
-            if previous_note is not None:
-                previous_vowel = classifier.trailing_vowel(getattr(previous_note, "lyric", ""))
+
+            if previous_note is not None and not self._is_rest(note) and not self._is_rest(previous_note):
+                previous_vowel = self._trailing_vowel_from_phonemes(previous_note)
+                if previous_vowel is None:
+                    previous_vowel = VowelClassifier(use_g2p=False).trailing_vowel(
+                        str(getattr(previous_note, "lyric", "") or "")
+                    )
                 consonant = self._initial_consonant(note)
                 vc_alias, vc_entry = self.resolve_vc(previous_vowel or "", consonant or "")
                 if vc_entry is not None:
