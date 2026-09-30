@@ -124,7 +124,7 @@ private:
     // USTスケジューラから呼ばれる版。常にトラック0（UST自体が単一パート仕様のため）。
     void pushSongNote (const ScheduledSongNote& note);
 
-    void resolveAndPushNote (int trackIndex, const std::vector<double>& pitchCurveHz, const juce::String& lyric,
+    void resolveAndPushNote (int trackIndex, int noteNum, const std::vector<double>& pitchCurveHz, const juce::String& lyric,
                               const std::vector<double>& genderCurve,
                               const std::vector<double>& tensionCurve,
                               const std::vector<double>& breathCurve,
