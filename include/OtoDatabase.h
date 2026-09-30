@@ -127,6 +127,25 @@ public:
                         "OtoDatabase: duplicate alias skipped: " + entry.alias
                         + " (" + entry.getWavFile().getFullPathName() + ")");
                 }
+
+                // Preserve the folder-qualified key used by multi-pitch USTs
+                // (for example "C4/あ" or "D4\\あ"). The unqualified
+                // alias remains first-wins, while each pitch folder stays
+                // explicitly addressable.
+                if (voiceRoot != nullptr)
+                {
+                    const auto relativeDir = iniFile.getParentDirectory()
+                        .getRelativePathFrom (*voiceRoot)
+                        .replaceCharacter ('\\', '/')
+                        .trim();
+
+                    if (relativeDir.isNotEmpty() && relativeDir != ".")
+                    {
+                        const auto scopedAlias = relativeDir + "/" + entry.alias;
+                        db.emplace (scopedAlias, entry);
+                    }
+                }
+
                 ++count;
             }
         }
