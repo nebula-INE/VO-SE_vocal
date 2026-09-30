@@ -303,7 +303,8 @@ class OtoParser:
                 with open(cache_path, "r", encoding="utf-8") as f:
                     cached_data = json.load(f)
                 cached_signature = cached_data.get("source_signature")
-                if cached_signature == source_signature:
+                cached_version = cached_data.get("cache_version", 1)
+                if cached_version >= 2 and cached_signature == source_signature:
                     for item in cached_data.get("entries", []):
                         entry = OtoEntry(
                             alias=item["alias"],
@@ -352,6 +353,7 @@ class OtoParser:
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(
                     {
+                        "cache_version": 2,
                         "entries": cache_entries,
                         "source_signature": source_signature,
                     },
