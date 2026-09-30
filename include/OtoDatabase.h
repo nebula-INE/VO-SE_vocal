@@ -25,6 +25,7 @@
 #include <map>
 #include <cstring>
 #include <regex>
+#include <algorithm>
 
 struct OtoEntryCpp
 {
@@ -92,7 +93,17 @@ public:
         if (! voiceDir.isDirectory())
             return 0;
 
-        for (const auto& f : voiceDir.findChildFiles (juce::File::findFiles, true, "oto.ini"))
+        auto otoFiles = voiceDir.findChildFiles (juce::File::findFiles, true, "oto.ini");
+        // Make first-wins duplicate handling deterministic across filesystems.
+        std::sort (
+            otoFiles.begin(),
+            otoFiles.end(),
+            [] (const juce::File& a, const juce::File& b)
+            {
+                return a.getFullPathName() < b.getFullPathName();
+            });
+
+        for (const auto& f : otoFiles)
             total += loadOtoFile (f);
 
         return total;
