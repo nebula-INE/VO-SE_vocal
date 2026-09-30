@@ -183,7 +183,10 @@ def _refresh_voice_library_v2(self) -> None:
         if "oto.ini" in files_lower:
             real_name = files[files_lower.index("oto.ini")]
             ini_path = os.path.join(root, real_name)
-            loaded = self.oto_parser.load_oto_file(ini_path)
+            loaded = self.oto_parser.load_oto_file(
+                ini_path,
+                voice_root=self.voice_lib_path,
+            )
             logger.debug("oto.ini ロード: %d エントリ (%s)", loaded, ini_path)
 
         for fname in files:
