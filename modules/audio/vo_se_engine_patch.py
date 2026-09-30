@@ -301,10 +301,21 @@ def _export_to_wav_v2(
                 note_tempo = 120.0
             continuity_gap_sec = 30.0 / note_tempo
             is_continuous = prev_note is not None and gap_sec <= continuity_gap_sec
+            # Multi-pitch voicebanks require the MIDI note number when
+            # resolving prefix.map / pitch-suffixed aliases (e.g. a_C4.wav
+            # versus a_F4.wav). Without note_num the resolver falls back to
+            # the first matching alias and the rendered source can be wrong.
+            try:
+                note_num = int(
+                    getattr(note, "note_number", getattr(note, "note_num", 60))
+                )
+            except (TypeError, ValueError):
+                note_num = 60
             _alias, oto_entry = vcv_resolver.resolve_note(
                 note.lyric,
                 prev_lyric,
                 is_continuous=is_continuous,
+                note_num=note_num,
             )
             if oto_entry is not None:
                 wav_path = oto_entry.wav_path
