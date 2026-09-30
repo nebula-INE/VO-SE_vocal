@@ -45,7 +45,7 @@ struct OtoEntryCpp
         // on macOS/Linux. Normalize the relative WAV path before resolving it.
         auto normalizedFilename = filename.replaceCharacter ('\\', '/').trim();
         const auto directPath = juce::File (normalizedFilename);
-        if (directPath.isAbsolute())
+        if (directPath.isAbsolutePath())
             return directPath;
 
         const auto exactPath = juce::File (voiceDir).getChildFile (normalizedFilename);
