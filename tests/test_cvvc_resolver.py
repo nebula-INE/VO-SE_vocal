@@ -20,6 +20,7 @@ def _parser() -> OtoParser:
     parser = OtoParser()
     parser._db["- か"] = _entry("- か")
     parser._db["か"] = _entry("か")
+    parser._db["き"] = _entry("き")
     parser._db["a k"] = _entry("a k")
     parser._db["i k"] = _entry("i k")
     parser._db["a き"] = _entry("a き")
@@ -170,7 +171,7 @@ def test_expand_notes_for_render_skips_missing_vc_without_changing_cv():
 
     assert len(expanded) == 2
     assert [getattr(note, "_cvvc_render_kind", None) for note in expanded] == ["cv", "cv"]
-    assert [note.lyric for note in expanded] == ["あ", "か"]
+    assert [note.lyric for note in expanded] == ["あ", "き"]
 
 
 def test_expand_notes_for_render_does_not_cross_rest():
