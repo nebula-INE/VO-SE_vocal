@@ -207,6 +207,11 @@ def test_expand_notes_for_render_uses_following_preutterance_for_vc():
     assert vc.pre_utterance == 0.0
     assert cv._cvvc_render_kind == "cv"
     assert cv.lyric == "か"
+    # VC occupies the preutterance window; CV begins exactly at the
+    # musical note boundary so the native absolute renderer cannot overwrite VC.
+    assert cv.start_time == 0.5
+    assert cv.pre_utterance == 0.0
+    assert vc.start_time + vc.duration == cv.start_time
     assert notes[1].lyric == "か"
     assert notes[1].start_time == 0.5
 
