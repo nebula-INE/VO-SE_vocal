@@ -70,7 +70,10 @@ class CvvcResolver:
         # such as "a n".  Only the five oral vowels are excluded here.
         if not tail or tail[0] in "aiueo":
             return False
-        if not re.fullmatch(r"[a-z][a-z0-9_-]*", tail):
+        # A VC alias must contain only consonant material in its
+        # second token. Romanized VCV aliases such as "a ka" contain
+        # a vowel and must not be classified as VC.
+        if not re.fullmatch(r"[b-df-hj-np-tv-z][b-df-hj-np-tv-z0-9_-]*", tail):
             return False
         return True
 
