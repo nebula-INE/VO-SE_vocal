@@ -43,7 +43,11 @@ struct OtoEntryCpp
     {
         // oto.ini may use Windows backslashes even when the application runs
         // on macOS/Linux. Normalize the relative WAV path before resolving it.
-        auto normalizedFilename = filename.replaceCharacter ('\\', '/');
+        auto normalizedFilename = filename.replaceCharacter ('\\', '/').trim();
+        const auto directPath = juce::File (normalizedFilename);
+        if (directPath.isAbsolute())
+            return directPath;
+
         const auto exactPath = juce::File (voiceDir).getChildFile (normalizedFilename);
 
         if (exactPath.existsAsFile())
@@ -147,7 +151,7 @@ public:
             });
 
         for (const auto& f : otoFiles)
-            total += loadOtoFile (f);
+            total += loadOtoFile (f, &voiceDir);
 
         return total;
     }
