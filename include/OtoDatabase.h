@@ -24,6 +24,7 @@
 #include "TextEncoding.h"
 #include <map>
 #include <cstring>
+#include <regex>
 
 struct OtoEntryCpp
 {
