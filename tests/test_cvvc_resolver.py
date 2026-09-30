@@ -104,3 +104,33 @@ def test_resolve_notes_uses_analyzed_phonemes_for_vc():
         ("cv", "か"),
         ("vc", "a k"),
     ]
+
+
+def test_resolve_notes_does_not_insert_vc_across_rest():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=0, lyric="R", start_time=0.5, duration=0.25, phonemes=[]),
+        NoteEvent(note_number=62, lyric="か", start_time=0.75, duration=0.5, phonemes=["k", "a"]),
+    ]
+
+    segments = resolver.resolve_notes(notes)
+
+    assert [(segment.kind, segment.alias) for segment in segments] == [
+        ("cv", "か"),
+    ]
+
+
+def test_resolve_notes_prefers_analyzed_previous_vowel():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="う", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=62, lyric="か", start_time=0.5, duration=0.5, phonemes=["k", "a"]),
+    ]
+
+    segments = resolver.resolve_notes(notes)
+
+    assert [(segment.kind, segment.alias) for segment in segments] == [
+        ("cv", "か"),
+        ("vc", "a k"),
+    ]
