@@ -439,30 +439,13 @@ class OtoParser:
                     return candidate
             return None
 
-        # Apply UTAU prefix.map before normal VCV/CV resolution.
-        # Explicit folder-qualified lyrics and explicit pitch suffixes are kept as-is.
-        mapped_lyric = clean_lyric
-        if note_num is not None and "/" not in clean_lyric and "\\" not in clean_lyric:
-            mapped_lyric = map_alias(clean_lyric, note_num, self._prefix_map)
-
-        if mapped_lyric != clean_lyric:
-            mapped_candidates = [
-                mapped_lyric,
-                f"- {mapped_lyric}",
-                f"_{mapped_lyric}",
-                f"-{mapped_lyric}",
-            ]
-            if prev_vowel:
-                mapped_candidates = [
-                    f"{prev_vowel} {mapped_lyric}",
-                    f"{prev_vowel}_{mapped_lyric}",
-                    f"{prev_vowel}{mapped_lyric}",
-                    *mapped_candidates,
-                ]
-            for candidate in mapped_candidates:
-                entry = self._db.get(candidate)
-                if entry is not None:
-                    return entry
+        def match_mapped(alias: str) -> Optional[OtoEntry]:
+            if note_num is None:
+                return None
+            mapped = map_alias(alias, note_num, self._prefix_map)
+            if mapped == alias:
+                return None
+            return self._db.get(mapped)
 
         # 明示的な VCV/CV alias はそのまま優先する。
         if lyric in self._db and (
@@ -472,7 +455,10 @@ class OtoParser:
 
         if prev_vowel:
             entry = (
-                match_pref(f"{prev_vowel} {clean_lyric}")
+                match_mapped(f"{prev_vowel} {clean_lyric}")
+                or match_mapped(f"{prev_vowel}_{clean_lyric}")
+                or match_mapped(f"{prev_vowel}{clean_lyric}")
+                or match_pref(f"{prev_vowel} {clean_lyric}")
                 or match_pref(f"{prev_vowel}_{clean_lyric}")
                 or match_pref(f"{prev_vowel}{clean_lyric}")
             )
@@ -480,7 +466,11 @@ class OtoParser:
                 return entry
 
         entry = (
-            match_pref(f"- {clean_lyric}")
+            match_mapped(f"- {clean_lyric}")
+            or match_mapped(f"_{clean_lyric}")
+            or match_mapped(f"-{clean_lyric}")
+            or match_mapped(clean_lyric)
+            or match_pref(f"- {clean_lyric}")
             or match_pref(f"_{clean_lyric}")
             or match_pref(f"-{clean_lyric}")
         )
