@@ -251,7 +251,7 @@ def _export_to_wav_v2(
 
     cvvc_resolver = getattr(self, "cvvc_resolver", None)
     if cvvc_resolver is not None and cvvc_resolver.classify_voicebank() == "cvvc":
-        notes = cvvc_resolver.expand_notes_for_render(notes)
+        notes = cvvc_resolver.expand_notes_for_render(notes, tempo_bpm=tempo_bpm)
 
     if timeline and hasattr(self, "pipeline_bridge") and self.pipeline_bridge:
         self.pipeline_bridge.send_timeline_to_core(timeline)
