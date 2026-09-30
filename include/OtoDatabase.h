@@ -216,22 +216,16 @@ public:
         if (auto* e = get (cleanLyric))
             return e;
 
-        // Apply the optional UTAU prefix.map to the base lyric. The mapped
-        // alias is then resolved through the same VCV/CV fallback chain.
-        const auto mappedLyric = applyPrefixMap (cleanLyric, noteNum);
-        if (mappedLyric != cleanLyric)
+        // Apply prefix.map to the complete phoneme alias. In VCV,
+        // the prefix belongs before the whole alias (e.g. C4/a い), not
+        // between the previous vowel and the current lyric.
+        const mapAlias = [this, noteNum] (const juce::String& candidate) -> const OtoEntryCpp*
         {
-            if (prevVowel.isNotEmpty())
-            {
-                if (auto* e = get (prevVowel + " " + mappedLyric)) return e;
-                if (auto* e = get (prevVowel + "_" + mappedLyric)) return e;
-                if (auto* e = get (prevVowel + mappedLyric)) return e;
-            }
-            if (auto* e = get ("- " + mappedLyric)) return e;
-            if (auto* e = get ("_" + mappedLyric)) return e;
-            if (auto* e = get ("-" + mappedLyric)) return e;
-            if (auto* e = get (mappedLyric)) return e;
-        }
+            const auto mapped = applyPrefixMap (candidate, noteNum);
+            if (mapped == candidate)
+                return nullptr;
+            return get (mapped);
+        };
 
         // Normalize common pitch suffixes used by UST/voicebanks.
         // Keep this aligned with the Python/Web resolvers:
@@ -252,21 +246,22 @@ public:
 
         if (prevVowel.isNotEmpty())
         {
-            if (auto* e = get (prevVowel + " " + cleanLyric))
-                return e;
-            if (auto* e = get (prevVowel + "_" + cleanLyric))
-                return e;
-            if (auto* e = get (prevVowel + cleanLyric))
-                return e;
+            if (auto* e = mapAlias (prevVowel + " " + cleanLyric)) return e;
+            if (auto* e = mapAlias (prevVowel + "_" + cleanLyric)) return e;
+            if (auto* e = mapAlias (prevVowel + cleanLyric)) return e;
+            if (auto* e = get (prevVowel + " " + cleanLyric)) return e;
+            if (auto* e = get (prevVowel + "_" + cleanLyric)) return e;
+            if (auto* e = get (prevVowel + cleanLyric)) return e;
         }
 
         // 語頭/CV候補も Python版と同じく複数表記を扱う。
-        if (auto* e = get ("- " + cleanLyric))
-            return e;
-        if (auto* e = get ("_" + cleanLyric))
-            return e;
-        if (auto* e = get ("-" + cleanLyric))
-            return e;
+        if (auto* e = mapAlias ("- " + cleanLyric)) return e;
+        if (auto* e = mapAlias ("_" + cleanLyric)) return e;
+        if (auto* e = mapAlias ("-" + cleanLyric)) return e;
+        if (auto* e = mapAlias (cleanLyric)) return e;
+        if (auto* e = get ("- " + cleanLyric)) return e;
+        if (auto* e = get ("_" + cleanLyric)) return e;
+        if (auto* e = get ("-" + cleanLyric)) return e;
 
         if (auto* e = get (lyric))
             return e;
