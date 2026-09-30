@@ -325,7 +325,7 @@ async function renderViaCore(
 
     const romanConsonant = (value: string): string => {
       const p = value.replace(/[^a-z]/g, '').toLowerCase();
-      if (!p || /^(?:[aiueon]+)$/.test(p)) return '';
+      if (!p || /^(?:[aiueo]+)$/.test(p)) return '';
       const match = p.match(/^(?:ch|sh|ts|zh|jh|dz|ky|gy|ny|hy|by|py|my|ry|ty|dy|sy|zy|fy|kw|gw|[bcdfghjklmnpqrstvwxyz])/);
       return match?.[0] || '';
     };
@@ -354,7 +354,7 @@ async function renderViaCore(
     if (normalized === prevVowel) return false;
     return normalized.startsWith(prevVowel + ' ') ||
       normalized.startsWith(prevVowel + '_') ||
-      (normalized.startsWith(prevVowel) && normalized.length > prevVowel.length);
+      new RegExp(`^${prevVowel}[^a-z]`).test(normalized);
   }
 
   function tickToTimeSec(targetTick: number): number {
