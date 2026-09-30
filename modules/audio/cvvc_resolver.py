@@ -249,7 +249,10 @@ class CvvcResolver:
                         str(getattr(previous_note, "lyric", "") or "")
                     )
                 consonant = self._initial_consonant(note)
-                vc_alias, vc_entry = self.resolve_vc(previous_vowel or "", consonant or "")
+                if previous_vowel is None or consonant is None:
+                    vc_alias, vc_entry = "", None
+                else:
+                    vc_alias, vc_entry = self.resolve_vc(previous_vowel, consonant)
                 if vc_entry is not None:
                     result.append(CvvcSegment(
                         note_index=index,
@@ -292,7 +295,10 @@ class CvvcResolver:
                         str(getattr(previous_note, "lyric", "") or "")
                     )
                 consonant = self._initial_consonant(note)
-                vc_alias, vc_entry = self.resolve_vc(previous_vowel or "", consonant or "")
+                if previous_vowel is None or consonant is None:
+                    vc_alias, vc_entry = "", None
+                else:
+                    vc_alias, vc_entry = self.resolve_vc(previous_vowel, consonant)
                 try:
                     next_preutterance = max(0.0, float(getattr(note, "pre_utterance", 0.0) or 0.0))
                 except (TypeError, ValueError):
