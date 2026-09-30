@@ -22,6 +22,7 @@ def _parser() -> OtoParser:
     parser._db["か"] = _entry("か")
     parser._db["き"] = _entry("き")
     parser._db["a k"] = _entry("a k")
+    parser._db["a n"] = _entry("a n")
     parser._db["i k"] = _entry("i k")
     parser._db["a き"] = _entry("a き")
     return parser
@@ -61,6 +62,28 @@ def test_resolves_exact_vc_alias():
 
     assert alias == "a k"
     assert entry is not None
+
+
+def test_resolves_moraic_nasal_vc_alias():
+    resolver = CvvcResolver(_parser())
+
+    alias, entry = resolver.resolve_vc("a", "n")
+
+    assert alias == "a n"
+    assert entry is not None
+
+
+def test_initial_moraic_nasal_is_not_dropped_as_a_vowel():
+    resolver = CvvcResolver(_parser())
+    note = NoteEvent(
+        note_number=62,
+        lyric="ん",
+        start_time=0.5,
+        duration=0.5,
+        phonemes=["n"],
+    )
+
+    assert resolver._initial_consonant(note) == "n"
 
 
 def test_does_not_substitute_missing_vc_with_another_vowel():
