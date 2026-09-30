@@ -65,7 +65,10 @@ class CvvcResolver:
         tail = match.group(2).strip().lower()
         # CVVC VC aliases use a consonant token such as "k", "ky", or "sh".
         # Japanese kana and VCV syllables such as "a か" / "a ka" are not VC.
-        if not tail or tail[0] in _VOWELS:
+        # "n" is part of _VOWELS for Japanese trailing-vowel handling,
+        # but it is also a valid moraic-nasal consonant in a CVVC VC alias
+        # such as "a n".  Only the five oral vowels are excluded here.
+        if not tail or tail[0] in "aiueo":
             return False
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", tail):
             return False
@@ -149,7 +152,7 @@ class CvvcResolver:
             return None
         for phoneme in phonemes:
             value = str(phoneme or "").strip().lower()
-            if not value or value in {"sil", "pau", "cl"} or value in _VOWELS:
+            if not value or value in {"sil", "pau", "cl"} or value in "aiueo":
                 continue
             return value
         return None
