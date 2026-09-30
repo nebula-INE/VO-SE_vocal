@@ -147,16 +147,58 @@ class CvvcResolver:
         )
 
     def _initial_consonant(self, note) -> Optional[str]:
-        phonemes = getattr(note, "phonemes", None)
-        if not phonemes:
-            return None
-        for phoneme in phonemes:
-            value = str(phoneme or "").strip().lower()
-            if not value or value in {"sil", "pau", "cl"} or value in "aiueo":
-                continue
-            return value
-        return None
+        """Return a CVVC-compatible consonant from phonemes or lyric text."""
+        kana_consonants = {
+            "か":"k","き":"k","く":"k","け":"k","こ":"k",
+            "が":"g","ぎ":"g","ぐ":"g","げ":"g","ご":"g",
+            "さ":"s","し":"sh","す":"s","せ":"s","そ":"s",
+            "ざ":"z","じ":"j","ず":"z","ぜ":"z","ぞ":"z",
+            "た":"t","ち":"ch","つ":"ts","て":"t","と":"t",
+            "だ":"d","ぢ":"j","づ":"z","で":"d","ど":"d",
+            "な":"n","に":"n","ぬ":"n","ね":"n","の":"n",
+            "は":"h","ひ":"h","ふ":"f","へ":"h","ほ":"h",
+            "ば":"b","び":"b","ぶ":"b","べ":"b","ぼ":"b",
+            "ぱ":"p","ぴ":"p","ぷ":"p","ぺ":"p","ぽ":"p",
+            "ま":"m","み":"m","む":"m","め":"m","も":"m",
+            "や":"y","ゆ":"y","よ":"y","ら":"r","り":"r",
+            "る":"r","れ":"r","ろ":"r","わ":"w","を":"w","ん":"n",
+        }
+        roman_prefixes = ("ch","sh","ts","zh","jh","dz","ky","gy","ny","hy","by","py","my","ry","ty","dy","sy","zy","fy","kw","gw")
+        roman_single = set("bcdfghjklmnpqrstvwxyz")
 
+        def roman_consonant(value: str) -> str:
+            compact = re.sub(r"[^a-z]", "", value.lower())
+            if not compact or compact[0] in "aiueo":
+                return ""
+            for prefix in roman_prefixes:
+                if compact.startswith(prefix):
+                    return prefix
+            return compact[0] if compact[0] in roman_single else ""
+
+        phonemes = getattr(note, "phonemes", None)
+        if isinstance(phonemes, str):
+            phonemes = phonemes.split()
+        if phonemes:
+            for phoneme in phonemes:
+                value = str(phoneme or "").strip().lower()
+                if not value or value in {"sil","pau","br","cl","r","休","休符","・"}:
+                    continue
+                if value in _VOWELS:
+                    continue
+                if value in kana_consonants:
+                    return kana_consonants[value]
+                roman = roman_consonant(value)
+                if roman:
+                    return roman
+
+        lyric = str(getattr(note, "lyric", "") or "").strip().lower()
+        if not lyric or lyric in {"r","r_","r_0","[r]","息","br","pau","sil","休","休符","・","-","ー","~"}:
+            return None
+        if lyric in kana_consonants:
+            return kana_consonants[lyric]
+        if lyric[-1:] in kana_consonants:
+            return kana_consonants[lyric[-1:]]
+        return roman_consonant(lyric)
     @staticmethod
     def _trailing_vowel_from_phonemes(note) -> Optional[str]:
         """Prefer analyzed phonemes over lyric text for the previous vowel."""
