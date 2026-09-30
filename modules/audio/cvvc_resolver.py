@@ -279,6 +279,15 @@ class CvvcResolver:
                 cv_note.lyric = cv_alias
                 cv_note._cvvc_render_alias = cv_alias
                 cv_note._cvvc_render_kind = "cv"
+                # In CVVC the preceding VC occupies the following CV's
+                # preutterance window.  The CV itself must therefore be
+                # rendered at the musical note boundary with no additional
+                # preutterance; otherwise the native absolute-timeline
+                # renderer would place VC and CV at the same output offset
+                # and the later CV event would overwrite the VC.
+                if len(expanded) > 0 and getattr(expanded[-1], "_cvvc_render_kind", "") == "vc":
+                    cv_note.pre_utterance = 0.0
+                    cv_note.overlap = 0.0
             expanded.append(cv_note)
             previous_note = note
         return expanded
