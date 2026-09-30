@@ -400,15 +400,6 @@ class OtoParser:
             if exact_scoped is not None:
                 return exact_scoped
 
-        # A multi-pitch UST may carry the folder-qualified lyric directly.
-        # Resolve it before stripping VCV/pitch prefixes so another folder
-        # cannot be selected by the unqualified alias fallback.
-        scoped_lyric = str(lyric).strip().replace("\\\\", "/").replace("\\", "/")
-        if "/" in scoped_lyric:
-            exact_scoped = self._db.get(scoped_lyric)
-            if exact_scoped is not None:
-                return exact_scoped
-
         clean_lyric = re.sub(
             r"^[-aieuon_]\s*",
             "",
