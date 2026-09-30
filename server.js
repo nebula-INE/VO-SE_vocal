@@ -1493,24 +1493,63 @@ function resolveWavFilePath(dirPath, filename) {
   const targetWav = path.join(dirPath, normFile);
   if (fs.existsSync(targetWav)) return targetWav;
 
-  const baseWav = path.basename(normFile).toLowerCase();
-
+  // Resolve each relative path component case-insensitively. This matters on
+  // Linux when oto.ini was authored on a case-insensitive filesystem.
+  // Prefer the exact relative path over any basename-only match so that
+  // duplicate names in different subfolders cannot select the wrong WAV.
   try {
+    const components = normFile.split('/').filter((part) => part && part !== '.');
+    let current = path.isAbsolute(normFile) ? path.parse(normFile).root : dirPath;
+
+    if (path.isAbsolute(normFile)) {
+      current = path.parse(normFile).root;
+    }
+
+    let resolved = current;
+    let failed = false;
+    for (const component of components) {
+      if (component === '..') {
+        resolved = path.dirname(resolved);
+        continue;
+      }
+
+      const items = fs.readdirSync(resolved, { withFileTypes: true });
+      const match = items.find((item) =>
+        item.name.toLowerCase() === component.toLowerCase()
+      );
+      if (!match) {
+        failed = true;
+        break;
+      }
+      resolved = path.join(resolved, match.name);
+    }
+
+    if (!failed && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+      return resolved;
+    }
+  } catch (e) {}
+
+  // Legacy fallback: a basename-only search is safe only when exactly one
+  // matching WAV exists. Otherwise the alias must remain unresolved rather
+  // than silently selecting a different subfolder's sample.
+  const baseWav = path.basename(normFile).toLowerCase();
+  try {
+    const matches = [];
     const searchDir = (current) => {
       const items = fs.readdirSync(current, { withFileTypes: true });
       for (const item of items) {
         const fullP = path.join(current, item.name);
         if (item.isDirectory()) {
-          const found = searchDir(fullP);
-          if (found) return found;
+          searchDir(fullP);
+          if (matches.length > 1) return;
         } else if (item.name.toLowerCase() === baseWav) {
-          return fullP;
+          matches.push(fullP);
+          if (matches.length > 1) return;
         }
       }
-      return null;
     };
-    const found = searchDir(dirPath);
-    if (found) return found;
+    searchDir(dirPath);
+    if (matches.length === 1) return matches[0];
   } catch (e) {}
 
   return null;
