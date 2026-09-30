@@ -185,3 +185,16 @@ def test_expand_notes_for_render_does_not_cross_rest():
 
     assert len(expanded) == 3
     assert all(getattr(note, "_cvvc_render_kind", None) != "vc" for note in expanded)
+
+
+def test_expand_notes_for_render_skips_long_gap():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=62, lyric="か", start_time=1.0, duration=0.5, phonemes=["k", "a"], pre_utterance=0.08),
+    ]
+
+    expanded = resolver.expand_notes_for_render(notes, tempo_bpm=120.0)
+
+    assert len(expanded) == 2
+    assert all(getattr(note, "_cvvc_render_kind", None) != "vc" for note in expanded)
