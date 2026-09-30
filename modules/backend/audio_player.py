@@ -36,10 +36,6 @@ class AudioPlayer(QObject):
         """再生位置をミリ秒単位で変更する。"""
         self.player.setPosition(max(0, int(position_ms)))
 
-    def set_pan(self, value: float) -> None:
-        """-1.0（左）～1.0（右）のパンを設定する。"""
-        self.audio_output.setBalance(max(-1.0, min(1.0, float(value))))
-
     def stop(self):
         self.player.stop()
 
