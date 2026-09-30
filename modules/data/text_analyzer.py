@@ -129,9 +129,8 @@ class TextAnalyzer:
             prev_note = note_events[i - 1] if i > 0 else None
             prev_lyric = getattr(prev_note, "lyric", None) if prev_note is not None else None
 
-            # Web版と同じく、前ノートとの隙間が大きい場合は VCV 接続を切る。
-            # 120 BPM / 480 tick基準で240 tick = 0.25秒に相当するため、
-            # NoteEvent側では実時間で同じ境界を扱う。
+            # Web版と同じ240 tick境界でVCV接続を判定する。
+            # NoteEventは秒単位なので、480 tick/beatから30/BPM秒へ変換する。
             gap_sec = float("inf")
             if prev_note is not None:
                 try:
