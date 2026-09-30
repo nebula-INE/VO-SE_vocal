@@ -506,8 +506,14 @@ async function renderViaCore(
         const preMs = Number(n.pre_utterance);
         const vcMatchesExactly = !!vcSample &&
           vcSample.matchedAlias.trim().toLowerCase() === vcAlias.toLowerCase();
-
-        if (continuousForCvvc && vcMatchesExactly && Number.isFinite(preMs) && preMs > 0) {
+        // VCV has priority when the requested previous-vowel + lyric alias
+        // actually exists. CVVC is only a fallback for banks that do not
+        // provide the corresponding VCV transition.
+        const vcvMatched = continuousForCvvc &&
+          !!s.matchedAlias &&
+          s.matchedAlias.trim().toLowerCase().startsWith(prevVowelForCvvc + ' ');
+        
+        if (continuousForCvvc && !vcvMatched && vcMatchesExactly && Number.isFinite(preMs) && preMs > 0) {
           const vcWasmKey = cacheKeyToWasmKey.get(vcKey);
           if (vcWasmKey) {
             const vcStartSec = Math.max(0, noteStartSec - preMs / 1000.0);
