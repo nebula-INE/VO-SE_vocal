@@ -104,6 +104,16 @@ public:
         if (lyric.isEmpty())
             return nullptr;
 
+        // Rest markers must never resolve to an audio alias. Keep this
+        // consistent with the Python and Web/WASM resolvers.
+        const auto restLyric = lyric.trim().toLowerCase();
+        const juce::StringArray restMarkers {
+            "r", "r_", "r_0", "[r]", "息", "br", "pau", "sil",
+            "吸", "吸気", "息吸い", "休", "休符", "・", "-", "ー", "~", "null"
+        };
+        if (restMarkers.contains (restLyric))
+            return nullptr;
+
         // UST/音源側に付く VCV/CV プレフィックスとピッチサフィックスを
         // Python版と同じ考え方で正規化してから候補を生成する。
         auto cleanLyric = lyric.trim();
