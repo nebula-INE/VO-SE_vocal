@@ -93,7 +93,9 @@ class OtoDatabase
 {
 public:
     // oto.ini を1ファイル読み込んでデータベースに追加。追加件数を返す。
-    int loadOtoFile (const juce::File& iniFile)
+    int loadOtoFile (
+        const juce::File& iniFile,
+        const juce::File* voiceRoot = nullptr)
     {
         if (! iniFile.existsAsFile())
             return 0;
@@ -179,6 +181,13 @@ public:
         // UST/音源側に付く VCV/CV プレフィックスとピッチサフィックスを
         // Python版と同じ考え方で正規化してから候補を生成する。
         auto cleanLyric = lyric.trim();
+
+        // Multi-pitch USTs may address a sample as "D4/あ" or "D4\\あ".
+        // Resolve that exact qualified key before stripping prefixes.
+        const auto scopedLyric = cleanLyric.replaceCharacter ('\\', '/');
+        if (scopedLyric.containsChar ('/'))
+            if (auto* e = get (scopedLyric))
+                return e;
 
         // Normalize common pitch suffixes used by UST/voicebanks.
         // Keep this aligned with the Python/Web resolvers:
