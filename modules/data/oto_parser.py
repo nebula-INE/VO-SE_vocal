@@ -210,6 +210,24 @@ class OtoParser:
                     )
                 else:
                     self._db[entry.alias] = entry
+
+                # UTAU/OpenUtau multi-pitch banks can address an entry with
+                # a folder-qualified lyric such as "D4/あ" or "D4\\あ".
+                # Keep that qualified key in addition to the unqualified
+                # alias so duplicate aliases in different pitch folders do
+                # not become ambiguous.
+                if voice_root is not None:
+                    try:
+                        rel_dir = os.path.relpath(
+                            voice_dir, os.path.abspath(voice_root)
+                        )
+                    except (OSError, ValueError):
+                        rel_dir = "."
+                    if rel_dir not in (".", ""):
+                        prefix = rel_dir.replace(os.sep, "/").strip("/") + "/"
+                        scoped_key = prefix + entry.alias
+                        self._db.setdefault(scoped_key, entry)
+
                 count += 1
 
             # Low RAM throttle: pause slightly and collect garbage every 300 lines
@@ -310,7 +328,7 @@ class OtoParser:
         # 3. Cache missed / outdated -> Perform full parsing
         total = 0
         for ini_p in ini_files:
-            total += self.load_oto_file(ini_p)
+            total += self.load_oto_file(ini_p, voice_root=voice_dir)
             if IS_LOW_RAM:
                 time.sleep(0.005)
                 gc.collect()
@@ -374,6 +392,15 @@ class OtoParser:
         # Multi-pitch USTs may carry a folder-qualified lyric such as
         # "D4/あ" or "D4\\あ". Resolve that exact scoped key before applying
         # VCV/CV normalization so another pitch folder cannot be selected.
+        scoped_lyric = str(lyric).strip().replace("\\\\", "/").replace("\\", "/")
+        if "/" in scoped_lyric:
+            exact_scoped = self._db.get(scoped_lyric)
+            if exact_scoped is not None:
+                return exact_scoped
+
+        # A multi-pitch UST may carry the folder-qualified lyric directly.
+        # Resolve it before stripping VCV/pitch prefixes so another folder
+        # cannot be selected by the unqualified alias fallback.
         scoped_lyric = str(lyric).strip().replace("\\\\", "/").replace("\\", "/")
         if "/" in scoped_lyric:
             exact_scoped = self._db.get(scoped_lyric)
