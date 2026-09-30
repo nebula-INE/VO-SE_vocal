@@ -89,3 +89,18 @@ def test_sequence_keeps_cv_and_vc_as_distinct_segments():
         ("vc", "a k"),
     ]
     assert all(segment.duration >= 0.0 for segment in segments)
+
+
+def test_resolve_notes_uses_analyzed_phonemes_for_vc():
+    resolver = CvvcResolver(_parser())
+    notes = [
+        NoteEvent(note_number=60, lyric="あ", start_time=0.0, duration=0.5, phonemes=["a"]),
+        NoteEvent(note_number=62, lyric="か", start_time=0.5, duration=0.5, phonemes=["k", "a"]),
+    ]
+
+    segments = resolver.resolve_notes(notes)
+
+    assert [(segment.kind, segment.alias) for segment in segments] == [
+        ("cv", "か"),
+        ("vc", "a k"),
+    ]
