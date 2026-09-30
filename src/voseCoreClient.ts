@@ -59,6 +59,7 @@ interface FetchedRawSample {
   pcmF32: Float32Array;
   baseMidi: number;
   oto: OtoData;
+  matchedAlias: string;
 }
 
 let sharedDecodeCtx: AudioContext | null = null;
@@ -109,6 +110,7 @@ async function fetchRawSample(
     // oto.iniの値は生のまま(符号・単位ms)渡す。map_time()側で
     // cutoff<0 = 末尾からの距離、という変換を既にやってくれるため、
     // ここでJS側で事前計算・加工する必要はない。
+    const matchedAlias = decodeURIComponent(res.headers.get('X-Alias-Matched') || alias);
     const oto: OtoData = {
       offsetMs: parseFloat(res.headers.get('X-Oto-Left-Blank') || '0'),
       consonantMs: parseFloat(res.headers.get('X-Oto-Fixed-Range') || '0'),
@@ -119,7 +121,7 @@ async function fetchRawSample(
 
     const arrayBuf = await res.arrayBuffer();
     const pcmF32 = await decodeToPcmF32(arrayBuf);
-    return { pcmF32, baseMidi, oto };
+    return { pcmF32, baseMidi, oto, matchedAlias };
   } catch (err) {
     console.warn(`[voseCoreClient] サンプル取得/デコード失敗 alias='${alias}':`, err);
     return null;
