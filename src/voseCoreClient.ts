@@ -503,7 +503,14 @@ async function renderViaCore(
           : '';
         const vcKey = vcAlias ? voicebank + ':' + vcAlias + ':DIRECT:' + noteNum : '';
         const vcSample = vcKey ? rawSampleMap.get(vcKey) : null;
-        const preMs = Number(n.pre_utterance);
+        const rawPreMs = Number(n.pre_utterance);
+        const hasExplicitPre = n._ust_preutterance_explicit === true;
+        // Web timeline notes commonly carry the dataclass default 0.0 even
+        // when UST did not explicitly specify PreUtterance. In that case use
+        // the following CV's OTO preutterance, matching CVVC's standard timing.
+        const preMs = !hasExplicitPre && (!Number.isFinite(rawPreMs) || rawPreMs <= 0)
+          ? Number(s.oto.preutterance)
+          : rawPreMs;
         const vcMatchesExactly = !!vcSample &&
           vcSample.matchedAlias.trim().toLowerCase() === vcAlias.toLowerCase();
         // VCV has priority when the requested previous-vowel + lyric alias
