@@ -714,6 +714,12 @@ jobs:
 
 
 
+      - name: "🌐 Run Web multi-pitch Render → Playback regression"
+        shell: bash
+        run: |
+            npm install --ignore-scripts
+            npm run test:web
+
       - name: "🧪 Run pytest (smoke + unit)"
         shell: bash
         env:
