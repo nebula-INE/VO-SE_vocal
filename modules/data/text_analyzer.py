@@ -76,6 +76,7 @@ class TextAnalyzer:
         note_events: List[NoteEvent],
         oto_parser: Optional[OtoParser] = None,
         frame_period_ms: float = 5.0,
+        tempo_bpm: float = 120.0,
     ) -> Tuple[List[NoteEvent], List[Dict[str, Any]]]:
         """
         【完全版】各ノートに対し:
@@ -89,6 +90,7 @@ class TextAnalyzer:
             note_events:     NoteEvent のリスト
             oto_parser:      OtoParser インスタンス (None なら VCV・先行発声無効)
             frame_period_ms: フレーム周期 (ms)
+            tempo_bpm: 基準テンポ (BPM)。ノートに _ust_tempo があればそちらを優先。
 
         Returns:
             (更新済み NoteEvent リスト, フレームタイムライン辞書リスト)
@@ -137,7 +139,17 @@ class TextAnalyzer:
                     gap_sec = max(0.0, float(note.start_time) - prev_end)
                 except (TypeError, ValueError, AttributeError):
                     gap_sec = float("inf")
-            is_continuous = prev_note is not None and gap_sec <= 0.25
+            note_tempo_raw = getattr(note, "_ust_tempo", None)
+            try:
+                note_tempo = float(note_tempo_raw) if note_tempo_raw is not None else float(tempo_bpm)
+            except (TypeError, ValueError):
+                note_tempo = float(tempo_bpm)
+            if note_tempo <= 0.0:
+                note_tempo = 120.0
+            # Web版の240 tick境界（480 tick/beat）を実時間へ変換。
+            # 240 ticks = 0.5 beat = 30 / BPM seconds。
+            continuity_gap_sec = 30.0 / note_tempo
+            is_continuous = prev_note is not None and gap_sec <= continuity_gap_sec
 
             oto_entry: Optional[OtoEntry] = None
             resolved_alias: str = note.lyric
