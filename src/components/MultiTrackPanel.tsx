@@ -60,12 +60,12 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
   return (
     <div className="bg-[#1f1f22] border-b border-[#303034] flex flex-col shrink-0 select-none transition-all">
       {/* Panel Header */}
-      <div className="h-10 px-3 bg-[#18181a] border-b border-[#303034] flex items-center justify-between">
+      <div className="h-10 px-3 bg-[#18181a] border-b border-[#303034] flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center space-x-2">
           {onToggleCollapse && (
             <button
               onClick={onToggleCollapse}
-              className="p-1 rounded text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e] transition cursor-pointer"
+              className="min-w-7 h-7 p-1 rounded text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e] transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
               title={isCollapsed ? 'トラックリストを展開' : 'トラックリストを折りたたむ'}
             >
               {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -134,7 +134,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
 
       {/* Track List Strip (Hidden when collapsed) */}
       {!isCollapsed && (
-      <div className="p-2 flex space-x-2 overflow-x-auto">
+      <div className="p-2 flex space-x-2 overflow-x-auto scrollbar-none">
         {tracks.map((t, idx) => {
           const isSelected = t.id === currentTrackId;
           const trackColor = t.color || TRACK_COLORS[idx % TRACK_COLORS.length];
@@ -171,7 +171,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                       e.stopPropagation();
                       onDuplicateTrack(t.id);
                     }}
-                    className="p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#2997ff]"
+                    className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#2997ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
                     title="トラック複製"
                   >
                     <Copy className="w-3 h-3" />
@@ -183,7 +183,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                         e.stopPropagation();
                         onDeleteTrack(t.id);
                       }}
-                      className="p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#ff453a]"
+                      className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#ff453a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
                       title="トラック削除"
                     >
                       <Trash2 className="w-3 h-3" />
