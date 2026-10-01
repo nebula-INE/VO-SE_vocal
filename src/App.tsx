@@ -3721,6 +3721,7 @@ export default function App() {
               </div>
 
               {/* Mobile Quick Navigation & Editing Bar */}
+              {!responsive.isDesktop && (
               <MobileQuickControls
                 isPlaying={isPlaying}
                 onTogglePlay={togglePlay}
@@ -3741,6 +3742,7 @@ export default function App() {
                 selectedNote={selectedNote}
                 tracksCount={tracks.length}
               />
+              )}
 
               {/* Mobile Bottom Sheets */}
               {/* 1. Tracks Management Sheet */}
