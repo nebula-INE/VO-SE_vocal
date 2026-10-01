@@ -1713,7 +1713,7 @@ app.post('/api/py/render-notes', async (req, res) => {
     const isContinuous = prevNote && ((n.tick || 0) - ((prevNote.tick || 0) + (prevNote.length || 480)) <= 240);
     const prevLyric = isContinuous ? (prevNote.lyric || null) : null;
 
-    const entry = findAliasEntry(indexed, lyric, prevLyric);
+    const entry = findAliasEntry(indexed, lyric, prevLyric, n.noteNum || 60);
     let resolvedWavPath = null;
     if (entry) {
       if (fs.existsSync(entry.wav_path)) {
