@@ -40,7 +40,7 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
         {onOpenVoicebankTab && (
           <button
             onClick={onOpenVoicebankTab}
-            className="px-2.5 py-1.5 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] font-medium transition cursor-pointer"
+            className="min-h-10 px-2.5 py-1.5 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
           >
             ライブラリ管理
           </button>
@@ -58,10 +58,12 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
           {customVoicebanks.map((vb) => {
             const isSelected = vb.name === selectedVoicebank;
             return (
-              <div
+              <button
+                type="button"
                 key={vb.name}
                 onClick={() => onSelectVoicebank(vb.name)}
-                className={`p-3 rounded-xl border flex items-center justify-between transition cursor-pointer ${
+                className={`w-full text-left p-3 rounded-xl border flex items-center justify-between transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
+
                   isSelected
                     ? 'bg-[#0a84ff]/20 border-[#0a84ff] shadow-sm shadow-[#0a84ff]/20'
                     : 'bg-[#18181a] hover:bg-[#2a2a2e] border-[#303034] text-[#d5d5da]'
@@ -82,7 +84,7 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
                     選択中
                   </span>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
@@ -90,7 +92,7 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
 
       {/* Zip Upload Button */}
       <div className="pt-2 border-t border-[#303034]">
-        <label className="w-full h-11 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer font-medium">
+        <label className="w-full min-h-11 h-11 focus-within:ring-2 focus-within:ring-[#0a84ff] focus-within:ring-offset-1 focus-within:ring-offset-[#18181a] bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer font-medium">
           <Upload className="w-4 h-4 text-[#0a84ff]" />
           <span>{isUploading ? '音源ZIP展開中...' : 'UTAU音源(.zip) を追加'}</span>
           <input
