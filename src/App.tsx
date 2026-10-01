@@ -3056,7 +3056,7 @@ export default function App() {
                 <div className="flex min-w-0 flex-1 items-center space-x-2 sm:space-x-3">
                   <button
                     onClick={togglePlay}
-                    className={`hidden lg:flex w-9 h-9 rounded-full items-center justify-center transition shadow-md ${
+                    className={`hidden lg:flex w-9 h-9 rounded-full items-center justify-center transition shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1f1f22] ${
                       isPlaying
                         ? 'bg-[#ff9f0a] hover:bg-[#ffb340] text-black'
                         : 'bg-[#0a84ff] hover:bg-[#2997ff] text-white font-bold'
@@ -3161,7 +3161,7 @@ export default function App() {
                       type="number"
                       value={tempo}
                       onChange={(e) => setTempo(parseFloat(e.target.value) || 120)}
-                      className="w-16 bg-[#18181a] border border-[#3a3a40] rounded px-2 py-1 text-[#2997ff] font-mono text-center font-bold focus:outline-none focus:border-[#0a84ff]"
+                      className="w-16 h-8 bg-[#18181a] border border-[#3a3a40] rounded-md px-2 py-1 text-[#2997ff] font-mono text-center font-bold focus:outline-none focus:border-[#0a84ff] focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
                     />
                   </div>
 
@@ -3172,7 +3172,7 @@ export default function App() {
                     <select
                       value={selectedVoicebank}
                       onChange={(e) => setSelectedVoicebank(e.target.value)}
-                      className="bg-[#18181a] border border-[#3a3a40] rounded px-2 py-1 text-[#f0f0f2] text-xs font-medium focus:outline-none focus:border-[#0a84ff]"
+                      className="h-8 bg-[#18181a] border border-[#3a3a40] rounded-md px-2 py-1 text-[#f0f0f2] text-xs font-medium focus:outline-none focus:border-[#0a84ff] focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
                     >
                       <option value="" disabled>音源を選択...</option>
                       {customVoicebanks.map((vb) => (
