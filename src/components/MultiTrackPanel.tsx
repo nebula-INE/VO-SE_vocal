@@ -171,7 +171,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                       e.stopPropagation();
                       onDuplicateTrack(t.id);
                     }}
-                    className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#2997ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+                    className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#2997ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                     title="トラック複製"
                   >
                     <Copy className="w-3 h-3" />
@@ -183,7 +183,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                         e.stopPropagation();
                         onDeleteTrack(t.id);
                       }}
-                      className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#ff453a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+                      className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#ff453a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                       title="トラック削除"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -200,7 +200,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                     value={t.voicebank || ''}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onUpdateTrack(t.id, { voicebank: e.target.value })}
-                    className="bg-[#18181a] text-[#f0f0f2] text-[10px] border border-[#3a3a40] rounded px-1 py-0.5 max-w-[120px] focus:border-[#0a84ff] focus:outline-none"
+                    className="bg-[#18181a] text-[#f0f0f2] text-[10px] border border-[#3a3a40] rounded px-1 py-0.5 max-w-[120px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                   >
                     <option value="">(既定音源)</option>
                     {customVoicebanks.map((vb) => (
@@ -222,7 +222,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                 <div className="flex items-center space-x-1.5 flex-1 mr-2">
                   <button
                     onClick={() => onUpdateTrack(t.id, { isMuted: !t.isMuted })}
-                    className={`px-1.5 py-0.5 text-[9px] font-mono font-bold rounded border transition ${
+                    className={`min-w-7 h-7 px-1.5 text-[9px] font-mono font-bold rounded border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
                       t.isMuted ? 'bg-[#ff453a]/20 text-[#ff453a] border-[#ff453a]/60' : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40] hover:text-[#f0f0f2]'
                     }`}
                   >
