@@ -324,13 +324,20 @@ export default function App() {
   // Update collapsed/inspector defaults when deviceType changes
   useEffect(() => {
     if (responsive.isPhone) {
+      // Phone: maximize the Timeline and move secondary controls into sheets.
       setIsTracksCollapsed(true);
       setIsInspectorOpen(false);
+    } else if (responsive.isTablet) {
+      // Tablet: keep the Timeline primary, but retain the inspector in
+      // landscape where there is enough horizontal room.
+      setIsTracksCollapsed(true);
+      setIsInspectorOpen(responsive.orientation === 'landscape');
     } else {
+      // Desktop: full multi-panel layout.
       setIsTracksCollapsed(false);
       setIsInspectorOpen(true);
     }
-  }, [responsive.isPhone]);
+  }, [responsive.isPhone, responsive.isTablet, responsive.orientation]);
 
   // Batch lyric apply handler
   const handleApplyBatchLyrics = (newLyrics: string[]) => {
@@ -2789,7 +2796,7 @@ export default function App() {
         {/* Right Toolbar Actions */}
         <div className="flex items-center space-x-1.5 sm:space-x-2">
           {/* Desktop Full Actions */}
-          {!responsive.isPhone && (
+          {!responsive.isPhone && !responsive.isTablet && (
             <>
               {/* Universal Project Import */}
               <button
@@ -2865,7 +2872,7 @@ export default function App() {
           />
 
           {/* Mobile Project Sheet Button */}
-          {responsive.isPhone && (
+          {(responsive.isPhone || responsive.isTablet) && (
             <button
               onClick={() => setActiveMobileSheet('project')}
               className="p-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] border border-[#3a3a40] transition cursor-pointer"
