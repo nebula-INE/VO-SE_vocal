@@ -218,13 +218,79 @@ export default function App() {
   ]);
   const [currentTrackId, setCurrentTrackId] = useState<string>('track_1');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>('1');
-  
+
   const currentTrack = tracks.find(t => t.id === currentTrackId) || tracks[0];
   const notes = currentTrack?.type === 'vocal' ? currentTrack.notes : [];
-  
+
+  // Timeline history follows the Desktop editor contract:
+  // one meaningful note edit = one undo checkpoint. Pointer gestures
+  // explicitly bracket their history entry so a drag does not create
+  // dozens of undo steps.
+  const noteHistoryRef = useRef<{ past: Note[][]; future: Note[][] }>({ past: [], future: [] });
+  const noteGestureActiveRef = useRef(false);
+
+  const pushNoteHistory = useCallback((snapshot: Note[]) => {
+    const history = noteHistoryRef.current;
+    history.past.push(snapshot.map((n) => ({ ...n })));
+    if (history.past.length > 100) history.past.shift();
+    history.future = [];
+  }, []);
+
+  const beginNoteGesture = useCallback(() => {
+    if (noteGestureActiveRef.current) return;
+    const snapshot = notes.map((n) => ({ ...n }));
+    pushNoteHistory(snapshot);
+    noteGestureActiveRef.current = true;
+  }, [notes, pushNoteHistory]);
+
+  const endNoteGesture = useCallback(() => {
+    noteGestureActiveRef.current = false;
+  }, []);
+
+  const undoNotes = useCallback(() => {
+    const history = noteHistoryRef.current;
+    const previous = history.past.pop();
+    if (!previous) return false;
+
+    const current = notes.map((n) => ({ ...n }));
+    history.future.push(current);
+    setTracks((prev) => prev.map((t) =>
+      t.id === currentTrackId && t.type === 'vocal'
+        ? { ...t, notes: previous.map((n) => ({ ...n })) }
+        : t
+    ));
+    const nextSelected = selectedNoteId && previous.some((n) => n.id === selectedNoteId)
+      ? selectedNoteId
+      : null;
+    setSelectedNoteId(nextSelected);
+    return true;
+  }, [notes, currentTrackId, selectedNoteId]);
+
+  const redoNotes = useCallback(() => {
+    const history = noteHistoryRef.current;
+    const next = history.future.pop();
+    if (!next) return false;
+
+    const current = notes.map((n) => ({ ...n }));
+    history.past.push(current);
+    setTracks((prev) => prev.map((t) =>
+      t.id === currentTrackId && t.type === 'vocal'
+        ? { ...t, notes: next.map((n) => ({ ...n })) }
+        : t
+    ));
+    const nextSelected = selectedNoteId && next.some((n) => n.id === selectedNoteId)
+      ? selectedNoteId
+      : null;
+    setSelectedNoteId(nextSelected);
+    return true;
+  }, [notes, currentTrackId, selectedNoteId]);
+
   const setNotes = (updater: any) => {
     setTracks(prev => prev.map(t => {
       if (t.id === currentTrackId && t.type === 'vocal') {
+        if (!noteGestureActiveRef.current) {
+          pushNoteHistory(t.notes);
+        }
         const newNotes = typeof updater === 'function' ? updater(t.notes) : updater;
         return { ...t, notes: newNotes };
       }
@@ -491,6 +557,22 @@ export default function App() {
           setNotes(prev => prev.filter(n => n.id !== selectedNoteId));
           setSelectedNoteId(null);
         }
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undoNotes();
+        return;
+      }
+
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))
+      ) {
+        e.preventDefault();
+        redoNotes();
+        return;
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
@@ -518,7 +600,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNoteId, clipboardNote, notes]);
+  }, [selectedNoteId, clipboardNote, notes, undoNotes, redoNotes]);
 
   // Voicebank State
   const selectedVoicebank = currentTrack?.voicebank || '';
@@ -3356,6 +3438,9 @@ export default function App() {
 
                               if (isLongPressed) return;
 
+                              // A drag is one Timeline edit for Undo/Redo.
+                              beginNoteGesture();
+
                               const rect = gridRef.current.getBoundingClientRect();
                               const ticksPerPx = totalTicks / rect.width;
                               let newTick = Math.max(0, startTick + deltaX * ticksPerPx);
@@ -3371,6 +3456,7 @@ export default function App() {
                               window.clearTimeout(longPressTimer);
                               window.removeEventListener('pointermove', onPointerMove);
                               window.removeEventListener('pointerup', onPointerUp);
+                              endNoteGesture();
                             };
 
                             window.addEventListener('pointermove', onPointerMove);
@@ -3390,6 +3476,9 @@ export default function App() {
                               const rect = gridRef.current.getBoundingClientRect();
                               const deltaX = moveEvent.clientX - startX;
 
+                              // A resize is one Timeline edit for Undo/Redo.
+                              beginNoteGesture();
+
                               const ticksPerPx = totalTicks / rect.width;
                               let newLength = Math.max(60, startLength + deltaX * ticksPerPx);
                               newLength = Math.round(newLength / 60) * 60; // Snap length
@@ -3400,6 +3489,7 @@ export default function App() {
                             const onPointerUp = () => {
                               window.removeEventListener('pointermove', onPointerMove);
                               window.removeEventListener('pointerup', onPointerUp);
+                              endNoteGesture();
                             };
 
                             window.addEventListener('pointermove', onPointerMove);
