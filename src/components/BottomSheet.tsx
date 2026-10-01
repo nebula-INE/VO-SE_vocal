@@ -21,6 +21,16 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   heightClass = "max-h-[85vh]"
 }) => {
   useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = 'hidden';
     } else {
@@ -34,7 +44,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-xs animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-labelledby="bottom-sheet-title">
       {/* Backdrop click to close */}
       <div className="absolute inset-0" onClick={onClose} />
 
@@ -53,14 +63,15 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           <div className="flex items-center space-x-2.5 min-w-0">
             {icon && <div className="text-[#0a84ff] shrink-0">{icon}</div>}
             <div className="min-w-0">
-              <h3 className="text-base font-bold text-[#f0f0f2] truncate">{title}</h3>
+              <h3 id="bottom-sheet-title" className="text-base font-bold text-[#f0f0f2] truncate">{title}</h3>
               {subtitle && <p className="text-xs text-[#9a9aa2] truncate">{subtitle}</p>}
             </div>
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] border border-[#3a3a40] flex items-center justify-center transition shrink-0 cursor-pointer"
-            aria-label="Close"
+            className="min-w-10 h-10 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] border border-[#3a3a40] flex items-center justify-center transition shrink-0 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
+            aria-label="閉じる"
+            title="閉じる"
           >
             <X className="w-4 h-4" />
           </button>
