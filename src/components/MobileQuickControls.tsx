@@ -16,7 +16,7 @@ interface MobileQuickControlsProps {
   tracksCount: number;
 }
 
-const baseButton = 'min-w-10 h-10 px-2 rounded-lg bg-[#2a2a2e] active:bg-[#34343a] text-[#d5d5da] border border-[#3a3a40] flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]';
+const baseButton = 'min-w-10 h-10 px-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#3a3a40] text-[#d5d5da] border border-[#3a3a40] flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]';
 
 export const MobileQuickControls: React.FC<MobileQuickControlsProps> = ({
   isPlaying, onTogglePlay, onStop, onZoomIn, onZoomOut, onResetZoom,
@@ -28,9 +28,9 @@ export const MobileQuickControls: React.FC<MobileQuickControlsProps> = ({
       : 'bg-[#2a2a2e] active:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40]';
 
   return (
-    <div className="bg-[#1f1f22] border-t border-[#303034] px-2 py-1.5 flex items-center gap-2 shrink-0 shadow-lg select-none pb-safe">
+    <div className="bg-[#1f1f22] border-t border-[#303034] px-2 py-1.5 flex items-center gap-2 shrink-0 shadow-lg select-none pb-safe min-h-[4rem]">
       <div className="flex items-center gap-1 shrink-0">
-        <button onClick={onTogglePlay} className="w-10 h-10 rounded-lg bg-[#0a84ff] active:bg-[#2997ff] text-white flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]" title={isPlaying ? '一時停止' : '再生'} aria-label={isPlaying ? '一時停止' : '再生'}>
+        <button onClick={onTogglePlay} className="w-10 h-10 rounded-lg bg-[#0a84ff] active:bg-[#2997ff] text-white flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]" title={isPlaying ? '一時停止' : '再生'} aria-label={isPlaying ? '一時停止' : '再生'}>
           {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
         </button>
         <button onClick={onStop} className={baseButton} title="停止" aria-label="停止"><Square className="w-4 h-4" /></button>
@@ -53,7 +53,7 @@ export const MobileQuickControls: React.FC<MobileQuickControlsProps> = ({
         <button onClick={() => onOpenSheet('params')} disabled={!selectedNote} className={sheetClass('params') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] disabled:opacity-40 disabled:cursor-not-allowed'} title={selectedNote ? 'ピッチ・パラメータ' : 'ノートを選択してください'} aria-label="ピッチ・パラメータ">
           <Sparkles className="w-4 h-4 text-[#bf5af2]" /><span className="hidden md:inline">Pitch</span>
         </button>
-        <button onClick={onAddNote} className="min-w-11 h-10 px-2 rounded-lg bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/50 flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]" title="ノートを追加" aria-label="ノートを追加">
+        <button onClick={onAddNote} className="min-w-11 h-10 px-2 rounded-lg bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/50 flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]" title="ノートを追加" aria-label="ノートを追加">
           <span className="text-base leading-none">+</span><span className="hidden md:inline">Note</span>
         </button>
         <button onClick={() => onOpenSheet('project')} className={sheetClass('project') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]'} title="プロジェクト" aria-label="プロジェクト">
