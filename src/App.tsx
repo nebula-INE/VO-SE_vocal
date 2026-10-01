@@ -3183,7 +3183,7 @@ export default function App() {
                       <button
                         onClick={() => setPianoRollZoomX((prev) => Math.max(1.0, Math.round((prev - 0.25) * 100) / 100))}
                         disabled={pianoRollZoomX <= 1.0}
-                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-30 border border-[#3a3a40]"
+                        className="min-w-7 h-7 p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-30 border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                         title="時間軸を縮小"
                       >
                         <ZoomOut className="w-3 h-3" />
@@ -3208,7 +3208,7 @@ export default function App() {
                       <button
                         onClick={() => setPianoRollRowHeight((prev) => Math.max(20, prev - 4))}
                         disabled={pianoRollRowHeight <= 20}
-                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-30 border border-[#3a3a40]"
+                        className="min-w-7 h-7 p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-30 border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                         title="鍵盤高さを縮小"
                       >
                         -
@@ -3231,7 +3231,7 @@ export default function App() {
                         setPianoRollZoomX(1.0);
                         setPianoRollRowHeight(28);
                       }}
-                      className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] rounded border border-[#3a3a40]"
+                      className="min-w-7 h-7 p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] rounded border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                       title="ズームリセット"
                     >
                       <RotateCcw className="w-3 h-3" />
