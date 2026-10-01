@@ -50,3 +50,6 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #4a4a52;
 }
+.pb-safe {
+  padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
+}
