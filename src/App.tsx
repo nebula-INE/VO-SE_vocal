@@ -2883,7 +2883,7 @@ export default function App() {
           )}
 
           {/* Mobile Navigation Menu Toggle */}
-          {responsive.isPhone && (
+          {(responsive.isPhone || responsive.isTablet) && (
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
               className="p-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] transition cursor-pointer"
@@ -3666,7 +3666,7 @@ export default function App() {
                   </div>
 
                 {/* Right Parameter Inspector Panel (Desktop & Tablet collapsible) */}
-                {!responsive.isPhone && isInspectorOpen && (
+                {!responsive.isPhone && (!responsive.isTablet || responsive.orientation === 'landscape') && isInspectorOpen && (
                   <div className="w-72 sm:w-80 bg-[#1f1f22] border-l border-[#3a3a40] flex flex-col shrink-0 overflow-y-auto">
                     <InspectorPanel
                       selectedNote={selectedNote}
