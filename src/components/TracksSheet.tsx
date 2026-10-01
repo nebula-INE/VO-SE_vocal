@@ -51,14 +51,14 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
         <div className="flex items-center space-x-2">
           <button
             onClick={() => onAddTrack('vocal')}
-            className="h-9 px-3 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-medium rounded-lg flex items-center space-x-1.5 transition cursor-pointer"
+            className="min-h-10 h-10 px-3 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-medium rounded-lg flex items-center space-x-1.5 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>+ ボーカルトラック</span>
           </button>
           <button
             onClick={() => onAddTrack('wave')}
-            className="h-9 px-3 bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#2a2a2e]/80 text-[#f0f0f2] font-medium rounded-lg flex items-center space-x-1.5 transition cursor-pointer border border-[#3a3a40]"
+            className="min-h-10 h-10 px-3 bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#2a2a2e]/80 text-[#f0f0f2] font-medium rounded-lg flex items-center space-x-1.5 transition cursor-pointer border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
           >
             <Music className="w-3.5 h-3.5 text-[#bf5af2]" />
             <span>+ WAV伴奏</span>
@@ -67,7 +67,7 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
 
         <button
           onClick={handleToggleGhost}
-          className={`h-9 px-2.5 rounded-lg border flex items-center space-x-1.5 transition cursor-pointer ${
+          className={`min-h-10 h-10 px-2.5 rounded-lg border flex items-center space-x-1.5 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
             showGhostNotes
               ? 'bg-[#0a84ff]/20 text-[#2997ff] border-[#0a84ff]'
               : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40]'
@@ -111,7 +111,7 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
                 <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
                   <button
                     onClick={() => onDuplicateTrack(t.id)}
-                    className="p-1.5 rounded-lg hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] transition cursor-pointer"
+                    className="min-w-10 h-10 rounded-lg hover:bg-[#34343a] text-[#9a9aa2] hover:text-[#f0f0f2] transition cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
                     title="複製"
                   >
                     <Copy className="w-3.5 h-3.5" />
@@ -119,7 +119,7 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
                   {tracks.length > 1 && (
                     <button
                       onClick={() => onDeleteTrack(t.id)}
-                      className="p-1.5 rounded-lg hover:bg-[#ff453a]/20 text-[#ff453a] hover:text-[#ff453a] transition cursor-pointer"
+                      className="min-w-10 h-10 rounded-lg hover:bg-[#ff453a]/20 text-[#ff453a] hover:text-[#ff453a] transition cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
                       title="削除"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -133,7 +133,7 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
                 <div className="flex space-x-1">
                   <button
                     onClick={() => onUpdateTrack(t.id, { isMuted: !t.isMuted })}
-                    className={`min-w-[28px] h-6 px-1.5 text-[10px] font-mono font-bold rounded border transition cursor-pointer ${
+                    className={`min-w-10 h-9 px-2 text-[10px] font-mono font-bold rounded-lg border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
                       t.isMuted
                         ? 'bg-[#ff453a]/20 text-[#ff453a] border-[#ff453a]/60'
                         : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40] hover:text-[#f0f0f2]'
@@ -162,7 +162,7 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
                     step="0.05"
                     value={t.volume}
                     onChange={(e) => onUpdateTrack(t.id, { volume: parseFloat(e.target.value) })}
-                    className="flex-1 accent-[#0a84ff] h-1.5 bg-[#18181a] rounded appearance-none cursor-pointer"
+                    className="flex-1 accent-[#0a84ff] h-2 bg-[#18181a] rounded appearance-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
                   />
                   <span className="text-[10px] font-mono text-[#9a9aa2] w-8 text-right font-medium">
                     {Math.round(t.volume * 100)}%
