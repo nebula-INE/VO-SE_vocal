@@ -3152,7 +3152,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="h-4 w-px bg-[#3a3a40]" />
+                  <div className="h-4 w-px bg-[#3a3a40] hidden lg:block" />
 
                   {/* Tempo & Settings */}
                   <div className="hidden lg:flex items-center space-x-2 text-xs">
@@ -3165,7 +3165,7 @@ export default function App() {
                     />
                   </div>
 
-                  <div className="h-4 w-px bg-[#3a3a40]" />
+                  <div className="h-4 w-px bg-[#3a3a40] hidden lg:block" />
 
                   <div className="hidden lg:flex items-center space-x-2 text-xs">
                     <span className="text-[#9a9aa2] font-medium">Voicebank:</span>
