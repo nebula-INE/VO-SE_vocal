@@ -3776,7 +3776,7 @@ export default function App() {
                 isOpen={activeMobileSheet === 'inspector'}
                 onClose={() => setActiveMobileSheet(null)}
                 title="ノート設定 (Inspector)"
-                snapPoints={['half', 'full']}
+                heightClass="max-h-[85vh]"
               >
                 <div className="p-4">
                   <InspectorPanel
