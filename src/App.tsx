@@ -2875,8 +2875,10 @@ export default function App() {
           {(responsive.isPhone || responsive.isTablet) && (
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] transition cursor-pointer"
+              className="min-w-10 h-10 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#3a3a40] text-[#f0f0f2] border border-[#3a3a40] transition cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
               title="メニュー"
+              aria-label="メニュー"
+              aria-expanded={isMobileMenuOpen}
             >
               <Menu className="w-4 h-4" />
             </button>
