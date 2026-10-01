@@ -3720,6 +3720,7 @@ export default function App() {
                   setIsPlaying(false);
                   seekToTick(0);
                 }}
+                showTransport={!responsive.isTablet || responsive.orientation === 'portrait'}
                 zoomX={pianoRollZoomX}
                 onZoomIn={() => setPianoRollZoomX((prev) => Math.min(4.0, Math.round((prev + 0.25) * 100) / 100))}
                 onZoomOut={() => setPianoRollZoomX((prev) => Math.max(1.0, Math.round((prev - 0.25) * 100) / 100))}
