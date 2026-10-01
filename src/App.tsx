@@ -3151,6 +3151,30 @@ export default function App() {
 
                     <div className="w-px h-3 bg-[#3a3a40]" />
 
+                    {/* Timeline history: same visible contract as Desktop */}
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => undoNotes()}
+                        disabled={noteHistoryRef.current.past.length === 0}
+                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40] disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="元に戻す (⌘/Ctrl+Z)"
+                        aria-label="元に戻す"
+                      >
+                        ↶
+                      </button>
+                      <button
+                        onClick={() => redoNotes()}
+                        disabled={noteHistoryRef.current.future.length === 0}
+                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40] disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="やり直す (⌘/Ctrl+Y / ⇧⌘/Ctrl+Z)"
+                        aria-label="やり直す"
+                      >
+                        ↷
+                      </button>
+                    </div>
+
+                    <div className="w-px h-3 bg-[#3a3a40]" />
+
                     {/* Horizontal Scroll Quick Buttons */}
                     <div className="flex items-center space-x-1">
                       <span className="text-[#9a9aa2] text-[10px] hidden sm:inline">横移動:</span>
