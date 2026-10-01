@@ -3070,7 +3070,7 @@ export default function App() {
                       setIsPlaying(false);
                       seekToTick(0);
                     }}
-                    className="w-8 h-8 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] flex items-center justify-center transition border border-[#3a3a40]"
+                    className="w-8 h-8 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] flex items-center justify-center transition border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
                   >
                     <Square className="w-3.5 h-3.5 fill-current" />
                   </button>
@@ -4625,7 +4625,7 @@ export default function App() {
 
       {/* Floating Toast Notification Popup */}
       {toast && (
-        <div className="fixed bottom-5 right-5 z-50 max-w-sm w-full animate-bounce-short">
+        <div className="fixed bottom-5 right-5 z-50 max-w-sm w-[min(92vw,24rem)] animate-in slide-in-from-bottom-4 duration-200">
           <div
             className={`p-4 rounded-xl border shadow-2xl backdrop-blur-md flex flex-col space-y-2 ${
               toast.type === 'success'
