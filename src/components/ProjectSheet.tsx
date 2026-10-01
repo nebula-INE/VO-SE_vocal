@@ -58,7 +58,7 @@ export const ProjectSheet: React.FC<ProjectSheetProps> = ({
           type="text"
           value={projectName}
           onChange={(e) => onUpdateProjectName(e.target.value)}
-          className="w-full h-9 bg-[#2a2a2e] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-bold focus:border-[#0a84ff] focus:outline-none"
+          className="w-full h-9 bg-[#2a2a2e] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-bold focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
         />
         <div className="flex items-center justify-between text-[11px] text-[#9a9aa2] pt-1">
           <div className="flex items-center space-x-1.5">
@@ -118,7 +118,7 @@ export const ProjectSheet: React.FC<ProjectSheetProps> = ({
         </h4>
         <button
           onClick={handleImport}
-          className="w-full h-11 bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#2a2a2e]/80 text-[#2997ff] border border-[#3a3a40] rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer font-medium"
+          className="w-full h-11 bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#2a2a2e]/80 text-[#2997ff] border border-[#3a3a40] rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
         >
           <Upload className="w-4 h-4 text-[#0a84ff]" />
           <span>UST / VSQX / SVP / MIDI ファイルを開く</span>
@@ -134,28 +134,28 @@ export const ProjectSheet: React.FC<ProjectSheetProps> = ({
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => handleExport('ust')}
-            className="h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium"
+            className="min-h-10 h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
           >
             <FileText className="w-3.5 h-3.5 text-[#0a84ff]" />
             <span>.UST (UTAU)</span>
           </button>
           <button
             onClick={() => handleExport('vsqx')}
-            className="h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium"
+            className="min-h-10 h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
           >
             <FileText className="w-3.5 h-3.5 text-[#bf5af2]" />
             <span>.VSQX (VOCALOID)</span>
           </button>
           <button
             onClick={() => handleExport('svp')}
-            className="h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium"
+            className="min-h-10 h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
           >
             <FileText className="w-3.5 h-3.5 text-[#30d158]" />
             <span>.SVP (Synthesizer V)</span>
           </button>
           <button
             onClick={() => handleExport('midi')}
-            className="h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium"
+            className="min-h-10 h-10 bg-[#18181a] hover:bg-[#2a2a2e] border border-[#3a3a40] rounded-lg flex items-center justify-center space-x-1.5 text-[#f0f0f2] transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
           >
             <Music className="w-3.5 h-3.5 text-[#ff9f0a]" />
             <span>Standard MIDI (.mid)</span>
