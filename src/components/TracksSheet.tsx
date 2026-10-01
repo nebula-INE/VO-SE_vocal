@@ -86,8 +86,18 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
           return (
             <div
               key={t.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectTrack(t.id)}
-              className={`p-3 rounded-xl border transition cursor-pointer flex flex-col space-y-2.5 ${
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelectTrack(t.id);
+                }
+              }}
+              className={`p-3 rounded-xl border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] flex flex-col space-y-2.5 ${
+
                 isSelected
                   ? 'bg-[#2a2a2e] border-[#0a84ff] shadow-md ring-1 ring-[#0a84ff]/40'
                   : 'bg-[#18181a] hover:bg-[#232327] border-[#303034] text-[#d5d5da]'
