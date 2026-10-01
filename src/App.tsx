@@ -3358,7 +3358,7 @@ export default function App() {
               <div className="flex-1 flex overflow-hidden">
                 {/* Left Keybed Column */}
                 <div className="w-14 sm:w-20 bg-[#1f1f22] border-r border-[#3a3a40] flex flex-col shrink-0 select-none">
-                  <div className="h-7 border-b border-[#3a3a40] bg-[#18181a] text-[10px] text-[#9a9aa2] flex items-center justify-center font-mono shrink-0">
+                  <div className="h-8 border-b border-[#3a3a40] bg-[#18181a] text-[10px] text-[#9a9aa2] flex items-center justify-center font-mono shrink-0">
                     Key
                   </div>
                   <div className="flex-1 overflow-y-auto flex flex-col" ref={keybedScrollRef}>
@@ -3390,7 +3390,7 @@ export default function App() {
                     {/* Timeline Ruler Header Bar */}
                     <div
                       ref={rulerScrollRef}
-                      className="h-7 bg-[#1f1f22] border-b border-[#3a3a40] relative cursor-pointer overflow-x-auto overflow-y-hidden scrollbar-none flex items-center shrink-0 select-none"
+                      className="h-8 bg-[#1f1f22] border-b border-[#3a3a40] relative cursor-pointer overflow-x-auto overflow-y-hidden scrollbar-none flex items-center shrink-0 select-none"
                       onClick={(e) => {
                         const rect = e.currentTarget.getBoundingClientRect();
                         const clickX = e.clientX - rect.left;
