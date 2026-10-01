@@ -3219,22 +3219,25 @@ export default function App() {
                     <div className="w-px h-3 bg-[#3a3a40]" />
 
                     {/* Timeline history: same visible contract as Desktop */}
-                    <div className="flex items-center space-x-1">
+                    <div className="flex items-center gap-1 rounded-md bg-[#18181a]/70 border border-[#3a3a40] p-0.5">
+                      <span className="px-1 text-[9px] font-semibold uppercase tracking-wider text-[#6f6f78] hidden md:inline">
+                        編集
+                      </span>
                       <button
                         onClick={() => undoNotes()}
                         disabled={noteHistoryRef.current.past.length === 0}
-                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40] disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-xs border border-transparent hover:border-[#4a4a52] disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="元に戻す (⌘/Ctrl+Z)"
-                        aria-label="元に戻す"
+                        aria-label="元に戻す (⌘/Ctrl+Z)"
                       >
                         ↶
                       </button>
                       <button
                         onClick={() => redoNotes()}
                         disabled={noteHistoryRef.current.future.length === 0}
-                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40] disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-xs border border-transparent hover:border-[#4a4a52] disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="やり直す (⌘/Ctrl+Y / ⇧⌘/Ctrl+Z)"
-                        aria-label="やり直す"
+                        aria-label="やり直す (⌘/Ctrl+Y / ⇧⌘/Ctrl+Z)"
                       >
                         ↷
                       </button>
@@ -3243,33 +3246,39 @@ export default function App() {
                     <div className="w-px h-3 bg-[#3a3a40]" />
 
                     {/* Horizontal Scroll Quick Buttons */}
-                    <div className="flex items-center space-x-1">
-                      <span className="text-[#9a9aa2] text-[10px] hidden sm:inline">横移動:</span>
+                    <div className="flex items-center gap-1 rounded-md bg-[#18181a]/70 border border-[#3a3a40] p-0.5">
+                      <span className="px-1 text-[9px] font-semibold uppercase tracking-wider text-[#6f6f78] hidden md:inline">
+                        表示
+                      </span>
                       <button
                         onClick={scrollPianoRollToStart}
-                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40]"
+                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-transparent hover:border-[#4a4a52] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="曲頭へスクロール"
+                        aria-label="曲頭へスクロール"
                       >
                         ◀◀
                       </button>
                       <button
                         onClick={() => scrollPianoRollHorizontal(-300)}
-                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40]"
+                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-transparent hover:border-[#4a4a52] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="左へスクロール"
+                        aria-label="左へスクロール"
                       >
                         ◀
                       </button>
                       <button
                         onClick={() => scrollPianoRollHorizontal(300)}
-                        className="px-1.5 py-0.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-[#3a3a40]"
+                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-mono border border-transparent hover:border-[#4a4a52] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="右へスクロール"
+                        aria-label="右へスクロール"
                       >
                         ▶
                       </button>
                       <button
                         onClick={scrollPianoRollToPlayhead}
-                        className="px-1.5 py-0.5 bg-[#0a84ff]/20 hover:bg-[#0a84ff]/30 border border-[#0a84ff]/50 text-[#2997ff] rounded text-[10px]"
+                        className="min-w-7 h-7 px-1.5 bg-[#0a84ff]/15 hover:bg-[#0a84ff]/25 border border-[#0a84ff]/40 hover:border-[#0a84ff]/70 text-[#2997ff] rounded text-[10px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="再生バー位置へスクロール"
+                        aria-label="再生バー位置へスクロール"
                       >
                         📍
                       </button>
