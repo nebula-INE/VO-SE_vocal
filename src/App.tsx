@@ -2871,17 +2871,6 @@ export default function App() {
             className="hidden"
           />
 
-          {/* Mobile Project Sheet Button */}
-          {(responsive.isPhone || responsive.isTablet) && (
-            <button
-              onClick={() => setActiveMobileSheet('project')}
-              className="p-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] border border-[#3a3a40] transition cursor-pointer"
-              title="プロジェクト設定・読込・書出"
-            >
-              <FileText className="w-4 h-4" />
-            </button>
-          )}
-
           {/* Mobile Navigation Menu Toggle */}
           {(responsive.isPhone || responsive.isTablet) && (
             <button
