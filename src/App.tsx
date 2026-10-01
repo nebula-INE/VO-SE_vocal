@@ -247,6 +247,13 @@ export default function App() {
     noteGestureActiveRef.current = false;
   }, []);
 
+  // History belongs to the active vocal track. Never apply one track's
+  // Timeline edits to another track after switching.
+  useEffect(() => {
+    noteHistoryRef.current = { past: [], future: [] };
+    noteGestureActiveRef.current = false;
+  }, [currentTrackId]);
+
   const undoNotes = useCallback(() => {
     const history = noteHistoryRef.current;
     const previous = history.past.pop();
