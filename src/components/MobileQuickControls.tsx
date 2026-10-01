@@ -14,13 +14,14 @@ interface MobileQuickControlsProps {
   onOpenSheet: (sheet: 'tracks' | 'voice' | 'inspector' | 'params' | 'project') => void;
   selectedNote: unknown | null;
   tracksCount: number;
+  showTransport?: boolean;
 }
 
 const baseButton = 'min-w-10 h-10 px-2 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#3a3a40] text-[#d5d5da] border border-[#3a3a40] flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]';
 
 export const MobileQuickControls: React.FC<MobileQuickControlsProps> = ({
   isPlaying, onTogglePlay, onStop, onZoomIn, onZoomOut, onResetZoom,
-  onAddNote, activeSheet, onOpenSheet, selectedNote, tracksCount,
+  onAddNote, activeSheet, onOpenSheet, selectedNote, tracksCount, showTransport = true,
 }) => {
   const sheetClass = (sheet: 'tracks' | 'voice' | 'inspector' | 'params' | 'project') =>
     activeSheet === sheet
@@ -29,12 +30,14 @@ export const MobileQuickControls: React.FC<MobileQuickControlsProps> = ({
 
   return (
     <div className="bg-[#1f1f22] border-t border-[#303034] px-2 py-1.5 flex items-center gap-2 shrink-0 shadow-lg select-none pb-safe min-h-[4rem]">
-      <div className="flex items-center gap-1 shrink-0">
-        <button onClick={onTogglePlay} className="w-10 h-10 rounded-lg bg-[#0a84ff] active:bg-[#2997ff] text-white flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]" title={isPlaying ? '一時停止' : '再生'} aria-label={isPlaying ? '一時停止' : '再生'}>
-          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-        </button>
-        <button onClick={onStop} className={baseButton} title="停止" aria-label="停止"><Square className="w-4 h-4" /></button>
-      </div>
+      {showTransport && (
+        <div className="flex items-center gap-1 shrink-0">
+          <button onClick={onTogglePlay} className="w-10 h-10 rounded-lg bg-[#0a84ff] active:bg-[#2997ff] text-white flex items-center justify-center transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]" title={isPlaying ? '一時停止' : '再生'} aria-label={isPlaying ? '一時停止' : '再生'}>
+            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+          </button>
+          <button onClick={onStop} className={baseButton} title="停止" aria-label="停止"><Square className="w-4 h-4" /></button>
+        </div>
+      )}
       <div className="hidden sm:flex items-center gap-1 shrink-0">
         <button onClick={onZoomOut} className={baseButton} title="Zoom Out" aria-label="Zoom Out"><ZoomOut className="w-4 h-4" /></button>
         <button onClick={onZoomIn} className={baseButton} title="Zoom In" aria-label="Zoom In"><ZoomIn className="w-4 h-4" /></button>
