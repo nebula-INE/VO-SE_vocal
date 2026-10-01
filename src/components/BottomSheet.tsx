@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
 
 interface BottomSheetProps {
@@ -20,14 +20,50 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   children,
   heightClass = "max-h-[85vh]"
 }) => {
+  const titleId = useId();
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!isOpen) return;
 
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = sheetRef.current?.querySelector<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+    );
+    focusable?.focus();
+
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const elements = Array.from(
+        sheetRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      );
+      if (elements.length === 0) return;
+
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
+
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      restoreFocusRef.current?.focus();
+      restoreFocusRef.current = null;
+    };
   }, [isOpen, onClose]);
 
   useEffect(() => {
@@ -44,12 +80,13 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-xs animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-labelledby="bottom-sheet-title">
+    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-xs animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       {/* Backdrop click to close */}
       <div className="absolute inset-0" onClick={onClose} />
 
       {/* Sheet Container */}
       <div
+        ref={sheetRef}
         className={`relative w-full bg-[#1f1f22] border-t border-[#3a3a40] rounded-t-2xl shadow-2xl flex flex-col ${heightClass} z-10 animate-in slide-in-from-bottom duration-250 pb-safe`}
         onClick={(e) => e.stopPropagation()}
       >
@@ -63,7 +100,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           <div className="flex items-center space-x-2.5 min-w-0">
             {icon && <div className="text-[#0a84ff] shrink-0">{icon}</div>}
             <div className="min-w-0">
-              <h3 id="bottom-sheet-title" className="text-base font-bold text-[#f0f0f2] truncate">{title}</h3>
+              <h3 id={titleId} className="text-base font-bold text-[#f0f0f2] truncate">{title}</h3>
               {subtitle && <p className="text-xs text-[#9a9aa2] truncate">{subtitle}</p>}
             </div>
           </div>
