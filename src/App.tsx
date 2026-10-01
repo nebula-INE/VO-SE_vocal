@@ -640,7 +640,7 @@ export default function App() {
   const fileInputRef2 = useRef<HTMLInputElement | null>(null);
 
   // Toast Notification State
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; title: string; desc: string } | null>(null);
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info' | 'warning'; title: string; desc: string } | null>(null);
 
   // System Diagnostic Status
   const [pyStatus, setPyStatus] = useState<PyStatus | null>(null);
@@ -2049,12 +2049,12 @@ export default function App() {
     }
 
     if (notesToRender.length === 0) {
-      alert('書き出すノートが存在しません。');
+      setToast({ type: 'warning', title: '書き出し対象がありません', desc: '書き出すノートが存在しません。Timelineにノートを追加してから実行してください。' });
       return;
     }
     const targetVb = selectedVoicebank || (customVoicebanks.length > 0 ? customVoicebanks[0].name : '');
     if (!targetVb) {
-      alert('UTAU音源が設定されていません。先にUTAU音源(.zip)をアップロードしてください。');
+      setToast({ type: 'warning', title: '音源が設定されていません', desc: '先にUTAU音源(.zip)を追加し、Voicebankを選択してください。' });
       return;
     }
     setIsRenderingWav(true);
@@ -4625,6 +4625,8 @@ export default function App() {
                 ? 'bg-[#1f1f22]/95 border-[#34c759]/80 text-[#34c759] shadow-black/60'
                 : toast.type === 'error'
                 ? 'bg-[#1f1f22]/95 border-[#ff453a]/80 text-[#ff453a] shadow-black/60'
+                : toast.type === 'warning'
+                ? 'bg-[#1f1f22]/95 border-[#ff9f0a]/80 text-[#ff9f0a] shadow-black/60'
                 : 'bg-[#1f1f22]/95 border-[#0a84ff]/80 text-[#2997ff] shadow-black/60'
             }`}
           >
@@ -4632,6 +4634,7 @@ export default function App() {
               <div className="shrink-0 mt-0.5">
                 {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-[#34c759]" />}
                 {toast.type === 'error' && <AlertCircle className="w-5 h-5 text-[#ff453a]" />}
+                {toast.type === 'warning' && <ShieldAlert className="w-5 h-5 text-[#ff9f0a]" />}
                 {toast.type === 'info' && <Loader2 className="w-5 h-5 text-[#0a84ff] animate-spin" />}
               </div>
               <div className="flex-1">
