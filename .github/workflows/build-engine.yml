@@ -169,6 +169,13 @@ jobs:
         shell: bash
         run: ls -la bin/
 
+      - name: "🌐 Web multi-pitch Render → WAV mapping regression"
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts
+          npm run test:web
+
       - name: "🧪 Native multi-pitch Render → WAV → Playback regression"
         shell: bash
         env:
