@@ -3052,11 +3052,11 @@ export default function App() {
               />
 
               {/* Transport Control Bar */}
-              <div className="h-12 bg-[#1f1f22] border-b border-[#3a3a40] px-4 flex items-center justify-between shrink-0">
-                <div className="flex items-center space-x-3">
+              <div className="h-10 sm:h-12 bg-[#1f1f22] border-b border-[#3a3a40] px-2 sm:px-4 flex items-center justify-between shrink-0">
+                <div className="flex min-w-0 flex-1 items-center space-x-2 sm:space-x-3">
                   <button
                     onClick={togglePlay}
-                    className={`w-9 h-9 rounded-full flex items-center justify-center transition shadow-md ${
+                    className={`hidden lg:flex w-9 h-9 rounded-full items-center justify-center transition shadow-md ${
                       isPlaying
                         ? 'bg-[#ff9f0a] hover:bg-[#ffb340] text-black'
                         : 'bg-[#0a84ff] hover:bg-[#2997ff] text-white font-bold'
@@ -3070,12 +3070,12 @@ export default function App() {
                       setIsPlaying(false);
                       seekToTick(0);
                     }}
-                    className="w-8 h-8 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] flex items-center justify-center transition border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+                    className="hidden lg:flex w-8 h-8 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] items-center justify-center transition border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
                   >
                     <Square className="w-3.5 h-3.5 fill-current" />
                   </button>
 
-                  <div className="h-4 w-px bg-[#3a3a40]" />
+                  <div className="h-4 w-px bg-[#3a3a40] hidden lg:block" />
 
                   {/* Unified Render / Playback status */}
                   <div
@@ -3155,7 +3155,7 @@ export default function App() {
                   <div className="h-4 w-px bg-[#3a3a40]" />
 
                   {/* Tempo & Settings */}
-                  <div className="flex items-center space-x-2 text-xs">
+                  <div className="hidden lg:flex items-center space-x-2 text-xs">
                     <span className="text-[#9a9aa2] font-medium">BPM:</span>
                     <input
                       type="number"
@@ -3167,7 +3167,7 @@ export default function App() {
 
                   <div className="h-4 w-px bg-[#3a3a40]" />
 
-                  <div className="flex items-center space-x-2 text-xs">
+                  <div className="hidden lg:flex items-center space-x-2 text-xs">
                     <span className="text-[#9a9aa2] font-medium">Voicebank:</span>
                     <select
                       value={selectedVoicebank}
@@ -3184,7 +3184,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-3">
+                <div className="hidden lg:flex items-center space-x-3">
                   {/* Piano Roll Zoom Controls */}
                   <div className="flex items-center space-x-2 bg-[#18181a] border border-[#3a3a40] rounded px-2 py-1 text-xs">
                     <span className="text-[#9a9aa2] text-[10px] font-bold">ロールズーム:</span>
