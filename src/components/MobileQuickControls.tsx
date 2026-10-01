@@ -44,10 +44,10 @@ export const MobileQuickControls: React.FC<MobileQuickControlsProps> = ({
         <button onClick={onResetZoom} className={baseButton} title="表示をリセット" aria-label="表示をリセット"><Maximize2 className="w-4 h-4" /></button>
       </div>
       <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 scrollbar-none min-w-0 flex-1">
-        <button onClick={() => onOpenSheet('tracks')} className={sheetClass('tracks') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]'} title="トラック" aria-label={'トラック ' + tracksCount + '件'}>
+        <button onClick={() => onOpenSheet('tracks')} className={sheetClass('tracks') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]'} title="トラック" aria-label={'トラック ' + tracksCount + '件'}>
           <Layers className="w-4 h-4 text-[#0a84ff]" /><span className="hidden md:inline">Track</span><span className="text-[10px] bg-[#18181a] px-1 rounded-full text-[#9a9aa2] border border-[#3a3a40]">{tracksCount}</span>
         </button>
-        <button onClick={() => onOpenSheet('voice')} className={sheetClass('voice') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]'} title="音源" aria-label="音源">
+        <button onClick={() => onOpenSheet('voice')} className={sheetClass('voice') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]'} title="音源" aria-label="音源">
           <Mic className="w-4 h-4 text-[#34c759]" /><span className="hidden md:inline">Voice</span>
         </button>
         <button onClick={() => onOpenSheet('inspector')} disabled={!selectedNote} className={sheetClass('inspector') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] disabled:opacity-40 disabled:cursor-not-allowed'} title={selectedNote ? 'ノート設定' : 'ノートを選択してください'} aria-label="ノート設定">
@@ -59,7 +59,7 @@ export const MobileQuickControls: React.FC<MobileQuickControlsProps> = ({
         <button onClick={onAddNote} className="min-w-11 h-10 px-2 rounded-lg bg-[#0a84ff]/15 text-[#2997ff] border border-[#0a84ff]/50 flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]" title="ノートを追加" aria-label="ノートを追加">
           <span className="text-base leading-none">+</span><span className="hidden md:inline">Note</span>
         </button>
-        <button onClick={() => onOpenSheet('project')} className={sheetClass('project') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]'} title="プロジェクト" aria-label="プロジェクト">
+        <button onClick={() => onOpenSheet('project')} className={sheetClass('project') + ' min-w-11 h-10 px-2 rounded-lg flex items-center justify-center gap-1 text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]'} title="プロジェクト" aria-label="プロジェクト">
           <FolderOpen className="w-4 h-4 text-[#d5d5da]" /><span className="hidden md:inline">Project</span>
         </button>
       </div>
