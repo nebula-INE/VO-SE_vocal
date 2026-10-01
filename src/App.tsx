@@ -327,24 +327,14 @@ export default function App() {
 
   // Batch lyric apply handler
   const handleApplyBatchLyrics = (newLyrics: string[]) => {
-    setTracks(prev => prev.map(t => {
-      if (t.id === currentTrackId && t.type === 'vocal') {
-        // Sort notes by tick to apply in order
-        const sortedNotes = [...t.notes].sort((a, b) => a.tick - b.tick);
-        const updatedSorted = sortedNotes.map((note, idx) => {
-          if (idx < newLyrics.length) {
-            return { ...note, lyric: newLyrics[idx] };
-          }
-          return note;
-        });
-
-        // Map back to maintain original order/structure with updated lyrics
-        const updatedMap = new Map(updatedSorted.map(n => [n.id, n]));
-        const newNotes = t.notes.map(n => updatedMap.get(n.id) || n);
-        return { ...t, notes: newNotes };
-      }
-      return t;
-    }));
+    // Batch lyric editing is one Timeline action, so Desktop/Web Undo
+    // semantics stay identical instead of bypassing note history.
+    const sortedNotes = [...notes].sort((a, b) => a.tick - b.tick);
+    const updatedSorted = sortedNotes.map((note, idx) =>
+      idx < newLyrics.length ? { ...note, lyric: newLyrics[idx] } : note
+    );
+    const updatedMap = new Map(updatedSorted.map(n => [n.id, n]));
+    setNotes(notes.map((n) => updatedMap.get(n.id) || n));
   };
 
   // Track operations
