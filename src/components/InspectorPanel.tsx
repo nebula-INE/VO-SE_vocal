@@ -87,7 +87,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           type="text"
           value={selectedNote.lyric}
           onChange={(e) => onUpdateNote('lyric', e.target.value)}
-          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-bold text-sm focus:border-[#0a84ff] focus:outline-none"
+          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-bold text-sm focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
         />
       </div>
 
@@ -101,7 +101,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             max="84"
             value={selectedNote.noteNum}
             onChange={(e) => onUpdateNote('noteNum', parseInt(e.target.value) || 60)}
-            className="h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono text-center font-bold focus:border-[#0a84ff] focus:outline-none"
+            className="h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono text-center font-bold focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
           />
           <div className="h-10 bg-[#2a2a2e] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
             {getNoteName(selectedNote.noteNum)}
@@ -117,7 +117,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           step="60"
           value={selectedNote.length}
           onChange={(e) => onUpdateNote('length', parseInt(e.target.value) || 480)}
-          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono focus:border-[#0a84ff] focus:outline-none"
+          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
         />
       </div>
 
@@ -145,7 +145,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           value={selectedNote.flags}
           onChange={(e) => onUpdateNote('flags', e.target.value)}
           placeholder="g-5B50"
-          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none placeholder-[#55555c]"
+          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] placeholder-[#55555c]"
         />
       </div>
 
@@ -162,7 +162,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               type="text"
               value={selectedNote.pbs}
               onChange={(e) => onUpdateNote('pbs', e.target.value)}
-              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none"
+              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
             />
           </div>
           <div>
@@ -171,7 +171,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               type="text"
               value={selectedNote.pbw}
               onChange={(e) => onUpdateNote('pbw', e.target.value)}
-              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none"
+              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
             />
           </div>
           <div>
@@ -180,7 +180,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               type="text"
               value={selectedNote.pby}
               onChange={(e) => onUpdateNote('pby', e.target.value)}
-              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none"
+              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
             />
           </div>
         </div>
