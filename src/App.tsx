@@ -3079,7 +3079,17 @@ export default function App() {
 
                   {/* Unified Render / Playback status */}
                   <div
-                    className="flex items-center gap-1.5 text-[10px] font-semibold font-mono"
+                    className={\`min-w-0 max-w-[min(42vw,22rem)] rounded-md border px-2.5 py-1.5 transition \${
+                      isRenderingWav
+                        ? 'bg-[#0a84ff]/10 border-[#0a84ff]/35'
+                        : isPlaying
+                          ? 'bg-[#34c759]/10 border-[#34c759]/30'
+                          : renderState === 'error'
+                            ? 'bg-[#ff453a]/10 border-[#ff453a]/30'
+                            : renderState === 'complete'
+                              ? 'bg-[#34c759]/5 border-[#34c759]/20'
+                              : 'bg-[#18181a]/70 border-[#3a3a40]'
+                    }\`}
                     aria-live="polite"
                     title={
                       isRenderingWav
@@ -3093,32 +3103,52 @@ export default function App() {
                               : '待機中'
                     }
                   >
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={\`w-1.5 h-1.5 rounded-full shrink-0 \${
+                          isRenderingWav
+                            ? 'bg-[#0a84ff] animate-pulse'
+                            : isPlaying
+                              ? 'bg-[#34c759] animate-pulse'
+                              : renderState === 'error'
+                                ? 'bg-[#ff453a]'
+                                : renderState === 'complete'
+                                  ? 'bg-[#34c759]'
+                                  : 'bg-[#606068]'
+                        }\`}
+                      />
+                      <span className={\`text-[10px] font-semibold font-mono truncate \${
                         isRenderingWav
-                          ? 'bg-[#0a84ff] animate-pulse'
+                          ? 'text-[#2997ff]'
                           : isPlaying
-                            ? 'bg-[#34c759] animate-pulse'
+                            ? 'text-[#34c759]'
                             : renderState === 'error'
-                              ? 'bg-[#ff453a]'
+                              ? 'text-[#ff6b62]'
                               : renderState === 'complete'
-                                ? 'bg-[#34c759]'
-                                : 'bg-[#606068]'
-                      }`}
-                    />
-                    <span className="text-[#9a9aa2] hidden md:inline">
-                      {isRenderingWav
-                        ? `Render ${renderProgress?.pct ?? 0}%`
-                        : isPlaying
-                          ? '再生中'
-                          : renderState === 'complete'
-                            ? 'Render完了'
-                            : renderState === 'error'
-                              ? 'Render失敗'
-                              : '待機中'}
-                    </span>
-                    {renderState === 'complete' && lastRenderEngine && !isPlaying && (
-                      <span className="text-[#606068] hidden lg:inline">· {lastRenderEngine}</span>
+                                ? 'text-[#7bdc91]'
+                                : 'text-[#9a9aa2]'
+                      }\`}>
+                        {isRenderingWav
+                          ? \`Render \${renderProgress?.pct ?? 0}%\`
+                          : isPlaying
+                            ? '再生中'
+                            : renderState === 'complete'
+                              ? 'Render完了'
+                              : renderState === 'error'
+                                ? 'Render失敗'
+                                : '待機中'}
+                      </span>
+                      {renderState === 'complete' && lastRenderEngine && !isPlaying && (
+                        <span className="text-[9px] text-[#606068] truncate hidden lg:inline">· {lastRenderEngine}</span>
+                      )}
+                    </div>
+                    {isRenderingWav && (
+                      <div className="mt-1 h-0.5 rounded-full bg-[#2a2a2e] overflow-hidden" aria-hidden="true">
+                        <div
+                          className="h-full rounded-full bg-[#0a84ff] transition-[width] duration-200"
+                          style={{ width: \`\${Math.max(0, Math.min(100, renderProgress?.pct ?? 0))}%\` }}
+                        />
+                      </div>
                     )}
                   </div>
 
