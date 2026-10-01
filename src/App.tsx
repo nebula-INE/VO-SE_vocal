@@ -4683,20 +4683,27 @@ export default function App() {
                 {toast.type === 'warning' && <ShieldAlert className="w-5 h-5 text-[#ff9f0a]" />}
                 {toast.type === 'info' && <Loader2 className="w-5 h-5 text-[#0a84ff] animate-spin" />}
               </div>
-              <div className="flex-1">
-                <h4 className="font-bold text-xs text-[#f0f0f2] flex items-center justify-between">
-                  <span>{toast.title}</span>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-bold text-xs text-[#f0f0f2] flex items-center justify-between gap-2">
+                  <span className="truncate">{toast.title}</span>
                   {uploadProgress > 0 && uploadProgress < 100 && (
                     <span className="font-mono text-[#2997ff] font-bold ml-2 text-[11px]">
                       {uploadProgress}%
                     </span>
                   )}
                 </h4>
-                <p className="text-xs mt-0.5 text-[#9a9aa2] leading-relaxed">{toast.desc}</p>
+                <p className="text-xs mt-0.5 text-[#9a9aa2] leading-relaxed break-words">{toast.desc}</p>
+                {(toast.type === 'warning' || toast.type === 'error') && (
+                  <p className="mt-1.5 text-[10px] font-medium text-[#6f6f78]">
+                    {toast.type === 'warning' ? '次の操作を確認してください' : '問題が続く場合はエラー内容を確認してください'}
+                  </p>
+                )}
               </div>
               <button
                 onClick={() => setToast(null)}
-                className="shrink-0 p-1 rounded-md hover:bg-[#2a2a2e] text-[#9a9aa2] hover:text-[#f0f0f2] transition"
+                aria-label="通知を閉じる"
+                title="通知を閉じる"
+                className="shrink-0 p-1 rounded-md hover:bg-[#2a2a2e] text-[#9a9aa2] hover:text-[#f0f0f2] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
