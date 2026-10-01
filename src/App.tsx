@@ -3347,7 +3347,7 @@ export default function App() {
                   </div>
 
                   {/* Inspector Toggle Button (Desktop & Tablet) */}
-                  {!responsive.isPhone && (
+                  {!responsive.isPhone && (!responsive.isTablet || responsive.orientation === 'landscape') && (
                     <button
                       onClick={() => setIsInspectorOpen(!isInspectorOpen)}
                       className={`p-1.5 rounded-lg border transition cursor-pointer ${
