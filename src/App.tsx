@@ -3411,13 +3411,13 @@ export default function App() {
                           const mEndTick = mStartTick + 480;
                           const isMeasureVisible = totalMeasures <= 60 || (mEndTick >= visibleTickRange.startTick && mStartTick <= visibleTickRange.endTick);
                           return (
-                            <div key={mIdx} className="flex-1 border-r border-[#3a3a40]/80 flex items-center justify-between px-1 text-[10px] text-[#9a9aa2] font-mono">
+                            <div key={mIdx} className="relative flex-1 border-r border-[#4a4a52]/90 flex items-center px-1 text-[10px] text-[#9a9aa2] font-mono">
                               {isMeasureVisible ? (
                                 <>
-                                  <span className="font-bold text-[#2997ff]">{mIdx + 1}</span>
-                                  <span className="text-[9px] text-[#606068]">.</span>
-                                  <span className="text-[9px] text-[#606068]">.</span>
-                                  <span className="text-[9px] text-[#606068]">.</span>
+                                  <span className="relative z-10 font-bold text-[#d5d5da] bg-[#1f1f22]/90 px-0.5 rounded-sm">{mIdx + 1}</span>
+                                  <div className="absolute inset-y-0 left-1/4 border-l border-[#38383f]/80" />
+                                  <div className="absolute inset-y-0 left-1/2 border-l border-[#38383f]/80" />
+                                  <div className="absolute inset-y-0 left-3/4 border-l border-[#38383f]/80" />
                                 </>
                               ) : null}
                             </div>
@@ -3497,21 +3497,22 @@ export default function App() {
                         {/* Playhead indicator bar */}
                         <div
                           ref={gridPlayheadRef}
-                          className="absolute top-0 bottom-0 w-0.5 bg-[#ff453a] z-30 pointer-events-none shadow-sm shadow-[#ff453a]"
+                          className="absolute top-0 bottom-0 w-[2px] bg-[#ff453a] z-30 pointer-events-none shadow-[0_0_6px_rgba(255,69,58,0.55)]"
                           style={{
                             left: `${(currentTick / totalTicks) * 100}%`
                           }}
                         >
-                          <div className="w-2.5 h-2.5 bg-[#ff453a] rounded-full -ml-[4px] -mt-1 shadow" />
+                          <div className="w-3 h-3 bg-[#ff453a] rounded-full -ml-[5px] -mt-1 shadow-[0_0_5px_rgba(255,69,58,0.55)] border border-[#ffb3ad]" />
                         </div>
 
                         {/* Grid lines background */}
-                        <div className="absolute inset-0 flex">
+                        <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
                           {Array.from({ length: totalMeasures }).map((_, bIdx) => (
-                            <div key={bIdx} className="flex-1 border-r border-[#3a3a40]/60 flex">
-                              <div className="flex-1 border-r border-[#2a2a2e]/40" />
-                              <div className="flex-1 border-r border-[#2a2a2e]/40" />
-                              <div className="flex-1 border-r border-[#2a2a2e]/40" />
+                            <div key={bIdx} className="absolute inset-y-0 flex" style={{ left: `${(bIdx / totalMeasures) * 100}%`, width: `${(1 / totalMeasures) * 100}%` }}>
+                              <div className="flex-1 border-r border-[#4a4a52]/90" />
+                              <div className="flex-1 border-r border-[#35353c]/80" />
+                              <div className="flex-1 border-r border-[#2c2c32]/70" />
+                              <div className="flex-1 border-r border-[#35353c]/80" />
                             </div>
                           ))}
                         </div>
