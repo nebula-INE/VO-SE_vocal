@@ -57,7 +57,7 @@ export const PitchParamsSheet: React.FC<PitchParamsSheetProps> = ({
 
           <button
             onClick={onToggleGhostNotes}
-            className={`min-w-[44px] h-9 px-3 rounded-lg font-medium transition cursor-pointer border ${
+            className={`min-w-[44px] h-9 px-3 rounded-lg font-medium transition cursor-pointer border focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] ${
               showGhostNotes
                 ? 'bg-[#0a84ff]/20 text-[#2997ff] border-[#0a84ff]'
                 : 'bg-[#2a2a2e] text-[#9a9aa2] border-[#3a3a40] hover:text-[#f0f0f2]'
@@ -104,7 +104,7 @@ export const PitchParamsSheet: React.FC<PitchParamsSheetProps> = ({
                 type="text"
                 value={selectedNote.pbs}
                 onChange={(e) => handleUpdateField('pbs', e.target.value)}
-                className="w-full h-9 bg-[#18181a] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none"
+                className="w-full h-9 bg-[#18181a] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
               />
             </div>
 
@@ -114,7 +114,7 @@ export const PitchParamsSheet: React.FC<PitchParamsSheetProps> = ({
                 type="text"
                 value={selectedNote.pbw}
                 onChange={(e) => handleUpdateField('pbw', e.target.value)}
-                className="w-full h-9 bg-[#18181a] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none"
+                className="w-full h-9 bg-[#18181a] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
               />
             </div>
 
@@ -124,7 +124,7 @@ export const PitchParamsSheet: React.FC<PitchParamsSheetProps> = ({
                 type="text"
                 value={selectedNote.pby}
                 onChange={(e) => handleUpdateField('pby', e.target.value)}
-                className="w-full h-9 bg-[#18181a] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none"
+                className="w-full h-9 bg-[#18181a] border border-[#3a3a40] rounded-lg px-2.5 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
               />
             </div>
           </div>
