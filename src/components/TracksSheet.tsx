@@ -47,21 +47,21 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
   const content = (
     <div className="space-y-4 text-xs">
       {/* Top Toolbar in Sheet */}
-      <div className="flex items-center justify-between gap-2 pb-2 border-b border-[#303034]">
-        <div className="flex items-center space-x-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#303034]">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <button
             onClick={() => onAddTrack('vocal')}
             className="min-h-10 h-10 px-3 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-medium rounded-lg flex items-center space-x-1.5 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>+ ボーカルトラック</span>
+            <span className="hidden sm:inline">+ ボーカルトラック</span>
           </button>
           <button
             onClick={() => onAddTrack('wave')}
             className="min-h-10 h-10 px-3 bg-[#2a2a2e] hover:bg-[#34343a] active:bg-[#2a2a2e]/80 text-[#f0f0f2] font-medium rounded-lg flex items-center space-x-1.5 transition cursor-pointer border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
           >
             <Music className="w-3.5 h-3.5 text-[#bf5af2]" />
-            <span>+ WAV伴奏</span>
+            <span className="hidden sm:inline">+ WAV伴奏</span>
           </button>
         </div>
 
@@ -72,10 +72,10 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
               ? 'bg-[#0a84ff]/20 text-[#2997ff] border-[#0a84ff]'
               : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40]'
           }`}
-          title="他トラックの透かし表示"
+          title="他トラックの透かし表示" aria-label="他トラックの透かし表示"
         >
           {showGhostNotes ? <Eye className="w-3.5 h-3.5 text-[#0a84ff]" /> : <EyeOff className="w-3.5 h-3.5 text-[#7d7d86]" />}
-          <span>他トラック透視</span>
+          <span className="hidden sm:inline">他トラック透視</span>
         </button>
       </div>
 
@@ -143,7 +143,7 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
                   </button>
                   <button
                     onClick={() => onUpdateTrack(t.id, { isSolo: !t.isSolo })}
-                    className={`min-w-[28px] h-6 px-1.5 text-[10px] font-mono font-bold rounded border transition cursor-pointer ${
+                    className={`min-w-10 h-9 px-2 text-[10px] font-mono font-bold rounded-lg border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
                       t.isSolo
                         ? 'bg-[#ff9f0a]/20 text-[#ff9f0a] border-[#ff9f0a]/60'
                         : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40] hover:text-[#f0f0f2]'
@@ -178,7 +178,7 @@ export const TracksSheet: React.FC<TracksSheetProps> = ({
         <div className="pt-2 border-t border-[#303034]">
           <button
             onClick={onImportProject}
-            className="w-full h-10 bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] border border-[#3a3a40] rounded-xl flex items-center justify-center space-x-2 transition font-medium cursor-pointer"
+            className="w-full h-10 bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] border border-[#3a3a40] rounded-xl flex items-center justify-center space-x-2 transition font-medium cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
           >
             <Upload className="w-4 h-4 text-[#0a84ff]" />
             <span>UST / MIDI プロジェクトをトラックへ読み込む</span>
