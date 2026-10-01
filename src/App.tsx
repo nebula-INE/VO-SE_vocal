@@ -3079,7 +3079,7 @@ export default function App() {
 
                   {/* Unified Render / Playback status */}
                   <div
-                    className={\`min-w-0 max-w-[min(42vw,22rem)] rounded-md border px-2.5 py-1.5 transition \${
+                    className={`min-w-0 max-w-[min(42vw,22rem)] rounded-md border px-2.5 py-1.5 transition ${
                       isRenderingWav
                         ? 'bg-[#0a84ff]/10 border-[#0a84ff]/35'
                         : isPlaying
@@ -3089,7 +3089,7 @@ export default function App() {
                             : renderState === 'complete'
                               ? 'bg-[#34c759]/5 border-[#34c759]/20'
                               : 'bg-[#18181a]/70 border-[#3a3a40]'
-                    }\`}
+                    }`}
                     aria-live="polite"
                     title={
                       isRenderingWav
@@ -3105,7 +3105,7 @@ export default function App() {
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <span
-                        className={\`w-1.5 h-1.5 rounded-full shrink-0 \${
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                           isRenderingWav
                             ? 'bg-[#0a84ff] animate-pulse'
                             : isPlaying
@@ -3115,9 +3115,9 @@ export default function App() {
                                 : renderState === 'complete'
                                   ? 'bg-[#34c759]'
                                   : 'bg-[#606068]'
-                        }\`}
+                        }`}
                       />
-                      <span className={\`text-[10px] font-semibold font-mono truncate \${
+                      <span className={`text-[10px] font-semibold font-mono truncate ${
                         isRenderingWav
                           ? 'text-[#2997ff]'
                           : isPlaying
@@ -3127,9 +3127,9 @@ export default function App() {
                               : renderState === 'complete'
                                 ? 'text-[#7bdc91]'
                                 : 'text-[#9a9aa2]'
-                      }\`}>
+                      }`}>
                         {isRenderingWav
-                          ? \`Render \${renderProgress?.pct ?? 0}%\`
+                          ? `Render ${renderProgress?.pct ?? 0}%`
                           : isPlaying
                             ? '再生中'
                             : renderState === 'complete'
@@ -3146,7 +3146,7 @@ export default function App() {
                       <div className="mt-1 h-0.5 rounded-full bg-[#2a2a2e] overflow-hidden" aria-hidden="true">
                         <div
                           className="h-full rounded-full bg-[#0a84ff] transition-[width] duration-200"
-                          style={{ width: \`\${Math.max(0, Math.min(100, renderProgress?.pct ?? 0))}%\` }}
+                          style={{ width: `${Math.max(0, Math.min(100, renderProgress?.pct ?? 0))}%` }}
                         />
                       </div>
                     )}
