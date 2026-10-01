@@ -61,7 +61,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
     <div className="bg-[#1f1f22] border-b border-[#303034] flex flex-col shrink-0 select-none transition-all">
       {/* Panel Header */}
       <div className="h-10 px-3 bg-[#18181a] border-b border-[#303034] flex items-center justify-between">
-        <div className="flex items-center space-x-2">
+        <div className="flex min-w-0 items-center space-x-2">
           {onToggleCollapse && (
             <button
               onClick={onToggleCollapse}
@@ -83,7 +83,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
           )}
         </div>
 
-        <div className="flex items-center space-x-1.5 sm:space-x-2">
+        <div className="hidden sm:flex items-center space-x-1.5 sm:space-x-2">
           {/* Ghost Notes Toggle */}
           <button
             onClick={() => setShowGhostNotes(!showGhostNotes)}
