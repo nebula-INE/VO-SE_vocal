@@ -156,8 +156,7 @@ async function parseOtoIniFull(dirPath) {
       try {
         const buf = await fs.promises.readFile(fullPath);
         const content = decodeTextBuffer(buf);
-        const lines = content.split(/\r?
-/);
+        const lines = content.split(/\r?\n/);
 
         let linesSinceYield = 0;
 
@@ -1265,8 +1264,7 @@ vbRegistry.warmBaseMidiCache = (indexed) => {
 
 function parsePrefixMapText(text) {
   const map = new Map();
-  const lines = String(text || '').split(/\r?
-/);
+  const lines = String(text || '').split(/\r?\n/);
   for (const raw of lines) {
     const trimmed = raw.trim();
     if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
@@ -2087,8 +2085,7 @@ app.post('/api/py/parse-ust', (req, res) => {
   }
 
   try {
-    const lines = ustText.split(/\r?
-/);
+    const lines = ustText.split(/\r?\n/);
     let tempo = 120;
     let projectName = 'Untitled Project';
     let voicebank = '';
