@@ -1270,7 +1270,7 @@ function parsePrefixMapText(text) {
     const cols = raw.includes('\t') ? raw.split('\t') : trimmed.split(/\s+/);
     if (cols.length < 2) continue;
     const noteToken = String(cols[0] || '').trim();
-    if (!/^[A-Ga-g][#b]?-?\\d+$/.test(noteToken)) continue;
+    if (!/^[A-Ga-g][#b]?-?\d+$/.test(noteToken)) continue;
     const midi = getMidiFromPitchTag(noteToken);
     if (!Number.isFinite(midi)) continue;
     const prefix = (cols[1] || '').trim();
