@@ -652,6 +652,8 @@ export default function App() {
     remainingSec: number | null;
     elapsedSec: number;
   } | null>(null);
+  const [renderState, setRenderState] = useState<'idle' | 'rendering' | 'complete' | 'error'>('idle');
+  const [lastRenderEngine, setLastRenderEngine] = useState<string | null>(null);
 
   // 残り時間のフォーマット表示ヘルパー
   const formatEta = (seconds: number | null | undefined): string => {
@@ -706,6 +708,8 @@ export default function App() {
     }
 
     setIsRenderingWav(true);
+    setRenderState('rendering');
+    setLastRenderEngine(null);
     const startTime = performance.now();
     setRenderProgress({ pct: 0, remainingSec: null, elapsedSec: 0 });
     setToast({
@@ -740,9 +744,11 @@ export default function App() {
       
       if (audioUrl) {
         const totalDurationSec = Math.round((performance.now() - startTime) / 1000);
-        const engineName = lastUsedEngine === 'wasm' 
-          ? '⚡ C++ WebAssembly (vose_core.wasm)' 
-          : '⚠️ JS/WebAudio (PSOLA フォールバック)';
+        const engineName = lastUsedEngine === 'wasm'
+          ? 'C++ WebAssembly'
+          : 'JS/WebAudio fallback';
+        setLastRenderEngine(engineName);
+        setRenderState('complete');
         setToast({
           type: 'success',
           title: 'レンダリング完了',
@@ -755,10 +761,11 @@ export default function App() {
         throw new Error('合成エラー: 出力ファイルが生成されませんでした');
       }
     } catch (e: any) {
+      setRenderState('error');
       setToast({
         type: 'error',
         title: 'レンダリング失敗',
-        desc: e.message
+        desc: e?.message || '不明なエラーが発生しました。'
       });
     } finally {
       setIsRenderingWav(false);
@@ -2051,6 +2058,8 @@ export default function App() {
       return;
     }
     setIsRenderingWav(true);
+    setRenderState('rendering');
+    setLastRenderEngine(null);
     const startTime = performance.now();
     setRenderProgress({ pct: 0, remainingSec: null, elapsedSec: 0 });
     setToast({
@@ -2091,9 +2100,11 @@ export default function App() {
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 10000);
-        const engineName = lastUsedEngine === 'wasm' 
-          ? '⚡ C++ WebAssembly (vose_core.wasm)' 
-          : '⚠️ JS/WebAudio (PSOLA フォールバック)';
+        const engineName = lastUsedEngine === 'wasm'
+          ? 'C++ WebAssembly'
+          : 'JS/WebAudio fallback';
+        setLastRenderEngine(engineName);
+        setRenderState('complete');
         setToast({
           type: 'success',
           title: 'WAV書き出し完了',
@@ -2103,7 +2114,12 @@ export default function App() {
         throw new Error('音声データの生成に失敗しました。');
       }
     } catch (err: any) {
-      alert('WAV音声書き出しに失敗しました: ' + err.message);
+      setRenderState('error');
+      setToast({
+        type: 'error',
+        title: 'WAV書き出し失敗',
+        desc: err?.message || '音声データの生成に失敗しました。'
+      });
     } finally {
       setIsRenderingWav(false);
       setRenderProgress(null);
@@ -3051,6 +3067,53 @@ export default function App() {
                   >
                     <Square className="w-3.5 h-3.5 fill-current" />
                   </button>
+
+                  <div className="h-4 w-px bg-[#3a3a40]" />
+
+                  {/* Unified Render / Playback status */}
+                  <div
+                    className="flex items-center gap-1.5 text-[10px] font-semibold font-mono"
+                    aria-live="polite"
+                    title={
+                      isRenderingWav
+                        ? 'WAVレンダリング処理中'
+                        : isPlaying
+                          ? 'タイムライン再生中'
+                          : renderState === 'complete'
+                            ? '最後のWAVレンダリングが完了'
+                            : renderState === 'error'
+                              ? '最後のWAVレンダリングに失敗'
+                              : '待機中'
+                    }
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        isRenderingWav
+                          ? 'bg-[#0a84ff] animate-pulse'
+                          : isPlaying
+                            ? 'bg-[#34c759] animate-pulse'
+                            : renderState === 'error'
+                              ? 'bg-[#ff453a]'
+                              : renderState === 'complete'
+                                ? 'bg-[#34c759]'
+                                : 'bg-[#606068]'
+                      }`}
+                    />
+                    <span className="text-[#9a9aa2] hidden md:inline">
+                      {isRenderingWav
+                        ? `Render ${renderProgress?.pct ?? 0}%`
+                        : isPlaying
+                          ? '再生中'
+                          : renderState === 'complete'
+                            ? 'Render完了'
+                            : renderState === 'error'
+                              ? 'Render失敗'
+                              : '待機中'}
+                    </span>
+                    {renderState === 'complete' && lastRenderEngine && !isPlaying && (
+                      <span className="text-[#606068] hidden lg:inline">· {lastRenderEngine}</span>
+                    )}
+                  </div>
 
                   <div className="h-4 w-px bg-[#3a3a40]" />
 
