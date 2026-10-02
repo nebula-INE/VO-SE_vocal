@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Upload, FileText, Clipboard, Check, X, AlertCircle, Music, Sparkles, FolderOpen } from 'lucide-react';
 import { parseUstText, parseVsqxXml, parseSvpJson, parseMidiBuffer, decodeTextBuffer, ProjectData } from '../utils/formatConverter';
 
@@ -20,6 +20,26 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
   const [previewData, setPreviewData] = useState<ProjectData | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const selector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+    const frame = requestAnimationFrame(() => modalRef.current?.querySelector<HTMLElement>(selector)?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const elements = Array.from(modalRef.current?.querySelectorAll<HTMLElement>(selector) ?? []);
+      if (!elements.length) return;
+      const first = elements[0], last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener('keydown', handleKeyDown); restoreFocusRef.current?.focus(); restoreFocusRef.current = null; };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -123,8 +143,8 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in duration-200" role="presentation">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="ust-import-title" className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden">
         {/* Modal Header */}
         <div className="px-5 py-4 border-b border-[#303034] flex items-center justify-between bg-[#18181a]">
           <div className="flex items-center space-x-2.5">
@@ -132,13 +152,13 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
               <Upload className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-[#f0f0f2]">プロジェクト / USTファイルの読み込み</h2>
+              <h2 id="ust-import-title" className="text-sm font-bold text-[#f0f0f2]">プロジェクト / USTファイルの読み込み</h2>
               <p className="text-xs text-[#9a9aa2]">UST, VSQX, SVP, MIDI ファイルまたはテキストをインポート</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-[#9a9aa2] hover:text-[#f0f0f2] rounded-lg hover:bg-[#2a2a2e] transition"
+            className="p-2 min-w-10 min-h-10 text-[#9a9aa2] hover:text-[#f0f0f2] rounded-lg hover:bg-[#2a2a2e] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]" aria-label="閉じる" title="閉じる"
           >
             <X className="w-4 h-4" />
           </button>
