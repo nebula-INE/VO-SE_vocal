@@ -203,4 +203,30 @@
     filter: none;
   }
 }
+/* Ruler hierarchy: keep measure labels readable without competing with the playhead. */
+.vose-timeline-ruler {
+  scrollbar-gutter: stable;
+}
+.vose-timeline-ruler-measure {
+  min-width: 0;
+}
+.vose-timeline-ruler-measure > span {
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+@media (max-width: 1199px) {
+  .vose-timeline-ruler-measure > span {
+    font-size: 9px;
+    opacity: 0.9;
+  }
+}
+@media (max-width: 767px) {
+  .vose-timeline-ruler-measure > span {
+    font-size: 8px;
+    opacity: 0.82;
+  }
 
+  .vose-timeline-ruler-measure > div {
+    opacity: 0.72;
+  }
+}
