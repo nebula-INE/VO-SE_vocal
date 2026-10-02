@@ -26,7 +26,7 @@ export const GhostTrackOverlay: React.FC<GhostTrackOverlayProps> = ({
   if (ghostTracks.length === 0) return null;
 
   return (
-    <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+    <div className="vose-ghost-track-overlay absolute inset-0 pointer-events-none z-[5] overflow-hidden">
       {ghostTracks.map((gt, tIdx) => {
         const color = gt.color || DEFAULT_GHOST_COLORS[tIdx % DEFAULT_GHOST_COLORS.length];
         const notesToRender = (visibleStartTick !== undefined && visibleEndTick !== undefined)
