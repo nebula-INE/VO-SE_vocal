@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+/* Shared dark palette for the Web editor and responsive sheets. */
+:root {
+  color-scheme: dark;
+  --vose-bg-base: #18181a;
+  --vose-bg-panel: #1f1f22;
+  --vose-bg-elevated: #2a2a2e;
+  --vose-bg-hover: #34343a;
+  --vose-border: #3a3a40;
+  --vose-border-strong: #4a4a52;
+  --vose-text-primary: #f0f0f2;
+  --vose-text-secondary: #9a9aa2;
+  --vose-text-muted: #7d7d86;
+  --vose-accent: #0a84ff;
+  --vose-danger: #ff453a;
+  --vose-success: #30d158;
+  --vose-warning: #ff9f0a;
+}
+
 @layer base {
   body {
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
