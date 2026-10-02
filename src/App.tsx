@@ -3183,7 +3183,7 @@ export default function App() {
                       <button
                         onClick={() => setPianoRollZoomX((prev) => Math.max(1.0, Math.round((prev - 0.25) * 100) / 100))}
                         disabled={pianoRollZoomX <= 1.0}
-                        className="min-w-7 h-7 p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-30 border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+                        className="min-w-7 h-7 p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-40 disabled:cursor-not-allowed border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                         title="時間軸を縮小"
                       >
                         <ZoomOut className="w-3 h-3" />
@@ -3194,7 +3194,7 @@ export default function App() {
                       <button
                         onClick={() => setPianoRollZoomX((prev) => Math.min(4.0, Math.round((prev + 0.25) * 100) / 100))}
                         disabled={pianoRollZoomX >= 4.0}
-                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-30 border border-[#3a3a40]"
+                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded disabled:opacity-40 disabled:cursor-not-allowed border border-[#3a3a40]"
                         title="時間軸を拡大"
                       >
                         <ZoomIn className="w-3 h-3" />
@@ -3208,7 +3208,7 @@ export default function App() {
                       <button
                         onClick={() => setPianoRollRowHeight((prev) => Math.max(20, prev - 4))}
                         disabled={pianoRollRowHeight <= 20}
-                        className="min-w-7 h-7 p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-30 border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+                        className="min-w-7 h-7 p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-40 disabled:cursor-not-allowed border border-[#3a3a40] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                         title="鍵盤高さを縮小"
                       >
                         -
@@ -3219,7 +3219,7 @@ export default function App() {
                       <button
                         onClick={() => setPianoRollRowHeight((prev) => Math.min(64, prev + 4))}
                         disabled={pianoRollRowHeight >= 64}
-                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-30 border border-[#3a3a40]"
+                        className="p-1 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-[10px] font-bold disabled:opacity-40 disabled:cursor-not-allowed border border-[#3a3a40]"
                         title="鍵盤高さを拡大"
                       >
                         +
@@ -3247,7 +3247,7 @@ export default function App() {
                       <button
                         onClick={() => undoNotes()}
                         disabled={noteHistoryRef.current.past.length === 0}
-                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-xs border border-transparent hover:border-[#4a4a52] disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
+                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-xs border border-transparent hover:border-[#4a4a52] disabled:opacity-40 disabled:cursor-not-allowed disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="元に戻す (⌘/Ctrl+Z)"
                         aria-label="元に戻す (⌘/Ctrl+Z)"
                       >
@@ -3256,7 +3256,7 @@ export default function App() {
                       <button
                         onClick={() => redoNotes()}
                         disabled={noteHistoryRef.current.future.length === 0}
-                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-xs border border-transparent hover:border-[#4a4a52] disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
+                        className="min-w-7 h-7 px-1.5 bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] rounded text-xs border border-transparent hover:border-[#4a4a52] disabled:opacity-40 disabled:cursor-not-allowed disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                         title="やり直す (⌘/Ctrl+Y / ⇧⌘/Ctrl+Z)"
                         aria-label="やり直す (⌘/Ctrl+Y / ⇧⌘/Ctrl+Z)"
                       >
