@@ -153,10 +153,19 @@
     transition: none !important;
   }
 
+  .vose-timeline-note-selected {
+    transform: none;
+  }
+
   .vose-timeline-note-idle:hover,
   .vose-timeline-note-selected:hover {
     transform: none;
     box-shadow: none;
+  }
+
+  .vose-timeline-note-idle:hover {
+    background-color: #0a84ff;
+    border-color: rgba(90, 200, 250, 0.4);
   }
 
   .vose-ghost-note:hover {
