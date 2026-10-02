@@ -247,12 +247,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-@container (max-width: 44px) {
+@container (max-width: 72px) {
   .vose-note-pitch {
     display: none;
   }
 }
-@container (min-width: 45px) and (max-width: 64px) {
+@container (min-width: 73px) and (max-width: 104px) {
   .vose-note-pitch {
     max-width: 2.25rem;
   }
