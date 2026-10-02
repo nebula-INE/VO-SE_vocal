@@ -174,7 +174,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                   </span>
                     </div>
                     <div className="mt-1 text-[9px] text-[#7d7d86] truncate">
-                      {t.type === 'vocal' ? `${t.notes.length} notes` : 'Audio track'}
+                      {t.type === 'vocal' ? `${t.notes.length}音` : 'WAVトラック'}
                     </div>
                   </div>
                 </div>
@@ -209,14 +209,14 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
               {/* Voicebank / Type details */}
               {t.type === 'vocal' ? (
                 <div className="rounded-md bg-[#18181a]/80 border border-[#303034] px-2 py-1.5">
-                  <div className="text-[9px] uppercase tracking-wide text-[#6f6f78] mb-1">Voicebank</div>
+                  <div className="text-[9px] uppercase tracking-wide text-[#6f6f78] mb-1">音源</div>
                   <div className="text-[10px] text-[#9a9aa2] flex items-center justify-between gap-2">
                   <span className="shrink-0 text-[9px] text-[#7d7d86]">音源</span>
                   <select
                     value={t.voicebank || ''}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onUpdateTrack(t.id, { voicebank: e.target.value })}
-                    className="min-w-0 w-full bg-[#18181a] text-[#f0f0f2] text-[10px] border border-[#3a3a40] rounded px-1.5 py-1 max-w-[150px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+                    className="min-w-0 w-full bg-[#18181a] text-[#f0f0f2] text-[10px] border border-[#3a3a40] rounded px-1.5 py-1 max-w-[150px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                   >
                     <option value="">(既定音源)</option>
                     {customVoicebanks.map((vb) => (
