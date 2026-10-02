@@ -37,29 +37,29 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 }) => {
   if (!selectedNote) {
     return (
-      <div className="flex flex-col items-center justify-center p-6 text-center text-[#7d7d86] space-y-2 h-full min-h-[180px]">
-        <Sliders className="w-8 h-8 opacity-40 text-[#9a9aa2]" />
+      <div className="flex flex-col items-center justify-center p-6 text-center text-[var(--vose-text-muted)] space-y-2 h-full min-h-[180px]">
+        <Sliders className="w-8 h-8 opacity-40 text-[var(--vose-text-secondary)]" />
         <p className="text-xs">ノートを選択すると<br />パラメータを編集できます</p>
       </div>
     );
   }
 
-  const sectionClass = 'rounded-lg border border-[#303034] bg-[#1b1b1e] p-2.5';
-  const fieldLabelClass = 'text-[#9a9aa2] font-medium block mb-1';
-  const inputClass = 'w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]';
-  const compactInputClass = 'w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]';
+  const sectionClass = 'rounded-lg border border-[var(--vose-border)] bg-[var(--vose-bg-panel)] p-2.5';
+  const fieldLabelClass = 'text-[var(--vose-text-secondary)] font-medium block mb-1';
+  const inputClass = 'w-full h-10 bg-[var(--vose-bg-base)] border border-[#3a3a40] rounded-lg px-3 text-[var(--vose-text-primary)] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-panel)]';
+  const compactInputClass = 'w-full h-8 bg-[var(--vose-bg-base)] border border-[#3a3a40] rounded px-2 text-[var(--vose-text-primary)] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-panel)]';
 
   return (
     <div className={`flex flex-col text-xs ${isCompact ? 'space-y-3' : 'space-y-3.5'}`}>
       {/* Header: identity + destructive action */}
-      <div className="flex items-center justify-between border-b border-[#303034] pb-2.5">
+      <div className="flex items-center justify-between border-b border-[var(--vose-border)] pb-2.5">
         <div className="flex items-center space-x-2 min-w-0">
           <span className="w-6 h-6 shrink-0 rounded-md bg-[#0a84ff]/20 border border-[#0a84ff]/50 text-[#2997ff] font-bold font-mono text-xs flex items-center justify-center">
             {getNoteName(selectedNote.noteNum)}
           </span>
           <div className="min-w-0">
-            <h4 className="font-bold text-[#f0f0f2] text-xs">ノート情報</h4>
-            <span className="text-[10px] text-[#7d7d86] font-mono">Tick {selectedNote.tick}</span>
+            <h4 className="font-bold text-[var(--vose-text-primary)] text-xs">ノート情報</h4>
+            <span className="text-[10px] text-[var(--vose-text-muted)] font-mono">Tick {selectedNote.tick}</span>
           </div>
         </div>
 
@@ -76,7 +76,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
       <section className={`${sectionClass} space-y-2.5`}>
         <div className="flex items-center justify-between">
-          <h5 className="text-[10px] font-semibold tracking-wide text-[#7d7d86] uppercase">基本情報</h5>
+          <h5 className="text-[10px] font-semibold tracking-wide text-[var(--vose-text-muted)] uppercase">基本情報</h5>
           {onOpenBatchLyrics && (
             <button
               type="button"
@@ -98,7 +98,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <label className={fieldLabelClass}>音高 (Pitch / Note):</label>
           <div className="grid grid-cols-2 gap-2">
             <input type="number" min="36" max="84" value={selectedNote.noteNum} onChange={(e) => onUpdateNote('noteNum', parseInt(e.target.value) || 60)} className={`${inputClass} font-mono text-center font-bold`} />
-            <div className="h-10 bg-[#2a2a2e] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
+            <div className="h-10 bg-[var(--vose-bg-elevated)] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
               {getNoteName(selectedNote.noteNum)}
             </div>
           </div>
@@ -111,18 +111,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       </section>
 
       <section className={`${sectionClass} space-y-2.5`}>
-        <h5 className="text-[10px] font-semibold tracking-wide text-[#7d7d86] uppercase">発音・強度</h5>
+        <h5 className="text-[10px] font-semibold tracking-wide text-[var(--vose-text-muted)] uppercase">発音・強度</h5>
 
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-[#9a9aa2] font-medium">音量強度 (Intensity):</label>
+            <label className="text-[var(--vose-text-secondary)] font-medium">音量強度 (Intensity):</label>
             <span className="font-mono text-[#2997ff] font-bold">{selectedNote.intensity}</span>
           </div>
-          <input type="range" min="0" max="150" value={selectedNote.intensity} onChange={(e) => onUpdateNote('intensity', parseFloat(e.target.value))} className="w-full h-2 accent-[#0a84ff] bg-[#2a2a2e] rounded-lg appearance-none cursor-pointer" aria-label="音量強度" />
+          <input type="range" min="0" max="150" value={selectedNote.intensity} onChange={(e) => onUpdateNote('intensity', parseFloat(e.target.value))} className="w-full h-2 accent-[#0a84ff] bg-[var(--vose-bg-elevated)] rounded-lg appearance-none cursor-pointer" aria-label="音量強度" />
         </div>
 
         <div>
-          <label className={fieldLabelClass}>フラグ <span className="text-[10px] text-[#7d7d86]">(例: g-5B50)</span></label>
+          <label className={fieldLabelClass}>フラグ <span className="text-[10px] text-[var(--vose-text-muted)]">(例: g-5B50)</span></label>
           <input type="text" value={selectedNote.flags} onChange={(e) => onUpdateNote('flags', e.target.value)} placeholder="g-5B50" className={`${inputClass} font-mono text-xs placeholder-[#55555c]`} />
         </div>
       </section>
@@ -134,11 +134,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         </label>
 
         <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
-          <span className="text-[10px] text-[#7d7d86]">PBS</span>
+          <span className="text-[10px] text-[var(--vose-text-muted)]">PBS</span>
           <input type="text" value={selectedNote.pbs} onChange={(e) => onUpdateNote('pbs', e.target.value)} aria-label="PBS 開始点" className={compactInputClass} />
-          <span className="text-[10px] text-[#7d7d86]">PBW</span>
+          <span className="text-[10px] text-[var(--vose-text-muted)]">PBW</span>
           <input type="text" value={selectedNote.pbw} onChange={(e) => onUpdateNote('pbw', e.target.value)} aria-label="PBW 各点幅" className={compactInputClass} />
-          <span className="text-[10px] text-[#7d7d86]">PBY</span>
+          <span className="text-[10px] text-[var(--vose-text-muted)]">PBY</span>
           <input type="text" value={selectedNote.pby} onChange={(e) => onUpdateNote('pby', e.target.value)} aria-label="PBY 各点高さ" className={compactInputClass} />
         </div>
 
