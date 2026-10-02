@@ -2846,7 +2846,7 @@ export default function App() {
           <button
             onClick={handleExportWav}
             disabled={isRenderingWav}
-            className="flex items-center space-x-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] disabled:opacity-50 text-white font-medium px-2.5 sm:px-3 py-1.5 rounded-md transition shadow-md shadow-[#0a84ff]/30 font-sans cursor-pointer"
+            className="flex items-center space-x-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] disabled:opacity-40 disabled:cursor-wait disabled:hover:bg-[#0a84ff] text-white font-medium px-2.5 sm:px-3 py-1.5 rounded-md transition shadow-md shadow-[#0a84ff]/30 font-sans cursor-pointer"
             title="WAV音声ファイルをレンダリングしてダウンロードします"
           >
             {isRenderingWav ? (
@@ -4582,7 +4582,7 @@ shadow border gpu-accelerated group select-none touch-none ${
                 <button
                   onClick={handleRunTests}
                   disabled={isRunningTests}
-                  className="flex items-center space-x-2 bg-[#0a84ff] hover:bg-[#2997ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition shadow-md disabled:opacity-50 cursor-pointer"
+                  className="flex items-center space-x-2 bg-[#0a84ff] hover:bg-[#2997ff] text-white text-xs font-semibold px-4 py-2 rounded-lg transition shadow-md disabled:opacity-40 disabled:cursor-wait cursor-pointer"
                 >
                   <RefreshCw className={`w-4 h-4 ${isRunningTests ? 'animate-spin' : ''}`} />
                   <span>{isRunningTests ? 'テスト実行中...' : 'テスト実行 (python -m unittest)'}</span>
