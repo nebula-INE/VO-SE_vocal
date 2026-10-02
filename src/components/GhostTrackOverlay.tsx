@@ -44,7 +44,7 @@ export const GhostTrackOverlay: React.FC<GhostTrackOverlayProps> = ({
               return (
                 <div
                   key={note.id}
-                  className="absolute rounded border opacity-40 flex items-center justify-between px-1.5 text-[10px] font-bold"
+                  className="vose-ghost-note absolute rounded border flex items-center justify-between px-1.5 text-[10px] font-bold"
                   style={{
                     top: `${topPos + 2}px`,
                     height: `${Math.max(12, rowHeightPx - 4)}px`,
