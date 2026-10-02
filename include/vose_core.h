@@ -72,6 +72,10 @@ struct NoteEvent {
 
 struct OtoEntry; // 前方宣言
 
+// レンダリング進捗・キャンセル用C ABIコールバック。
+typedef void (*VoseProgressCallback)(int percent);
+typedef int  (*VoseCancelCheckCallback)();
+
 extern "C" {
     // 1. 音源をメモリにパッキングする（内蔵音源化の必須関数）
     DLLEXPORT void load_embedded_resource(const char* phoneme, const int16_t* raw_data, int sample_count);
@@ -82,6 +86,15 @@ extern "C" {
 
     // 2. レンダリング実行関数
     DLLEXPORT void execute_render(NoteEvent* notes, int note_count, const char* output_path, int mode_flag);
+
+    // Desktop/Web共通の段階進捗・協調キャンセル対応版。
+    DLLEXPORT void execute_render_cancelable(
+        NoteEvent* notes,
+        int note_count,
+        const char* output_path,
+        int mode_flag,
+        VoseProgressCallback progress_cb,
+        VoseCancelCheckCallback cancel_cb);
 
     // 🚀 【新規追加】Python（PipelineBridge）からシリアライズされた連続フレームデータをC++メモリへ流し込む
     // このポインタを渡すだけのゼロコピー転送により、リアルタイム合成時でも一切の遅延が発生しません
