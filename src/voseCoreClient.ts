@@ -600,8 +600,17 @@ async function renderViaCore(
   const w = getWorker();
   const requestId = nextRequestId++;
 
+  let lastReportedPct = 35;
+  const reportCoreProgress = (pct: number) => {
+    const mapped = Math.max(35, Math.min(100, Math.round(35 + pct * 0.65)));
+    // Worker初期化中の段階通知とC++側の2%通知が前後しても、
+    // UIの進捗が後戻りしないように単調増加にする。
+    lastReportedPct = Math.max(lastReportedPct, mapped);
+    onProgress?.(lastReportedPct);
+  };
+
   const resultPromise = new Promise<string | null>((resolve, reject) => {
-    pending.set(requestId, { resolve, reject, onProgress: (pct: number) => onProgress?.(Math.round(35 + pct * 0.65)) });
+    pending.set(requestId, { resolve, reject, onProgress: reportCoreProgress });
   });
 
   const msg: RenderRequestMsg = {
@@ -613,9 +622,17 @@ async function renderViaCore(
   };
 
   const transferables = samples.map((s) => s.pcmF32);
-  w.postMessage(msg, transferables);
+  try {
+    w.postMessage(msg, transferables);
+  } catch (err: any) {
+    pending.delete(requestId);
+    throw new Error('WASM Workerへのレンダリング要求送信に失敗しました: ' + (err?.message || err));
+  }
 
-  const timeoutMs = 25000;
+  // WORLD解析 + 合成は音源数やノート数によって25秒を超えることがある。
+  // 25秒で強制的にJSフォールバックへ落とすと、正常なWebレンダリングまで
+  // 「35%で止まった」ように見えるため、十分な猶予を確保する。
+  const timeoutMs = 180000;
   let timerId: any = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timerId = setTimeout(() => {
