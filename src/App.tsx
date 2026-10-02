@@ -3673,10 +3673,12 @@ shadow border gpu-accelerated group select-none touch-none ${
                               
                               {/* Resize Handle (Adaptive to touch vs mouse) */}
                               <div 
-                                className={`resize-handle absolute right-0 top-0 bottom-0 flex items-center justify-center cursor-ew-resize rounded-r-md ${
+                                className={`resize-handle vose-note-resize-handle absolute right-0 top-0 bottom-0 flex items-center justify-center cursor-ew-resize rounded-r-md ${
                                   responsive.isTouch
                                     ? 'w-5 bg-white/20 active:bg-white/40 text-[#f0f0f2]'
-                                    : 'w-3 opacity-0 group-hover:opacity-100 bg-black/20 hover:bg-black/40'
+                                    : isSelected
+                                      ? 'w-3 opacity-70 bg-black/20 hover:opacity-100 hover:bg-black/40'
+                                      : 'w-3 opacity-0 group-hover:opacity-100 bg-black/20 hover:bg-black/40'
                                 }`}
                                 onPointerDown={handleResizePointerDown}
                               >
