@@ -32,3 +32,12 @@ def test_desktop_render_checks_output_after_native_completion():
     assert 'if not os.path.exists(file_path):' in patch
     assert 'raise RuntimeError("レンダリング結果の WAV が生成されませんでした。")' in patch
     assert "report_progress(100)" in patch
+
+
+def test_desktop_v2_render_retries_direct_oto_alias_before_silence():
+    source = Path("modules/audio/vo_se_engine_patch.py").read_text(encoding="utf-8")
+    assert "direct_entry = oto_parser.resolve_alias(" in source
+    assert "getattr(oto_parser, "_db", {}).get(" in source
+    assert "resolved_voice_count = 0" in source
+    assert "音源WAVを1件も解決できませんでした" in source
+    assert "os.path.isfile(wav_path)" in source
