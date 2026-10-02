@@ -291,6 +291,7 @@ def _export_to_wav_v2(
 
     note_count = len(notes)
     from modules.audio.vo_se_engine import CNoteEvent
+    resolved_voice_count = 0
     c_notes_array = (CNoteEvent * note_count)()
     self._temp_refs = []
 
@@ -344,12 +345,42 @@ def _export_to_wav_v2(
                 wav_path = oto_entry.wav_path
 
         if not wav_path or not os.path.exists(wav_path):
+            # VCV/prefix.map 解決に失敗した場合でも、明示 alias の OTO エントリを
+            # 直接引いて再試行する。これにより「解決器は失敗したが oto.ini には
+            # 完全一致エントリがある」というケースを無音に落とさない。
+            direct_entry = None
+            if oto_parser is not None:
+                try:
+                    direct_entry = oto_parser.resolve_alias(
+                        str(getattr(note, "lyric", "") or ""),
+                        None,
+                        note_num=note_num,
+                    )
+                except (AttributeError, TypeError, ValueError):
+                    direct_entry = None
+            if direct_entry is None and oto_parser is not None:
+                try:
+                    direct_entry = getattr(oto_parser, "_db", {}).get(
+                        str(getattr(note, "lyric", "") or "")
+                    )
+                except AttributeError:
+                    direct_entry = None
+            if direct_entry is not None:
+                candidate_path = str(getattr(direct_entry, "wav_path", "") or "")
+                if candidate_path and os.path.isfile(candidate_path):
+                    wav_path = candidate_path
+
+        if not wav_path or not os.path.isfile(wav_path):
             wav_path = self.oto_map.get(note.lyric) or self.oto_map.get(
                 getattr(note, "phonemes", ""), ""
             )
-            # 未解決時にライブラリ先頭の別音素を使うと、
-            # 「あ」が見つからないから「か」を歌う、といった誤発音になる。
-            # 解決不能なノートは wav_path を空のままにし、C++ 側で無音として扱う。
+
+        if wav_path:
+            wav_path = os.path.abspath(os.path.normpath(str(wav_path)))
+
+        # 未解決時にライブラリ先頭の別音素を使うと、誤発音になるため、
+        # 解決不能なノートは空のままにする。ただし後段で「全ノート無音」を
+        # 正常終了扱いにしない。
 
         # C++ 側の pitch_length は「固定128点の表示解像度」ではなく、
         # 実際のノート長を表す 5ms フレーム数。
@@ -435,6 +466,8 @@ def _export_to_wav_v2(
         # ctypes.c_char_p の None は C++ 側の nullptr になる。
         # b"" は「NUL終端の空文字列へのポインタ」であり nullptr ではない。
         c_notes_array[i].wav_path = wav_path.encode("utf-8") if wav_path else None
+        if wav_path:
+            resolved_voice_count += 1
         c_notes_array[i].pitch_curve = p_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
         c_notes_array[i].gender_curve = g_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
         c_notes_array[i].tension_curve = t_curve.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
@@ -495,6 +528,15 @@ def _export_to_wav_v2(
 
     if callable(cancel_check) and cancel_check():
         raise RuntimeError("レンダリングがキャンセルされました")
+
+    # ノートが存在するのに音源が1件も解決できない場合、C++ は仕様上
+    # 全ノートを無音として正常終了できてしまう。これは「書き出し成功」
+    # ではなく音源解決失敗なので、ここで明示的に止める。
+    if note_count > 0 and resolved_voice_count == 0:
+        raise RuntimeError(
+            "レンダリング対象の音源WAVを1件も解決できませんでした。"
+            " 音源フォルダ・oto.ini・prefix.mapを確認してください。"
+        )
 
     native_output = os.path.abspath(file_path).encode("utf-8")
     execute_cancelable = getattr(self.lib, "execute_render_cancelable", None)
