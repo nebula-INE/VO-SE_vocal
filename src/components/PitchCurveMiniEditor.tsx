@@ -554,7 +554,7 @@ export default function PitchCurveMiniEditor(props: PitchCurveMiniEditorProps) {
             type="button"
             onClick={handleZoomOut}
             disabled={zoomX <= 1.0}
-            className="p-1 rounded bg-[#2a2a2e] hover:bg-[#34343a] text-[#d5d5da] border border-[#3a3a40] disabled:opacity-30"
+            className="p-1 rounded bg-[#2a2a2e] hover:bg-[#34343a] text-[#d5d5da] border border-[#3a3a40] disabled:opacity-40 disabled:cursor-not-allowed"
             title="時間軸を縮小"
           >
             <ZoomOut className="w-3 h-3" />
