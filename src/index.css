@@ -207,6 +207,23 @@
 .vose-timeline-ruler {
   scrollbar-gutter: stable;
 }
+.vose-timeline-ruler {
+  box-shadow: inset 0 -1px 0 rgba(74, 74, 82, 0.35);
+}
+.vose-timeline-ruler-measure {
+  overflow: hidden;
+}
+.vose-timeline-ruler-measure > span {
+  pointer-events: none;
+}
+.vose-timeline-grid-lines {
+  contain: paint;
+}
+.vose-timeline-playhead,
+.vose-timeline-ruler-playhead {
+  contain: layout paint;
+}
+
 .vose-timeline-ruler-measure {
   min-width: 0;
 }
