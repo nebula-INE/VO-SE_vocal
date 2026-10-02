@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { Type, Check, X, Sparkles, HelpCircle, ArrowRight } from 'lucide-react';
 
 interface BatchLyricModalProps {
@@ -70,6 +70,26 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
   const [inputText, setInputText] = useState('');
   const [delimiterMode, setDelimiterMode] = useState<'auto' | 'char' | 'space' | 'line'>('auto');
   const [fillMode, setFillMode] = useState<'all' | 'from_start' | 'loop'>('all');
+  const modalRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const selector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+    const frame = requestAnimationFrame(() => modalRef.current?.querySelector<HTMLElement>(selector)?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const elements = Array.from(modalRef.current?.querySelectorAll<HTMLElement>(selector) ?? []);
+      if (!elements.length) return;
+      const first = elements[0], last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener('keydown', handleKeyDown); restoreFocusRef.current?.focus(); restoreFocusRef.current = null; };
+  }, [isOpen, onClose]);
 
   // Sorted notes by timeline tick
   const sortedNotes = useMemo(() => {
@@ -113,8 +133,8 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-150">
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4" role="presentation">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="batch-lyric-title" className="bg-[#1f1f22] border border-[#3a3a40] rounded-xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-150">
         {/* Header */}
         <div className="px-5 py-3.5 bg-[#18181a] border-b border-[#303034] flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -122,7 +142,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
               <Type className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-bold text-sm text-[#f0f0f2] flex items-center gap-1.5">
+              <h2 id="batch-lyric-title" className="font-bold text-sm text-[#f0f0f2] flex items-center gap-1.5">
                 歌詞一括入力 (Batch Lyric Input)
               </h2>
               <p className="text-[11px] text-[#9a9aa2]">
@@ -132,7 +152,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="text-[#9a9aa2] hover:text-[#f0f0f2] p-1 rounded-lg hover:bg-[#2a2a2e] transition"
+            className="text-[#9a9aa2] hover:text-[#f0f0f2] p-2 min-w-10 min-h-10 rounded-lg hover:bg-[#2a2a2e] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]" aria-label="閉じる" title="閉じる"
           >
             <X className="w-4 h-4" />
           </button>
