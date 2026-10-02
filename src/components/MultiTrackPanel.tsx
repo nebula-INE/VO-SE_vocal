@@ -134,7 +134,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
 
       {/* Track List Strip (Hidden when collapsed) */}
       {!isCollapsed && (
-      <div className="p-2 flex space-x-2 overflow-x-auto scrollbar-none">
+      <div className="px-1.5 py-1.5 sm:p-2 flex gap-1.5 sm:gap-2 overflow-x-auto scrollbar-none">
         {tracks.map((t, idx) => {
           const isSelected = t.id === currentTrackId;
           const trackColor = t.color || TRACK_COLORS[idx % TRACK_COLORS.length];
@@ -153,7 +153,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                   onSelectTrack(t.id);
                 }
               }}
-              className={`min-w-[210px] p-2.5 rounded-lg border transition-[background-color,border-color,box-shadow] duration-150 cursor-pointer flex flex-col justify-between gap-2 relative group ${
+              className={`min-w-[176px] sm:min-w-[190px] md:min-w-[210px] p-2 sm:p-2.5 rounded-lg border transition-[background-color,border-color,box-shadow] duration-150 cursor-pointer flex flex-col justify-between gap-1.5 sm:gap-2 relative group ${
                 isSelected
                   ? 'bg-[var(--vose-bg-elevated)] border-[#0a84ff] shadow-md shadow-[#0a84ff]/20 ring-1 ring-[#0a84ff]/40'
                   : 'bg-[var(--vose-bg-base)] hover:bg-[#232327] border-[var(--vose-border)] text-[var(--vose-text-secondary)]'
@@ -219,7 +219,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
               {/* Voicebank / Type details */}
               {t.type === 'vocal' ? (
                 <div className="rounded-md bg-[var(--vose-bg-base)]/80 border border-[var(--vose-border)] px-2 py-1.5">
-                  <div className="text-[9px] uppercase tracking-wide text-[#6f6f78] mb-1">音源</div>
+                  <div className="text-[8px] sm:text-[9px] uppercase tracking-wide text-[#6f6f78] mb-1">音源</div>
                   <div className="text-[10px] text-[var(--vose-text-secondary)] flex items-center justify-between gap-2">
                   <select
                     value={t.voicebank || ''}
@@ -244,7 +244,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
               )}
 
               {/* Volume Slider & Mute / Solo Controls */}
-              <div className="flex items-center justify-between pt-2 border-t border-[var(--vose-border)]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between pt-1.5 sm:pt-2 border-t border-[var(--vose-border)]" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
                   <button
                     onClick={() => onUpdateTrack(t.id, { isMuted: !t.isMuted })}
