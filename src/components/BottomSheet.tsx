@@ -80,22 +80,21 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/65 backdrop-blur-sm animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-      {/* Backdrop click to close */}
+    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/65 backdrop-blur-sm animate-in fade-in duration-200" role="presentation">
       <div className="absolute inset-0" onClick={onClose} />
 
-      {/* Sheet Container */}
       <div
         ref={sheetRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         className={`relative w-full bg-[var(--vose-bg-panel)] border-t border-[var(--vose-border)] rounded-t-2xl shadow-2xl flex flex-col ${heightClass} z-10 animate-in slide-in-from-bottom duration-250 pb-safe`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Grab Handle */}
         <div className="w-full flex justify-center pt-2.5 pb-1">
           <div className="w-12 h-1.5 rounded-full bg-[var(--vose-border)]" />
         </div>
 
-        {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--vose-border)] shrink-0">
           <div className="flex items-center space-x-2.5 min-w-0">
             {icon && <div className="text-[var(--vose-accent)] shrink-0">{icon}</div>}
@@ -114,7 +113,6 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           </button>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
           {children}
         </div>
