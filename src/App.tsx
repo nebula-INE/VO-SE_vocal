@@ -3428,7 +3428,7 @@ export default function App() {
                       {/* Ruler Playhead Handle */}
                       <div
                         ref={rulerPlayheadRef}
-                        className="absolute top-0 bottom-0 w-0.5 bg-[#ff453a] z-20 pointer-events-none"
+                        className="vose-timeline-ruler-playhead absolute top-0 bottom-0 w-0.5 bg-[#ff453a] z-20 pointer-events-none"
                         style={{ left: `${(currentTick / totalTicks) * 100 * pianoRollZoomX}%` }}
                       >
                         <div className="w-3 h-3 bg-[#ff453a] rounded-b -ml-[5px] shadow flex items-center justify-center">
