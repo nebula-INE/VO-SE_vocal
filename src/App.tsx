@@ -1153,10 +1153,12 @@ export default function App() {
       if (data.success && Array.isArray(data.voicebanks)) {
         setCustomVoicebanks(data.voicebanks);
         if (data.voicebanks.length > 0) {
-          // If current track has no voicebank or invalid one, auto-select the first available one
+          // If current track has no voicebank or invalid one, auto-select the best available one (preferring richer voicebank like TETO)
+          const sortedVbs = [...data.voicebanks].sort((a: any, b: any) => (b.aliasCount || 0) - (a.aliasCount || 0));
+          const bestVbName = sortedVbs[0]?.name || data.voicebanks[0].name;
           setTracks(prev => prev.map(t => {
             if (!t.voicebank || !data.voicebanks.some((v: any) => v.name === t.voicebank)) {
-              return { ...t, voicebank: data.voicebanks[0].name };
+              return { ...t, voicebank: bestVbName };
             }
             return t;
           }));

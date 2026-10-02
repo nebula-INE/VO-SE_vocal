@@ -95,7 +95,7 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
                 )}
               </button>
             );
-          }))
+          })
           )}
         </div>
       </div>

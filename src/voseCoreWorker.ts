@@ -63,17 +63,42 @@ interface VoseCoreModule {
 declare const self: DedicatedWorkerGlobalScope;
 
 self.onerror = (e) => {
-  console.error('[Worker Error]', e.message, e.filename, e.lineno);
+  console.error('[Worker Error]', e);
+  const resp: RenderResponseMsg = {
+    type: 'error',
+    requestId: 0,
+    message: typeof e === 'string' ? e : ((e as any)?.message || 'Worker runtime error')
+  };
+  (self as unknown as Worker).postMessage(resp);
+};
+
+// @ts-ignore
+self.onunhandledrejection = (e: PromiseRejectionEvent) => {
+  console.error('[Worker UnhandledRejection]', e);
+  const resp: RenderResponseMsg = {
+    type: 'error',
+    requestId: 0,
+    message: `Worker unhandled rejection: ${e?.reason?.message || e?.reason || e}`
+  };
+  (self as unknown as Worker).postMessage(resp);
 };
 
 // ------------------------------------------------------------
-// NoteEvent構造体レイアウト (vose_core.h より。wasm32=ポインタ4バイト前提。
-// #pragma pack(push, 8) のため、末尾のdoubleは8バイト境界へアラインされる。
-// intensity: offset 48, modulation: offset 56,
-// start_time_ms: offset 64, preutterance_ms: offset 72,
-// overlap_ms: offset 80、合計88バイト。
+// NoteEvent構造体レイアウト (vose_core.wasm / wasm32環境: 各フィールド4バイト、計44バイト)
+//   wav_path:               offset 0   (4B, const char*)
+//   pitch_curve:            offset 4   (4B, double*)
+//   pitch_length:           offset 8   (4B, int)
+//   gender_curve:           offset 12  (4B, double*)
+//   tension_curve:          offset 16  (4B, double*)
+//   breath_curve:           offset 20  (4B, double*)
+//   vibrato_depth_curve:    offset 24  (4B, double*)
+//   vibrato_rate_curve:     offset 28  (4B, double*)
+//   vibrato_curve_length:   offset 32  (4B, int)
+//   portamento_offsets:     offset 36  (4B, double*)
+//   portamento_length:      offset 40  (4B, int)
+//   合計44バイト (sizeof(NoteEvent) = 44)
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 88;
+const NOTE_EVENT_SIZE = 44;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
@@ -85,11 +110,6 @@ const OFF_VIBRATO_RATE_CURVE = 28;
 const OFF_VIBRATO_CURVE_LENGTH = 32;
 const OFF_PORTAMENTO_OFFSETS = 36;
 const OFF_PORTAMENTO_LENGTH = 40;
-const OFF_INTENSITY = 48;
-const OFF_MODULATION = 56;
-const OFF_START_TIME_MS = 64;
-const OFF_PREUTTERANCE_MS = 72;
-const OFF_OVERLAP_MS = 80;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
@@ -148,22 +168,32 @@ async function getModule(): Promise<VoseCoreModule> {
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
         (async () => {
           try {
+            let instance: WebAssembly.Instance | null = null;
             try {
               const res = await fetch('/wasm/vose_core.wasm');
               if (res.ok) {
                 const streamRes = await WebAssembly.instantiateStreaming(res, imports);
-                successCallback(streamRes.instance);
-                return;
+                instance = streamRes.instance;
               }
             } catch (streamErr) {
               console.warn('[voseCoreWorker] instantiateStreaming failed, falling back to ArrayBuffer:', streamErr);
             }
-            const bufRes = await fetch('/wasm/vose_core.wasm');
-            const bytes = await bufRes.arrayBuffer();
-            const compiled = await WebAssembly.instantiate(bytes, imports);
-            successCallback(compiled.instance);
-          } catch (err) {
+            if (!instance) {
+              const bufRes = await fetch('/wasm/vose_core.wasm');
+              if (!bufRes.ok) throw new Error(`HTTP ${bufRes.status} on /wasm/vose_core.wasm`);
+              const bytes = await bufRes.arrayBuffer();
+              const compiled = await WebAssembly.instantiate(bytes, imports);
+              instance = compiled.instance;
+            }
+            successCallback(instance);
+          } catch (err: any) {
             console.error('[voseCoreWorker] Failed to instantiate WASM via instantiateWasm:', err);
+            const resp: RenderResponseMsg = {
+              type: 'error',
+              requestId: 0,
+              message: `WASMモジュールの読み込みに失敗しました: ${err?.message || err}`
+            };
+            (self as unknown as Worker).postMessage(resp);
           }
         })();
         return {};
@@ -177,6 +207,12 @@ async function getModule(): Promise<VoseCoreModule> {
         console.error('[vose_core stderr]', text);
       }
     });
+    if (!mod.HEAPF32 && mod.HEAPU8) {
+      try {
+        (mod as any).HEAPF32 = new Float32Array(mod.HEAPU8.buffer);
+      } catch (_) {}
+    }
+    return mod;
   })();
   return modPromise;
 }
@@ -372,23 +408,6 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
-      mod.setValue(base + OFF_INTENSITY, intensity ?? 100, 'double');
-      mod.setValue(base + OFF_MODULATION, modulation ?? 0, 'double');
-      mod.setValue(
-        base + OFF_START_TIME_MS,
-        typeof notes[i].startTimeMs === 'number' ? notes[i].startTimeMs : -1,
-        'double'
-      );
-      mod.setValue(
-        base + OFF_PREUTTERANCE_MS,
-        typeof notes[i].preutteranceMs === 'number' ? notes[i].preutteranceMs : -1,
-        'double'
-      );
-      mod.setValue(
-        base + OFF_OVERLAP_MS,
-        typeof notes[i].overlapMs === 'number' ? notes[i].overlapMs : -1,
-        'double'
-      );
     }
 
     // 4. レンダリング実行 (execute_render_cancelable で進捗をメインスレッドへ

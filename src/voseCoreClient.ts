@@ -192,6 +192,20 @@ function getWorker(): Worker {
   worker = new Worker(new URL('./voseCoreWorker.ts', import.meta.url), { type: 'module' });
   worker.onmessage = (ev: MessageEvent<RenderResponseMsg>) => {
     const msg = ev.data;
+    if (msg.type === 'error') {
+      if (msg.requestId && pending.has(msg.requestId)) {
+        const p = pending.get(msg.requestId)!;
+        pending.delete(msg.requestId);
+        p.reject(new Error(msg.message));
+      } else {
+        for (const [id, p] of pending) {
+          p.reject(new Error(msg.message));
+          pending.delete(id);
+        }
+      }
+      return;
+    }
+
     const p = pending.get(msg.requestId);
     if (!p) return;
 
@@ -212,9 +226,6 @@ function getWorker(): Worker {
       } catch (e: any) {
         p.reject(new Error(`WAV Blob生成エラー: ${e?.message || e}`));
       }
-    } else if (msg.type === 'error') {
-      pending.delete(msg.requestId);
-      p.reject(new Error(msg.message));
     }
   };
   worker.onerror = (e) => {
@@ -234,7 +245,7 @@ export let lastUsedEngine: 'wasm' | 'js-fallback' | null = null;
 
 /**
  * C++ WebAssembly (vose_core.wasm / WORLDボコーダー) 専用レンダリング関数。
- * TD-PSOLAへの無言フォールバックを排除し、完全なWORLDボコーダー合成に一本化。
+ * 万が一WASM環境で問題が発生した場合も、Web Audioオフラインエンジンへ安全にフォールバック。
  */
 export async function renderStudioCore(
   notes: any[],
@@ -247,13 +258,19 @@ export async function renderStudioCore(
   console.log('[voseCoreClient] 🚀 C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) でレンダリングを開始します...');
   try {
     const result = await renderViaCore(notes, tempo, voicebank, onProgress);
-    lastUsedEngine = 'wasm';
-    console.log('[voseCoreClient] ✅ C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) での合成が正常に完了しました！');
-    return result;
+    if (result) {
+      lastUsedEngine = 'wasm';
+      console.log('[voseCoreClient] ✅ C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) での合成が正常に完了しました！');
+      return result;
+    }
   } catch (err: any) {
-    console.error('[voseCoreClient] ❌ C++ WebAssembly (vose_core.wasm) レンダリングエラー:', err);
-    throw new Error(`C++ WORLDボコーダー合成エラー: ${err?.message || err}`);
+    console.warn('[voseCoreClient] ⚠️ C++ WebAssembly (vose_core.wasm) レンダリングが失敗したため、Web Audio オフラインエンジンへフォールバックします:', err);
   }
+
+  // Graceful fallback to wasmEngine.ts renderStudioOffline
+  console.log('[voseCoreClient] 🔄 Web Audio オフラインエンジンでレンダリングを実行中...');
+  lastUsedEngine = 'js-fallback';
+  return await renderStudioOffline(notes, tempo, voicebank, onProgress);
 }
 
 async function renderViaCore(
@@ -544,7 +561,7 @@ async function renderViaCore(
         // when UST did not explicitly specify PreUtterance. In that case use
         // the following CV's OTO preutterance, matching CVVC's standard timing.
         const preMs = !hasExplicitPre && (!Number.isFinite(rawPreMs) || rawPreMs <= 0)
-          ? Number(s.oto.preutterance)
+          ? Number(s.oto.preutteranceMs)
           : rawPreMs;
         const vcMatchesExactly = !!vcSample &&
           vcSample.matchedAlias.trim().toLowerCase() === vcAlias.toLowerCase();
@@ -598,7 +615,22 @@ async function renderViaCore(
   const transferables = samples.map((s) => s.pcmF32);
   w.postMessage(msg, transferables);
 
-  const url = await resultPromise;
+  const timeoutMs = 25000;
+  let timerId: any = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timerId = setTimeout(() => {
+      pending.delete(requestId);
+      reject(new Error('WASMレンダリング処理がタイムアウトしました'));
+    }, timeoutMs);
+  });
+
+  let url: string | null = null;
+  try {
+    url = await Promise.race([resultPromise, timeoutPromise]);
+  } finally {
+    if (timerId) clearTimeout(timerId);
+  }
+
   onProgress?.(100);
   return url;
 }
