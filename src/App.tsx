@@ -3428,7 +3428,7 @@ export default function App() {
                       {/* Ruler Playhead Handle */}
                       <div
                         ref={rulerPlayheadRef}
-                        className="vose-timeline-ruler-playhead absolute top-0 bottom-0 w-0.5 bg-[#ff453a] z-20 pointer-events-none"
+                        className="vose-timeline-ruler-playhead absolute top-0 bottom-0 w-0.5 bg-[#ff453a] z-40 pointer-events-none"
                         style={{ left: `${(currentTick / totalTicks) * 100 * pianoRollZoomX}%` }}
                       >
                         <div className="w-3 h-3 bg-[#ff453a] rounded-b -ml-[5px] shadow flex items-center justify-center">
@@ -3497,7 +3497,7 @@ export default function App() {
                         {/* Playhead indicator bar */}
                         <div
                           ref={gridPlayheadRef}
-                          className="vose-timeline-playhead absolute top-0 bottom-0 w-[2px] bg-[#ff453a] z-30 pointer-events-none shadow-[0_0_6px_rgba(255,69,58,0.55)]"
+                          className="vose-timeline-playhead absolute top-0 bottom-0 w-[2px] bg-[#ff453a] z-40 pointer-events-none shadow-[0_0_6px_rgba(255,69,58,0.55)]"
                           style={{
                             left: `${(currentTick / totalTicks) * 100}%`
                           }}
@@ -3506,7 +3506,7 @@ export default function App() {
                         </div>
 
                         {/* Grid lines background */}
-                        <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+                        <div className="vose-timeline-grid-lines absolute inset-0 pointer-events-none z-0" aria-hidden="true">
                           {Array.from({ length: totalMeasures }).map((_, bIdx) => (
                             <div key={bIdx} className="absolute inset-y-0 flex" style={{ left: `${(bIdx / totalMeasures) * 100}%`, width: `${(1 / totalMeasures) * 100}%` }}>
                               <div className="flex-1 border-r border-[#4a4a52]/90" />
