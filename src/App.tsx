@@ -3517,6 +3517,27 @@ export default function App() {
                           ))}
                         </div>
 
+                        {/* Empty timeline guidance */}
+                        {visibleNotes.length === 0 && notes.length === 0 && (
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                            <div className="pointer-events-auto text-center px-5 py-4 rounded-xl border border-dashed border-[var(--vose-border-strong)] bg-[var(--vose-bg-panel)]/90 shadow-lg max-w-xs">
+                              <div className="w-10 h-10 mx-auto rounded-xl bg-[var(--vose-bg-elevated)] border border-[var(--vose-border)] text-[var(--vose-text-secondary)] flex items-center justify-center mb-2">
+                                <Plus className="w-5 h-5" />
+                              </div>
+                              <p className="text-sm font-semibold text-[var(--vose-text-primary)]">ノートがありません</p>
+                              <p className="mt-1 text-[11px] leading-5 text-[var(--vose-text-muted)]">「+ ノート」で追加するか、Timelineをダブルクリックして歌声を作成できます。</p>
+                              <button
+                                type="button"
+                                onClick={addNote}
+                                className="mt-3 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[#0a84ff] hover:bg-[#2997ff] text-white text-xs font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--vose-bg-panel)]"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                ノートを追加
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Note Blocks (Viewport culled) */}
                         {visibleNotes.map((note) => {
                           const rowIdx = 84 - note.noteNum;
