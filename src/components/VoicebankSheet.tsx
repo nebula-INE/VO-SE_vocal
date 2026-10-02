@@ -55,7 +55,16 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
         </h4>
 
         <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-          {customVoicebanks.map((vb) => {
+          {customVoicebanks.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-[var(--vose-border-strong)] bg-[var(--vose-bg-base)] p-4 text-center">
+              <div className="w-9 h-9 mx-auto rounded-lg bg-[var(--vose-bg-elevated)] border border-[var(--vose-border)] text-[var(--vose-text-secondary)] flex items-center justify-center mb-2">
+                <Upload className="w-4 h-4" />
+              </div>
+              <p className="text-xs font-semibold text-[var(--vose-text-primary)]">音源がありません</p>
+              <p className="mt-1 text-[10px] leading-4 text-[var(--vose-text-muted)]">UTAU音源(.zip)を追加すると、歌声を選択してレンダリングできます。</p>
+            </div>
+          ) : (
+            customVoicebanks.map((vb) => {
             const isSelected = vb.name === selectedVoicebank;
             return (
               <button
@@ -86,7 +95,8 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
                 )}
               </button>
             );
-          })}
+          }))
+          )}
         </div>
       </div>
 
