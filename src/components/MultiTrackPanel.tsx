@@ -58,26 +58,26 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
   const currentTrack = tracks.find((t) => t.id === currentTrackId) || tracks[0];
 
   return (
-    <div className="bg-[#1f1f22] border-b border-[#303034] flex flex-col shrink-0 select-none transition-all">
+    <div className="bg-[var(--vose-bg-panel)] border-b border-[var(--vose-border)] flex flex-col shrink-0 select-none transition-all">
       {/* Panel Header */}
-      <div className="h-10 px-3 bg-[#18181a] border-b border-[#303034] flex items-center justify-between gap-2">
+      <div className="h-10 px-3 bg-[var(--vose-bg-base)] border-b border-[var(--vose-border)] flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center space-x-2">
           {onToggleCollapse && (
             <button
               onClick={onToggleCollapse}
-              className="min-w-7 h-7 p-1 rounded text-[#9a9aa2] hover:text-[#f0f0f2] hover:bg-[#2a2a2e] transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+              className="min-w-7 h-7 p-1 rounded text-[var(--vose-text-secondary)] hover:text-[var(--vose-text-primary)] hover:bg-[var(--vose-bg-elevated)] transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
               title={isCollapsed ? 'トラックリストを展開' : 'トラックリストを折りたたむ'}
             >
               {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </button>
           )}
           <Layers className="w-4 h-4 text-[#0a84ff]" />
-          <span className="font-semibold text-xs text-[#f0f0f2]">Track List</span>
+          <span className="font-semibold text-xs text-[var(--vose-text-primary)]">Track List</span>
           <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-[#0a84ff]/20 text-[#2997ff] border border-[#0a84ff]/40">
             {tracks.length}
           </span>
           {isCollapsed && currentTrack && (
-            <span className="text-xs text-[#9a9aa2] truncate max-w-[120px] font-medium ml-1">
+            <span className="text-xs text-[var(--vose-text-secondary)] truncate max-w-[120px] font-medium ml-1">
               Active: <span className="text-[#2997ff] font-bold">{currentTrack.name}</span>
             </span>
           )}
@@ -90,7 +90,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
             className={`text-[11px] px-2 py-1 rounded-md transition flex items-center space-x-1 border ${
               showGhostNotes
                 ? 'bg-[#0a84ff]/20 text-[#2997ff] border-[#0a84ff]/60'
-                : 'bg-[#2a2a2e] text-[#9a9aa2] hover:text-[#f0f0f2] border-[#3a3a40]'
+                : 'bg-[var(--vose-bg-elevated)] text-[var(--vose-text-secondary)] hover:text-[var(--vose-text-primary)] border-[var(--vose-border)]'
             }`}
             title="ピアノロール上に別トラックのノート・ピッチを透かし(ゴースト)表示"
           >
@@ -104,7 +104,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
           {onImportProject && (
             <button
               onClick={onImportProject}
-              className="text-[11px] bg-[#2a2a2e] hover:bg-[#34343a] text-[#2997ff] hover:text-[#5ac8fa] font-medium px-2 py-1 rounded-md transition flex items-center space-x-1 border border-[#3a3a40]"
+              className="text-[11px] bg-[var(--vose-bg-elevated)] hover:bg-[var(--vose-bg-hover)] text-[#2997ff] hover:text-[#5ac8fa] font-medium px-2 py-1 rounded-md transition flex items-center space-x-1 border border-[var(--vose-border)]"
               title="UST / VSQX / SVP / MIDI ファイルを選択して読み込み"
             >
               <Upload className="w-3.5 h-3.5 text-[#0a84ff]" />
@@ -124,7 +124,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
           {/* Add Audio Track */}
           <button
             onClick={() => onAddTrack('wave')}
-            className="text-[11px] bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] font-medium px-2 py-1 rounded-md transition flex items-center space-x-1 border border-[#3a3a40] cursor-pointer"
+            className="text-[11px] bg-[var(--vose-bg-elevated)] hover:bg-[var(--vose-bg-hover)] text-[var(--vose-text-primary)] font-medium px-2 py-1 rounded-md transition flex items-center space-x-1 border border-[var(--vose-border)] cursor-pointer"
           >
             <Music className="w-3.5 h-3.5 text-[#bf5af2]" />
             <span className="hidden sm:inline">+ WAV</span>
@@ -145,8 +145,8 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
               onClick={() => onSelectTrack(t.id)}
               className={`min-w-[210px] p-2.5 rounded-lg border transition-[background-color,border-color,box-shadow] duration-150 cursor-pointer flex flex-col justify-between gap-2 relative group ${
                 isSelected
-                  ? 'bg-[#2a2a2e] border-[#0a84ff] shadow-md shadow-[#0a84ff]/20 ring-1 ring-[#0a84ff]/40'
-                  : 'bg-[#18181a] hover:bg-[#232327] border-[#303034] text-[#9a9aa2]'
+                  ? 'bg-[var(--vose-bg-elevated)] border-[#0a84ff] shadow-md shadow-[#0a84ff]/20 ring-1 ring-[#0a84ff]/40'
+                  : 'bg-[var(--vose-bg-base)] hover:bg-[#232327] border-[var(--vose-border)] text-[var(--vose-text-secondary)]'
               }`}
             >
               {/* Color Stripe Header */}
@@ -163,7 +163,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                     value={t.name}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onUpdateTrack(t.id, { name: e.target.value })}
-                    className="bg-transparent font-bold text-xs text-[#f0f0f2] border-b border-transparent hover:border-[#3a3a40] focus:border-[#0a84ff] focus:outline-none w-full min-w-0 max-w-[8rem] truncate"
+                    className="bg-transparent font-bold text-xs text-[var(--vose-text-primary)] border-b border-transparent hover:border-[var(--vose-border)] focus:border-[#0a84ff] focus:outline-none w-full min-w-0 max-w-[8rem] truncate"
                   />
                   <span className={`shrink-0 text-[9px] font-mono px-1.5 py-0.5 rounded border ${
                     t.type === 'vocal'
@@ -185,7 +185,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                       e.stopPropagation();
                       onDuplicateTrack(t.id);
                     }}
-                    className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded-md text-[#9a9aa2] hover:text-[#2997ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
+                    className="min-w-7 h-7 p-1 hover:bg-[var(--vose-bg-elevated)] rounded-md text-[var(--vose-text-secondary)] hover:text-[#2997ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                     title="トラック複製"
                   >
                     <Copy className="w-3 h-3" />
@@ -197,7 +197,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                         e.stopPropagation();
                         onDeleteTrack(t.id);
                       }}
-                      className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded-md text-[#9a9aa2] hover:text-[#ff453a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-[#18181a] transition"
+                      className="min-w-7 h-7 p-1 hover:bg-[var(--vose-bg-elevated)] rounded-md text-[var(--vose-text-secondary)] hover:text-[#ff453a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-[#18181a] transition"
                       title="トラック削除"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -208,15 +208,15 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
 
               {/* Voicebank / Type details */}
               {t.type === 'vocal' ? (
-                <div className="rounded-md bg-[#18181a]/80 border border-[#303034] px-2 py-1.5">
+                <div className="rounded-md bg-[var(--vose-bg-base)]/80 border border-[var(--vose-border)] px-2 py-1.5">
                   <div className="text-[9px] uppercase tracking-wide text-[#6f6f78] mb-1">音源</div>
-                  <div className="text-[10px] text-[#9a9aa2] flex items-center justify-between gap-2">
+                  <div className="text-[10px] text-[var(--vose-text-secondary)] flex items-center justify-between gap-2">
                   <span className="shrink-0 text-[9px] text-[#7d7d86]">音源</span>
                   <select
                     value={t.voicebank || ''}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onUpdateTrack(t.id, { voicebank: e.target.value })}
-                    className="min-w-0 w-full bg-[#18181a] text-[#f0f0f2] text-[10px] border border-[#3a3a40] rounded px-1.5 py-1 max-w-[150px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+                    className="min-w-0 w-full bg-[var(--vose-bg-base)] text-[var(--vose-text-primary)] text-[10px] border border-[var(--vose-border)] rounded px-1.5 py-1 max-w-[150px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                   >
                     <option value="">(既定音源)</option>
                     {customVoicebanks.map((vb) => (
@@ -227,19 +227,19 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                   </select>
                 </div>
               ) : (
-                <div className="rounded-md bg-[#18181a]/80 border border-[#303034] px-2 py-2 text-[10px] text-[#bf5af2] flex items-center gap-1.5">
+                <div className="rounded-md bg-[var(--vose-bg-base)]/80 border border-[var(--vose-border)] px-2 py-2 text-[10px] text-[#bf5af2] flex items-center gap-1.5">
                   <Disc className="w-3 h-3 text-[#bf5af2]" />
                   <span className="truncate">オーディオ伴奏トラック</span>
                 </div>
               )}
 
               {/* Volume Slider & Mute / Solo Controls */}
-              <div className="flex items-center justify-between pt-2 border-t border-[#303034]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between pt-2 border-t border-[var(--vose-border)]" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
                   <button
                     onClick={() => onUpdateTrack(t.id, { isMuted: !t.isMuted })}
                     className={`min-w-7 h-7 px-1.5 text-[9px] font-mono font-bold rounded border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
-                      t.isMuted ? 'bg-[#ff453a]/20 text-[#ff453a] border-[#ff453a]/60' : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40] hover:text-[#f0f0f2]'
+                      t.isMuted ? 'bg-[#ff453a]/20 text-[#ff453a] border-[#ff453a]/60' : 'bg-[var(--vose-bg-base)] text-[var(--vose-text-secondary)] border-[var(--vose-border)] hover:text-[var(--vose-text-primary)]'
                     }`}
                   >
                     M
@@ -247,7 +247,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                   <button
                     onClick={() => onUpdateTrack(t.id, { isSolo: !t.isSolo })}
                     className={`min-w-7 h-7 px-1.5 text-[9px] font-mono font-bold rounded border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
-                      t.isSolo ? 'bg-[#ff9f0a]/20 text-[#ff9f0a] border-[#ff9f0a]/60' : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40] hover:text-[#f0f0f2]'
+                      t.isSolo ? 'bg-[#ff9f0a]/20 text-[#ff9f0a] border-[#ff9f0a]/60' : 'bg-[var(--vose-bg-base)] text-[var(--vose-text-secondary)] border-[var(--vose-border)] hover:text-[var(--vose-text-primary)]'
                     }`}
                   >
                     S
@@ -259,11 +259,11 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                     step="0.05"
                     value={t.volume}
                     onChange={(e) => onUpdateTrack(t.id, { volume: parseFloat(e.target.value) })}
-                    className="w-full accent-[#0a84ff] h-1.5 bg-[#18181a] rounded"
+                    className="w-full accent-[#0a84ff] h-1.5 bg-[var(--vose-bg-base)] rounded"
                     title={`音量: ${Math.round(t.volume * 100)}%`}
                   />
                 </div>
-                <span className="text-[10px] font-mono text-[#9a9aa2] font-semibold w-7 text-right">
+                <span className="text-[10px] font-mono text-[var(--vose-text-secondary)] font-semibold w-7 text-right">
                   {Math.round(t.volume * 100)}%
                 </span>
               </div>
