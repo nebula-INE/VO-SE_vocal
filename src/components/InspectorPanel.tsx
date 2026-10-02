@@ -37,9 +37,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 }) => {
   if (!selectedNote) {
     return (
-      <div className="flex flex-col items-center justify-center p-6 text-center text-[var(--vose-text-muted)] space-y-2 h-full min-h-[180px]">
-        <Sliders className="w-8 h-8 opacity-40 text-[var(--vose-text-secondary)]" />
-        <p className="text-xs">ノートを選択すると<br />パラメータを編集できます</p>
+      <div className="flex flex-col items-center justify-center p-5 text-center h-full min-h-[180px]">
+        <div className="w-10 h-10 rounded-xl bg-[var(--vose-bg-elevated)] border border-[var(--vose-border)] text-[var(--vose-text-secondary)] flex items-center justify-center mb-3">
+          <Sliders className="w-5 h-5 opacity-70" />
+        </div>
+        <p className="text-sm font-semibold text-[var(--vose-text-primary)]">ノートを選択してください</p>
+        <p className="mt-1 text-[11px] leading-5 text-[var(--vose-text-muted)]">Timeline上のノートを選択すると<br />歌詞・音高・ピッチベンドを編集できます。</p>
       </div>
     );
   }
