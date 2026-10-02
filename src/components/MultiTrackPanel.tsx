@@ -67,6 +67,8 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
               onClick={onToggleCollapse}
               className="min-w-7 h-7 p-1 rounded text-[var(--vose-text-secondary)] hover:text-[var(--vose-text-primary)] hover:bg-[var(--vose-bg-elevated)] transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
               title={isCollapsed ? 'トラックリストを展開' : 'トラックリストを折りたたむ'}
+              aria-label={isCollapsed ? 'トラックリストを展開' : 'トラックリストを折りたたむ'}
+              aria-expanded={!isCollapsed}
             >
               {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </button>
