@@ -129,3 +129,7 @@
     transition: none;
   }
 }
+
+.vose-timeline-ruler-playhead {
+  filter: drop-shadow(0 0 3px rgba(255, 69, 58, 0.4));
+}
