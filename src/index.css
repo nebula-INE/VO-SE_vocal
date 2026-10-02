@@ -133,3 +133,65 @@
 .vose-timeline-ruler-playhead {
   filter: drop-shadow(0 0 3px rgba(255, 69, 58, 0.4));
 }
+
+/* Timeline density: keep structural layers visually quiet behind editable content. */
+.vose-timeline-grid-lines {
+  opacity: 0.82;
+}
+.vose-timeline-ruler-grid {
+  opacity: 0.92;
+}
+.vose-ghost-track-overlay {
+  opacity: 0.94;
+}
+
+/* Touch layouts: reduce motion/hover emphasis so dense timelines remain stable. */
+@media (max-width: 1199px) {
+  .vose-timeline-note-idle,
+  .vose-timeline-note-selected,
+  .vose-ghost-note {
+    transition: none !important;
+  }
+
+  .vose-timeline-note-idle:hover,
+  .vose-timeline-note-selected:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .vose-ghost-note:hover {
+    opacity: 0.22;
+    filter: saturate(0.8);
+  }
+
+  .vose-timeline-playhead {
+    filter: drop-shadow(0 0 2px rgba(255, 69, 58, 0.32));
+  }
+
+  .vose-timeline-ruler-playhead {
+    filter: drop-shadow(0 0 2px rgba(255, 69, 58, 0.3));
+  }
+}
+
+@media (max-width: 767px) {
+  .vose-timeline-grid-lines {
+    opacity: 0.68;
+  }
+
+  .vose-timeline-ruler-grid {
+    opacity: 0.8;
+  }
+
+  .vose-ghost-track-overlay {
+    opacity: 0.9;
+  }
+
+  .vose-timeline-playhead {
+    filter: none;
+  }
+
+  .vose-timeline-ruler-playhead {
+    filter: none;
+  }
+}
+
