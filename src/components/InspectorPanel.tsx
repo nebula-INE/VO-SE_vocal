@@ -101,7 +101,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <label className={fieldLabelClass}>音高 (Pitch / Note):</label>
           <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
             <input type="number" min="36" max="84" value={selectedNote.noteNum} onChange={(e) => onUpdateNote('noteNum', parseInt(e.target.value) || 60)} className={`${inputClass} font-mono text-center font-bold`} />
-            <div className="h-10 bg-[var(--vose-bg-elevated)] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
+            <div className="h-9 sm:h-10 bg-[var(--vose-bg-elevated)] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
               {getNoteName(selectedNote.noteNum)}
             </div>
           </div>
