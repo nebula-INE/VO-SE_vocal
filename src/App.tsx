@@ -3357,11 +3357,11 @@ export default function App() {
               {/* Piano Roll Workspace Canvas */}
               <div className="flex-1 flex overflow-hidden">
                 {/* Left Keybed Column */}
-                <div className="w-14 sm:w-20 bg-[#1f1f22] border-r border-[#3a3a40] flex flex-col shrink-0 select-none">
+                <div className="w-14 sm:w-20 bg-[#1f1f22] border-r border-[#3a3a40] flex flex-col shrink-0 select-none min-h-0">
                   <div className="h-8 border-b border-[#3a3a40] bg-[#18181a] text-[10px] text-[#9a9aa2] flex items-center justify-center font-mono shrink-0">
                     Key
                   </div>
-                  <div className="flex-1 overflow-y-auto flex flex-col" ref={keybedScrollRef}>
+                  <div className="vose-keybed-scroll flex-1 min-h-0 overflow-y-auto flex flex-col" ref={keybedScrollRef}>
                       {Array.from({ length: 37 }).map((_, i) => {
                         const midiNum = 84 - i; // C6 (84) down to C3 (48)
                         const isBlack = isBlackKey(midiNum);
@@ -3386,7 +3386,7 @@ export default function App() {
                   </div>
 
                   {/* Center Timeline & Grid Canvas Column */}
-                  <div className="flex-1 flex flex-col overflow-hidden relative min-w-0">
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative min-w-0">
                     {/* Timeline Ruler Header Bar */}
                     <div
                       ref={rulerScrollRef}
@@ -3444,7 +3444,7 @@ export default function App() {
                       onTouchStart={handlePianoRollTouchStart}
                       onTouchMove={handlePianoRollTouchMove}
                       onTouchEnd={handlePianoRollTouchEnd}
-                      className="flex-1 relative overflow-auto bg-[#18181a] touch-grid no-scroll-chain"
+                      className="vose-timeline-scroll flex-1 min-h-0 relative overflow-auto bg-[#18181a] touch-grid no-scroll-chain"
                       onClick={(e) => {
                         // Check if click was on grid background (not on a note)
                         if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('border-r')) {
