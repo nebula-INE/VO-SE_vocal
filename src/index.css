@@ -230,3 +230,25 @@
     opacity: 0.72;
   }
 }
+
+/* Timeline resize handle: keep the edit affordance visible without competing with note content. */
+.vose-note-resize-handle {
+  min-width: 12px;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+@media (max-width: 1199px) {
+  .vose-note-resize-handle {
+    min-width: 20px;
+    transition: none;
+  }
+}
+@media (max-width: 767px) {
+  .vose-note-resize-handle {
+    min-width: 20px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vose-note-resize-handle {
+    transition: none;
+  }
+}
