@@ -92,7 +92,7 @@ export const ProjectSheet: React.FC<ProjectSheetProps> = ({
         <button
           onClick={handleRender}
           disabled={renderingActive}
-          className="w-full h-11 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-bold rounded-xl flex items-center justify-center space-x-2 transition shadow-lg shadow-[#0a84ff]/30 cursor-pointer disabled:opacity-50"
+          className="w-full h-11 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-bold rounded-xl flex items-center justify-center space-x-2 transition shadow-lg shadow-[#0a84ff]/30 cursor-pointer disabled:opacity-40 disabled:cursor-wait disabled:hover:bg-[#0a84ff]"
         >
           {renderingActive ? (
             <>
