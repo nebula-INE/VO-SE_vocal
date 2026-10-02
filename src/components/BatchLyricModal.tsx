@@ -273,7 +273,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
               type="button"
               onClick={handleApply}
               disabled={parsedTokens.length === 0 || sortedNotes.length === 0}
-              className="px-4 py-1.5 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-bold rounded-lg text-xs flex items-center space-x-1.5 shadow-lg shadow-[#0a84ff]/30 disabled:opacity-40 disabled:pointer-events-none transition cursor-pointer"
+              className="px-4 py-1.5 bg-[#0a84ff] hover:bg-[#2997ff] active:bg-[#0071e3] text-white font-bold rounded-lg text-xs flex items-center space-x-1.5 shadow-lg shadow-[#0a84ff]/30 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#0a84ff] transition cursor-pointer"
             >
               <Check className="w-3.5 h-3.5" />
               <span>一括適用する</span>
