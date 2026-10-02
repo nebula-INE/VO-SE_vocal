@@ -3390,7 +3390,7 @@ export default function App() {
                     {/* Timeline Ruler Header Bar */}
                     <div
                       ref={rulerScrollRef}
-                      className="h-8 bg-[#1f1f22] border-b border-[#3a3a40] relative cursor-pointer overflow-x-auto overflow-y-hidden scrollbar-none flex items-center shrink-0 select-none"
+                      className="vose-timeline-ruler h-8 bg-[#1f1f22] border-b border-[#3a3a40] relative cursor-pointer overflow-x-auto overflow-y-hidden scrollbar-none flex items-center shrink-0 select-none"
                       onClick={(e) => {
                         const rect = e.currentTarget.getBoundingClientRect();
                         const clickX = e.clientX - rect.left;
@@ -3411,7 +3411,7 @@ export default function App() {
                           const mEndTick = mStartTick + 480;
                           const isMeasureVisible = totalMeasures <= 60 || (mEndTick >= visibleTickRange.startTick && mStartTick <= visibleTickRange.endTick);
                           return (
-                            <div key={mIdx} className="relative flex-1 border-r border-[#4a4a52]/90 flex items-center px-1 text-[10px] text-[#9a9aa2] font-mono">
+                            <div key={mIdx} className="vose-timeline-ruler-measure relative flex-1 border-r border-[#4a4a52]/90 flex items-center px-1 text-[10px] text-[#9a9aa2] font-mono">
                               {isMeasureVisible ? (
                                 <>
                                   <span className="relative z-10 font-bold text-[#d5d5da] bg-[#1f1f22]/90 px-0.5 rounded-sm">{mIdx + 1}</span>
