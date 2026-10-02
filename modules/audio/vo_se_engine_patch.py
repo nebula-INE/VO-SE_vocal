@@ -246,6 +246,20 @@ def _export_to_wav_v2(
     **kwargs,
 ) -> str:
     """VCV + UST ビブラート + ポルタメント対応の WAV export。"""
+    last_progress = -1
+
+    def report_progress(percent: int) -> None:
+        nonlocal last_progress
+        if not callable(progress_callback):
+            return
+        pct = max(0, min(100, int(percent)))
+        if pct < last_progress:
+            return
+        last_progress = pct
+        progress_callback(pct)
+
+    report_progress(2)
+
     tempo_bpm = kwargs.pop("tempo_bpm", None)
     if tempo_bpm is None:
         tempo_bpm = getattr(self, "_tempo", 120.0)
@@ -265,6 +279,7 @@ def _export_to_wav_v2(
         oto_parser,
         tempo_bpm=tempo_bpm,
     )
+    report_progress(5)
 
     cvvc_resolver = getattr(self, "cvvc_resolver", None)
     if cvvc_resolver is not None and cvvc_resolver.classify_voicebank() == "cvvc":
@@ -272,6 +287,7 @@ def _export_to_wav_v2(
 
     if timeline and hasattr(self, "pipeline_bridge") and self.pipeline_bridge:
         self.pipeline_bridge.send_timeline_to_core(timeline)
+    report_progress(8)
 
     note_count = len(notes)
     from modules.audio.vo_se_engine import CNoteEvent
@@ -464,8 +480,11 @@ def _export_to_wav_v2(
             else -1.0
         )
 
-        if callable(progress_callback):
-            progress_callback(int(((i + 1) / max(note_count, 1)) * 90.0))
+        # NoteEvent準備は全体の8→20%に割り当て、ネイティブ側の
+        # 2→100%を20→100%へ連続的に接続する。これでDesktop UIの
+        # 進捗が90%→2%のように逆戻りしない。
+        note_progress = 8 + int(((i + 1) / max(note_count, 1)) * 12.0)
+        report_progress(note_progress)
 
         if portamento_arr is not None:
             c_notes_array[i].portamento_offsets = portamento_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
@@ -477,16 +496,58 @@ def _export_to_wav_v2(
     if callable(cancel_check) and cancel_check():
         raise RuntimeError("レンダリングがキャンセルされました")
 
-    try:
-        self.lib.execute_render(
-            c_notes_array,
-            note_count,
-            os.path.abspath(file_path).encode("utf-8"),
-            mode_flag,
-        )
-    finally:
-        self._temp_refs = []
+    if callable(cancel_check) and cancel_check():
+        raise RuntimeError("レンダリングがキャンセルされました")
 
+    native_output = os.path.abspath(file_path).encode("utf-8")
+    execute_cancelable = getattr(self.lib, "execute_render_cancelable", None)
+
+    if callable(execute_cancelable):
+        ProgressCallback = ctypes.CFUNCTYPE(None, ctypes.c_int)
+        CancelCheckCallback = ctypes.CFUNCTYPE(ctypes.c_int)
+
+        # ctypes callbackはネイティブ呼び出しが終わるまで参照を保持する。
+        progress_cb_ref = ProgressCallback(
+            lambda native_pct: report_progress(20 + int(
+                max(0, min(100, int(native_pct))) * 0.8
+            ))
+        )
+        cancel_cb_ref = CancelCheckCallback(
+            lambda: 1 if callable(cancel_check) and cancel_check() else 0
+        )
+
+        try:
+            execute_cancelable(
+                c_notes_array,
+                note_count,
+                native_output,
+                mode_flag,
+                progress_cb_ref,
+                cancel_cb_ref,
+            )
+        finally:
+            self._temp_refs = []
+    else:
+        # 古いDLLとの互換性。cancelable APIが無い場合でもレンダー自体は
+        # 継続できるが、ネイティブ内部の段階進捗は受け取れない。
+        report_progress(20)
+        try:
+            self.lib.execute_render(
+                c_notes_array,
+                note_count,
+                native_output,
+                mode_flag,
+            )
+        finally:
+            self._temp_refs = []
+
+    if callable(cancel_check) and cancel_check():
+        raise RuntimeError("レンダリングがキャンセルされました")
+
+    if not os.path.exists(file_path):
+        raise RuntimeError("レンダリング結果の WAV が生成されませんでした。")
+
+    report_progress(100)
     return os.path.abspath(file_path)
 
 
