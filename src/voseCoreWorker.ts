@@ -299,6 +299,15 @@ export type RenderResponseMsg =
 self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
   console.log('[Worker] received message:', ev.data.type);
   const msg = ev.data;
+  if (msg?.type === 'render') {
+    // 35%はメインスレッド側のサンプル準備完了を表す。
+    // ここから先がWorker/WASM処理なので、段階的に進捗を通知する。
+    (self as unknown as Worker).postMessage({
+      type: 'progress',
+      requestId: msg.requestId,
+      percent: 3
+    } satisfies RenderResponseMsg);
+  }
   if (!msg || msg.type !== 'render') return;
   const { requestId, samples, notes, modeFlag } = msg;
 
@@ -311,8 +320,18 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
 
   try {
     console.log('[Worker] waiting for getModule()...');
-    const mod = await getModule();
+    const mod = await Promise.race([
+      getModule(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('WASMモジュール初期化がタイムアウトしました')), 60000)
+      )
+    ]);
     console.log('[Worker] getModule() resolved');
+    (self as unknown as Worker).postMessage({
+      type: 'progress',
+      requestId,
+      percent: 5
+    } satisfies RenderResponseMsg);
 
     // 1. サンプルをWASM側へ登録する。Web AudioのFloat32 PCMをそのまま
     //    使い、Int16量子化でD4C解析前に微小成分を失わないようにする。
@@ -344,6 +363,12 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       }
       mod._free(keyPtr);
     }
+
+    (self as unknown as Worker).postMessage({
+      type: 'progress',
+      requestId,
+      percent: 7
+    } satisfies RenderResponseMsg);
 
     // 2. oto.iniデータをWASM側へ登録する(set_oto_data)
     //    ※これが無いと execute_render_impl は kDefaultOto (全フィールド0)
@@ -409,6 +434,12 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
     }
+
+    (self as unknown as Worker).postMessage({
+      type: 'progress',
+      requestId,
+      percent: 9
+    } satisfies RenderResponseMsg);
 
     // 4. レンダリング実行 (execute_render_cancelable で進捗をメインスレッドへ
     //    中継する。ProgressCallback = void(*)(int) をJS関数から生成する)
