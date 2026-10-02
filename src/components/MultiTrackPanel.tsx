@@ -142,7 +142,17 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
           return (
             <div
               key={t.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={isSelected}
               onClick={() => onSelectTrack(t.id)}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectTrack(t.id);
+                }
+              }}
               className={`min-w-[210px] p-2.5 rounded-lg border transition-[background-color,border-color,box-shadow] duration-150 cursor-pointer flex flex-col justify-between gap-2 relative group ${
                 isSelected
                   ? 'bg-[var(--vose-bg-elevated)] border-[#0a84ff] shadow-md shadow-[#0a84ff]/20 ring-1 ring-[#0a84ff]/40'
@@ -211,7 +221,6 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                 <div className="rounded-md bg-[var(--vose-bg-base)]/80 border border-[var(--vose-border)] px-2 py-1.5">
                   <div className="text-[9px] uppercase tracking-wide text-[#6f6f78] mb-1">音源</div>
                   <div className="text-[10px] text-[var(--vose-text-secondary)] flex items-center justify-between gap-2">
-                  <span className="shrink-0 text-[9px] text-[#7d7d86]">音源</span>
                   <select
                     value={t.voicebank || ''}
                     onClick={(e) => e.stopPropagation()}
