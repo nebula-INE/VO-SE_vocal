@@ -4682,7 +4682,7 @@ shadow border gpu-accelerated group select-none touch-none ${
 
       {/* Floating Toast Notification Popup */}
       {toast && (
-        <div className="fixed bottom-20 lg:bottom-5 right-3 sm:right-5 z-50 max-w-sm w-[min(92vw,24rem)] animate-in slide-in-from-bottom-4 duration-200">
+        <div className="fixed bottom-20 lg:bottom-5 right-3 sm:right-5 z-[70] max-w-sm w-[min(92vw,24rem)] animate-in slide-in-from-bottom-4 duration-200" role="status" aria-live="polite" aria-atomic="true">
           <div
             className={`p-4 rounded-xl border shadow-2xl backdrop-blur-md flex flex-col space-y-2 ${
               toast.type === 'success'
