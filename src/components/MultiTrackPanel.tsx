@@ -143,35 +143,49 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
             <div
               key={t.id}
               onClick={() => onSelectTrack(t.id)}
-              className={`min-w-[210px] p-2.5 rounded-lg border transition cursor-pointer flex flex-col justify-between space-y-2 relative group ${
+              className={`min-w-[210px] p-2.5 rounded-lg border transition-[background-color,border-color,box-shadow] duration-150 cursor-pointer flex flex-col justify-between gap-2 relative group ${
                 isSelected
                   ? 'bg-[#2a2a2e] border-[#0a84ff] shadow-md shadow-[#0a84ff]/20 ring-1 ring-[#0a84ff]/40'
                   : 'bg-[#18181a] hover:bg-[#232327] border-[#303034] text-[#9a9aa2]'
               }`}
             >
               {/* Color Stripe Header */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <div className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ backgroundColor: trackColor }} />
+              <div className="flex items-start justify-between gap-2 min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <div
+                    className="w-2.5 h-2.5 shrink-0 rounded-full shadow-sm ring-1 ring-white/10"
+                    style={{ backgroundColor: trackColor }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-1.5">
                   <input
                     type="text"
                     value={t.name}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onUpdateTrack(t.id, { name: e.target.value })}
-                    className="bg-transparent font-bold text-xs text-[#f0f0f2] border-b border-transparent hover:border-[#3a3a40] focus:border-[#0a84ff] focus:outline-none w-24 truncate"
+                    className="bg-transparent font-bold text-xs text-[#f0f0f2] border-b border-transparent hover:border-[#3a3a40] focus:border-[#0a84ff] focus:outline-none w-full min-w-0 max-w-[8rem] truncate"
                   />
-                  <span className="text-[9px] font-mono px-1 rounded bg-[#18181a] text-[#9a9aa2] border border-[#3a3a40]">
-                    {t.type === 'vocal' ? `${t.notes.length}音` : 'WAV'}
+                  <span className={`shrink-0 text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                    t.type === 'vocal'
+                      ? 'bg-[#0a84ff]/10 text-[#7fc8ff] border-[#0a84ff]/30'
+                      : 'bg-[#bf5af2]/10 text-[#d6a8ff] border-[#bf5af2]/30'
+                  }`}>
+                    {t.type === 'vocal' ? 'VOCAL' : 'WAV'}
                   </span>
+                    </div>
+                    <div className="mt-1 text-[9px] text-[#7d7d86] truncate">
+                      {t.type === 'vocal' ? `${t.notes.length} notes` : 'Audio track'}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="flex items-center space-x-1">
+                <div className="flex shrink-0 items-center gap-0.5">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       onDuplicateTrack(t.id);
                     }}
-                    className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#2997ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+                    className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded-md text-[#9a9aa2] hover:text-[#2997ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a] transition"
                     title="トラック複製"
                   >
                     <Copy className="w-3 h-3" />
@@ -183,7 +197,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                         e.stopPropagation();
                         onDeleteTrack(t.id);
                       }}
-                      className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded text-[#9a9aa2] hover:text-[#ff453a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+                      className="min-w-7 h-7 p-1 hover:bg-[#2a2a2e] rounded-md text-[#9a9aa2] hover:text-[#ff453a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-[#18181a] transition"
                       title="トラック削除"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -194,13 +208,15 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
 
               {/* Voicebank / Type details */}
               {t.type === 'vocal' ? (
-                <div className="text-[10px] text-[#9a9aa2] flex items-center justify-between">
-                  <span>音源:</span>
+                <div className="rounded-md bg-[#18181a]/80 border border-[#303034] px-2 py-1.5">
+                  <div className="text-[9px] uppercase tracking-wide text-[#6f6f78] mb-1">Voicebank</div>
+                  <div className="text-[10px] text-[#9a9aa2] flex items-center justify-between gap-2">
+                  <span className="shrink-0 text-[9px] text-[#7d7d86]">音源</span>
                   <select
                     value={t.voicebank || ''}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => onUpdateTrack(t.id, { voicebank: e.target.value })}
-                    className="bg-[#18181a] text-[#f0f0f2] text-[10px] border border-[#3a3a40] rounded px-1 py-0.5 max-w-[120px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+                    className="min-w-0 w-full bg-[#18181a] text-[#f0f0f2] text-[10px] border border-[#3a3a40] rounded px-1.5 py-1 max-w-[150px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
                   >
                     <option value="">(既定音源)</option>
                     {customVoicebanks.map((vb) => (
@@ -211,15 +227,15 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                   </select>
                 </div>
               ) : (
-                <div className="text-[10px] text-[#bf5af2] flex items-center space-x-1">
+                <div className="rounded-md bg-[#18181a]/80 border border-[#303034] px-2 py-2 text-[10px] text-[#bf5af2] flex items-center gap-1.5">
                   <Disc className="w-3 h-3 text-[#bf5af2]" />
                   <span className="truncate">オーディオ伴奏トラック</span>
                 </div>
               )}
 
               {/* Volume Slider & Mute / Solo Controls */}
-              <div className="flex items-center justify-between pt-1 border-t border-[#303034]" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center space-x-1.5 flex-1 mr-2">
+              <div className="flex items-center justify-between pt-2 border-t border-[#303034]" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
                   <button
                     onClick={() => onUpdateTrack(t.id, { isMuted: !t.isMuted })}
                     className={`min-w-7 h-7 px-1.5 text-[9px] font-mono font-bold rounded border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
@@ -230,7 +246,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                   </button>
                   <button
                     onClick={() => onUpdateTrack(t.id, { isSolo: !t.isSolo })}
-                    className={`px-1.5 py-0.5 text-[9px] font-mono font-bold rounded border transition ${
+                    className={`min-w-7 h-7 px-1.5 text-[9px] font-mono font-bold rounded border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
                       t.isSolo ? 'bg-[#ff9f0a]/20 text-[#ff9f0a] border-[#ff9f0a]/60' : 'bg-[#18181a] text-[#9a9aa2] border-[#3a3a40] hover:text-[#f0f0f2]'
                     }`}
                   >
