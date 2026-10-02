@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Trash2, Type, AudioWaveform, Copy, X } from 'lucide-react';
 
 interface NoteContextMenuProps {
@@ -25,12 +25,33 @@ export const NoteContextMenu: React.FC<NoteContextMenuProps> = ({
   onOpenPitch,
   onClose,
 }) => {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const selector = 'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+    const first = menuRef.current?.querySelector<HTMLElement>(selector);
+    first?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const elements = Array.from(menuRef.current?.querySelectorAll<HTMLElement>(selector) ?? []);
+      if (!elements.length) return;
+      const firstElement = elements[0], lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) { event.preventDefault(); lastElement.focus(); }
+      else if (!event.shiftKey && document.activeElement === lastElement) { event.preventDefault(); firstElement.focus(); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => { document.removeEventListener('keydown', handleKeyDown); restoreFocusRef.current?.focus(); restoreFocusRef.current = null; };
+  }, [onClose]);
+
   // Clamp within window bounds
   const clampedX = Math.max(10, Math.min(window.innerWidth - 180, x));
   const clampedY = Math.max(10, Math.min(window.innerHeight - 200, y));
 
   return (
-    <div className="fixed inset-0 z-50 select-none" onClick={onClose}>
+    <div className="fixed inset-0 z-50 select-none" role="presentation" onClick={onClose}>
       <div
         className="absolute bg-[#1f1f22] border border-[#3a3a40] rounded-xl shadow-2xl p-1.5 min-w-[170px] z-50 text-xs text-[#f0f0f2] animate-in fade-in zoom-in-95 duration-100 space-y-1"
         style={{ left: `${clampedX}px`, top: `${clampedY}px` }}
