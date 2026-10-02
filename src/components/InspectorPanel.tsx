@@ -1,5 +1,5 @@
 import React from 'react';
-import { Edit3, Trash2, Type, AudioWaveform, Sliders, Volume2, Music } from 'lucide-react';
+import { Trash2, Type, AudioWaveform, Sliders } from 'lucide-react';
 import PitchCurveMiniEditor from './PitchCurveMiniEditor';
 
 export interface Note {
@@ -44,148 +44,106 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     );
   }
 
+  const sectionClass = 'rounded-lg border border-[#303034] bg-[#1b1b1e] p-2.5';
+  const fieldLabelClass = 'text-[#9a9aa2] font-medium block mb-1';
+  const inputClass = 'w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]';
+  const compactInputClass = 'w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]';
+
   return (
-    <div className="flex flex-col space-y-4 text-xs">
-      {/* Header with Note Info & Delete Button */}
+    <div className={`flex flex-col text-xs ${isCompact ? 'space-y-3' : 'space-y-3.5'}`}>
+      {/* Header: identity + destructive action */}
       <div className="flex items-center justify-between border-b border-[#303034] pb-2.5">
-        <div className="flex items-center space-x-2">
-          <span className="w-6 h-6 rounded-md bg-[#0a84ff]/20 border border-[#0a84ff]/50 text-[#2997ff] font-bold font-mono text-xs flex items-center justify-center">
+        <div className="flex items-center space-x-2 min-w-0">
+          <span className="w-6 h-6 shrink-0 rounded-md bg-[#0a84ff]/20 border border-[#0a84ff]/50 text-[#2997ff] font-bold font-mono text-xs flex items-center justify-center">
             {getNoteName(selectedNote.noteNum)}
           </span>
-          <div>
-            <h4 className="font-bold text-[#f0f0f2] text-xs">Note Inspector</h4>
-            <span className="text-[10px] text-[#7d7d86] font-mono">Tick: {selectedNote.tick}</span>
+          <div className="min-w-0">
+            <h4 className="font-bold text-[#f0f0f2] text-xs">ノート情報</h4>
+            <span className="text-[10px] text-[#7d7d86] font-mono">Tick {selectedNote.tick}</span>
           </div>
         </div>
 
         <button
           onClick={() => onDeleteNote(selectedNote.id)}
-          className="min-w-[36px] min-h-[36px] px-2.5 py-1 text-[#ff453a] hover:text-white bg-[#ff453a]/15 hover:bg-[#ff453a]/30 border border-[#ff453a]/40 rounded-lg flex items-center space-x-1 transition cursor-pointer"
-          title="Delete Note"
+          className="min-w-[36px] min-h-[36px] px-2.5 py-1 text-[#ff453a] hover:text-white bg-[#ff453a]/15 hover:bg-[#ff453a]/30 border border-[#ff453a]/40 rounded-lg flex items-center space-x-1 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+          title="ノートを削除"
+          aria-label="ノートを削除"
         >
           <Trash2 className="w-3.5 h-3.5" />
-          <span className="text-[11px]">Delete</span>
+          <span className="text-[11px]">削除</span>
         </button>
       </div>
 
-      {/* Lyric & Phoneme */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <label className="text-[#9a9aa2] font-medium">歌詞 / 音素 (Lyrics):</label>
+      <section className={`${sectionClass} space-y-2.5`}>
+        <div className="flex items-center justify-between">
+          <h5 className="text-[10px] font-semibold tracking-wide text-[#7d7d86] uppercase">基本情報</h5>
           {onOpenBatchLyrics && (
             <button
               type="button"
               onClick={onOpenBatchLyrics}
-              className="text-[10px] text-[#2997ff] hover:text-[#0a84ff] hover:underline flex items-center gap-0.5 cursor-pointer"
+              className="text-[10px] text-[#2997ff] hover:text-[#0a84ff] hover:underline flex items-center gap-0.5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] rounded"
             >
               <Type className="w-3 h-3" />
               <span>一括入力</span>
             </button>
           )}
         </div>
-        <input
-          type="text"
-          value={selectedNote.lyric}
-          onChange={(e) => onUpdateNote('lyric', e.target.value)}
-          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-bold text-sm focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
-        />
-      </div>
 
-      {/* Pitch (MIDI) & Note Name */}
-      <div>
-        <label className="text-[#9a9aa2] font-medium block mb-1">音高 (Pitch / Note):</label>
-        <div className="grid grid-cols-2 gap-2">
-          <input
-            type="number"
-            min="36"
-            max="84"
-            value={selectedNote.noteNum}
-            onChange={(e) => onUpdateNote('noteNum', parseInt(e.target.value) || 60)}
-            className="h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono text-center font-bold focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
-          />
-          <div className="h-10 bg-[#2a2a2e] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
-            {getNoteName(selectedNote.noteNum)}
+        <div>
+          <label className={fieldLabelClass}>歌詞 / 音素 (Lyrics):</label>
+          <input type="text" value={selectedNote.lyric} onChange={(e) => onUpdateNote('lyric', e.target.value)} className={`${inputClass} font-bold text-sm`} />
+        </div>
+
+        <div>
+          <label className={fieldLabelClass}>音高 (Pitch / Note):</label>
+          <div className="grid grid-cols-2 gap-2">
+            <input type="number" min="36" max="84" value={selectedNote.noteNum} onChange={(e) => onUpdateNote('noteNum', parseInt(e.target.value) || 60)} className={`${inputClass} font-mono text-center font-bold`} />
+            <div className="h-10 bg-[#2a2a2e] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
+              {getNoteName(selectedNote.noteNum)}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Length in Ticks */}
-      <div>
-        <label className="text-[#9a9aa2] font-medium block mb-1">長さ (Length Ticks):</label>
-        <input
-          type="number"
-          step="60"
-          value={selectedNote.length}
-          onChange={(e) => onUpdateNote('length', parseInt(e.target.value) || 480)}
-          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
-        />
-      </div>
-
-      {/* Intensity / Volume */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <label className="text-[#9a9aa2] font-medium">音量強度 (Intensity):</label>
-          <span className="font-mono text-[#2997ff] font-bold">{selectedNote.intensity}</span>
+        <div>
+          <label className={fieldLabelClass}>長さ (Length Ticks):</label>
+          <input type="number" step="60" value={selectedNote.length} onChange={(e) => onUpdateNote('length', parseInt(e.target.value) || 480)} className={`${inputClass} font-mono`} />
         </div>
-        <input
-          type="range"
-          min="0"
-          max="150"
-          value={selectedNote.intensity}
-          onChange={(e) => onUpdateNote('intensity', parseFloat(e.target.value))}
-          className="w-full h-2 accent-[#0a84ff] bg-[#2a2a2e] rounded-lg appearance-none cursor-pointer"
-        />
-      </div>
+      </section>
 
-      {/* Flags */}
-      <div>
-        <label className="text-[#9a9aa2] font-medium block mb-1">フラグ (Flags, e.g. g-5B50):</label>
-        <input
-          type="text"
-          value={selectedNote.flags}
-          onChange={(e) => onUpdateNote('flags', e.target.value)}
-          placeholder="g-5B50"
-          className="w-full h-10 bg-[#18181a] border border-[#3a3a40] rounded-lg px-3 text-[#f0f0f2] font-mono text-xs focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] placeholder-[#55555c]"
-        />
-      </div>
+      <section className={`${sectionClass} space-y-2.5`}>
+        <h5 className="text-[10px] font-semibold tracking-wide text-[#7d7d86] uppercase">発音・強度</h5>
 
-      {/* Pitch Curve Parameters (PBS, PBW, PBY) */}
-      <div className="border-t border-[#303034] pt-3">
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[#9a9aa2] font-medium">音量強度 (Intensity):</label>
+            <span className="font-mono text-[#2997ff] font-bold">{selectedNote.intensity}</span>
+          </div>
+          <input type="range" min="0" max="150" value={selectedNote.intensity} onChange={(e) => onUpdateNote('intensity', parseFloat(e.target.value))} className="w-full h-2 accent-[#0a84ff] bg-[#2a2a2e] rounded-lg appearance-none cursor-pointer" aria-label="音量強度" />
+        </div>
+
+        <div>
+          <label className={fieldLabelClass}>フラグ <span className="text-[10px] text-[#7d7d86]">(例: g-5B50)</span></label>
+          <input type="text" value={selectedNote.flags} onChange={(e) => onUpdateNote('flags', e.target.value)} placeholder="g-5B50" className={`${inputClass} font-mono text-xs placeholder-[#55555c]`} />
+        </div>
+      </section>
+
+      <section className={sectionClass}>
         <label className="text-[#d5d5da] font-medium block mb-2 flex items-center space-x-1">
           <AudioWaveform className="w-3.5 h-3.5 text-[#0a84ff]" />
-          <span>ピッチベンド曲線 (PBS / PBW / PBY)</span>
+          <span>ピッチベンド曲線</span>
         </label>
-        <div className="space-y-2">
-          <div>
-            <span className="text-[10px] text-[#7d7d86]">PBS (開始点 ticks;semitones):</span>
-            <input
-              type="text"
-              value={selectedNote.pbs}
-              onChange={(e) => onUpdateNote('pbs', e.target.value)}
-              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
-            />
-          </div>
-          <div>
-            <span className="text-[10px] text-[#7d7d86]">PBW (各点幅カンマ区切り):</span>
-            <input
-              type="text"
-              value={selectedNote.pbw}
-              onChange={(e) => onUpdateNote('pbw', e.target.value)}
-              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
-            />
-          </div>
-          <div>
-            <span className="text-[10px] text-[#7d7d86]">PBY (各点高さ半音単位):</span>
-            <input
-              type="text"
-              value={selectedNote.pby}
-              onChange={(e) => onUpdateNote('pby', e.target.value)}
-              className="w-full h-8 bg-[#18181a] border border-[#3a3a40] rounded px-2 text-[#f0f0f2] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]"
-            />
-          </div>
+
+        <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
+          <span className="text-[10px] text-[#7d7d86]">PBS</span>
+          <input type="text" value={selectedNote.pbs} onChange={(e) => onUpdateNote('pbs', e.target.value)} aria-label="PBS 開始点" className={compactInputClass} />
+          <span className="text-[10px] text-[#7d7d86]">PBW</span>
+          <input type="text" value={selectedNote.pbw} onChange={(e) => onUpdateNote('pbw', e.target.value)} aria-label="PBW 各点幅" className={compactInputClass} />
+          <span className="text-[10px] text-[#7d7d86]">PBY</span>
+          <input type="text" value={selectedNote.pby} onChange={(e) => onUpdateNote('pby', e.target.value)} aria-label="PBY 各点高さ" className={compactInputClass} />
         </div>
 
-        {/* Mini Pitch Bend Graphical Curve Editor */}
+        <p className="mt-1.5 text-[9px] text-[#6f6f78] leading-relaxed">PBS: 開始点 / PBW: 幅 / PBY: 高さ</p>
+
         <div className="mt-3">
           <PitchCurveMiniEditor
             note={selectedNote}
@@ -197,7 +155,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             }}
           />
         </div>
-      </div>
+      </section>
     </div>
   );
 };
