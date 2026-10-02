@@ -3022,9 +3022,9 @@ export default function App() {
         )}
 
         {/* Central Active View Content */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-[#18181a]">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-[#18181a]">
           {activeTab === 'editor' && (
-            <div className="flex-1 flex flex-col overflow-hidden relative">
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
               {/* Multi-Track Mixer Panel (Collapsible) */}
               <MultiTrackPanel
                 tracks={tracks}
@@ -3723,7 +3723,7 @@ shadow border gpu-accelerated group select-none touch-none ${
 
                 {/* Right Parameter Inspector Panel (Desktop & Tablet collapsible) */}
                 {!responsive.isPhone && (!responsive.isTablet || responsive.orientation === 'landscape') && isInspectorOpen && (
-                  <div className="w-72 sm:w-80 bg-[#1f1f22] border-l border-[#3a3a40] flex flex-col shrink-0 overflow-y-auto">
+                  <div className="vose-inspector-scroll w-72 sm:w-80 bg-[#1f1f22] border-l border-[#3a3a40] flex flex-col shrink-0 min-h-0 overflow-y-auto">
                     <InspectorPanel
                       selectedNote={selectedNote}
                       onUpdateNote={updateSelectedNote}
