@@ -173,7 +173,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               placeholder="例: さ く ら さ く ら や よ い の そ ら は (スペース区切りまたは連続入力)"
-              className="w-full bg-[#18181a] border border-[#3a3a40] focus:border-[#0a84ff] focus:ring-1 focus:ring-[#0a84ff] rounded-lg p-3 text-[#f0f0f2] placeholder-[#7d7d86] font-mono text-sm leading-relaxed resize-none focus:outline-none"
+              className="w-full bg-[#18181a] border border-[#3a3a40] focus:border-[#0a84ff] focus:ring-1 focus:ring-[#0a84ff] rounded-lg p-3 text-[#f0f0f2] placeholder-[#7d7d86] font-mono text-sm leading-relaxed resize-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-panel)]"
               autoFocus
             />
           </div>
@@ -185,7 +185,7 @@ export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
               <select
                 value={delimiterMode}
                 onChange={(e) => setDelimiterMode(e.target.value as any)}
-                className="w-full bg-[#2a2a2e] border border-[#3a3a40] rounded px-2 py-1.5 text-[#f0f0f2] focus:border-[#0a84ff] focus:outline-none"
+                className="w-full bg-[var(--vose-bg-elevated)] border border-[var(--vose-border)] rounded px-2 py-1.5 text-[var(--vose-text-primary)] focus:border-[#0a84ff] focus:outline-none"
               >
                 <option value="auto">自動判別 (スペース区切り / 1文字ごと)</option>
                 <option value="space">空白・スペース区切り (「か え る」)</option>
