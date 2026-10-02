@@ -226,6 +226,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                     ))}
                   </select>
                 </div>
+                </div>
               ) : (
                 <div className="rounded-md bg-[var(--vose-bg-base)]/80 border border-[var(--vose-border)] px-2 py-2 text-[10px] text-[#bf5af2] flex items-center gap-1.5">
                   <Disc className="w-3 h-3 text-[#bf5af2]" />
