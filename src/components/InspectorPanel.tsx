@@ -47,17 +47,17 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     );
   }
 
-  const sectionClass = 'rounded-lg border border-[var(--vose-border)] bg-[var(--vose-bg-panel)] p-2.5';
-  const fieldLabelClass = 'text-[var(--vose-text-secondary)] font-medium block mb-1';
-  const inputClass = 'w-full h-10 bg-[var(--vose-bg-base)] border border-[#3a3a40] rounded-lg px-3 text-[var(--vose-text-primary)] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-panel)]';
+  const sectionClass = 'rounded-lg border border-[var(--vose-border)] bg-[var(--vose-bg-panel)] p-2 sm:p-2.5';
+  const fieldLabelClass = 'text-[var(--vose-text-secondary)] font-medium block mb-1 text-[11px] sm:text-xs';
+  const inputClass = 'w-full h-9 sm:h-10 bg-[var(--vose-bg-base)] border border-[#3a3a40] rounded-lg px-3 text-[var(--vose-text-primary)] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-panel)]';
   const compactInputClass = 'w-full h-8 bg-[var(--vose-bg-base)] border border-[#3a3a40] rounded px-2 text-[var(--vose-text-primary)] font-mono text-[11px] focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-panel)]';
 
   return (
     <div className={`flex flex-col text-xs ${isCompact ? 'space-y-3' : 'space-y-3.5'}`}>
       {/* Header: identity + destructive action */}
-      <div className="flex items-center justify-between border-b border-[var(--vose-border)] pb-2.5">
+      <div className="flex items-center justify-between border-b border-[var(--vose-border)] pb-2 sm:pb-2.5">
         <div className="flex items-center space-x-2 min-w-0">
-          <span className="w-6 h-6 shrink-0 rounded-md bg-[#0a84ff]/20 border border-[#0a84ff]/50 text-[#2997ff] font-bold font-mono text-xs flex items-center justify-center">
+          <span className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 rounded-md bg-[#0a84ff]/20 border border-[#0a84ff]/50 text-[#2997ff] font-bold font-mono text-xs flex items-center justify-center">
             {getNoteName(selectedNote.noteNum)}
           </span>
           <div className="min-w-0">
@@ -68,7 +68,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
         <button
           onClick={() => onDeleteNote(selectedNote.id)}
-          className="min-w-[36px] min-h-[36px] px-2.5 py-1 text-[#ff453a] hover:text-white bg-[#ff453a]/15 hover:bg-[#ff453a]/30 border border-[#ff453a]/40 rounded-lg flex items-center space-x-1 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+          className="min-w-[36px] min-h-[34px] sm:min-h-[36px] px-2.5 py-1 text-[#ff453a] hover:text-white bg-[#ff453a]/15 hover:bg-[#ff453a]/30 border border-[#ff453a]/40 rounded-lg flex items-center space-x-1 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
           title="ノートを削除"
           aria-label="ノートを削除"
         >
@@ -77,7 +77,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         </button>
       </div>
 
-      <section className={`${sectionClass} space-y-2.5`}>
+      <section className={`${sectionClass} space-y-2 sm:space-y-2.5`}>
         <div className="flex items-center justify-between">
           <h5 className="text-[10px] font-semibold tracking-wide text-[var(--vose-text-muted)] uppercase">基本情報</h5>
           {onOpenBatchLyrics && (
@@ -99,7 +99,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
         <div>
           <label className={fieldLabelClass}>音高 (Pitch / Note):</label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
             <input type="number" min="36" max="84" value={selectedNote.noteNum} onChange={(e) => onUpdateNote('noteNum', parseInt(e.target.value) || 60)} className={`${inputClass} font-mono text-center font-bold`} />
             <div className="h-10 bg-[var(--vose-bg-elevated)] border border-[#3a3a40] rounded-lg text-[#2997ff] font-mono font-bold flex items-center justify-center text-sm shadow-inner">
               {getNoteName(selectedNote.noteNum)}
@@ -138,7 +138,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
         <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1.5">
           <span className="text-[10px] text-[var(--vose-text-muted)]">PBS</span>
-          <input type="text" value={selectedNote.pbs} onChange={(e) => onUpdateNote('pbs', e.target.value)} aria-label="PBS 開始点" className={compactInputClass} />
+          <input type="text" value={selectedNote.pbs} onChange={(e) => onUpdateNote('pbs', e.target.value)} aria-label="PBS 開始点" className={`${compactInputClass} h-7 sm:h-8`} />
           <span className="text-[10px] text-[var(--vose-text-muted)]">PBW</span>
           <input type="text" value={selectedNote.pbw} onChange={(e) => onUpdateNote('pbw', e.target.value)} aria-label="PBW 各点幅" className={compactInputClass} />
           <span className="text-[10px] text-[var(--vose-text-muted)]">PBY</span>
