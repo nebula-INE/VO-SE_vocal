@@ -1745,8 +1745,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 //   ProgressCallback:   進捗率(0-100)を通知する。nullptr可（呼ばれない）。
 //   CancelCheckCallback: 非0を返すとレンダリングを中断する。nullptr可。
 // ============================================================
-typedef void (*ProgressCallback)(int percent);
-typedef int  (*CancelCheckCallback)();
+using ProgressCallback = VoseProgressCallback;
+using CancelCheckCallback = VoseCancelCheckCallback;
 
 // ============================================================
 // extern "C" API
