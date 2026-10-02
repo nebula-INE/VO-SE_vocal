@@ -19,7 +19,14 @@
 }
 
 @layer base {
+  html {
+    background: var(--vose-bg-base);
+    color-scheme: dark;
+  }
+
   body {
+    background-color: var(--vose-bg-base);
+    color: var(--vose-text-primary);
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     -webkit-tap-highlight-color: transparent;
     -webkit-font-smoothing: antialiased;
