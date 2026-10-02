@@ -78,3 +78,36 @@
 .pb-safe {
   padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
 }
+
+
+/* Timeline micro-polish: hover/selection hierarchy and reduced-motion support. */
+.vose-timeline-note-idle {
+  transition: background-color 150ms ease, border-color 150ms ease,
+    box-shadow 150ms ease, transform 150ms ease, opacity 150ms ease;
+}
+.vose-timeline-note-idle:hover {
+  background-color: #2997ff;
+  border-color: rgba(138, 215, 255, 0.7);
+  box-shadow: 0 4px 12px rgba(10, 132, 255, 0.2);
+  transform: translateY(-1px);
+}
+.vose-timeline-note-selected {
+  transform: scale(1.005);
+}
+.vose-timeline-note-selected:hover {
+  box-shadow: 0 6px 16px rgba(255, 159, 10, 0.34);
+}
+.vose-timeline-playhead {
+  will-change: left;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vose-timeline-note-idle,
+  .vose-timeline-note-selected,
+  .vose-timeline-playhead {
+    transition: none !important;
+    animation: none !important;
+  }
+  .vose-timeline-note-idle:hover {
+    transform: none;
+  }
+}
