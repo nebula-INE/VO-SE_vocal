@@ -32,15 +32,15 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
             <CheckCircle2 className="w-5 h-5 text-[#30d158]" />
           </div>
           <div>
-            <span className="text-[10px] text-[#9a9aa2] block">選択中の歌声 (Active Voice)</span>
-            <span className="text-sm font-bold text-[#f0f0f2]">{selectedVoicebank}</span>
+            <span className="text-[10px] text-[var(--vose-text-secondary)] block">選択中の歌声 (Active Voice)</span>
+            <span className="text-sm font-bold text-[var(--vose-text-primary)]">{selectedVoicebank}</span>
           </div>
         </div>
 
         {onOpenVoicebankTab && (
           <button
             onClick={onOpenVoicebankTab}
-            className="min-h-10 px-2.5 py-1.5 rounded-lg bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#18181a]"
+            className="min-h-10 px-2.5 py-1.5 rounded-lg bg-[var(--vose-bg-elevated)] hover:bg-[var(--vose-bg-hover)] text-[var(--vose-text-primary)] border border-[var(--vose-border)] font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-base)]"
           >
             ライブラリ管理
           </button>
@@ -49,7 +49,7 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
 
       {/* Voicebank List */}
       <div>
-        <h4 className="text-xs font-semibold text-[#9a9aa2] mb-2 flex items-center space-x-1.5">
+        <h4 className="text-xs font-semibold text-[var(--vose-text-secondary)] mb-2 flex items-center space-x-1.5">
           <Library className="w-4 h-4 text-[#0a84ff]" />
           <span>インストール済み音源 ({customVoicebanks.length})</span>
         </h4>
@@ -62,18 +62,18 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
                 type="button"
                 key={vb.name}
                 onClick={() => onSelectVoicebank(vb.name)}
-                className={`w-full text-left p-3 rounded-xl border flex items-center justify-between transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22] ${
+                className={`w-full text-left p-3 rounded-xl border flex items-center justify-between transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-panel)] ${
 
                   isSelected
                     ? 'bg-[#0a84ff]/20 border-[#0a84ff] shadow-sm shadow-[#0a84ff]/20'
-                    : 'bg-[#18181a] hover:bg-[#2a2a2e] border-[#303034] text-[#d5d5da]'
+                    : 'bg-[var(--vose-bg-base)] hover:bg-[var(--vose-bg-elevated)] border-[var(--vose-border)] text-[#d5d5da]'
                 }`}
               >
                 <div className="flex items-center space-x-2.5">
                   <div className={`w-3 h-3 rounded-full ${isSelected ? 'bg-[#0a84ff] shadow-sm shadow-[#0a84ff]' : 'bg-[#3a3a40]'}`} />
                   <div>
-                    <div className="font-bold text-[#f0f0f2] text-xs">{vb.name}</div>
-                    <div className="text-[10px] text-[#9a9aa2]">
+                    <div className="font-bold text-[var(--vose-text-primary)] text-xs">{vb.name}</div>
+                    <div className="text-[10px] text-[var(--vose-text-secondary)]">
                       {vb.aliasCount} 音素エイリアス {vb.hasVcv ? '・連続音 (VCV)' : '・単独音'}
                     </div>
                   </div>
@@ -91,8 +91,8 @@ export const VoicebankSheet: React.FC<VoicebankSheetProps> = ({
       </div>
 
       {/* Zip Upload Button */}
-      <div className="pt-2 border-t border-[#303034]">
-        <label className="w-full min-h-11 h-11 focus-within:ring-2 focus-within:ring-[#0a84ff] focus-within:ring-offset-1 focus-within:ring-offset-[#18181a] bg-[#2a2a2e] hover:bg-[#34343a] text-[#f0f0f2] border border-[#3a3a40] rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer font-medium">
+      <div className="pt-2 border-t border-[var(--vose-border)]">
+        <label className="w-full min-h-11 h-11 focus-within:ring-2 focus-within:ring-[#0a84ff] focus-within:ring-offset-1 focus-within:ring-offset-[#18181a] bg-[var(--vose-bg-elevated)] hover:bg-[var(--vose-bg-hover)] text-[var(--vose-text-primary)] border border-[var(--vose-border)] rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer font-medium">
           <Upload className="w-4 h-4 text-[#0a84ff]" />
           <span>{isUploading ? '音源ZIP展開中...' : 'UTAU音源(.zip) を追加'}</span>
           <input
