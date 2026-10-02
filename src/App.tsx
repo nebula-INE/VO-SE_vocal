@@ -3497,7 +3497,7 @@ export default function App() {
                         {/* Playhead indicator bar */}
                         <div
                           ref={gridPlayheadRef}
-                          className="absolute top-0 bottom-0 w-[2px] bg-[#ff453a] z-30 pointer-events-none shadow-[0_0_6px_rgba(255,69,58,0.55)]"
+                          className="vose-timeline-playhead absolute top-0 bottom-0 w-[2px] bg-[#ff453a] z-30 pointer-events-none shadow-[0_0_6px_rgba(255,69,58,0.55)]"
                           style={{
                             left: `${(currentTick / totalTicks) * 100}%`
                           }}
@@ -3655,11 +3655,11 @@ export default function App() {
                                 setContextMenuPos({ x: e.clientX, y: e.clientY });
                               }}
                               className={`absolute rounded-md px-2 flex items-center justify-between text-xs font-bold cursor-pointer 
-transition-[background-color,border-color,box-shadow,transform,opacity] duration-150 ease-out 
+vose-timeline-note transition-[background-color,border-color,box-shadow,transform,opacity] duration-150 ease-out 
 shadow border gpu-accelerated group select-none touch-none ${
                                 isSelected
-                                  ? 'bg-[#ff9f0a] text-black border-white ring-2 ring-[#ff9f0a]/60 z-20 shadow-lg shadow-[#ff9f0a]/30 scale-[1.005]'
-                                  : 'bg-[#0a84ff] hover:bg-[#2997ff] hover:border-[#8ad7ff]/70 hover:shadow-md hover:shadow-[#0a84ff]/20 text-white border-[#5ac8fa]/40 z-10 shadow-sm'
+                                  ? 'vose-timeline-note-selected bg-[#ff9f0a] text-black border-white ring-2 ring-[#ff9f0a]/60 z-20 shadow-lg shadow-[#ff9f0a]/30 scale-[1.005]'
+                                  : 'vose-timeline-note-idle bg-[#0a84ff] text-white border-[#5ac8fa]/40 z-10 shadow-sm'
                               }`}
                               style={{
                                 top: `${topPos + 1}px`,
