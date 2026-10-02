@@ -292,7 +292,7 @@ export const UstImportModal: React.FC<UstImportModalProps> = ({
             <button
               onClick={handleApplyPastedText}
               disabled={!previewData}
-              className="px-4 py-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] disabled:opacity-40 disabled:hover:bg-[#0a84ff] text-white font-medium rounded-lg transition flex items-center space-x-1.5 shadow-md shadow-[#0a84ff]/30 cursor-pointer"
+              className="px-4 py-1.5 text-xs bg-[#0a84ff] hover:bg-[#2997ff] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#0a84ff] text-white font-medium rounded-lg transition flex items-center space-x-1.5 shadow-md shadow-[#0a84ff]/30 cursor-pointer"
             >
               <Check className="w-3.5 h-3.5" />
               <span>トラックに反映して読み込み</span>
