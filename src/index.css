@@ -236,6 +236,27 @@
   min-width: 12px;
   transition: opacity 120ms ease, background-color 120ms ease;
 }
+
+/* Keep short Timeline notes readable: lyric stays primary, pitch label yields space first. */
+.vose-timeline-note {
+  container-type: inline-size;
+}
+.vose-note-pitch {
+  max-width: 3.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@container (max-width: 44px) {
+  .vose-note-pitch {
+    display: none;
+  }
+}
+@container (min-width: 45px) and (max-width: 64px) {
+  .vose-note-pitch {
+    max-width: 2.25rem;
+  }
+}
 @media (max-width: 1199px) {
   .vose-note-resize-handle {
     min-width: 20px;
