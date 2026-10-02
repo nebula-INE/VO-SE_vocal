@@ -46,6 +46,15 @@
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
+.vose-inspector-scroll {
+  min-height: 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.vose-track-strip {
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
 .vose-timeline-scroll::-webkit-scrollbar,
 .vose-keybed-scroll::-webkit-scrollbar {
   width: 8px;
