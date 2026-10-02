@@ -59,7 +59,7 @@ export const NoteContextMenu: React.FC<NoteContextMenuProps> = ({
       >
         <div className="px-2.5 py-1.5 border-b border-[#303034] flex items-center justify-between text-[#9a9aa2]">
           <span className="font-bold text-[#2997ff]">{noteName} ({noteLyric})</span>
-          <button onClick={onClose} className="p-0.5 rounded hover:bg-[#2a2a2e] text-[#9a9aa2] hover:text-[#f0f0f2]">
+          <button onClick={onClose} className="min-w-7 min-h-7 p-1 rounded hover:bg-[#2a2a2e] text-[#9a9aa2] hover:text-[#f0f0f2] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[#1f1f22]" aria-label="閉じる" title="閉じる">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
