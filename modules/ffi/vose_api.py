@@ -75,6 +75,19 @@ def bind_all(lib: ctypes.CDLL) -> None:
         ctypes.c_int,
     ], None)
 
+    # Desktop render は Web と同じくネイティブ側の段階進捗と
+    # 協調キャンセルを受け取れる cancelable API を優先する。
+    # 古いDLLにはシンボルが無い場合があるため、存在しなければ
+    # execute_render のみで従来互換を維持する。
+    _bind(lib, "execute_render_cancelable", [
+        ctypes.POINTER(CNoteEvent),
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.CFUNCTYPE(None, ctypes.c_int),
+        ctypes.CFUNCTYPE(ctypes.c_int),
+    ], None)
+
     _bind(lib, "set_vocal_timeline", [
         ctypes.POINTER(CVoseFrame),
         ctypes.c_int,
