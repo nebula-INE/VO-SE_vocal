@@ -496,9 +496,6 @@ def _export_to_wav_v2(
     if callable(cancel_check) and cancel_check():
         raise RuntimeError("レンダリングがキャンセルされました")
 
-    if callable(cancel_check) and cancel_check():
-        raise RuntimeError("レンダリングがキャンセルされました")
-
     native_output = os.path.abspath(file_path).encode("utf-8")
     execute_cancelable = getattr(self.lib, "execute_render_cancelable", None)
 
