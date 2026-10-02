@@ -3668,8 +3668,8 @@ shadow border gpu-accelerated group select-none touch-none ${
                                 width: `${Math.max(widthPct, 2)}%`
                               }}
                             >
-                              <span className="truncate pointer-events-none">{note.lyric}</span>
-                              <span className="text-[9px] font-mono opacity-80 pl-1 pointer-events-none">{getNoteName(note.noteNum)}</span>
+                              <span className="min-w-0 flex-1 truncate pointer-events-none leading-none">{note.lyric}</span>
+                              <span className="vose-note-pitch shrink-0 text-[8px] sm:text-[9px] font-mono opacity-80 pl-1 pointer-events-none leading-none">{getNoteName(note.noteNum)}</span>
                               
                               {/* Resize Handle (Adaptive to touch vs mouse) */}
                               <div 
