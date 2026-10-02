@@ -136,7 +136,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
 
       {/* Track List Strip (Hidden when collapsed) */}
       {!isCollapsed && (
-      <div className="px-1.5 py-1.5 sm:p-2 flex gap-1.5 sm:gap-2 overflow-x-auto scrollbar-none">
+      <div className="vose-track-strip px-1.5 py-1.5 sm:p-2 flex gap-1.5 sm:gap-2 overflow-x-auto scrollbar-none">
         {tracks.map((t, idx) => {
           const isSelected = t.id === currentTrackId;
           const trackColor = t.color || TRACK_COLORS[idx % TRACK_COLORS.length];
