@@ -160,6 +160,68 @@ function getCapturedLogText(): string {
   return capturedLog.join('\n');
 }
 
+function validateWavIsAudible(wavBytes: Uint8Array): void {
+  if (wavBytes.length < 44) {
+    throw new Error('WASMレンダリング結果のWAVが短すぎます。');
+  }
+  const view = new DataView(wavBytes.buffer, wavBytes.byteOffset, wavBytes.byteLength);
+  const ascii = (offset: number, length: number) => {
+    let out = '';
+    for (let i = 0; i < length; i++) out += String.fromCharCode(view.getUint8(offset + i));
+    return out;
+  };
+  if (ascii(0, 4) !== 'RIFF' || ascii(8, 4) !== 'WAVE') {
+    throw new Error('WASMレンダリング結果が有効なWAVではありません。');
+  }
+
+  let offset = 12;
+  let channels = 0;
+  let bitsPerSample = 0;
+  let dataOffset = -1;
+  let dataSize = 0;
+  while (offset + 8 <= wavBytes.length) {
+    const chunkId = ascii(offset, 4);
+    const size = view.getUint32(offset + 4, true);
+    const body = offset + 8;
+    if (chunkId === 'fmt ' && size >= 16 && body + size <= wavBytes.length) {
+      channels = view.getUint16(body + 2, true);
+      bitsPerSample = view.getUint16(body + 14, true);
+    } else if (chunkId === 'data' && body <= wavBytes.length) {
+      dataOffset = body;
+      dataSize = Math.min(size, wavBytes.length - body);
+      break;
+    }
+    offset = body + size + (size & 1);
+  }
+
+  if (dataOffset < 0 || channels <= 0 || bitsPerSample <= 0) {
+    throw new Error('WASMレンダリング結果のWAVデータチャンクを確認できません。');
+  }
+
+  let peak = 0;
+  if (bitsPerSample === 16) {
+    const end = dataOffset + (dataSize - (dataSize % 2));
+    for (let p = dataOffset; p + 2 <= end; p += 2) {
+      peak = Math.max(peak, Math.abs(view.getInt16(p, true)) / 32768);
+    }
+  } else if (bitsPerSample === 32) {
+    const end = dataOffset + (dataSize - (dataSize % 4));
+    for (let p = dataOffset; p + 4 <= end; p += 4) {
+      peak = Math.max(peak, Math.abs(view.getFloat32(p, true)));
+    }
+  } else {
+    throw new Error(`未対応のWAV bit depthです: ${bitsPerSample}bit`);
+  }
+
+  if (!(peak > 1.0e-7)) {
+    const log = getCapturedLogText();
+    throw new Error(
+      'WASMレンダリング結果のWAVが完全な無音です。' +
+      (log ? `\\n--- vose_core ログ ---\\n${log}` : '')
+    );
+  }
+}
+
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
@@ -444,6 +506,12 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     // 4. レンダリング実行 (execute_render_cancelable で進捗をメインスレッドへ
     //    中継する。ProgressCallback = void(*)(int) をJS関数から生成する)
     const outputPath = '/vose_output.wav';
+
+    // C++ execute_render_cancelable() は失敗時にWAVを書かずにreturnする。
+    // ここで前回のWAVを残したままだと、失敗してもその古いWAVをreadFile()
+    // して「成功」と誤認するため、必ず実行前に削除する。
+    try { mod.FS.unlink?.(outputPath); } catch (e) { /* not present */ }
+
     progressFnPtr = mod.addFunction((percent: number) => {
       const resp: RenderResponseMsg = { type: 'progress', requestId, percent };
       (self as unknown as Worker).postMessage(resp);
@@ -472,6 +540,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
         (log ? `\n--- vose_core ログ ---\n${log}` : '(vose_coreからのログ出力なし)')
       );
     }
+    validateWavIsAudible(wavBytes);
     const wavCopy = new Uint8Array(wavBytes); // WASMヒープ外へコピー
     try { mod.FS.unlink?.(outputPath); } catch (e) { /* ignore */ }
 
