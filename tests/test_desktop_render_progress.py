@@ -41,3 +41,21 @@ def test_desktop_v2_render_retries_direct_oto_alias_before_silence():
     assert "resolved_voice_count = 0" in source
     assert "音源WAVを1件も解決できませんでした" in source
     assert "os.path.isfile(wav_path)" in source
+
+
+def test_desktop_native_note_failure_cannot_be_converted_to_silence_success():
+    source = (ROOT / "src" / "vose_core.cpp").read_text(encoding="utf-8")
+
+    assert "worker_failed.store(true" in source
+    assert "cancel_flag.store(true" in source
+    assert "無音でスキップ" not in source
+
+
+def test_desktop_render_rejects_stale_output_and_validates_audio():
+    source = (ROOT / "modules" / "audio" / "vo_se_engine_patch.py").read_text(encoding="utf-8")
+
+    assert "os.remove(output_path_abs)" in source
+    assert "_expected_render_duration_sec(notes)" in source
+    assert "_validate_rendered_wav(output_path_abs, expected_duration_sec)" in source
+    assert "完全な無音です" in source
+    assert "WAV長がタイムラインと一致しません" in source
