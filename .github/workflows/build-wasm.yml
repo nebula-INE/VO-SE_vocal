@@ -119,6 +119,14 @@ jobs:
                -s DEFAULT_TO_CXX \
                -o build/wasm/vose_core.js
 
+      - name: Verify required WebAssembly exports
+        run: |
+          set -eu
+          grep -q "_load_embedded_resource_f32" build/wasm/vose_core.js
+          grep -q "_execute_render_cancelable" build/wasm/vose_core.js
+          grep -q "_set_oto_data" build/wasm/vose_core.js
+          echo "Required vose_core WASM exports are present."
+
       # ★新規追加: ビルド成果物をActionsのArtifactタブに置くだけでは
       # アプリからは絶対に参照されない（誰もダウンロード→手動配置しない限り
       # 永遠に古いビルドのままになる）。ここでリポジトリ内の実際にアプリが
