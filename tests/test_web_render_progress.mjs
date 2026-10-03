@@ -29,3 +29,16 @@ test('Web render Worker reports startup stages and has a WASM init watchdog', ()
   assert.match(worker, /WASMモジュール初期化がタイムアウトしました/);
   assert.match(worker, /60000/);
 });
+
+
+test('Web render removes stale WASM output before rendering', () => {
+  assert.match(worker, /mod\.FS\.unlink\?\.\(outputPath\)/);
+  assert.match(worker, /前回のWAVを残したままだと/);
+});
+
+test('Web render rejects a completely silent WAV instead of reporting success', () => {
+  assert.match(worker, /validateWavIsAudible\(wavBytes\)/);
+  assert.match(worker, /WAVが完全な無音です/);
+  assert.match(worker, /bitsPerSample === 16/);
+  assert.match(worker, /bitsPerSample === 32/);
+});
