@@ -115,6 +115,12 @@ test('Web prefix.map two-column entries use the suffix like Desktop', () => {
 });
 
 
+test('Default voicebank repairs a legacy literal\\n oto.ini', () => {
+  const server = readFileSync('server.js', 'utf8');
+  assert.match(server, /needsRebuild = !otoText\.includes\('\\n'\) && otoText\.includes\('\\\\n'\);/);
+  assert.match(server, /createDefaultVoicebank\(defaultName, true\);/);
+});
+
 test('Default voicebank writes real newlines to oto.ini', () => {
   const server = readFileSync('server.js', 'utf8');
   assert.match(
