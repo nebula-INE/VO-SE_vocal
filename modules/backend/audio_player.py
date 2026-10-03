@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportGeneralTypeIssues=false
 import os
 # PyQt6 から PySide6 に変更
 try:
