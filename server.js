@@ -1133,8 +1133,13 @@ function cacheWavBaseMidi(wavPath, signature, midi) {
 }
 
 function detectWavBaseMidi(wavPath, alias = '', filename = '') {
-  const taggedMidi = getMidiFromPitchTag(alias) || getMidiFromPitchTag(filename);
-  if (taggedMidi && taggedMidi !== 60) return taggedMidi;
+  // getMidiFromPitchTag() returns 60 for an untagged value, so do not
+  // use it as a truthy fallback: an untagged alias must not mask a
+  // pitch-tagged filename such as a_F4.wav.
+  const aliasMidi = getExplicitMidiFromPitchTag(alias);
+  const filenameMidi = getExplicitMidiFromPitchTag(filename);
+  const taggedMidi = aliasMidi ?? filenameMidi;
+  if (taggedMidi !== null) return taggedMidi;
 
   const cacheSignature = getWavBaseMidiCacheSignature(wavPath);
   if (wavPath && cacheSignature) {
