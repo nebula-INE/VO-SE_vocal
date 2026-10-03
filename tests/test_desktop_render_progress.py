@@ -29,7 +29,7 @@ def test_desktop_progress_stays_monotonic_across_native_boundary():
 def test_desktop_render_checks_output_after_native_completion():
     patch = (ROOT / "modules" / "audio" / "vo_se_engine_patch.py").read_text(encoding="utf-8")
 
-    assert 'if not os.path.exists(file_path):' in patch
+    assert 'if not os.path.exists(output_path_abs):' in patch
     assert 'raise RuntimeError("レンダリング結果の WAV が生成されませんでした。")' in patch
     assert "report_progress(100)" in patch
 
