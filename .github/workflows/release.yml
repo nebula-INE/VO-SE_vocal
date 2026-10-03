@@ -154,13 +154,31 @@ jobs:
         run: |
           python modules/tools/pack_all_voices.py
 
-      - name: Auto Commit Fixes
+      - name: Commit Ruff auto-fixes safely
         if: matrix.os == 'windows-latest'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style: ruff auto-fix unused imports"
-          commit_user_name: github-actions[bot]
-          commit_user_email: github-actions[bot]@users.noreply.github.com
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Ruff may modify the checkout while another workflow has already
+          # advanced main. Commit locally first, then rebase that commit onto
+          # the current remote main before pushing. This avoids non-fast-forward
+          # failures without overwriting commits created by other workflows.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No Ruff changes to commit."
+            exit 0
+          fi
+
+          git add .
+          git commit -m "style: ruff auto-fix unused imports"
+
+          git fetch origin main
+          git rebase origin/main
+
+          git push origin HEAD:main
 
       - name: 🛠️ Setup MSVC (Windows)
         if: matrix.os == 'windows-latest'
