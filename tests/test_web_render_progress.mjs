@@ -47,6 +47,8 @@ test('Web Audio fallback never synthesizes unresolved notes with a sawtooth osci
   const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
   assert.doesNotMatch(engine, /osc\.type\s*=\s*['"]sawtooth['"]/);
   assert.doesNotMatch(engine, /offlineCtx\.createOscillator\(\)/);
+  assert.doesNotMatch(engine, /psolaPitchAndTimeShiftBuffer\(/);
+  assert.match(engine, /source\.playbackRate\.setValueAtTime\(/);
   assert.match(engine, /resolvedSampleCount\+\+/);
   assert.match(engine, /resolvedSampleCount === 0/);
   assert.match(engine, /unresolved notes are left silent/);
