@@ -139,12 +139,12 @@ function buildPitchCurveHz(note: any, frameCount: number, durationMs: number): n
       const points: PitchPoint[] = smoothPitchBendPoints(rawPoints);
       bendSemitoneAt = (tMs: number) => {
         if (points.length === 0) return 0;
-        if (tMs <= points[0].timeMs) return points[0].semitone;
+        if (tMs <= points[0].offsetMs) return points[0].semitone;
         for (let i = 0; i < points.length - 1; i++) {
           const a = points[i];
           const b = points[i + 1];
-          if (tMs >= a.timeMs && tMs <= b.timeMs) {
-            const ratio = b.timeMs > a.timeMs ? (tMs - a.timeMs) / (b.timeMs - a.timeMs) : 0;
+          if (tMs >= a.offsetMs && tMs <= b.offsetMs) {
+            const ratio = b.offsetMs > a.offsetMs ? (tMs - a.offsetMs) / (b.offsetMs - a.offsetMs) : 0;
             return a.semitone + (b.semitone - a.semitone) * ratio;
           }
         }
