@@ -1495,6 +1495,20 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         throw std::runtime_error(buf);
     }
 
+    // 入力音源が無音ならWORLD解析が成功しても当然ながら出力は無音になる。
+    // ここで明示的に検出して、Web/デスクトップの「正常完了だが無音」を防ぐ。
+    double source_peak = 0.0;
+    for (const double sample : pp.ev->waveform)
+        source_peak = std::max(source_peak, std::abs(sample));
+    if (!(source_peak > 1.0e-8)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "source waveform is silent: wav_path=%s samples=%lld peak=%.9g",
+                 n.wav_path ? n.wav_path : "(null)",
+                 static_cast<long long>(pp.ev->waveform.size()), source_peak);
+        throw std::runtime_error(buf);
+    }
+
     const int64_t note_samples  = pp.note_samples;
     const int     lead_frames = static_cast<int>(
         std::ceil(static_cast<double>(std::max<int64_t>(0, pp.preutterance_samples)) /
@@ -1712,6 +1726,22 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                  "output_frames=%d fft_size=%d src_ms=%.2f fixed=%.2f : %s",
                  static_cast<long long>(note_samples), note_ms, output_frames,
                  fft_size, src_ms, current_oto.consonant, e.what());
+        throw std::runtime_error(buf);
+    }
+
+    // WORLD合成が例外なく完了しても、入力解析やパラメータ異常で
+    // 全サンプルが0になる可能性がある。無音を成功扱いにしない。
+    double synth_peak = 0.0;
+    for (const double sample : note_buf)
+        synth_peak = std::max(synth_peak, std::abs(sample));
+    if (!(synth_peak > 1.0e-8)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "WORLD synthesis produced silence: wav_path=%s note_samples=%lld "
+                 "pitch_length=%d source_peak=%.9g output_peak=%.9g",
+                 n.wav_path ? n.wav_path : "(null)",
+                 static_cast<long long>(note_samples), n.pitch_length,
+                 source_peak, synth_peak);
         throw std::runtime_error(buf);
     }
 
