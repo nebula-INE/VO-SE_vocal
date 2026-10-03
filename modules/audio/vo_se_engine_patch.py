@@ -235,6 +235,69 @@ def _note_duration_frames(note, frame_period_ms: float = 5.0) -> int:
     return max(1, int(round(duration_sec * 1000.0 / frame_period_ms)))
 
 
+def _expected_render_duration_sec(notes) -> float:
+    """v2 の絶対タイムラインから期待される WAV 長を秒で求める。"""
+    end_sec = 0.0
+    saw_timed_note = False
+    sequential_sec = 0.0
+    for note in notes:
+        try:
+            duration = max(0.0, float(getattr(note, "duration", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            duration = 0.0
+        try:
+            start = float(getattr(note, "start_time", -1.0))
+        except (TypeError, ValueError):
+            start = -1.0
+        if np.isfinite(start) and start >= 0.0:
+            saw_timed_note = True
+            end_sec = max(end_sec, start + duration)
+        else:
+            sequential_sec += duration
+    return end_sec if saw_timed_note else sequential_sec
+
+
+def _validate_rendered_wav(file_path: str, expected_duration_sec: float) -> None:
+    """生成WAVの長さと無音化を検証し、壊れた書き出しを成功扱いしない。"""
+    if sf is None:
+        raise RuntimeError("WAV検証に必要な soundfile が利用できません。")
+
+    try:
+        info = sf.info(file_path)
+        actual_duration = float(info.frames) / float(info.samplerate)
+    except Exception as exc:
+        raise RuntimeError(f"生成されたWAVを読み込めませんでした: {exc}") from exc
+
+    # v2 は C++ 側が 44100Hz / 5ms frame の絶対タイムラインを使う。
+    # 数サンプル程度の丸め誤差は許容するが、大きな差は書き出し破綻とする。
+    duration_tolerance = max(0.015, 3.0 / max(float(info.samplerate), 1.0))
+    if expected_duration_sec > 0.0 and abs(actual_duration - expected_duration_sec) > duration_tolerance:
+        raise RuntimeError(
+            "レンダリング結果のWAV長がタイムラインと一致しません。"
+            f" expected={expected_duration_sec:.3f}s actual={actual_duration:.3f}s"
+        )
+
+    # 少なくとも1ノートの音源WAVが解決済みなら、全体が完全無音になるのは
+    # 正常な成功結果ではない。チャンク読み込みで長時間曲のメモリ使用量を抑える。
+    peak = 0.0
+    try:
+        with sf.SoundFile(file_path, "r") as audio:
+            while True:
+                chunk = audio.read(262144, dtype="float32", always_2d=False)
+                if chunk is None or len(chunk) == 0:
+                    break
+                chunk_peak = float(np.max(np.abs(chunk)))
+                peak = max(peak, chunk_peak)
+    except Exception as exc:
+        raise RuntimeError(f"生成されたWAVの音量を検証できませんでした: {exc}") from exc
+
+    if peak <= 1.0e-7:
+        raise RuntimeError(
+            "レンダリング結果のWAVが完全な無音です。"
+            " ネイティブ合成・音源WAV・WORLD解析のいずれかで失敗しています。"
+        )
+
+
 def _export_to_wav_v2(
     self,
     notes,
@@ -273,6 +336,15 @@ def _export_to_wav_v2(
     if not self.lib:
         raise RuntimeError("Engine Core library missing!")
 
+    # 既存ファイルを先に削除する。ネイティブ側でノート合成に失敗した場合に
+    # 古いWAVを「今回の書き出し成功結果」と誤認しないため。
+    output_path_abs = os.path.abspath(file_path)
+    try:
+        if os.path.isfile(output_path_abs):
+            os.remove(output_path_abs)
+    except OSError as exc:
+        raise RuntimeError(f"既存のWAVを置き換えられません: {exc}") from exc
+
     oto_parser = getattr(self, "oto_parser", None)
     notes, timeline = self.text_analyzer.align_vocal_timing(
         notes,
@@ -290,7 +362,7 @@ def _export_to_wav_v2(
     report_progress(8)
 
     note_count = len(notes)
-    from modules.audio.vo_se_engine import CNoteEvent
+    from modules.audio.vo_se_engine import CNoteEvent, sf
     resolved_voice_count = 0
     c_notes_array = (CNoteEvent * note_count)()
     self._temp_refs = []
@@ -583,11 +655,14 @@ def _export_to_wav_v2(
     if callable(cancel_check) and cancel_check():
         raise RuntimeError("レンダリングがキャンセルされました")
 
-    if not os.path.exists(file_path):
+    if not os.path.exists(output_path_abs):
         raise RuntimeError("レンダリング結果の WAV が生成されませんでした。")
 
+    expected_duration_sec = _expected_render_duration_sec(notes)
+    _validate_rendered_wav(output_path_abs, expected_duration_sec)
+
     report_progress(100)
-    return os.path.abspath(file_path)
+    return output_path_abs
 
 
 def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
