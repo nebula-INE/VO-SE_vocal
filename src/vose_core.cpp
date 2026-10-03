@@ -2069,7 +2069,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         if (worker_error_msg.empty())
                             worker_error_msg = buf;
                     }
-                    fprintf(stderr, "[Render] %s\\n", buf);
+                    fprintf(stderr, "[Render] %s\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
                     worker_failed.store(true, std::memory_order_relaxed);
                     cancel_flag.store(true, std::memory_order_relaxed);
@@ -2085,7 +2085,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         if (worker_error_msg.empty())
                             worker_error_msg = buf;
                     }
-                    fprintf(stderr, "[Render] %s\\n", buf);
+                    fprintf(stderr, "[Render] %s\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
                     worker_failed.store(true, std::memory_order_relaxed);
                     cancel_flag.store(true, std::memory_order_relaxed);
