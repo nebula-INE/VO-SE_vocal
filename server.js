@@ -1328,12 +1328,8 @@ function getExplicitMidiFromPitchTag(str) {
 // different pitch-specific WAVs. aliasMap intentionally keeps the first
 // entry for compatibility, but render-time selection must prefer the entry
 // whose explicit pitch tag is closest to the requested MIDI note.
-function selectBestPitchEntry(indexed, candidate, noteNum) {
-  if (!indexed || !candidate || !Array.isArray(indexed.entries)) return null;
-  const normalized = String(candidate).normalize('NFC');
-  const matches = indexed.entries.filter((entry) =>
-    entry && String(entry.alias || '').normalize('NFC') === normalized
-  );
+function selectBestPitchEntryFromEntries(entries, noteNum) {
+  const matches = Array.isArray(entries) ? entries.filter(Boolean) : [];
   if (matches.length === 0) return null;
   if (noteNum === null || noteNum === undefined || !Number.isFinite(Number(noteNum))) {
     return matches[0];
@@ -1358,10 +1354,18 @@ function selectBestPitchEntry(indexed, candidate, noteNum) {
     }
   }
 
-  // If this alias has no pitch tags at all, preserve the original first-entry
-  // behavior rather than inventing a pitch.
   return taggedCount > 0 ? best : matches[0];
 }
+
+function selectBestPitchEntry(indexed, candidate, noteNum) {
+  if (!indexed || !candidate || !Array.isArray(indexed.entries)) return null;
+  const normalized = String(candidate).normalize('NFC');
+  const matches = indexed.entries.filter((entry) =>
+    entry && String(entry.alias || '').normalize('NFC') === normalized
+  );
+  return selectBestPitchEntryFromEntries(matches, noteNum);
+}
+
 // [FIX] This function was called from resolveVoicebankPath() in two places but was
 // never defined anywhere in server.js, causing a ReferenceError on every single
 // call to resolveVoicebankPath — which meant every /api/py/voicebank-sample,
@@ -1530,11 +1534,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
       }
     }
     if (filenameMatches.length > 0) {
-      const best = selectBestPitchEntry(
-        { entries: filenameMatches },
-        filenameMatches[0].alias,
-        noteNum
-      );
+      const best = selectBestPitchEntryFromEntries(filenameMatches, noteNum);
       return best || filenameMatches[0];
     }
   }
