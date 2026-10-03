@@ -446,21 +446,21 @@ export async function renderStudioOffline(
   const masterDeMud = offlineCtx.createBiquadFilter();
   masterDeMud.type = 'peaking';
   masterDeMud.frequency.setValueAtTime(350, 0);
-  masterDeMud.gain.setValueAtTime(-2.5, 0);
+  masterDeMud.gain.setValueAtTime(-1.5, 0);
   masterDeMud.Q.setValueAtTime(1.2, 0);
 
   // 3. [スタジオPresence & Articulation] 3.8kHz 子音のアタック・発音の輪郭をクリアに強調
   const masterPresence = offlineCtx.createBiquadFilter();
   masterPresence.type = 'peaking';
   masterPresence.frequency.setValueAtTime(3800, 0);
-  masterPresence.gain.setValueAtTime(3.0, 0);
+  masterPresence.gain.setValueAtTime(0.0, 0);
   masterPresence.Q.setValueAtTime(1.0, 0);
 
   // 4. [スタジオAir & Brilliance] 9.0kHz ハイシェルフで抜けと透明感を付加
   const masterAir = offlineCtx.createBiquadFilter();
   masterAir.type = 'highshelf';
   masterAir.frequency.setValueAtTime(9000, 0);
-  masterAir.gain.setValueAtTime(3.2, 0);
+  masterAir.gain.setValueAtTime(0.0, 0);
 
   // 5. [スタジオ超高域セーフティLPF] 17.5kHz以上の不要な折り返しノイズのみをカット
   const masterLpf = offlineCtx.createBiquadFilter();
@@ -470,9 +470,9 @@ export async function renderStudioOffline(
 
   // クリッピング防止コンプレッサー/リミッター
   const masterLimiter = offlineCtx.createDynamicsCompressor();
-  masterLimiter.threshold.setValueAtTime(-0.8, 0);
-  masterLimiter.knee.setValueAtTime(3.0, 0);
-  masterLimiter.ratio.setValueAtTime(16.0, 0);
+  masterLimiter.threshold.setValueAtTime(-1.0, 0);
+  masterLimiter.knee.setValueAtTime(6.0, 0);
+  masterLimiter.ratio.setValueAtTime(4.0, 0);
   masterLimiter.attack.setValueAtTime(0.003, 0);
   masterLimiter.release.setValueAtTime(0.05, 0);
 
