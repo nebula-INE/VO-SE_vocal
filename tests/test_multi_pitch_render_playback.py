@@ -108,15 +108,44 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
     assert native_lib is not None, "native VO-SE Core library is required for this integration test"
     native_api = cast(Any, native_lib)
     captured_paths: list[str] = []
-    native_execute_render = native_api.execute_render
+    # The current Desktop renderer prefers the cancelable native API. Spy on
+    # whichever native entry point is actually available, so this regression
+    # test verifies the real execution path instead of forcing the legacy API.
+    native_execute_cancelable = getattr(native_api, "execute_render_cancelable", None)
+    if callable(native_execute_cancelable):
+        ProgressCallback = ctypes.CFUNCTYPE(None, ctypes.c_int)
+        CancelCheckCallback = ctypes.CFUNCTYPE(ctypes.c_int)
+        native_progress = ProgressCallback(lambda _percent: None)
+        native_cancel = CancelCheckCallback(lambda: 0)
 
-    def execute_render_spy(c_notes, note_count, output_path, mode_flag):
-        for i in range(int(note_count)):
-            ptr = c_notes[i].wav_path
-            captured_paths.append(ctypes.string_at(ptr).decode("utf-8") if ptr else "")
-        return native_execute_render(c_notes, note_count, output_path, mode_flag)
+        def execute_render_cancelable_spy(
+            c_notes, note_count, output_path, mode_flag, progress_cb, cancel_cb
+        ):
+            for i in range(int(note_count)):
+                ptr = c_notes[i].wav_path
+                captured_paths.append(ctypes.string_at(ptr).decode("utf-8") if ptr else "")
+            return native_execute_cancelable(
+                c_notes,
+                note_count,
+                output_path,
+                mode_flag,
+                progress_cb,
+                cancel_cb,
+            )
 
-    native_api.execute_render = execute_render_spy
+        native_api.execute_render_cancelable = execute_render_cancelable_spy
+        # Keep ctypes callback references alive for the duration of the native call.
+        _ = (native_progress, native_cancel)
+    else:
+        native_execute_render = native_api.execute_render
+
+        def execute_render_spy(c_notes, note_count, output_path, mode_flag):
+            for i in range(int(note_count)):
+                ptr = c_notes[i].wav_path
+                captured_paths.append(ctypes.string_at(ptr).decode("utf-8") if ptr else "")
+            return native_execute_render(c_notes, note_count, output_path, mode_flag)
+
+        native_api.execute_render = execute_render_spy
 
     rendered = engine.export_to_wav_v2(notes, params, str(output), tempo_bpm=120.0)
 
