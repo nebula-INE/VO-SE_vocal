@@ -4,6 +4,7 @@ import fs from 'node:fs';
 
 const client = fs.readFileSync('src/voseCoreClient.ts', 'utf8');
 const worker = fs.readFileSync('src/voseCoreWorker.ts', 'utf8');
+const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
 
 test('Web render client does not use the old 25s core timeout', () => {
   assert.match(client, /const timeoutMs = 180000;/);
