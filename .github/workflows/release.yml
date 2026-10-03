@@ -173,7 +173,7 @@ jobs:
           fi
 
           git add .
-          git commit -m "style: ruff auto-fix unused imports"
+          git commit -m "style: ruff auto-fix unused imports [skip ci]"
 
           git fetch origin main
           git rebase origin/main
