@@ -367,7 +367,7 @@ def _export_to_wav_v2(
     report_progress(8)
 
     note_count = len(notes)
-    from modules.audio.vo_se_engine import CNoteEvent, sf
+    from modules.audio.vo_se_engine import CNoteEvent
     resolved_voice_count = 0
     c_notes_array = (CNoteEvent * note_count)()
     self._temp_refs = []
