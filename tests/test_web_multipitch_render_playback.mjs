@@ -106,6 +106,13 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
   } catch (error) { error.message += '\nserver stderr:\n' + stderr; throw error; }
 });
 
+test('Web prefix.map two-column entries use the suffix like Desktop', () => {
+  const server = require('node:fs').readFileSync('server.js', 'utf8');
+  assert.match(server, /if \(cols\.length >= 3\)/);
+  assert.match(server, /suffix = \(cols\[1\] \|\| ''\)\.trim\(\);/);
+  assert.match(server, /two-column suffix as a prefix/i);
+});
+
 test('Web multi-pitch aliases with identical oto aliases select the closest pitch WAV', async (t) => {
   const voicebank = '__test_multipitch_duplicate_' + process.pid;
   const voiceDir = join(VOICEBANKS, voicebank);
