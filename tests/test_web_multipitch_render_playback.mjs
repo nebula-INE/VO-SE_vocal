@@ -114,6 +114,19 @@ test('Web prefix.map two-column entries use the suffix like Desktop', () => {
   assert.match(server, /two-column suffix as a prefix/i);
 });
 
+
+test('Default voicebank writes real newlines to oto.ini', () => {
+  const server = readFileSync('server.js', 'utf8');
+  assert.match(
+    server,
+    /fs\.writeFileSync\(otoPathFinal, otoLines\.join\('\\n'\), \{ encoding: 'utf-8' \}\);/
+  );
+  assert.doesNotMatch(
+    server,
+    /fs\.writeFileSync\(otoPathFinal, otoLines\.join\('\\\\n'\), \{ encoding: 'utf-8' \}\);/
+  );
+});
+
 test('Web multi-pitch aliases with identical oto aliases select the closest pitch WAV', async (t) => {
   const voicebank = '__test_multipitch_duplicate_' + process.pid;
   const voiceDir = join(VOICEBANKS, voicebank);
