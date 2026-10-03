@@ -993,7 +993,7 @@ function createDefaultVoicebank(targetName, forceRecreate = false) {
   });
 
   const otoPathFinal = path.join(targetDir, 'oto.ini');
-  fs.writeFileSync(otoPathFinal, otoLines.join('\\n'), { encoding: 'utf-8' });
+  fs.writeFileSync(otoPathFinal, otoLines.join('\n'), { encoding: 'utf-8' });
 
   const charTxt = path.join(targetDir, 'character.txt');
   fs.writeFileSync(charTxt, `name=${targetName}
