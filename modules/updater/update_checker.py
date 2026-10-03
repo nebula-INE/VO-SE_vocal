@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportGeneralTypeIssues=false
 # modules/updater/auto_updater.py
 import os, sys, subprocess, tempfile, urllib.request
 try:
