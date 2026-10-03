@@ -2057,37 +2057,39 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                                        note_global_time[idx] };
                     synthesize_note_impl(p, note_bufs[idx]);
                 } catch (const std::exception& e) {
-                    // [修正] 以前はここで worker_failed を立てて曲全体の
-                    // レンダリングを中断していたが、原因不明のノート単位の
-                    // 例外(メモリ破壊の疑いあり、調査中)によって曲全体が
-                    // 巻き込まれるのを避けるため、このノート1つを無音として
-                    // 諦めて処理を続行するように変更した。曲全体の長さの
-                    // 帳尻を合わせるため、無音の長さは prepass[idx].note_samples
-                    // に正確に合わせる。失敗自体はログに残し、件数もカウントする。
-                    char buf[256];
+                    char buf[512];
                     snprintf(buf, sizeof(buf),
-                             "note idx=%d wav_path=%s pitch_length=%d : %s (無音でスキップ)",
+                             "note idx=%d wav_path=%s pitch_length=%d : %s",
                              idx,
                              notes[idx].wav_path ? notes[idx].wav_path : "(null)",
                              notes[idx].pitch_length,
                              e.what());
-                    fprintf(stderr, "[Render] %s\n", buf);
+                    {
+                        std::lock_guard<std::mutex> lock(worker_error_mutex);
+                        if (worker_error_msg.empty())
+                            worker_error_msg = buf;
+                    }
+                    fprintf(stderr, "[Render] %s\\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
-                    note_bufs[idx].assign(
-                        static_cast<size_t>(std::max<int64_t>(0, prepass[idx].note_samples)),
-                        0.0);
+                    worker_failed.store(true, std::memory_order_relaxed);
+                    cancel_flag.store(true, std::memory_order_relaxed);
+                    return;
                 } catch (...) {
-                    char buf[256];
+                    const char* wav = notes[idx].wav_path ? notes[idx].wav_path : "(null)";
+                    char buf[512];
                     snprintf(buf, sizeof(buf),
-                             "note idx=%d wav_path=%s pitch_length=%d : unknown exception (無音でスキップ)",
-                             idx,
-                             notes[idx].wav_path ? notes[idx].wav_path : "(null)",
-                             notes[idx].pitch_length);
-                    fprintf(stderr, "[Render] %s\n", buf);
+                             "note idx=%d wav_path=%s pitch_length=%d : unknown exception",
+                             idx, wav, notes[idx].pitch_length);
+                    {
+                        std::lock_guard<std::mutex> lock(worker_error_mutex);
+                        if (worker_error_msg.empty())
+                            worker_error_msg = buf;
+                    }
+                    fprintf(stderr, "[Render] %s\\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
-                    note_bufs[idx].assign(
-                        static_cast<size_t>(std::max<int64_t>(0, prepass[idx].note_samples)),
-                        0.0);
+                    worker_failed.store(true, std::memory_order_relaxed);
+                    cancel_flag.store(true, std::memory_order_relaxed);
+                    return;
                 }
 
                 const int done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
