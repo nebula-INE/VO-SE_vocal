@@ -54,3 +54,14 @@ test('Web Audio fallback never synthesizes unresolved notes with a sawtooth osci
   assert.match(engine, /resolvedSampleCount === 0/);
   assert.match(engine, /unresolved notes are left silent/);
 });
+
+test('Web Audio pitch bends stay relative to the note base pitch', () => {
+  const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
+  const start = engine.indexOf('scheduleSafePitchRamp(');
+  assert.notEqual(start, -1);
+  const block = engine.slice(start, start + 900);
+  assert.match(block, /source\.playbackRate/);
+  assert.match(block, /safePitchRatio/);
+  assert.match(block, /safePitchRatio \* Math\.pow\(2, st \/ 12\)/);
+});
+
