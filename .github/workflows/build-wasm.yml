@@ -64,9 +64,11 @@ jobs:
       - name: Verify current source diagnostics are compiled
         run: |
           set -eu
-          grep -q "source waveform is silent" build/wasm/vose_core.js
-          grep -q "WORLD synthesis produced silence" build/wasm/vose_core.js
-          echo "Current silent-render diagnostics are present in the WASM JavaScript loader."
+          # C++ string literals are normally stored in the WASM data section,
+          # not necessarily in the generated JavaScript loader.
+          grep -a -q -- "source waveform is silent" build/wasm/vose_core.wasm
+          grep -a -q -- "WORLD synthesis produced silence" build/wasm/vose_core.wasm
+          echo "Current silent-render diagnostics are present in the WASM binary."
 
       - name: Deploy build output into repository
         run: |
