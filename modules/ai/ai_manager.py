@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportGeneralTypeIssues=false
 # modules/ai/ai_manager.py
 
 import os
