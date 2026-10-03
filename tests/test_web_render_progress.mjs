@@ -42,3 +42,12 @@ test('Web render rejects a completely silent WAV instead of reporting success', 
   assert.match(worker, /bitsPerSample === 16/);
   assert.match(worker, /bitsPerSample === 32/);
 });
+
+test('Web Audio fallback never synthesizes unresolved notes with a sawtooth oscillator', () => {
+  const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
+  assert.doesNotMatch(engine, /osc\.type\s*=\s*['"]sawtooth['"]/);
+  assert.doesNotMatch(engine, /offlineCtx\.createOscillator\(\)/);
+  assert.match(engine, /resolvedSampleCount\+\+/);
+  assert.match(engine, /resolvedSampleCount === 0/);
+  assert.match(engine, /unresolved notes are left silent/);
+});
