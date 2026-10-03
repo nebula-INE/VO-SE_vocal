@@ -6,10 +6,6 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
-# ★追加: リポジトリ側の "Workflow permissions" 設定が Read-only の場合、
-# デフォルトの GITHUB_TOKEN では git push が 403 で拒否される。
-# ここで明示的に contents: write を宣言することで、リポジトリ側の設定を
-# 変更しなくてもこのワークフローだけ書き込み権限を持てるようにする。
 permissions:
   contents: write
 
@@ -27,69 +23,6 @@ jobs:
         run: |
           mkdir -p build/wasm
           cp include/world/*.h src/world/
-          # Compile WORLD vocoder and vose_core with Emscripten
-          # ★変更点1: -s MODULARIZE=1 -s EXPORT_NAME='createVoseCoreModule' を追加。
-          #   これが無いとブラウザのグローバルスコープに直接 Module を生やす形式になり、
-          #   Vite等のバンドラからESモジュールとして安全にimportできない。
-          # ★変更点2: -s EXPORTED_RUNTIME_METHODS に FS を追加。
-          #   execute_render() が仮想ファイルシステムへ書き出す output.wav を
-          #   JS側から Module.FS.readFile() で読み出すために必要。
-          # ★変更点3: -s ENVIRONMENT=web で不要なNode.js向けコードを除外し軽量化。
-          # ★変更点4: -s EXPORT_ES6=1 を追加。
-          #   voseCoreWorker.ts は type:'module' のWeb Worker内で動くが、
-          #   モジュールWorker内では importScripts() が使えない(仕様上非対応で
-          #   例外になる)。EXPORT_ES6=1 で vose_core.js 自体を
-          #   `export default createVoseCoreModule` を持つ正式なESモジュールに
-          #   ビルドし、Worker側は動的 import() で読み込む形に統一する。
-          # ★変更点5: addFunction / removeFunction をランタイムメソッドに追加し、
-          #   -s ALLOW_TABLE_GROWTH=1 を付与。execute_render_cancelable() の
-          #   進捗コールバック(JS関数)をC関数ポインタとして渡せるようにするため。
-          # ★変更点6: EXPORTED_FUNCTIONS に '_set_oto_data' を追加。
-          #   vose_core.cpp / vose_core.h には set_oto_data() が実装されており
-          #   デスクトップ版のネイティブDLLローダーもこれをバインドしているが、
-          #   このWASMビルドの EXPORTED_FUNCTIONS からだけ抜けていた。
-          #   これが無いとWeb版はoto.ini由来のタイミング(offset/consonant/
-          #   cutoff/preutterance/overlap)を一切C++側に渡せず、
-          #   常に kDefaultOto (全フィールド0) でレンダリングされてしまう。
-          # ★変更点7: EXPORTED_RUNTIME_METHODS に 'HEAPU8'、'HEAPF32'、'HEAPF64' を追加。
-          #   voseCoreWorker.ts は Float32 PCMデータやNoteEvent/OtoEntry構造体を
-          #   WASMメモリへ直接書き込むために各メモリビューのset()を使っているが、
-          #   これらのメモリビューはランタイムメソッドとして
-          #   明示的にエクスポートしないとMODULARIZE=1のビルドでは
-          #   Module(=mod)オブジェクト上に生えず、`mod.HEAPU8` が undefined
-          #   になって "undefined is not an object" で失敗する。
-          # ★変更点8(一時的なデバッグ用): -s ASSERTIONS=2 と -g2 を追加。
-          #   "Aborted(undefined). Build with -sASSERTIONS for more info."
-          #   というエラーで原因不明のままクラッシュしていたため、詳細な
-          #   エラーメッセージ(不正なポインタアクセス/型不一致等)を
-          #   出させるために付与。原因が特定できたら外してよい
-          #   (バイナリサイズと実行速度に多少ペナルティがあるため)。
-          # ★変更点9: -fexceptions と -s DISABLE_EXCEPTION_CATCHING=0 を追加。
-          #   実機で "Assertion failed: Exception thrown, but exception
-          #   catching is not enabled" というエラーで、レンダリング中盤の
-          #   特定ノートでC++側の例外が投げられた際に強制中断していた。
-          #   vose_core.cpp の synthesize_note_impl 呼び出し箇所(L1729-1743)
-          #   と set_bigvgan_model(L2252-2258) には元々 try/catch が書かれて
-          #   いたが、Emscriptenはデフォルトで例外機構を無効化(バイナリ
-          #   サイズ削減のため)するため、この try/catch が機能せず
-          #   ハードクラッシュになっていた。これを有効化することで、
-          #   個々のノート合成失敗時に例外がキャッチされ
-          #   (worker_error_msgにe.what()が格納される)、曲全体がクラッシュ
-          #   することなく処理を継続できる想定。
-          # ★変更点10〜12(デバッグ用、解除済み): SAFE_HEAP=1 →
-          #   AddressSanitizerと段階を追い、execute_render_impl内の
-          #   const fft_size/spec_bins がノート417件目の処理時点で
-          #   ゴミ値化けしていること(get_or_analyzeに渡る手前で何かが
-          #   メモリを破壊している)までは特定できた。ただしASanの
-          #   エラーはC++のtry/catchで捕まえられない(検出したら即abort
-          #   する設計のため)ので、「ノート単位でスキップして続行する」
-          #   という今の設計とは相性が悪く、外した。今の設計(無音スキップ)
-          #   はASan無しでも機能する: 壊れた値はvector::resizeなどの
-          #   通常のC++例外として捕まえられる形で表面化し、それを
-          #   catchしてそのノートだけ無音にする、という流れで動く。
-          #   根本原因(何がfft_size/spec_binsを壊しているか)の追跡を
-          #   再開する際は、-fsanitize=address / -O0 / SAFE_HEAP=1 /
-          #   STACK_OVERFLOW_CHECK=2 を再度追加すること。
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
@@ -115,7 +48,7 @@ jobs:
                -s ASSERTIONS=1 \
                -s DISABLE_EXCEPTION_CATCHING=0 \
                -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_load_embedded_resource_f32', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
-               -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF64']" \
+               -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF32', 'HEAPF64']" \
                -s DEFAULT_TO_CXX \
                -o build/wasm/vose_core.js
 
@@ -125,22 +58,30 @@ jobs:
           grep -q "_load_embedded_resource_f32" build/wasm/vose_core.js
           grep -q "_execute_render_cancelable" build/wasm/vose_core.js
           grep -q "_set_oto_data" build/wasm/vose_core.js
+          grep -q "_get_engine_version" build/wasm/vose_core.js
           echo "Required vose_core WASM exports are present."
 
-      # ★新規追加: ビルド成果物をActionsのArtifactタブに置くだけでは
-      # アプリからは絶対に参照されない（誰もダウンロード→手動配置しない限り
-      # 永遠に古いビルドのままになる）。ここでリポジトリ内の実際にアプリが
-      # 参照するパス(public/wasm/)へ直接コピー＆コミットして、
-      # 「ビルドしたのに反映されない」を今後起こさないようにする。
+      - name: Verify current source diagnostics are compiled
+        run: |
+          set -eu
+          grep -q "source waveform is silent" build/wasm/vose_core.js
+          grep -q "WORLD synthesis produced silence" build/wasm/vose_core.js
+          echo "Current silent-render diagnostics are present in the WASM JavaScript loader."
+
       - name: Deploy build output into repository
         run: |
+          set -eu
           mkdir -p public/wasm
           cp build/wasm/vose_core.js public/wasm/vose_core.js
           cp build/wasm/vose_core.wasm public/wasm/vose_core.wasm
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # The PR checkout can be a shallow/detached checkout while Git LFS\n          # objects from the branch history are not present locally. Fetch the LFS\n          # objects reachable from the PR head before the push, otherwise Git LFS\n          # rejects an otherwise valid branch push with a missing-object error.\n          git lfs fetch origin "${{ github.head_ref || github.ref_name }}"\n\n          git add public/wasm/vose_core.js public/wasm/vose_core.wasm
+
+          # PR checkout may be shallow/detached. Fetch reachable LFS objects before push.
+          git lfs fetch origin "${{ github.head_ref || github.ref_name }}"
+
+          git add public/wasm/vose_core.js public/wasm/vose_core.wasm
           if git diff --cached --quiet; then
             echo "No changes to commit (build output identical to previous commit)."
           else
