@@ -105,3 +105,60 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
     }
   } catch (error) { error.message += '\nserver stderr:\n' + stderr; throw error; }
 });
+
+test('Web multi-pitch aliases with identical oto aliases select the closest pitch WAV', async (t) => {
+  const voicebank = '__test_multipitch_duplicate_' + process.pid;
+  const voiceDir = join(VOICEBANKS, voicebank);
+  const c4 = makeWav(21);
+  const f4 = makeWav(111);
+  await mkdir(voiceDir, { recursive: true });
+  // Deliberately use the same alias for both pitch samples. This is the
+  // case that a first-entry-only aliasMap silently mishandles.
+  await writeFile(
+    join(voiceDir, 'oto.ini'),
+    'a_C4.wav=あ,0,0,0,0,0\na_F4.wav=あ,0,0,0,0,0\n',
+    'utf8'
+  );
+  await writeFile(join(voiceDir, 'a_C4.wav'), c4);
+  await writeFile(join(voiceDir, 'a_F4.wav'), f4);
+
+  const port = 34000 + (process.pid % 1000);
+  const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+  try {
+    await waitForServer(child, port);
+    for (const item of [[60, 'a_C4.wav', c4], [65, 'a_F4.wav', f4]]) {
+      const noteNum = item[0];
+      const expectedWav = item[2];
+      const sample = await request(
+        port,
+        'GET',
+        '/api/py/voicebank-sample?name=' +
+          encodeURIComponent(voicebank) +
+          '&alias=' +
+          encodeURIComponent('あ') +
+          '&noteNum=' +
+          noteNum
+      );
+      assert.equal(sample.status, 200, sample.body.toString());
+      assert.equal(sample.headers['x-sample-base-midi'], String(noteNum));
+      assert.match(decodeURIComponent(sample.headers['x-alias-matched']), /^あ$/);
+      assert.match(sample.headers['content-type'], /audio\/wav/);
+      assert.deepEqual(sample.body, expectedWav);
+    }
+  } catch (error) {
+    error.message += '\nserver stderr:\n' + stderr;
+    throw error;
+  }
+});
