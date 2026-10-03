@@ -62,6 +62,6 @@ test('Web Audio pitch bends stay relative to the note base pitch', () => {
   const block = engine.slice(start, start + 900);
   assert.match(block, /source\.playbackRate/);
   assert.match(block, /safePitchRatio/);
-  assert.match(block, /safePitchRatio \* Math\.pow\(2, st \/ 12\)/);
+  assert.match(block, /safePitchRatio \* Math\.max\(0\.5, Math\.min\(2\.0, Math\.pow\(2, st \/ 12\)\)\)/);
 });
 
