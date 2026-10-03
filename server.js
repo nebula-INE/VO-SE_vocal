@@ -1403,8 +1403,21 @@ function ensureDefaultVoicebanks() {
     }
     const defaultName = 'Standard Japanese CV';
     const targetDir = path.join(voicebanksDir, defaultName);
-    if (!fs.existsSync(targetDir) || !fs.existsSync(path.join(targetDir, 'oto.ini'))) {
-      createDefaultVoicebank(defaultName, false);
+    const otoPath = path.join(targetDir, 'oto.ini');
+    let needsRebuild = !fs.existsSync(targetDir) || !fs.existsSync(otoPath);
+    if (!needsRebuild) {
+      try {
+        const otoText = fs.readFileSync(otoPath, 'utf8');
+        // Older builds accidentally wrote the two-character "\\n" sequence
+        // instead of real line breaks. That makes the entire OTO table one line
+        // and causes every default-bank alias lookup to fail.
+        needsRebuild = !otoText.includes('\n') && otoText.includes('\\n');
+      } catch (e) {
+        needsRebuild = true;
+      }
+    }
+    if (needsRebuild) {
+      createDefaultVoicebank(defaultName, true);
     }
   } catch (e) {
     console.warn('[VO-SE] ensureDefaultVoicebanks failed:', e && e.message ? e.message : e);
