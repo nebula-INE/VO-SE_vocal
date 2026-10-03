@@ -1316,6 +1316,52 @@ function getMidiFromPitchTag(str) {
   return (octave + 1) * 12 + noteVal;
 }
 
+function getExplicitMidiFromPitchTag(str) {
+  if (!str) return null;
+  const match = String(str).match(/(?:^|[_\s\\/.-])([A-Ga-g])([#b]?)(-?\d+)(?:$|[_\s\\/.-])/);
+  if (!match) return null;
+  const midi = getMidiFromPitchTag(match[0]);
+  return Number.isFinite(midi) ? midi : null;
+}
+
+// Multi-pitch banks may contain several identical oto aliases backed by
+// different pitch-specific WAVs. aliasMap intentionally keeps the first
+// entry for compatibility, but render-time selection must prefer the entry
+// whose explicit pitch tag is closest to the requested MIDI note.
+function selectBestPitchEntry(indexed, candidate, noteNum) {
+  if (!indexed || !candidate || !Array.isArray(indexed.entries)) return null;
+  const normalized = String(candidate).normalize('NFC');
+  const matches = indexed.entries.filter((entry) =>
+    entry && String(entry.alias || '').normalize('NFC') === normalized
+  );
+  if (matches.length === 0) return null;
+  if (noteNum === null || noteNum === undefined || !Number.isFinite(Number(noteNum))) {
+    return matches[0];
+  }
+
+  const requested = Math.round(Number(noteNum));
+  let best = null;
+  let bestDiff = Infinity;
+  let taggedCount = 0;
+
+  for (const entry of matches) {
+    const taggedMidi =
+      getExplicitMidiFromPitchTag(entry.alias) ??
+      getExplicitMidiFromPitchTag(entry.filename);
+
+    if (taggedMidi === null) continue;
+    taggedCount += 1;
+    const diff = Math.abs(requested - taggedMidi);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = entry;
+    }
+  }
+
+  // If this alias has no pitch tags at all, preserve the original first-entry
+  // behavior rather than inventing a pitch.
+  return taggedCount > 0 ? best : matches[0];
+}
 // [FIX] This function was called from resolveVoicebankPath() in two places but was
 // never defined anywhere in server.js, causing a ReferenceError on every single
 // call to resolveVoicebankPath — which meant every /api/py/voicebank-sample,
@@ -1383,7 +1429,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   const matchMappedAlias = (candidate) => {
     // An explicitly written alias must always win over automatic pitch mapping.
     // This is especially important for explicit VCV aliases such as "a い".
-    const exact = aliasMap.get(candidate);
+    const exact = selectBestPitchEntry(indexed, candidate, noteNum) || aliasMap.get(candidate);
     if (exact) return exact;
     if (noteNum === null || noteNum === undefined) return null;
     if (candidate.includes('/') || candidate.includes('\\')) return null;
@@ -1399,7 +1445,9 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     const prefLower = prefNorm.toLowerCase();
 
     // 1. Exact match
-    if (aliasMap.has(prefNorm)) return aliasMap.get(prefNorm);
+    if (aliasMap.has(prefNorm)) {
+      return selectBestPitchEntry(indexed, prefNorm, noteNum) || aliasMap.get(prefNorm);
+    }
 
     // 2. Pitch-suffixed search with proximity to requested noteNum
     const midi = (noteNum !== null && noteNum !== undefined) ? Math.round(Number(noteNum)) : 60;
@@ -1463,19 +1511,31 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   // If the requested VCV entry is unavailable, the plain CV/standalone
   // fallback above is the safe choice. Falling through to another vowel
   // (for example "a い" for a requested "u い") silently changes pronunciation.
-  // 4. Exact WAV filename match (without extension, strictly full name match)
+  // 4. Exact WAV filename match. Multi-pitch filenames are collected first
+  // so traversal order cannot select an unrelated pitch by accident.
   for (const cand of candidates) {
     const candLower = cand.toLowerCase();
     if (!candLower) continue;
-    for (const [key, entry] of aliasMap.entries()) {
+    const filenameMatches = [];
+    for (const entry of indexed.entries || []) {
       const baseName = path.basename(entry.filename || '').replace(/\.wav$/i, '').toLowerCase().normalize('NFC');
-      if (baseName === candLower || baseName === `_${candLower}` || baseName === `-${candLower}`) {
-        return entry;
+      if (
+        baseName === candLower ||
+        baseName === `_${candLower}` ||
+        baseName === `-${candLower}` ||
+        baseName.startsWith(`${candLower}_`) ||
+        baseName.startsWith(`${candLower} `)
+      ) {
+        filenameMatches.push(entry);
       }
-      // Multi-pitch filename e.g. "あ_C4" or "ka_G4"
-      if (baseName.startsWith(`${candLower}_`) || baseName.startsWith(`${candLower} `)) {
-        return entry;
-      }
+    }
+    if (filenameMatches.length > 0) {
+      const best = selectBestPitchEntry(
+        { entries: filenameMatches },
+        filenameMatches[0].alias,
+        noteNum
+      );
+      return best || filenameMatches[0];
     }
   }
 
