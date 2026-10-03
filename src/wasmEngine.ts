@@ -10,7 +10,7 @@
 //    - oto.ini タイムマッピング (Offset, Preutterance, Overlap, Fixed, Cutoff)
 //    - 長音用イコールパワークロスフェードループ (クリック音完全防止)
 //    - アタック/リリース マイクロフェードエンベロープ (音素衝突防止)
-//    - 未収録歌詞用の高品位フォルマントオシレーターフォールバック
+//    - 未解決ノートは合成オシレーターへフォールバックせず、無音として扱う
 //    - マスタリングEQ & ダイナミクスリミッター
 // 3. 進捗状況(0%〜100%)およびリアルタイムETAをスムーズにメインUIへ通知
 // 4. 高音質 16-bit PCM WAV (RIFF) を生成してBlob URLを出力
@@ -486,6 +486,8 @@ export async function renderStudioOffline(
   masterLimiter.connect(offlineCtx.destination);
 
   // 5. 各ノートの音響ノードをオフラインコンテキストにスケジュール (進捗: 32% -> 40%)
+  // 音源が解決できないノートを人工的な sawtooth で埋めると、UTAU音源の欠落が
+  // 「ノイズの多い正常レンダリング」に見えてしまうため、ここでは音源サンプルのみを使用する。
   // [修正] このループはノートごとに自己相関計算+PSOLA+デクリックという
   // 重いCPU処理を「同期的に」行っており、ノート数の多い曲では数秒〜十数秒
   // メインスレッドを占有し続けてタブが完全に固まって見えていた。
@@ -493,6 +495,9 @@ export async function renderStudioOffline(
   // 処理時間そのものは変わらないが、ブラウザが固まらず(UIが反応し続け、
   // 進捗表示も更新され続ける)ようにする。
   const YIELD_EVERY_N_NOTES = 2;
+  let resolvedSampleCount = 0;
+  let missingSampleCount = 0;
+  let schedulingFailureCount = 0;
   for (let idx = 0; idx < schedulingInfos.length; idx++) {
     if (idx > 0 && idx % YIELD_EVERY_N_NOTES === 0) {
       await new Promise((resolve) => setTimeout(resolve, 8));
@@ -621,69 +626,30 @@ export async function renderStudioOffline(
         // shiftedBufferは既に必要な長さぶんだけ用意されているのでオフセット不要
         source.start(actualStartTime, 0);
         source.stop(tEnd + 0.01);
+        resolvedSampleCount++;
       } catch (err) {
-        console.warn('[wasmEngine] Note scheduling failed, fallback to synth:', err);
+        schedulingFailureCount++;
+        console.warn('[wasmEngine] Note scheduling failed; skipping unresolved note:', err);
       }
     } else {
-      // フォルマントシンセサイザー フォールバック
-      try {
-        const baseFreq = 440 * Math.pow(2, (note.noteNum - 69) / 12);
-        let f1 = 500, f2 = 1500;
-        const lyric = note.lyric || 'あ';
-        if (lyric.includes('あ') || lyric.includes('a') || lyric.includes('か') || lyric.includes('た')) {
-          f1 = 800; f2 = 1250;
-        } else if (lyric.includes('い') || lyric.includes('i') || lyric.includes('き') || lyric.includes('し')) {
-          f1 = 300; f2 = 2300;
-        } else if (lyric.includes('う') || lyric.includes('u') || lyric.includes('く') || lyric.includes('す')) {
-          f1 = 350; f2 = 1200;
-        } else if (lyric.includes('え') || lyric.includes('e') || lyric.includes('け') || lyric.includes('せ')) {
-          f1 = 500; f2 = 1900;
-        } else if (lyric.includes('お') || lyric.includes('o') || lyric.includes('こ') || lyric.includes('そ')) {
-          f1 = 450; f2 = 800;
-        }
-
-        const osc = offlineCtx.createOscillator();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(baseFreq, startTimeSec);
-
-        // 母音の第1・第2フォルマント(F1/F2)と抜けの良い高域を合成し、篭もりのない明瞭な音声を生成
-        const filter1 = offlineCtx.createBiquadFilter();
-        filter1.type = 'peaking';
-        filter1.frequency.setValueAtTime(f1, startTimeSec);
-        filter1.gain.setValueAtTime(6.0, startTimeSec);
-        filter1.Q.setValueAtTime(2.0, startTimeSec);
-
-        const filter2 = offlineCtx.createBiquadFilter();
-        filter2.type = 'peaking';
-        filter2.frequency.setValueAtTime(f2, startTimeSec);
-        filter2.gain.setValueAtTime(5.0, startTimeSec);
-        filter2.Q.setValueAtTime(2.0, startTimeSec);
-
-        const lpf = offlineCtx.createBiquadFilter();
-        lpf.type = 'lowpass';
-        lpf.frequency.setValueAtTime(9500, startTimeSec);
-        lpf.Q.setValueAtTime(0.707, startTimeSec);
-
-        const synthGain = offlineCtx.createGain();
-        const vol = Math.max(0.05, Math.min(1.0, (note.intensity || 120) / 140)) * 0.6;
-
-        synthGain.gain.setValueAtTime(0.0001, startTimeSec);
-        synthGain.gain.linearRampToValueAtTime(vol, startTimeSec + 0.02);
-        synthGain.gain.setValueAtTime(vol, Math.max(startTimeSec + 0.03, startTimeSec + durationSec - 0.02));
-        synthGain.gain.linearRampToValueAtTime(0.0001, startTimeSec + durationSec);
-
-        osc.connect(filter1);
-        filter1.connect(filter2);
-        filter2.connect(lpf);
-        lpf.connect(synthGain);
-        synthGain.connect(masterGain);
-
-        osc.start(startTimeSec);
-        osc.stop(startTimeSec + durationSec + 0.05);
-      } catch (synthErr) {
-        console.warn('[wasmEngine] Synth fallback failed:', synthErr);
-      }
+      missingSampleCount++;
+      console.warn(
+        `[wasmEngine] Voice sample unresolved; skipping note lyric='${note.lyric || ''}' noteNum=${note.noteNum}`
+      );
     }
+  }
+
+  if (schedulingInfos.length > 0 && resolvedSampleCount === 0) {
+    throw new Error(
+      `Web Audio fallback could not resolve any voice samples (missing=${missingSampleCount}, schedulingFailed=${schedulingFailureCount}).`
+    );
+  }
+
+  if (missingSampleCount > 0 || schedulingFailureCount > 0) {
+    console.warn(
+      `[wasmEngine] Voice sample fallback skipped ${missingSampleCount + schedulingFailureCount} note(s); ` +
+      'unresolved notes are left silent instead of synthesizing a sawtooth fallback.'
+    );
   }
 
   onProgress?.(40);
