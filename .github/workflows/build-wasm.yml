@@ -71,6 +71,7 @@ jobs:
           echo "Current silent-render diagnostics are present in the WASM binary."
 
       - name: Deploy build output into repository
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -eu
           mkdir -p public/wasm
@@ -80,15 +81,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # PR checkout may be shallow/detached. Fetch reachable LFS objects before push.
-          git lfs fetch origin "${{ github.head_ref || github.ref_name }}"
+          # Do not fetch the repository's unrelated LFS history here.
+          # The generated WASM files are committed as ordinary repository files.
+          # Fetching a stale/missing LFS object can fail deployment after a
+          # successful WASM build.
 
           git add public/wasm/vose_core.js public/wasm/vose_core.wasm
           if git diff --cached --quiet; then
             echo "No changes to commit (build output identical to previous commit)."
           else
             git commit -m "chore: update vose_core.wasm build [skip ci]"
-            git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
+            git push origin HEAD:main
           fi
 
       - name: Upload WebAssembly Artifacts
