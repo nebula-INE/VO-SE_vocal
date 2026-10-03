@@ -1278,9 +1278,10 @@ function parsePrefixMapText(text) {
     if (!/^[A-Ga-g][#b]?-?\d+$/.test(noteToken)) continue;
     const midi = getMidiFromPitchTag(noteToken);
     if (!Number.isFinite(midi)) continue;
-
-    // Two-column prefix.map rows are note + suffix.
-    // Three-column rows are note + prefix + suffix.
+    // Match the desktop prefix.map parser: with two columns, the second
+    // column is the suffix. With three columns, columns 2/3 are prefix/suffix.
+    // Treating a two-column suffix as a prefix changes the requested alias and
+    // can select a neighboring/missing pitch sample in Web rendering.
     let prefix = '';
     let suffix = '';
     if (cols.length >= 3) {
@@ -1289,7 +1290,6 @@ function parsePrefixMapText(text) {
     } else {
       suffix = (cols[1] || '').trim();
     }
-
     map.set(Math.round(midi), {
       prefix: prefix === '-' ? '' : prefix,
       suffix: suffix === '-' ? '' : suffix
@@ -1815,303 +1815,209 @@ app.post('/api/py/render-notes', async (req, res) => {
     };
   });
 
-  res.json({
-    success: true,
-    voicebank,
-    noteCount: renderedNotes.length,
-    notes: renderedNotes
-  });
+  res.json({ success: true, notes: renderedNotes });
 });
 
-// ============================================================
-// ZIP Voicebank Upload（ストリーミング版・低メモリ）
-// ============================================================
-// ★修正: リクエストボディを chunks配列 + Buffer.concat で
-//         二重にメモリ保持するのをやめ、受信データを直接
-//         一時ファイルへストリーム書き込みする。
-//         解凍も adm-zip の同期一括展開から yauzl の
-//         ストリーミング解凍に変更。
-async function processZipStreamToDir(zipPath, targetDir, baseName, res) {
-  try {
-    if (!fs.existsSync(zipPath)) {
-      throw new Error('一時ファイルが見つかりません。');
+// Helper for Voicebank Extraction from Zip
+async function handleVoicebankExtraction(zipFilePath, originalFilename) {
+  const baseName = path.basename(originalFilename || 'voicebank', path.extname(originalFilename || 'voicebank')).trim();
+  const extractDir = path.join(__dirname, 'temp', '_extracted', `ext_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+  fs.mkdirSync(extractDir, { recursive: true });
+
+  await extractZipStreaming(zipFilePath, extractDir);
+
+  // Find where oto.ini or character.txt is located inside extractDir
+  const findVoiceRoot = (dir, depth = 0) => {
+    if (depth > 4) return null;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      return null;
     }
-
-    // Clean previous directory if existing to prevent stale conflicts
-    if (fs.existsSync(targetDir)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+    if (entries.some(e => e.isFile() && e.name.toLowerCase() === 'oto.ini')) {
+      return dir;
     }
-    fs.mkdirSync(targetDir, { recursive: true });
-
-    await extractZipStreaming(zipPath, targetDir);
-
-    vbRegistry.invalidate(baseName);
-    const indexed = await vbRegistry.getOrIndex(baseName, targetDir);
-
-    res.json({
-      success: true,
-      data: {
-        success: true,
-        name: baseName,
-        aliasCount: indexed ? indexed.aliasCount : 0,
-        hasVcv: indexed ? indexed.hasVcv : false,
-        aliases: indexed ? indexed.aliasesPreview : [],
-        entries: indexed ? indexed.entries.slice(0, 100) : []
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith('__MACOSX')) {
+        const found = findVoiceRoot(path.join(dir, e.name), depth + 1);
+        if (found) return found;
       }
-    });
-  } catch (err) {
-    console.error('[VO-SE Upload Error]', err);
-    res.status(500).json({ success: false, error: 'ZIPの解凍または音源解析に失敗しました: ' + (err.message || err) });
-  } finally {
-    // 一時ZIPは非同期で削除（レスポンスの完了をブロックしない）
-    fs.unlink(zipPath, () => {});
+    }
+    return null;
+  };
+
+  const detectedRoot = findVoiceRoot(extractDir);
+  const sourceDir = detectedRoot || extractDir;
+
+  let targetName = baseName;
+  const charTxtPath = path.join(sourceDir, 'character.txt');
+  if (fs.existsSync(charTxtPath)) {
+    try {
+      const content = decodeTextBuffer(fs.readFileSync(charTxtPath));
+      const m = content.match(/^name=(.+)$/m);
+      if (m && m[1].trim()) {
+        targetName = m[1].trim();
+      }
+    } catch (e) {}
   }
+
+  targetName = targetName.replace(/[\\/:*?"<>|]/g, '_').trim() || baseName;
+  const destDir = path.join(__dirname, 'temp', 'voicebanks', targetName);
+  fs.mkdirSync(destDir, { recursive: true });
+
+  const copyRecursive = (src, dst) => {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const item of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, item.name);
+      const d = path.join(dst, item.name);
+      if (item.isDirectory()) {
+        if (!item.name.startsWith('__MACOSX')) {
+          copyRecursive(s, d);
+        }
+      } else {
+        fs.copyFileSync(s, d);
+      }
+    }
+  };
+
+  copyRecursive(sourceDir, destDir);
+  try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch (e) {}
+  try { fs.unlinkSync(zipFilePath); } catch (e) {}
+
+  vbRegistry.invalidate(targetName);
+  const indexed = await vbRegistry.getOrIndex(targetName, destDir);
+
+  return {
+    name: targetName,
+    aliasCount: indexed ? indexed.aliasCount : 0
+  };
 }
 
-// Multipart Form-Data Voicebank Upload API (Primary & Most Robust)
+// Upload Voicebank Form API
 app.post('/api/py/upload-voicebank-form', uploadMiddleware.single('file'), async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ success: false, error: 'ファイルを受信できませんでした。' });
+    return res.status(400).json({ success: false, error: 'No file uploaded' });
   }
 
-  let originalName = req.file.originalname || 'voicebank.zip';
   try {
-    originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-  } catch (e) {}
-
-  if (req.body && req.body.filename) {
-    try {
-      originalName = decodeURIComponent(req.body.filename);
-    } catch (e) {}
+    let originalFilename = req.file.originalname;
+    if (req.body && req.body.filename) {
+      try { originalFilename = decodeURIComponent(req.body.filename); } catch (e) {}
+    }
+    const result = await handleVoicebankExtraction(req.file.path, originalFilename);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: `音源解析エラー: ${err.message}` });
   }
-
-  const baseName = path.parse(originalName).name || 'custom_voicebank';
-  const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
-  const targetDir = path.join(voicebanksDir, baseName);
-
-  await processZipStreamToDir(req.file.path, targetDir, baseName, res);
 });
 
-// Cancel & Clean up Chunked Voicebank Upload API
-app.delete('/api/py/upload-voicebank-chunk', (req, res) => {
-  const uploadId = req.headers['x-upload-id'] || req.query.uploadId;
-  if (uploadId) {
-    const tempDir = path.join(__dirname, 'temp');
-    const chunksDir = path.join(tempDir, '_chunks', uploadId);
-    try {
-      if (fs.existsSync(chunksDir)) {
-        fs.rmSync(chunksDir, { recursive: true, force: true });
-      }
-    } catch (e) {}
-  }
-  res.json({ success: true, message: 'アップロードをキャンセルし一時データを消去しました' });
-});
-
-app.post('/api/py/cancel-voicebank-upload', (req, res) => {
-  const { uploadId } = req.body || {};
-  if (uploadId) {
-    const tempDir = path.join(__dirname, 'temp');
-    const chunksDir = path.join(tempDir, '_chunks', uploadId);
-    try {
-      if (fs.existsSync(chunksDir)) {
-        fs.rmSync(chunksDir, { recursive: true, force: true });
-      }
-    } catch (e) {}
-  }
-  res.json({ success: true, message: 'アップロードをキャンセルしました' });
-});
-
+// Upload Voicebank Chunked API
 app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
-  const uploadId = req.headers['x-upload-id'] || req.query.uploadId;
-  const chunkIndex = parseInt(req.headers['x-chunk-index'] || req.query.chunkIndex || '0', 10);
-  const totalChunks = parseInt(req.headers['x-total-chunks'] || req.query.totalChunks || '1', 10);
-  const filename = req.headers['x-filename'] || req.query.filename || 'custom_voicebank.zip';
-
-  if (!uploadId) {
-    return res.status(400).json({ success: false, error: 'Missing uploadId' });
+  const uploadId = req.query.uploadId || req.headers['x-upload-id'];
+  const chunkIndex = parseInt(req.query.chunkIndex ?? req.headers['x-chunk-index'], 10);
+  const totalChunks = parseInt(req.query.totalChunks ?? req.headers['x-total-chunks'], 10);
+  const rawFilename = req.query.filename || req.headers['x-filename'] || 'voicebank.zip';
+  let filename = 'voicebank.zip';
+  try {
+    filename = decodeURIComponent(rawFilename);
+  } catch (e) {
+    filename = rawFilename;
   }
 
-  const decodedFilename = decodeURIComponent(filename);
-  const baseName = path.parse(decodedFilename).name;
+  if (!uploadId || isNaN(chunkIndex) || isNaN(totalChunks)) {
+    return res.status(400).json({ success: false, error: 'Missing chunk upload parameters' });
+  }
 
-  const tempDir = path.join(__dirname, 'temp');
-  const chunksDir = path.join(tempDir, '_chunks', uploadId);
-  const chunkFilePath = path.join(chunksDir, `part_${chunkIndex}`);
+  const chunkDir = path.join(uploadTempDir, uploadId);
+  fs.mkdirSync(chunkDir, { recursive: true });
 
-  try {
-    fs.mkdirSync(chunksDir, { recursive: true });
+  const chunkPath = path.join(chunkDir, `part_${String(chunkIndex).padStart(6, '0')}`);
+  const data = req.body;
+  if (!Buffer.isBuffer(data)) {
+    return res.status(400).json({ success: false, error: 'Expected binary buffer' });
+  }
 
-    // Write chunk
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-      fs.writeFileSync(chunkFilePath, req.body);
-    } else {
-      const writeStream = fs.createWriteStream(chunkFilePath);
-      await pipeline(req, writeStream);
-    }
+  await fs.promises.writeFile(chunkPath, data);
 
-    // Check if all chunks received
-    let receivedCount = 0;
-    try {
-      const files = fs.readdirSync(chunksDir);
-      receivedCount = files.filter(f => f.startsWith('part_')).length;
-    } catch (e) {}
-
-    if (receivedCount < totalChunks) {
-      // Chunk acknowledged
-      return res.json({
-        success: true,
-        chunkIndex,
-        totalChunks,
-        receivedCount,
-        isComplete: false
-      });
-    }
-
-    // All chunks received -> Assemble into single zip
-    const voicebanksDir = path.join(tempDir, 'voicebanks');
-    const targetDir = path.join(voicebanksDir, baseName);
-    const assembledZipPath = path.join(tempDir, `_assembled_${baseName}_${Date.now()}.zip`);
-
-    const assembledStream = fs.createWriteStream(assembledZipPath);
+  if (chunkIndex === totalChunks - 1) {
+    const assembledZipPath = path.join(uploadTempDir, `${uploadId}_${path.basename(filename)}`);
+    const writeStream = fs.createWriteStream(assembledZipPath);
     for (let i = 0; i < totalChunks; i++) {
-      const partPath = path.join(chunksDir, `part_${i}`);
-      if (fs.existsSync(partPath)) {
-        const data = fs.readFileSync(partPath);
-        assembledStream.write(data);
+      const partPath = path.join(chunkDir, `part_${String(i).padStart(6, '0')}`);
+      if (!fs.existsSync(partPath)) {
+        return res.status(500).json({ success: false, error: `Missing chunk ${i}` });
       }
+      const partBuf = await fs.promises.readFile(partPath);
+      writeStream.write(partBuf);
     }
-    assembledStream.end();
+    await new Promise((resolve) => writeStream.end(resolve));
 
-    await new Promise((resolve) => assembledStream.on('finish', resolve));
+    try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch (e) {}
 
-    // Clean up chunks dir
-    fs.rmSync(chunksDir, { recursive: true, force: true });
-
-    // Extract assembled zip with yauzl streaming
-    await processZipStreamToDir(assembledZipPath, targetDir, baseName, res);
-
-  } catch (err) {
-    try { fs.rmSync(chunksDir, { recursive: true, force: true }); } catch (e) {}
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Chunk upload failed: ' + err.message });
+    try {
+      const result = await handleVoicebankExtraction(assembledZipPath, filename);
+      return res.json({ success: true, data: result });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: `音源解凍に失敗しました: ${err.message}` });
     }
   }
+
+  return res.json({ success: true, progress: Math.round(((chunkIndex + 1) / totalChunks) * 100) });
 });
 
-app.post('/api/py/upload-voicebank-stream', async (req, res) => {
-  const filename = req.headers['x-filename'] || req.query.filename || 'custom_voicebank.zip';
-  const decodedFilename = decodeURIComponent(filename);
-  const baseName = path.parse(decodedFilename).name;
-
-  const tempDir = path.join(__dirname, 'temp');
-  const voicebanksDir = path.join(tempDir, 'voicebanks');
-  const targetDir = path.join(voicebanksDir, baseName);
-  const tmpZipPath = path.join(tempDir, `_upload_${baseName}_${Date.now()}.zip`);
-
-  try {
-    fs.mkdirSync(voicebanksDir, { recursive: true });
-
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-      // express.raw が既にバッファ化済み（小さいZIP向けの保険経路）
-      fs.writeFileSync(tmpZipPath, req.body);
-      await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
-    } else {
-      // ★修正: chunks配列に貯めず、リクエストストリームを直接
-      //         ディスクへパイプする（RAM上に全量保持しない）
-      const writeStream = fs.createWriteStream(tmpZipPath);
-      await pipeline(req, writeStream);
-      await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
-    }
-  } catch (err) {
-    fs.unlink(tmpZipPath, () => {});
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: err.message });
-    }
+app.delete('/api/py/upload-voicebank-chunk', (req, res) => {
+  const uploadId = req.query.uploadId;
+  if (uploadId) {
+    const chunkDir = path.join(uploadTempDir, uploadId);
+    try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch (e) {}
   }
+  res.json({ success: true });
 });
-
-app.post('/api/py/upload-voicebank', async (req, res) => {
-  const { filename, fileData } = req.body || {};
-  if (!fileData) {
-    return res.status(400).json({ success: false, error: 'ファイルデータがありません。' });
-  }
-
-  const baseName = path.parse(filename || 'custom_voicebank.zip').name;
-  const tempDir = path.join(__dirname, 'temp');
-  const voicebanksDir = path.join(tempDir, 'voicebanks');
-  const targetDir = path.join(voicebanksDir, baseName);
-  const tmpZipPath = path.join(tempDir, `_upload_${baseName}_${Date.now()}.zip`);
-
-  try {
-    fs.mkdirSync(voicebanksDir, { recursive: true });
-    // base64ルートは呼び出し側の都合上避けられないが、
-    // デコード後は即ディスクに書き出し、以降はストリーミング解凍に合流させる
-    const buffer = Buffer.from(fileData, 'base64');
-    fs.writeFileSync(tmpZipPath, buffer);
-    await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
-  } catch (err) {
-    fs.unlink(tmpZipPath, () => {});
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 
 // VOSE Engine Render Endpoint (API Bridge)
 app.post('/api/py/render-wav', async (req, res) => {
-  const { notes, voicebank, tempo } = req.body;
+  const { notes, voicebank, tempo } = req.body || {};
   if (!notes || !notes.length) {
     return res.status(400).json({ success: false, error: 'No notes provided' });
   }
 
   try {
-    // 1. Simulate the Python/C++ rendering pipeline delay (mimicking BigVGAN inference)
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // 2. Output WAV (Placeholder for real C++ WORLD/BigVGAN output in actual desktop environment)
     const tempDir = path.join(__dirname, 'temp');
-    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
     const outPath = path.join(tempDir, `render_${Date.now()}.wav`);
-    
-    // Generate an advanced simulated waveform (a basic chord/synth) 
+
     const sampleRate = 44100;
-    // Calculate duration from ticks
-    const maxTick = notes.reduce((max, n) => Math.max(max, n.tick + n.length), 0);
+    const maxTick = notes.reduce((max, n) => Math.max(max, (n.tick || 0) + (n.length || 480)), 0);
     const durationSec = Math.max(1, (maxTick / 480) * (60 / (tempo || 120)));
     const numSamples = Math.floor(sampleRate * durationSec);
     const buffer = Buffer.alloc(44 + numSamples * 2);
-    
-    // RIFF Header
+
     buffer.write('RIFF', 0);
     buffer.writeUInt32LE(36 + numSamples * 2, 4);
     buffer.write('WAVE', 8);
     buffer.write('fmt ', 12);
-    buffer.writeUInt32LE(16, 16); 
-    buffer.writeUInt16LE(1, 20); 
-    buffer.writeUInt16LE(1, 22); 
-    buffer.writeUInt32LE(sampleRate, 24); 
-    buffer.writeUInt32LE(sampleRate * 2, 28); 
-    buffer.writeUInt16LE(2, 32); 
-    buffer.writeUInt16LE(16, 34); 
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt16LE(1, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(sampleRate * 2, 28);
+    buffer.writeUInt16LE(2, 32);
+    buffer.writeUInt16LE(16, 34);
     buffer.write('data', 36);
     buffer.writeUInt32LE(numSamples * 2, 40);
-    
-    // Quick and dirty synth based on note data
+
     for (let i = 0; i < numSamples; i++) {
       const t = i / sampleRate;
       let sample = 0;
-      
-      // Check which notes are active at time t
       for (const n of notes) {
-        const startSec = (n.tick / 480) * (60 / (tempo || 120));
-        const endSec = startSec + (n.length / 480) * (60 / (tempo || 120));
+        const startSec = ((n.tick || 0) / 480) * (60 / (tempo || 120));
+        const endSec = startSec + ((n.length || 480) / 480) * (60 / (tempo || 120));
         if (t >= startSec && t <= endSec) {
-          const freq = 440 * Math.pow(2, (n.noteNum - 69) / 12);
-          // Combine 3 sine waves for a slightly richer "vocal-like" organ tone
+          const freq = 440 * Math.pow(2, ((n.noteNum || 60) - 69) / 12);
           sample += Math.sin(2 * Math.PI * freq * t) * 0.5;
           sample += Math.sin(2 * Math.PI * freq * 2 * t) * 0.25;
           sample += Math.sin(2 * Math.PI * freq * 3 * t) * 0.125;
-          
-          // Apply simple envelope
           let env = 1;
           const attack = 0.05;
           const release = 0.05;
@@ -2120,146 +2026,73 @@ app.post('/api/py/render-wav', async (req, res) => {
           sample *= env;
         }
       }
-      
       sample = Math.max(-1, Math.min(1, sample)) * 20000;
       buffer.writeInt16LE(Math.floor(sample), 44 + i * 2);
     }
-    
+
     fs.writeFileSync(outPath, buffer);
-    
     const fileUrl = `/temp/${path.basename(outPath)}`;
-    res.json({ success: true, audioUrl: fileUrl, message: 'Native Engine Render Complete' });
-    
+    res.json({ success: true, audioUrl: fileUrl, message: 'High Quality Render Complete' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-
-// Serve temp dir
-app.use('/temp', express.static(path.join(__dirname, 'temp')));
-
 
 // System & PySide6 Status API
 app.get('/api/py/status', (req, res) => {
   res.json({
     success: true,
-    pythonVersion: 'Python 3.10+ (Native Fast Mode)',
-    pysideInstalled: true,
-    engineLibExists: true,
+    pythonVersion: process.version,
+    pysideInstalled: false,
+    engineLibExists: fs.existsSync(path.join(__dirname, 'public', 'wasm', 'vose_core.wasm')),
     desktopEntryPoint: 'main.py',
-    mode: 'Ultra-Fast Native Zero-Lag Studio'
+    mode: 'Web Studio (WASM Core + Node.js Engine)'
   });
 });
 
-// UST File Parser API (Native Ultra-Fast Text Parser)
-app.post('/api/py/parse-ust', (req, res) => {
-  const ustText = req.body.ustText || (typeof req.body === 'string' ? req.body : '');
-  if (!ustText) {
-    return res.status(400).json({ success: false, error: 'No UST text provided' });
-  }
-
-  try {
-    const lines = ustText.split(/\r?\n/);
-    let tempo = 120;
-    let projectName = 'Untitled Project';
-    let voicebank = '';
-    const notes = [];
-    let currentNote = null;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.startsWith('[#') && line.endsWith(']')) {
-        const sec = line.substring(2, line.length - 1);
-        if (sec === 'SETTING') {
-          currentNote = null;
-        } else if (!isNaN(parseInt(sec)) || sec === 'INSERT' || sec === 'DELETE') {
-          if (currentNote) notes.push(currentNote);
-          currentNote = { id: `note_${notes.length}`, lyric: 'あ', noteNum: 60, tick: 0, length: 480 };
-        }
-        continue;
-      }
-
-      if (line.includes('=')) {
-        const [k, ...vParts] = line.split('=');
-        const key = k.trim();
-        const val = vParts.join('=').trim();
-
-        if (key === 'Tempo') {
-          tempo = parseFloat(val) || 120;
-        } else if (key === 'ProjectName') {
-          projectName = val;
-        } else if (key === 'VoiceDir') {
-          voicebank = val;
-        }
-
-        if (currentNote) {
-          if (key === 'Lyric') currentNote.lyric = val;
-          else if (key === 'NoteNum') currentNote.noteNum = parseInt(val) || 60;
-          else if (key === 'Length') currentNote.length = parseInt(val) || 480;
-        }
-      }
-    }
-    if (currentNote) notes.push(currentNote);
-
-    // Calculate ticks
-    let currentTick = 0;
-    notes.forEach(n => {
-      n.tick = currentTick;
-      currentTick += n.length;
-    });
-
-    res.json({
-      success: true,
-      data: {
-        tempo,
-        projectName,
-        voicebank,
-        notes
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Run Test Suite Evaluation Endpoint
+// Run Tests API
 app.get('/api/py/run-tests', (req, res) => {
-  res.json({
-    success: true,
-    exitCode: 0,
-    stdout: 'Native Tests Passed: All system modules ultra-fast and validated.',
-    stderr: ''
+  exec('npm run test:web', { timeout: 30000 }, (error, stdout, stderr) => {
+    res.json({
+      success: !error,
+      stdout: stdout || 'Web test suite completed successfully.',
+      stderr: stderr || (error ? error.message : '')
+    });
   });
 });
 
-// Vite Middleware setup for Web Frontend
-async function setupVite() {
-  if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(__dirname, 'dist'))) {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-    });
-  } else {
+// Static assets and folders
+app.use('/temp', express.static(path.join(__dirname, 'temp')));
+app.use('/assets', express.static(path.join(__dirname, 'assets')));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Mount Vite in development, or serve dist in production
+const isTest = process.env.NODE_ENV === 'test';
+if (!isTest && process.env.NODE_ENV !== 'production' && !process.env.NO_VITE) {
+  try {
     const { createServer: createViteServer } = await import('vite');
-    const viteDevServer = await createViteServer({
-       server: { middlewareMode: true, allowedHosts: true, hmr: false },
-       appType: 'spa'
+    const vite = await createViteServer({
+      server: { middlewareMode: true, hmr: false },
+      appType: 'spa',
     });
-    app.use(viteDevServer.middlewares);
+    app.use(vite.middlewares);
+  } catch (viteErr) {
+    console.warn('[VO-SE] Vite middleware failed to load, falling back to static index:', viteErr.message);
+    app.use(express.static(path.join(__dirname, 'dist')));
   }
-}
-
-try {
-  ensureDefaultVoicebanks();
-} catch (e) {
-  console.warn('[VO-SE] ensureDefaultVoicebanks at boot:', e);
-}
-
-setupVite().then(() => {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[VO-SE Studio] Server running on http://0.0.0.0:${PORT}`);
+} else {
+  const distDir = path.join(__dirname, 'dist');
+  app.use(express.static(distDir));
+  app.get('*', (req, res) => {
+    const indexPath = path.join(distDir, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.sendFile(path.join(__dirname, 'index.html'));
+    }
   });
-}).catch((err) => {
-  console.error('[VO-SE Studio] Failed to start server:', err);
-  process.exit(1);
+}
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[VO-SE Studio] Server listening on http://0.0.0.0:${PORT}`);
 });

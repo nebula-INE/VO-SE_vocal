@@ -1,0 +1,3 @@
+name=Standard Japanese CV
+author=VO-SE Official Studio
+sample=vocal_00.wav
