@@ -30,6 +30,11 @@ import re
 
 import numpy as np
 
+try:
+    import soundfile as sf
+except ImportError:
+    sf = None
+
 from modules.data.oto_parser import OtoParser
 from modules.audio.vcv_resolver import VcvResolver
 from modules.audio.cvvc_resolver import CvvcResolver
