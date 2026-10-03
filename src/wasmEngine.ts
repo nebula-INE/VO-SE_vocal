@@ -5,7 +5,7 @@
 //
 // 1. 各トラック・各ノートの音源サンプル(oto.ini設定含む)を並行取得
 // 2. OfflineAudioContext (44.1kHz 2ch) 上で完全なUTAU音響パイプラインを構築:
-//    - サンプルベース音高からのピッチシフト (TD-PSOLA、フォルマント保持)
+//    - サンプルベース音高からのピッチシフト (AudioBufferSource playbackRate)
 //    - USTピッチベンドカーブ (PBS/PBW/PBY) はビブラート等の微小補正として反映
 //    - oto.ini タイムマッピング (Offset, Preutterance, Overlap, Fixed, Cutoff)
 //    - 長音用イコールパワークロスフェードループ (クリック音完全防止)
@@ -29,7 +29,6 @@ import {
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
 import { cleanWavArrayBuffer } from './utils/wavCleaner';
-import { psolaPitchAndTimeShiftBuffer } from './psolaPitchShift';
 
 export interface FetchedSample {
   buffer: AudioBuffer;
@@ -512,7 +511,7 @@ export async function renderStudioOffline(
         const semitoneShift = softClampSemitone(note.noteNum - sampleBase);
         // タイミング計算(消費速度)専用。もう再生には使わない。
         const baseRate = Math.min(4.0, Math.max(0.18, Math.pow(2, semitoneShift / 12)));
-        const pitchRatio = Math.pow(2, semitoneShift / 12); // PSOLAはクランプ不要(エイリアシングしない)
+        const pitchRatio = Math.pow(2, semitoneShift / 12);
 
         const offsetSec = Math.max(0, (cached.left_blank || 0) / 1000);
         const preuttSec = Math.max(0, (cached.preutterance || 0) / 1000);
@@ -535,7 +534,7 @@ export async function renderStudioOffline(
         const startOffsetInWav = Math.min(offsetSec + timeDiff, cutoffEndSec - 0.02);
         const playLen = effectivePreuttSec + durationSec;
 
-        const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen;
+        const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen * Math.min(4.0, Math.max(0.18, pitchRatio));
 
         let loopRange: { loopStartSec: number; loopEndSec: number } | null = null;
         if (requiredSampleSec > maxSampleDur + 0.02) {
@@ -549,31 +548,31 @@ export async function renderStudioOffline(
           }
         }
 
-        // --- ここからがPSOLAによるピッチ+時間シフト ---
-        // 1. 生波形(未シフト)から、必要な区間をループも含めて敷き詰めて切り出す
+        // --- 安全なWeb Audioフォールバック ---
+        // 自作TD-PSOLAは、音素境界・非周期子音・誤ったF0推定が重なると
+        // グレイン境界のバズ/ジリジリしたノイズを発生させることがある。
+        // フォールバックでは人工的なノイズを追加せず、ブラウザ標準の
+        // AudioBufferSourceNode.playbackRateだけで音源サンプルを再生する。
+        // WASMが正常ならこの経路には入らない。
+        const safePitchRatio = Math.min(4.0, Math.max(0.18, pitchRatio));
+        const requiredPlaybackSec = playLen * safePitchRatio;
+        const requiredSourceSec = Math.max(
+          0.02,
+          (startOffsetInWav - offsetSec) + requiredPlaybackSec
+        );
         const rawSegment = buildRawSegment(
           offlineCtx,
           cached,
           Math.max(0, Math.min(wavDuration - 0.02, startOffsetInWav)),
-          Math.max(0.02, requiredSampleSec),
+          requiredSourceSec,
           loopRange
         );
 
-        // 2. ピッチと時間伸縮を同時に、フォルマントを保持したまま適用
-        const targetLenSamples = Math.max(1, Math.round(playLen * sampleRate));
-        const shiftedBuffer = psolaPitchAndTimeShiftBuffer(
-          offlineCtx,
-          rawSegment,
-          pitchRatio,
-          targetLenSamples
-        );
-
         const source = offlineCtx.createBufferSource();
-        source.buffer = shiftedBuffer;
-        // ベースピッチはPSOLAで焼き込み済みなので、playbackRateは1.0が基準。
-        source.playbackRate.setValueAtTime(1.0, Math.max(0, actualStartTime));
+        source.buffer = rawSegment;
+        source.playbackRate.setValueAtTime(safePitchRatio, Math.max(0, actualStartTime));
 
-        // ピッチベンド(ビブラート等)は小さな相対揺れとしてplaybackRateに乗せる。
+        // ピッチベンドは標準playbackRateへ相対的に適用する。
         // 揺れ幅は通常小さいのでフォルマントへの影響は知覚できるレベルにならない。
         if (note.pbs && note.pbw && note.pby) {
           try {
