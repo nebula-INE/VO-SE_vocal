@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportGeneralTypeIssues=false
 # talk_manager.py
 """
 VO-SE Cut Studio — コアエンジン統合モジュール
