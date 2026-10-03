@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
@@ -107,7 +108,7 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
 });
 
 test('Web prefix.map two-column entries use the suffix like Desktop', () => {
-  const server = require('node:fs').readFileSync('server.js', 'utf8');
+  const server = readFileSync('server.js', 'utf8');
   assert.match(server, /if \(cols\.length >= 3\)/);
   assert.match(server, /suffix = \(cols\[1\] \|\| ''\)\.trim\(\);/);
   assert.match(server, /two-column suffix as a prefix/i);
