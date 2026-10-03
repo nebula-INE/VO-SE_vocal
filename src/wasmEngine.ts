@@ -580,11 +580,11 @@ export async function renderStudioOffline(
             const points = smoothPitchBendPoints(rawPoints);
             scheduleSafePitchRamp(
               source.playbackRate,
-              1.0,
+              safePitchRatio,
               points,
               startTimeSec,
-              (st) => Math.max(0.5, Math.min(2.0, Math.pow(2, st / 12))),
-              0,
+              (st) => safePitchRatio * Math.max(0.5, Math.min(2.0, Math.pow(2, st / 12))),
+              Math.max(0, actualStartTime),
               startTimeSec + durationSec
             );
           } catch (e) {
