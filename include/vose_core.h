@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <cstdint> 
+#include <cstddef>
 
 // ディスクキャッシュの先頭に書き込むヘッダ情報
 struct VoseCacheHeader {
@@ -68,6 +69,27 @@ struct NoteEvent {
     double  preutterance_ms;
     double  overlap_ms;
 };
+
+#if defined(__wasm32__)
+static_assert(sizeof(NoteEvent) == 112, "WASM NoteEvent ABI size changed");
+static_assert(offsetof(NoteEvent, wav_path) == 0, "WASM NoteEvent wav_path offset changed");
+static_assert(offsetof(NoteEvent, pitch_curve) == 4, "WASM NoteEvent pitch_curve offset changed");
+static_assert(offsetof(NoteEvent, pitch_length) == 8, "WASM NoteEvent pitch_length offset changed");
+static_assert(offsetof(NoteEvent, gender_curve) == 16, "WASM NoteEvent gender_curve offset changed");
+static_assert(offsetof(NoteEvent, tension_curve) == 24, "WASM NoteEvent tension_curve offset changed");
+static_assert(offsetof(NoteEvent, breath_curve) == 32, "WASM NoteEvent breath_curve offset changed");
+static_assert(offsetof(NoteEvent, vibrato_depth_curve) == 40, "WASM NoteEvent vibrato_depth_curve offset changed");
+static_assert(offsetof(NoteEvent, vibrato_rate_curve) == 48, "WASM NoteEvent vibrato_rate_curve offset changed");
+static_assert(offsetof(NoteEvent, vibrato_curve_length) == 56, "WASM NoteEvent vibrato_curve_length offset changed");
+static_assert(offsetof(NoteEvent, portamento_offsets) == 64, "WASM NoteEvent portamento_offsets offset changed");
+static_assert(offsetof(NoteEvent, portamento_length) == 68, "WASM NoteEvent portamento_length offset changed");
+static_assert(offsetof(NoteEvent, intensity) == 72, "WASM NoteEvent intensity offset changed");
+static_assert(offsetof(NoteEvent, modulation) == 80, "WASM NoteEvent modulation offset changed");
+static_assert(offsetof(NoteEvent, start_time_ms) == 88, "WASM NoteEvent start_time_ms offset changed");
+static_assert(offsetof(NoteEvent, preutterance_ms) == 96, "WASM NoteEvent preutterance_ms offset changed");
+static_assert(offsetof(NoteEvent, overlap_ms) == 104, "WASM NoteEvent overlap_ms offset changed");
+#endif
+#pragma pack(pop)
 #pragma pack(pop)
 
 struct OtoEntry; // 前方宣言
