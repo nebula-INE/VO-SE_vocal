@@ -220,7 +220,7 @@ test('Web multi-pitch aliases with identical oto aliases select the closest pitc
 test('Web default voicebank name matches the UI default and preserves legacy compatibility', () => {
   const server = readFileSync('server.js', 'utf8');
   assert.match(server, /const defaultName = 'Official Voice \(VCV\)'/);
-  assert.match(server, /official voice \\(vcv\\)/i);
+  assert.match(server, /official voice \(vcv\)/i);
   assert.match(server, /standard japanese cv/i);
   assert.match(server, /legacyDefault/);
 });
