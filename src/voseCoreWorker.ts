@@ -85,27 +85,27 @@ self.onunhandledrejection = (e: PromiseRejectionEvent) => {
 
 // ------------------------------------------------------------
 // NoteEvent構造体レイアウト (vose_core.wasm / wasm32)
- // IMPORTANT: C++ の #pragma pack(8) は wasm32 でも double を8-byte境界へ
- // 配置するため、ポインタ4Bだけを単純連結した44Bではない。
- // vose_core.h の static_assert とこのオフセットを同じ契約として維持する。
+// IMPORTANT: Emscripten wasm32 の NoteEvent は sizeof=88。double も4-byte境界に
+// 配置されるため、64-bit native のレイアウトとは異なる。
+// vose_core.h の wasm32 static_assert とこのオフセットを同じ契約として維持する。
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 112;
+const NOTE_EVENT_SIZE = 88;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
-const OFF_GENDER_CURVE = 16;
-const OFF_TENSION_CURVE = 24;
-const OFF_BREATH_CURVE = 32;
-const OFF_VIBRATO_DEPTH_CURVE = 40;
-const OFF_VIBRATO_RATE_CURVE = 48;
-const OFF_VIBRATO_CURVE_LENGTH = 56;
-const OFF_PORTAMENTO_OFFSETS = 64;
-const OFF_PORTAMENTO_LENGTH = 68;
-const OFF_INTENSITY = 72;
-const OFF_MODULATION = 80;
-const OFF_START_TIME_MS = 88;
-const OFF_PREUTTERANCE_MS = 96;
-const OFF_OVERLAP_MS = 104;
+const OFF_GENDER_CURVE = 12;
+const OFF_TENSION_CURVE = 20;
+const OFF_BREATH_CURVE = 28;
+const OFF_VIBRATO_DEPTH_CURVE = 36;
+const OFF_VIBRATO_RATE_CURVE = 44;
+const OFF_VIBRATO_CURVE_LENGTH = 52;
+const OFF_PORTAMENTO_OFFSETS = 56;
+const OFF_PORTAMENTO_LENGTH = 60;
+const OFF_INTENSITY = 64;
+const OFF_MODULATION = 72;
+const OFF_START_TIME_MS = 80;
+const OFF_PREUTTERANCE_MS = 88;
+const OFF_OVERLAP_MS = 96;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
