@@ -107,6 +107,13 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
   } catch (error) { error.message += '\nserver stderr:\n' + stderr; throw error; }
 });
 
+test('Web Audio fallback reports sample HTTP failures with alias context', () => {
+  const engine = readFileSync('src/wasmEngine.ts', 'utf8');
+  assert.match(engine, /\[wasmEngine\] サンプル取得失敗 status=/);
+  assert.match(engine, /await res\.text\(\)/);
+  assert.match(engine, /noteNum=\$\{noteNum \?\? ''\}/);
+});
+
 test('Web voicebank resolution trims and NFC-normalizes the requested name', () => {
   const server = readFileSync('server.js', 'utf8');
   assert.match(server, /String\(targetName\)\.normalize\('NFC'\)\.trim\(\)/);
