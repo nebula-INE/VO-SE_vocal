@@ -216,3 +216,53 @@ test('Web multi-pitch aliases with identical oto aliases select the closest pitc
     throw error;
   }
 });
+
+test('Web alias resolution normalizes path separators and whitespace without losing pitch selection', async (t) => {
+  const voicebank = '__test_alias_normalization_' + process.pid;
+  const voiceDir = join(VOICEBANKS, voicebank);
+  const c4 = makeWav(31);
+  const f4 = makeWav(131);
+  await mkdir(join(voiceDir, 'Pitches'), { recursive: true });
+  await writeFile(join(voiceDir, 'Pitches', 'a_C4.wav'), c4);
+  await writeFile(join(voiceDir, 'Pitches', 'a_F4.wav'), f4);
+  await writeFile(
+    join(voiceDir, 'Pitches', 'oto.ini'),
+    'a_C4.wav=あ,0,0,0,0,0\na_F4.wav=あ,0,0,0,0,0\n',
+    'utf8'
+  );
+
+  const port = 35000 + (process.pid % 1000);
+  const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  try {
+    await waitForServer(child, port);
+    const sample = await request(
+      port,
+      'GET',
+      '/api/py/voicebank-sample?name=' +
+        encodeURIComponent(voicebank) +
+        '&alias=' + encodeURIComponent(' あ ') +
+        '&noteNum=65'
+    );
+    assert.equal(sample.status, 200, sample.body.toString());
+    assert.deepEqual(sample.body, f4);
+    assert.equal(decodeURIComponent(sample.headers['x-alias-matched']), 'あ');
+  } finally {
+    child.kill('SIGTERM');
+  }
+});
+
+test('Web server keeps normalized alias candidates indexed for nested oto.ini folders', () => {
+  const server = readFileSync('server.js', 'utf8');
+  assert.match(server, /aliasLookupMap: new Map\(\)/);
+  assert.match(server, /normalizeLookupAlias/);
+  assert.match(server, /prefixedLookupKey/);
+});
