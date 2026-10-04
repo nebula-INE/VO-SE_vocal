@@ -1738,8 +1738,9 @@ function resolveWavFilePath(dirPath, filename) {
       }
 
       const items = fs.readdirSync(resolved, { withFileTypes: true });
+      const normalizedComponent = component.normalize('NFC').toLowerCase();
       const match = items.find((item) =>
-        item.name.toLowerCase() === component.toLowerCase()
+        item.name.normalize('NFC').toLowerCase() === normalizedComponent
       );
       if (!match) {
         failed = true;
@@ -1904,15 +1905,28 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
   }
 
   if (!entry || !wavFile || !fs.existsSync(wavFile)) {
+    const reason = !entry ? 'alias_not_found' : 'wav_missing';
     console.warn(
-      `[VO-SE] voicebank-sample: alias not found voicebank="${resolvedName}" ` +
-      `alias="${String(alias)}" prevLyric="${String(prevLyric || '')}" noteNum="${String(noteNum || '')}"`
+      `[VO-SE] voicebank-sample: ${reason} voicebank="${effectiveResolvedName}" ` +
+      `alias="${String(alias)}" prevLyric="${String(prevLyric || '')}" noteNum="${String(noteNum || '')}"` +
+      (entry ? ` filename="${String(entry.filename || '')}" wavPath="${String(entry.wav_path || '')}"` : '')
     );
     return res.status(404).json({
       success: false,
-      error: `Sample WAV for alias "${alias}" not found`,
-      voicebank: resolvedName,
-      alias: String(alias)
+      error: reason === 'alias_not_found'
+        ? `Alias "${alias}" not found in voicebank`
+        : `Alias "${alias}" resolved, but its WAV file is missing`,
+      reason,
+      voicebank: effectiveResolvedName,
+      requestedVoicebank: String(name || ''),
+      alias: String(alias),
+      prevLyric: String(prevLyric || ''),
+      noteNum: noteNum == null ? null : Number(noteNum),
+      indexedAliasCount: indexed?.aliasCount ?? 0,
+      matchedAlias: entry?.alias || null,
+      filename: entry?.filename || null,
+      wavPath: entry?.wav_path || null,
+      resolvedWavPath: wavFile || null
     });
   }
 
