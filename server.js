@@ -335,6 +335,7 @@ class VoicebankRegistryEngine {
       aliasesPreview: parsed.aliases,
       entries: parsed.entries,
       aliasMap: parsed.aliasMap,
+      aliasLookupMap: parsed.aliasLookupMap,
       prefixMap: parsed.prefixMap
     };
 
