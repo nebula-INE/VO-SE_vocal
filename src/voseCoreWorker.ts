@@ -89,7 +89,7 @@ self.onunhandledrejection = (e: PromiseRejectionEvent) => {
 // 配置されるため、64-bit native のレイアウトとは異なる。
 // vose_core.h の wasm32 static_assert とこのオフセットを同じ契約として維持する。
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 88;
+const NOTE_EVENT_SIZE = 104;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
@@ -101,11 +101,11 @@ const OFF_VIBRATO_RATE_CURVE = 44;
 const OFF_VIBRATO_CURVE_LENGTH = 52;
 const OFF_PORTAMENTO_OFFSETS = 56;
 const OFF_PORTAMENTO_LENGTH = 60;
-const OFF_INTENSITY = 48;
-const OFF_MODULATION = 56;
-const OFF_START_TIME_MS = 64;
-const OFF_PREUTTERANCE_MS = 72;
-const OFF_OVERLAP_MS = 80;
+const OFF_INTENSITY = 64;
+const OFF_MODULATION = 72;
+const OFF_START_TIME_MS = 80;
+const OFF_PREUTTERANCE_MS = 88;
+const OFF_OVERLAP_MS = 96;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
