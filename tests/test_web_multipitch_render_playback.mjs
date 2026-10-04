@@ -267,6 +267,46 @@ test('Web server keeps normalized alias candidates indexed for nested oto.ini fo
   assert.match(server, /prefixedLookupKey/);
 });
 
+test('Web normalized alias lookup survives the registry cache and separator normalization', async (t) => {
+  const voicebank = '__test_registry_alias_lookup_' + process.pid;
+  const voiceDir = join(VOICEBANKS, voicebank);
+  const nestedDir = join(voiceDir, 'Pitches');
+  await mkdir(nestedDir, { recursive: true });
+  await writeFile(join(nestedDir, 'a.wav'), makeWav(64));
+  await writeFile(
+    join(nestedDir, 'oto.ini'),
+    'a.wav=あ,0,0,0,0,0\\n',
+    'utf8'
+  );
+
+  const port = 35500 + (process.pid % 500);
+  const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  try {
+    await waitForServer(child, port);
+    const sample = await request(
+      port,
+      'GET',
+      '/api/py/voicebank-sample?name=' +
+        encodeURIComponent(voicebank) +
+        '&alias=' + encodeURIComponent('Pitches/あ') +
+        '&noteNum=60'
+    );
+    assert.equal(sample.status, 200, sample.body.toString());
+    assert.deepEqual(sample.body, makeWav(64));
+  } finally {
+    child.kill('SIGTERM');
+  }
+});
+
 test('Web voicebank alias diagnostics verifies the resolved WAV path', () => {
   const server = readFileSync('server.js', 'utf8');
   assert.match(server, /Alias resolved but WAV file is missing/);
