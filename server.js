@@ -1757,7 +1757,14 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
 
   const resolved = resolveVoicebankPath(name);
   if (!resolved) {
-    return res.status(404).json({ success: false, error: 'No voicebank found on server' });
+    console.warn(
+      `[VO-SE] voicebank-sample: voicebank not found requested="${String(name || '')}" alias="${String(alias)}"`
+    );
+    return res.status(404).json({
+      success: false,
+      error: 'No voicebank found on server',
+      requestedVoicebank: String(name || '')
+    });
   }
 
   const { resolvedName, resolvedPath } = resolved;
@@ -1770,7 +1777,16 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
   }
 
   if (!entry || !wavFile || !fs.existsSync(wavFile)) {
-    return res.status(404).json({ success: false, error: `Sample WAV for alias "${alias}" not found` });
+    console.warn(
+      `[VO-SE] voicebank-sample: alias not found voicebank="${resolvedName}" ` +
+      `alias="${String(alias)}" prevLyric="${String(prevLyric || '')}" noteNum="${String(noteNum || '')}"`
+    );
+    return res.status(404).json({
+      success: false,
+      error: `Sample WAV for alias "${alias}" not found`,
+      voicebank: resolvedName,
+      alias: String(alias)
+    });
   }
 
   if (entry) {
