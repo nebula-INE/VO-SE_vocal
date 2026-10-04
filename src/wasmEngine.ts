@@ -414,6 +414,42 @@ export async function renderStudioOffline(
 
   onProgress?.(5);
 
+  // 音源解決の共通経路をレンダリング開始時に1音だけ事前検証する。
+  // ここで失敗させることで、数百ノートのHTTP 404を発生させず、
+  // voicebank / oto.ini / alias / WAV のどこで止まったかを即座に判定できる。
+  const firstSampleEntry = sampleEntries.length > 0 ? sampleEntries[0][1] : null;
+  if (firstSampleEntry) {
+    const probeUrl =
+      `/api/py/voicebank-alias-info?name=${encodeURIComponent(voicebank)}&alias=${encodeURIComponent(firstSampleEntry.alias)}` +
+      (firstSampleEntry.prevLyric ? `&prevLyric=${encodeURIComponent(firstSampleEntry.prevLyric)}` : '') +
+      `&noteNum=${encodeURIComponent(String(firstSampleEntry.noteNum))}`;
+    const probe = await fetch(probeUrl);
+    if (!probe.ok) {
+      let detail = '';
+      try {
+        detail = (await probe.text()).slice(0, 500).replace(/\\s+/g, ' ');
+      } catch (_) {}
+      throw new Error(
+        `音源解決に失敗しました: voicebank="${voicebank}" alias="${firstSampleEntry.alias}" ` +
+        `prevLyric="${firstSampleEntry.prevLyric || ''}" noteNum=${firstSampleEntry.noteNum} ` +
+        `status=${probe.status} detail=${detail || 'diagnostic endpoint returned no detail'}`
+      );
+    }
+    const probeData = await probe.json();
+    if (!probeData?.success || !probeData?.wavPath) {
+      throw new Error(
+        `音源WAVを解決できませんでした: voicebank="${voicebank}" alias="${firstSampleEntry.alias}" ` +
+        `matchedAlias="${probeData?.matchedAlias || ''}" ` +
+        `filename="${probeData?.filename || ''}"`
+      );
+    }
+    console.info(
+      `[wasmEngine] 音源解決OK voicebank="${probeData.voicebank}" ` +
+      `alias="${probeData.requestedAlias}" -> "${probeData.matchedAlias}" ` +
+      `wav="${probeData.filename}" baseMidi=${probeData.baseMidi}`
+    );
+  }
+
   // 3. サンプルを並行バッチで取得 (進捗: 5% -> 30%)
   const sampleEntries = Array.from(uniqueSampleMap.entries());
   const BATCH_SIZE = 8;
