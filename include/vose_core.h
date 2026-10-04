@@ -90,7 +90,6 @@ static_assert(offsetof(NoteEvent, preutterance_ms) == 96, "WASM NoteEvent preutt
 static_assert(offsetof(NoteEvent, overlap_ms) == 104, "WASM NoteEvent overlap_ms offset changed");
 #endif
 #pragma pack(pop)
-#pragma pack(pop)
 
 struct OtoEntry; // 前方宣言
 
