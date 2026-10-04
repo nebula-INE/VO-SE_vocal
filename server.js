@@ -121,6 +121,7 @@ async function parseOtoIniFull(dirPath) {
     aliases: [],
     entries: [],
     aliasMap: new Map(),
+    aliasLookupMap: new Map(),
     prefixMap: new Map()
   };
 
@@ -210,6 +211,10 @@ async function parseOtoIniFull(dirPath) {
           if (!result.aliasMap.has(alias)) {
             result.aliasMap.set(alias, entryObj);
           }
+          const lookupKey = alias.normalize('NFC').replace(/[\\/]/g, '\\\\').replace(/\\s+/g, ' ').trim().toLowerCase();
+          const lookupEntries = result.aliasLookupMap.get(lookupKey) || [];
+          lookupEntries.push(entryObj);
+          result.aliasLookupMap.set(lookupKey, lookupEntries);
           const baseNameNoExt = path.basename(filename).replace(/\.wav$/i, '');
           if (baseNameNoExt && !result.aliasMap.has(baseNameNoExt)) {
             result.aliasMap.set(baseNameNoExt, entryObj);
@@ -221,6 +226,10 @@ async function parseOtoIniFull(dirPath) {
             if (!result.aliasMap.has(prefixedAlias)) {
               result.aliasMap.set(prefixedAlias, entryObj);
             }
+            const prefixedLookupKey = prefixedAlias.normalize('NFC').replace(/[\\/]/g, '\\\\').replace(/\\s+/g, ' ').trim().toLowerCase();
+            const prefixedLookupEntries = result.aliasLookupMap.get(prefixedLookupKey) || [];
+            prefixedLookupEntries.push(entryObj);
+            result.aliasLookupMap.set(prefixedLookupKey, prefixedLookupEntries);
             if (baseNameNoExt) {
               const prefixedBaseName = subdirPrefix + baseNameNoExt;
               if (!result.aliasMap.has(prefixedBaseName)) {
@@ -1428,6 +1437,7 @@ function ensureDefaultVoicebanks() {
 function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   if (!indexed || !indexed.aliasMap) return null;
   const aliasMap = indexed.aliasMap;
+  const aliasLookupMap = indexed.aliasLookupMap || new Map();
   const rawTrim = (rawAlias || '').trim();
   if (!rawTrim) return null;
 
@@ -1439,6 +1449,18 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   }
 
   const alias = rawTrim.normalize('NFC');
+  const normalizeLookupAlias = (value) => String(value || '')
+    .normalize('NFC')
+    .replace(/[\\/]/g, '\\\\')
+    .replace(/\\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const lookupAliasEntry = (candidate) => {
+    const exact = aliasMap.get(candidate);
+    if (exact) return selectBestPitchEntry(indexed, candidate, noteNum) || exact;
+    const normalized = normalizeLookupAlias(candidate);
+    return selectBestPitchEntryFromEntries(aliasLookupMap.get(normalized) || [], noteNum);
+  };
   // Strip pitch/octave suffixes e.g., "_C4", "_A3", "_1", "↑", "↓"
   const cleanPitch = alias.replace(/_?[A-Ga-g][#b]?[0-9]$/, '').replace(/_[0-9]$/, '').replace(/[↑↓強弱SP]$/, '').trim();
   // Strip VCV prefixes e.g. "- か", "a か", "_か", "-か"
@@ -1461,13 +1483,13 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   const matchMappedAlias = (candidate) => {
     // An explicitly written alias must always win over automatic pitch mapping.
     // This is especially important for explicit VCV aliases such as "a い".
-    const exact = selectBestPitchEntry(indexed, candidate, noteNum) || aliasMap.get(candidate);
+    const exact = lookupAliasEntry(candidate);
     if (exact) return exact;
     if (noteNum === null || noteNum === undefined) return null;
     if (candidate.includes('/') || candidate.includes('\\')) return null;
     const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);
     if (mapped === candidate) return null;
-    return aliasMap.get(mapped) || null;
+    return lookupAliasEntry(mapped) || null;
   };
 
   // Helper to search direct match or pitch-suffixed key in aliasMap
@@ -1478,7 +1500,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
 
     // 1. Exact match
     if (aliasMap.has(prefNorm)) {
-      return selectBestPitchEntry(indexed, prefNorm, noteNum) || aliasMap.get(prefNorm);
+      return lookupAliasEntry(prefNorm);
     }
 
     // 2. Pitch-suffixed search with proximity to requested noteNum
