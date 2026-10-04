@@ -1589,13 +1589,20 @@ function resolveVoicebankPath(targetName) {
   ensureDefaultVoicebanks();
 
   const baseDir = path.join(__dirname, 'temp', 'voicebanks');
-  const hasRequestedName = !!(targetName && String(targetName).trim());
+  // Browser/JSON state can carry invisible whitespace or a different Unicode
+  // normalization form than the directory name created during upload. Resolve
+  // against a canonical display name so every sample request uses the same
+  // voicebank directory.
+  const normalizedTargetName = targetName
+    ? String(targetName).normalize('NFC').trim()
+    : '';
+  const hasRequestedName = !!normalizedTargetName;
 
   // 1. Direct path check
   if (hasRequestedName) {
-    const directPath = path.join(baseDir, targetName);
+    const directPath = path.join(baseDir, normalizedTargetName);
     if (fs.existsSync(directPath)) {
-      return { resolvedName: targetName, resolvedPath: directPath };
+      return { resolvedName: path.basename(directPath), resolvedPath: directPath };
     }
   }
 
@@ -1609,7 +1616,7 @@ function resolveVoicebankPath(targetName) {
     }
 
     if (hasRequestedName) {
-      const lowerTarget = targetName.toLowerCase();
+      const lowerTarget = normalizedTargetName.toLowerCase();
       const ciMatch = dirs.find(d => d.toLowerCase() === lowerTarget);
       if (ciMatch) {
         return { resolvedName: ciMatch, resolvedPath: path.join(baseDir, ciMatch) };
@@ -1623,7 +1630,7 @@ function resolveVoicebankPath(targetName) {
       if (subMatches.length === 1) {
         const subMatch = subMatches[0];
         console.warn(
-          `[VO-SE] resolveVoicebankPath: no exact match for "${targetName}", ` +
+          `[VO-SE] resolveVoicebankPath: no exact match for "${normalizedTargetName}", ` +
           `using unique substring match "${subMatch}" instead. Consider renaming to avoid ambiguity.`
         );
         return { resolvedName: subMatch, resolvedPath: path.join(baseDir, subMatch) };
@@ -1631,7 +1638,7 @@ function resolveVoicebankPath(targetName) {
 
       if (subMatches.length > 1) {
         console.warn(
-          `[VO-SE] resolveVoicebankPath: voicebank "${targetName}" is ambiguous; ` +
+          `[VO-SE] resolveVoicebankPath: voicebank "${normalizedTargetName}" is ambiguous; ` +
           `substring matches are [${subMatches.join(', ')}]. Refusing to select one implicitly.`
         );
         return null;
@@ -1640,7 +1647,7 @@ function resolveVoicebankPath(targetName) {
       // [FIX] previously: `return { resolvedName: dirs[0], ... }` here — silently
       // substituting an unrelated voicebank. Now we fail loudly instead.
       console.warn(
-        `[VO-SE] resolveVoicebankPath: requested voicebank "${targetName}" not found ` +
+        `[VO-SE] resolveVoicebankPath: requested voicebank "${normalizedTargetName}" not found ` +
         `among [${dirs.join(', ')}] — returning 404 instead of substituting another voicebank.`
       );
       return null;
