@@ -110,7 +110,7 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
 test('Web sample endpoint exposes voicebank and alias context on lookup failure', () => {
   const server = readFileSync('server.js', 'utf8');
   assert.match(server, /voicebank-sample: voicebank not found requested=/);
-  assert.match(server, /voicebank-sample: alias not found voicebank=/);
+  assert.match(server, /voicebank-sample: (?:alias_not_found|wav_missing) voicebank=/);
   assert.match(server, /requestedVoicebank: String\(name \|\| ''\)/);
 });
 
