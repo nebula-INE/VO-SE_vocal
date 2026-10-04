@@ -71,20 +71,20 @@ struct NoteEvent {
 };
 
 #if defined(__wasm32__)
-// Emscripten wasm32 uses 4-byte alignment for pointers and scalar members here.
-// Keep the exact compiler-observed ABI locked: NoteEvent is 88 bytes.
-static_assert(sizeof(NoteEvent) == 104, "WASM NoteEvent ABI size changed");
+// Lock the compiler-observed wasm32 ABI. Pointers are 4 bytes; the double
+// fields are aligned to 8 bytes under #pragma pack(push, 8).
+static_assert(sizeof(NoteEvent) == 88, "WASM NoteEvent ABI size changed");
 static_assert(offsetof(NoteEvent, wav_path) == 0, "WASM NoteEvent wav_path offset changed");
 static_assert(offsetof(NoteEvent, pitch_curve) == 4, "WASM NoteEvent pitch_curve offset changed");
 static_assert(offsetof(NoteEvent, pitch_length) == 8, "WASM NoteEvent pitch_length offset changed");
 static_assert(offsetof(NoteEvent, gender_curve) == 12, "WASM NoteEvent gender_curve offset changed");
-static_assert(offsetof(NoteEvent, tension_curve) == 20, "WASM NoteEvent tension_curve offset changed");
-static_assert(offsetof(NoteEvent, breath_curve) == 28, "WASM NoteEvent breath_curve offset changed");
-static_assert(offsetof(NoteEvent, vibrato_depth_curve) == 36, "WASM NoteEvent vibrato_depth_curve offset changed");
-static_assert(offsetof(NoteEvent, vibrato_rate_curve) == 44, "WASM NoteEvent vibrato_rate_curve offset changed");
-static_assert(offsetof(NoteEvent, vibrato_curve_length) == 52, "WASM NoteEvent vibrato_curve_length offset changed");
-static_assert(offsetof(NoteEvent, portamento_offsets) == 56, "WASM NoteEvent portamento_offsets offset changed");
-static_assert(offsetof(NoteEvent, portamento_length) == 60, "WASM NoteEvent portamento_length offset changed");
+static_assert(offsetof(NoteEvent, tension_curve) == 16, "WASM NoteEvent tension_curve offset changed");
+static_assert(offsetof(NoteEvent, breath_curve) == 24, "WASM NoteEvent breath_curve offset changed");
+static_assert(offsetof(NoteEvent, vibrato_depth_curve) == 32, "WASM NoteEvent vibrato_depth_curve offset changed");
+static_assert(offsetof(NoteEvent, vibrato_rate_curve) == 40, "WASM NoteEvent vibrato_rate_curve offset changed");
+static_assert(offsetof(NoteEvent, vibrato_curve_length) == 48, "WASM NoteEvent vibrato_curve_length offset changed");
+static_assert(offsetof(NoteEvent, portamento_offsets) == 52, "WASM NoteEvent portamento_offsets offset changed");
+static_assert(offsetof(NoteEvent, portamento_length) == 56, "WASM NoteEvent portamento_length offset changed");
 static_assert(offsetof(NoteEvent, intensity) == 64, "WASM NoteEvent intensity offset changed");
 static_assert(offsetof(NoteEvent, modulation) == 72, "WASM NoteEvent modulation offset changed");
 static_assert(offsetof(NoteEvent, start_time_ms) == 80, "WASM NoteEvent start_time_ms offset changed");
