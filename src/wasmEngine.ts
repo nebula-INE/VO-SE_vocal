@@ -84,6 +84,16 @@ async function fetchSampleWithMeta(
 
       const res = await fetch(url);
       if (!res.ok) {
+        let detail = '';
+        try {
+          detail = (await res.text()).slice(0, 240).replace(/\s+/g, ' ');
+        } catch (_) {
+          // HTTP status is still useful when the response body cannot be read.
+        }
+        console.warn(
+          `[wasmEngine] サンプル取得失敗 status=${res.status} alias='${alias}' ` +
+          `prevLyric='${prevLyric || ''}' noteNum=${noteNum ?? ''} detail='${detail}'`
+        );
         sampleCache.set(key, null);
         return null;
       }
