@@ -266,3 +266,17 @@ test('Web server keeps normalized alias candidates indexed for nested oto.ini fo
   assert.match(server, /normalizeLookupAlias/);
   assert.match(server, /prefixedLookupKey/);
 });
+
+test('Web voicebank alias diagnostics verifies the resolved WAV path', () => {
+  const server = readFileSync('server.js', 'utf8');
+  assert.match(server, /Alias resolved but WAV file is missing/);
+  assert.match(server, /resolvedWavPath/);
+  assert.match(server, /indexedEntryCount/);
+});
+
+test('Web render preflights one voice sample before bulk fetches', () => {
+  const engine = readFileSync('src/wasmEngine.ts', 'utf8');
+  assert.match(engine, /voicebank-alias-info\?name=/);
+  assert.match(engine, /音源解決に失敗しました/);
+  assert.match(engine, /音源解決OK voicebank=/);
+});
