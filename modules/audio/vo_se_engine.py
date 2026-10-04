@@ -496,15 +496,16 @@ class VO_SE_Engine:
     def _get_sampled_curve(self, events, note, res, is_pitch=False):
         """ノート区間におけるパラメータカーブを res 点でサンプリングする。
 
-        events が空のときは「無変更」を意味する中立値を返す:
-          - is_pitch=True : 0.0 (半音偏差。ノート基準ピッチそのものは
-                            呼び出し側で note.note_number から復元する)
-          - is_pitch=False: 0.5 (Gender/Tension の中立値。Breath は別途 0.0 を明示)
+        events が空のときも、Pitch はノート基準音高を Hz で返す。
+        それ以外のパラメータは従来どおり中立値を返す。
         """
         curve = np.zeros(res, dtype=np.float32)
-        default_val = 0.0 if is_pitch else 0.5
         if not events:
-            return curve + default_val
+            if is_pitch:
+                note_number = float(getattr(note, "note_number", 60))
+                base_hz = 440.0 * (2.0 ** ((note_number - 69.0) / 12.0))
+                return np.full(res, base_hz, dtype=np.float32)
+            return curve + 0.5
 
         start_time = float(getattr(note, "start_time", 0.0))
         duration = float(getattr(note, "duration", 0.0))
