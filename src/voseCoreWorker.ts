@@ -84,32 +84,28 @@ self.onunhandledrejection = (e: PromiseRejectionEvent) => {
 };
 
 // ------------------------------------------------------------
-// NoteEvent構造体レイアウト (vose_core.wasm / wasm32環境: 各フィールド4バイト、計44バイト)
-//   wav_path:               offset 0   (4B, const char*)
-//   pitch_curve:            offset 4   (4B, double*)
-//   pitch_length:           offset 8   (4B, int)
-//   gender_curve:           offset 12  (4B, double*)
-//   tension_curve:          offset 16  (4B, double*)
-//   breath_curve:           offset 20  (4B, double*)
-//   vibrato_depth_curve:    offset 24  (4B, double*)
-//   vibrato_rate_curve:     offset 28  (4B, double*)
-//   vibrato_curve_length:   offset 32  (4B, int)
-//   portamento_offsets:     offset 36  (4B, double*)
-//   portamento_length:      offset 40  (4B, int)
-//   合計44バイト (sizeof(NoteEvent) = 44)
+// NoteEvent構造体レイアウト (vose_core.wasm / wasm32)
+ // IMPORTANT: C++ の #pragma pack(8) は wasm32 でも double を8-byte境界へ
+ // 配置するため、ポインタ4Bだけを単純連結した44Bではない。
+ // vose_core.h の static_assert とこのオフセットを同じ契約として維持する。
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 44;
+const NOTE_EVENT_SIZE = 112;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
-const OFF_GENDER_CURVE = 12;
-const OFF_TENSION_CURVE = 16;
-const OFF_BREATH_CURVE = 20;
-const OFF_VIBRATO_DEPTH_CURVE = 24;
-const OFF_VIBRATO_RATE_CURVE = 28;
-const OFF_VIBRATO_CURVE_LENGTH = 32;
-const OFF_PORTAMENTO_OFFSETS = 36;
-const OFF_PORTAMENTO_LENGTH = 40;
+const OFF_GENDER_CURVE = 16;
+const OFF_TENSION_CURVE = 24;
+const OFF_BREATH_CURVE = 32;
+const OFF_VIBRATO_DEPTH_CURVE = 40;
+const OFF_VIBRATO_RATE_CURVE = 48;
+const OFF_VIBRATO_CURVE_LENGTH = 56;
+const OFF_PORTAMENTO_OFFSETS = 64;
+const OFF_PORTAMENTO_LENGTH = 68;
+const OFF_INTENSITY = 72;
+const OFF_MODULATION = 80;
+const OFF_START_TIME_MS = 88;
+const OFF_PREUTTERANCE_MS = 96;
+const OFF_OVERLAP_MS = 104;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
@@ -468,7 +464,15 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     allocatedPtrs.push(notesPtr);
 
     for (let i = 0; i < notes.length; i++) {
-      const { key, pitchCurveHz, intensity, modulation } = notes[i];
+      const {
+        key,
+        pitchCurveHz,
+        intensity = 100,
+        modulation = 0,
+        startTimeMs = -1,
+        preutteranceMs = -1,
+        overlapMs = -1
+      } = notes[i];
       const base = notesPtr + i * NOTE_EVENT_SIZE;
 
       const isVoiced = key !== null;
@@ -495,6 +499,15 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
+
+      // 64-bit scalar fields must use the exact 8-byte-aligned offsets from
+      // vose_core.h. Leaving these fields unwritten is an ABI violation:
+      // C++ would read arbitrary heap bytes as gain/modulation/timing.
+      mod.setValue(base + OFF_INTENSITY, Number.isFinite(intensity) ? intensity : 100, 'double');
+      mod.setValue(base + OFF_MODULATION, Number.isFinite(modulation) ? modulation : 0, 'double');
+      mod.setValue(base + OFF_START_TIME_MS, Number.isFinite(startTimeMs) ? startTimeMs : -1, 'double');
+      mod.setValue(base + OFF_PREUTTERANCE_MS, Number.isFinite(preutteranceMs) ? preutteranceMs : -1, 'double');
+      mod.setValue(base + OFF_OVERLAP_MS, Number.isFinite(overlapMs) ? overlapMs : -1, 'double');
     }
 
     (self as unknown as Worker).postMessage({
