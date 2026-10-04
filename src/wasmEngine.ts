@@ -189,37 +189,12 @@ function getLoopCrossfadedBuffer(
   const rawStart = Math.max(0, Math.floor(loopStartSec * sr));
   const rawEnd = Math.min(src.length, Math.floor(loopEndSec * sr));
 
-  // 1. 正のゼロ交差点検出 (loopStartSample)
-  let loopStartSample = rawStart;
-  let minStartDist = 999999;
-  const searchStartRad = Math.min(400, Math.floor(sr * 0.010));
-  for (let i = Math.max(1, rawStart - searchStartRad); i < Math.min(src.length - 1, rawStart + searchStartRad); i++) {
-    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
-      const dist = Math.abs(i - rawStart);
-      if (dist < minStartDist) {
-        minStartDist = dist;
-        loopStartSample = i;
-      }
-    }
-  }
-
-  // 2. 位相・波形相関が最大となる正のゼロ交差点検出 (loopEndSample)
-  const corrLen = Math.min(180, Math.floor(sr * 0.004));
-  let loopEndSample = rawEnd;
-  let bestCorr = -Infinity;
-  const searchEndRad = Math.min(500, Math.floor(sr * 0.012));
-  for (let i = Math.max(1, rawEnd - searchEndRad); i < Math.min(src.length - 1 - corrLen, rawEnd + searchEndRad); i++) {
-    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
-      let corr = 0;
-      for (let k = 0; k < corrLen; k++) {
-        corr += ch0[loopStartSample + k] * ch0[i + k];
-      }
-      if (corr > bestCorr) {
-        bestCorr = corr;
-        loopEndSample = i;
-      }
-    }
-  }
+  // 1. ループ境界は近傍のゼロクロスだけを探索する。
+  // 以前は loopEnd ごとに多数の候補×波形相関を計算していたため、
+  // 長い曲や多音源ではメインスレッドを大きく占有していた。
+  const searchRadius = Math.min(240, Math.floor(sr * 0.006));
+  const loopStartSample = findZeroCrossing(ch0, rawStart, searchRadius);
+  const loopEndSample = findZeroCrossing(ch0, rawEnd, searchRadius);
 
   const loopLenSamples = Math.max(100, loopEndSample - loopStartSample);
   const xfadeSec = Math.min(0.010, (loopLenSamples / sr) * 0.25);
@@ -231,10 +206,13 @@ function getLoopCrossfadedBuffer(
     const dstData = newBuffer.getChannelData(ch);
     dstData.set(srcData);
 
-    // 位相連続クロスフェード: loopEnd の手前 xfadeSamples を loopStart の手前波形と滑らかにブレンド
+    // ループ開始より前の音素を混ぜない。
+    // 旧実装は loopStartSample - xfadeSamples を参照していたため、
+    // 子音/前音素がループ末尾へ混入し「別の音が混じる」原因になり得た。
+    // ループ内部の先頭 xfadeSamples と末尾だけをクロスフェードする。
     for (let i = 0; i < xfadeSamples; i++) {
       const tailIdx = loopEndSample - xfadeSamples + i;
-      const headIdx = loopStartSample - xfadeSamples + i;
+      const headIdx = loopStartSample + i;
       if (tailIdx < 0 || tailIdx >= src.length || headIdx < 0 || headIdx >= src.length) continue;
       const t = i / xfadeSamples;
       const fadeOut = Math.cos((t * Math.PI) / 2);
@@ -279,8 +257,6 @@ function buildRawSegment(
   const xfaded = getLoopCrossfadedBuffer(ctx, cached, loopRange.loopStartSec, loopRange.loopEndSec);
   const loopStartSample = Math.max(0, Math.floor(loopRange.loopStartSec * sr));
   const loopEndSample = Math.min(xfaded.length, Math.floor(loopRange.loopEndSec * sr));
-  const loopLenSec = Math.max(0.001, loopRange.loopEndSec - loopRange.loopStartSec);
-  const xfadeSamples = Math.max(1, Math.min(Math.floor(0.020 * sr), Math.floor((loopEndSample - loopStartSample) * 0.25)));
   // クロスフェード完了後の実効ループ周回長
   const loopLen = Math.max(1, loopEndSample - loopStartSample);
 
