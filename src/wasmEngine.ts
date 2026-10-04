@@ -412,6 +412,8 @@ export async function renderStudioOffline(
     });
   }
 
+  const sampleEntries = Array.from(uniqueSampleMap.entries());
+
   onProgress?.(5);
 
   // 音源解決の共通経路をレンダリング開始時に1音だけ事前検証する。
@@ -451,7 +453,6 @@ export async function renderStudioOffline(
   }
 
   // 3. サンプルを並行バッチで取得 (進捗: 5% -> 30%)
-  const sampleEntries = Array.from(uniqueSampleMap.entries());
   const BATCH_SIZE = 8;
   const sampleDataMap = new Map<string, FetchedSample | null>();
 
