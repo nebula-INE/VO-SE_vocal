@@ -427,9 +427,11 @@ function decodeZipFilename(bufOrStr) {
 function extractWithUnzipCommand(zipPath, targetDir) {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(targetDir, { recursive: true });
-    exec(`unzip -o -q "${zipPath}" -d "${targetDir}"`, { timeout: 45000, maxBuffer: 16 * 1024 * 1024 }, (err) => {
+    // Japanese UTAU voicebanks are typically encoded in CP932 / Shift-JIS.
+    // Try unzip with -O CP932 first to ensure Japanese folder and wav names are properly extracted on Linux.
+    exec(`unzip -O CP932 -o -q "${zipPath}" -d "${targetDir}"`, { timeout: 45000, maxBuffer: 16 * 1024 * 1024 }, (err) => {
       if (!err) return resolve(true);
-      exec(`unzip -O CP932 -o -q "${zipPath}" -d "${targetDir}"`, { timeout: 45000 }, (err2) => {
+      exec(`unzip -o -q "${zipPath}" -d "${targetDir}"`, { timeout: 45000 }, (err2) => {
         if (!err2) return resolve(true);
         reject(err2 || err);
       });
@@ -1411,9 +1413,6 @@ function ensureDefaultVoicebanks() {
     if (!fs.existsSync(voicebanksDir)) {
       fs.mkdirSync(voicebanksDir, { recursive: true });
     }
-    // The Web UI's built-in vocal track uses this exact voicebank name.
-    // Keep the legacy "Standard Japanese CV" directory compatible below so
-    // existing installations do not lose their previously generated bank.
     const defaultName = 'Official Voice (VCV)';
     const targetDir = path.join(voicebanksDir, defaultName);
     const otoPath = path.join(targetDir, 'oto.ini');
@@ -1421,9 +1420,6 @@ function ensureDefaultVoicebanks() {
     if (!needsRebuild) {
       try {
         const otoText = fs.readFileSync(otoPath, 'utf8');
-        // Older builds accidentally wrote the two-character "\\n" sequence
-        // instead of real line breaks. That makes the entire OTO table one line
-        // and causes every default-bank alias lookup to fail.
         needsRebuild = !otoText.includes('\n') && otoText.includes('\\n');
       } catch (e) {
         needsRebuild = true;
@@ -1432,8 +1428,25 @@ function ensureDefaultVoicebanks() {
     if (needsRebuild) {
       createDefaultVoicebank(defaultName, true);
     }
-    // Legacy installations are handled by resolveVoicebankPath() when the
-    // Web UI requests the new default name and only the old directory exists.
+
+    // Also check and fix Standard Japanese CV if present
+    const stdName = 'Standard Japanese CV';
+    const stdDir = path.join(voicebanksDir, stdName);
+    if (fs.existsSync(stdDir)) {
+      const stdOto = path.join(stdDir, 'oto.ini');
+      let stdNeedsRebuild = !fs.existsSync(stdOto);
+      if (!stdNeedsRebuild) {
+        try {
+          const text = fs.readFileSync(stdOto, 'utf8');
+          stdNeedsRebuild = (!text.includes('\n') && text.includes('\\n')) || fs.readdirSync(stdDir).length < 20;
+        } catch (e) {
+          stdNeedsRebuild = true;
+        }
+      }
+      if (stdNeedsRebuild) {
+        createDefaultVoicebank(stdName, true);
+      }
+    }
   } catch (e) {
     console.warn('[VO-SE] ensureDefaultVoicebanks failed:', e && e.message ? e.message : e);
   }
@@ -1646,21 +1659,17 @@ function resolveVoicebankPath(targetName) {
     if (hasRequestedName) {
       const lowerTarget = normalizedTargetName.toLowerCase();
 
-      // Compatibility with older builds that generated "Standard Japanese CV".
-      if (lowerTarget === 'official voice (vcv)') {
-        const legacyDefault = dirs.find(d => d.toLowerCase() === 'standard japanese cv');
-        if (legacyDefault) {
-          console.warn(
-            '[VO-SE] resolveVoicebankPath: using legacy default voicebank "' +
-            legacyDefault + '" for requested "' + normalizedTargetName + '".'
-          );
-          return { resolvedName: legacyDefault, resolvedPath: path.join(baseDir, legacyDefault) };
-        }
-      }
-
       const ciMatch = dirs.find(d => d.toLowerCase() === lowerTarget);
       if (ciMatch) {
         return { resolvedName: ciMatch, resolvedPath: path.join(baseDir, ciMatch) };
+      }
+
+      // Compatibility with older builds where only "Standard Japanese CV" existed
+      if (lowerTarget === 'official voice (vcv)') {
+        const legacyDefault = dirs.find(d => d.toLowerCase() === 'standard japanese cv');
+        if (legacyDefault) {
+          return { resolvedName: legacyDefault, resolvedPath: path.join(baseDir, legacyDefault) };
+        }
       }
 
       const subMatches = dirs.filter(d => {
@@ -1783,17 +1792,37 @@ app.get('/api/py/voicebank-alias-info', async (req, res) => {
   const { resolvedName, resolvedPath } = resolved;
   const indexed = await vbRegistry.getOrIndex(resolvedName, resolvedPath);
   
-  const entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
+  let entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
   let wavFile = entry ? entry.wav_path : null;
   if (wavFile && !fs.existsSync(wavFile) && entry.filename) {
     wavFile = resolveWavFilePath(path.dirname(wavFile), entry.filename);
+  }
+
+  let effectiveResolvedName = resolvedName;
+  if ((!entry || !wavFile || !fs.existsSync(wavFile)) && resolvedName !== 'Official Voice (VCV)') {
+    const defaultResolved = resolveVoicebankPath('Official Voice (VCV)');
+    if (defaultResolved && defaultResolved.resolvedName !== resolvedName) {
+      const defaultIndexed = await vbRegistry.getOrIndex(defaultResolved.resolvedName, defaultResolved.resolvedPath);
+      if (defaultIndexed) {
+        const fallbackEntry = findAliasEntry(defaultIndexed, alias, prevLyric, noteNum);
+        let fallbackWav = fallbackEntry ? fallbackEntry.wav_path : null;
+        if (fallbackWav && !fs.existsSync(fallbackWav) && fallbackEntry.filename) {
+          fallbackWav = resolveWavFilePath(path.dirname(fallbackWav), fallbackEntry.filename);
+        }
+        if (fallbackEntry && fallbackWav && fs.existsSync(fallbackWav)) {
+          entry = fallbackEntry;
+          wavFile = fallbackWav;
+          effectiveResolvedName = defaultResolved.resolvedName;
+        }
+      }
+    }
   }
 
   if (!entry) {
     return res.status(404).json({
       success: false,
       error: 'Alias not found',
-      voicebank: resolvedName,
+      voicebank: effectiveResolvedName,
       requestedAlias: String(alias),
       prevLyric: String(prevLyric || ''),
       noteNum: noteNum == null ? null : Number(noteNum),
@@ -1805,7 +1834,7 @@ app.get('/api/py/voicebank-alias-info', async (req, res) => {
     return res.status(404).json({
       success: false,
       error: 'Alias resolved but WAV file is missing',
-      voicebank: resolvedName,
+      voicebank: effectiveResolvedName,
       requestedAlias: String(alias),
       matchedAlias: String(entry.alias || alias),
       filename: String(entry.filename || ''),
@@ -1817,7 +1846,7 @@ app.get('/api/py/voicebank-alias-info', async (req, res) => {
   const baseMidi = detectWavBaseMidi(wavFile, entry.alias, entry.filename);
   return res.json({
     success: true,
-    voicebank: resolvedName,
+    voicebank: effectiveResolvedName,
     requestedAlias: String(alias),
     matchedAlias: String(entry.alias || alias),
     prevLyric: String(prevLyric || ''),
@@ -1852,6 +1881,26 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
 
   if (wavFile && !fs.existsSync(wavFile) && entry.filename) {
     wavFile = resolveWavFilePath(path.dirname(wavFile), entry.filename);
+  }
+
+  let effectiveResolvedName = resolvedName;
+  if ((!entry || !wavFile || !fs.existsSync(wavFile)) && resolvedName !== 'Official Voice (VCV)') {
+    const defaultResolved = resolveVoicebankPath('Official Voice (VCV)');
+    if (defaultResolved && defaultResolved.resolvedName !== resolvedName) {
+      const defaultIndexed = await vbRegistry.getOrIndex(defaultResolved.resolvedName, defaultResolved.resolvedPath);
+      if (defaultIndexed) {
+        const fallbackEntry = findAliasEntry(defaultIndexed, alias, prevLyric, noteNum);
+        let fallbackWav = fallbackEntry ? fallbackEntry.wav_path : null;
+        if (fallbackWav && !fs.existsSync(fallbackWav) && fallbackEntry.filename) {
+          fallbackWav = resolveWavFilePath(path.dirname(fallbackWav), fallbackEntry.filename);
+        }
+        if (fallbackEntry && fallbackWav && fs.existsSync(fallbackWav)) {
+          entry = fallbackEntry;
+          wavFile = fallbackWav;
+          effectiveResolvedName = defaultResolved.resolvedName;
+        }
+      }
+    }
   }
 
   if (!entry || !wavFile || !fs.existsSync(wavFile)) {
@@ -1940,28 +1989,31 @@ async function handleVoicebankExtraction(zipFilePath, originalFilename) {
 
   await extractZipStreaming(zipFilePath, extractDir);
 
-  // Find where oto.ini or character.txt is located inside extractDir
-  const findVoiceRoot = (dir, depth = 0) => {
-    if (depth > 4) return null;
+  // Find all candidate voicebank directories containing oto.ini and pick the richest one
+  const findVoiceRoots = (dir, depth = 0) => {
+    if (depth > 5) return [];
     let entries;
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch (e) {
-      return null;
+      return [];
     }
+    const results = [];
     if (entries.some(e => e.isFile() && e.name.toLowerCase() === 'oto.ini')) {
-      return dir;
+      const wavCount = entries.filter(e => e.isFile() && e.name.toLowerCase().endsWith('.wav')).length;
+      results.push({ dir, wavCount });
     }
     for (const e of entries) {
       if (e.isDirectory() && !e.name.startsWith('__MACOSX')) {
-        const found = findVoiceRoot(path.join(dir, e.name), depth + 1);
-        if (found) return found;
+        results.push(...findVoiceRoots(path.join(dir, e.name), depth + 1));
       }
     }
-    return null;
+    return results;
   };
 
-  const detectedRoot = findVoiceRoot(extractDir);
+  const roots = findVoiceRoots(extractDir);
+  roots.sort((a, b) => b.wavCount - a.wavCount);
+  const detectedRoot = roots.length > 0 ? roots[0].dir : null;
   const sourceDir = detectedRoot || extractDir;
 
   let targetName = baseName;

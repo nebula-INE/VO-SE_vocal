@@ -209,7 +209,7 @@ export default function App() {
       id: 'track_1',
       name: 'Vocal 1',
       type: 'vocal',
-      voicebank: '',
+      voicebank: 'Official Voice (VCV)',
       notes: INITIAL_NOTES,
       volume: 0.8,
       isMuted: false,
@@ -1149,13 +1149,17 @@ export default function App() {
   const fetchVoicebanks = async () => {
     try {
       const res = await fetch('/api/py/voicebanks');
+      if (!res.ok) return;
+      const ct = res.headers.get('content-type');
+      if (!ct || !ct.includes('application/json')) return;
       const data = await res.json();
       if (data.success && Array.isArray(data.voicebanks)) {
         setCustomVoicebanks(data.voicebanks);
         if (data.voicebanks.length > 0) {
-          // If current track has no voicebank or invalid one, auto-select the best available one (preferring richer voicebank like TETO)
+          // If current track has no voicebank or invalid one, select Official Voice (VCV) or best available
+          const official = data.voicebanks.find((v: any) => v.name === 'Official Voice (VCV)');
           const sortedVbs = [...data.voicebanks].sort((a: any, b: any) => (b.aliasCount || 0) - (a.aliasCount || 0));
-          const bestVbName = sortedVbs[0]?.name || data.voicebanks[0].name;
+          const bestVbName = official?.name || sortedVbs[0]?.name || data.voicebanks[0].name;
           setTracks(prev => prev.map(t => {
             if (!t.voicebank || !data.voicebanks.some((v: any) => v.name === t.voicebank)) {
               return { ...t, voicebank: bestVbName };
@@ -1166,8 +1170,8 @@ export default function App() {
           setTracks(prev => prev.map(t => ({ ...t, voicebank: '' })));
         }
       }
-    } catch (e) {
-      console.warn('Failed to load voicebanks:', e);
+    } catch (e: any) {
+      console.warn('Failed to load voicebanks:', e?.message || e);
     }
   };
 
@@ -1229,7 +1233,16 @@ export default function App() {
         if (noteNum) {
           url += `&noteNum=${encodeURIComponent(String(noteNum))}`;
         }
-        const res = await fetch(url);
+        let res = await fetch(url);
+        if (!res.ok && vbName !== 'Official Voice (VCV)') {
+          let fallbackUrl = `/api/py/voicebank-sample?name=${encodeURIComponent('Official Voice (VCV)')}&alias=${encodeURIComponent(alias)}`;
+          if (prevLyric) fallbackUrl += `&prevLyric=${encodeURIComponent(prevLyric)}`;
+          if (noteNum) fallbackUrl += `&noteNum=${encodeURIComponent(String(noteNum))}`;
+          const fallbackRes = await fetch(fallbackUrl);
+          if (fallbackRes.ok) {
+            res = fallbackRes;
+          }
+        }
         if (!res.ok) {
           sampleCacheRef.current.set(cacheKey, null);
           // 診断用: 解決失敗を記録する。ただし「っ」「ッ」（促音）は単独サンプルを
@@ -1783,12 +1796,15 @@ export default function App() {
   const fetchPyStatus = async () => {
     try {
       const res = await fetch('/api/py/status');
+      if (!res.ok) return;
+      const ct = res.headers.get('content-type');
+      if (!ct || !ct.includes('application/json')) return;
       const data = await res.json();
       if (data.success) {
         setPyStatus(data);
       }
-    } catch (e) {
-      console.warn('Backend Py API not responding:', e);
+    } catch (e: any) {
+      console.warn('Backend Py API not responding:', e?.message || e);
     }
   };
 
