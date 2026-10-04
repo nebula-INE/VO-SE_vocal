@@ -73,7 +73,7 @@ struct NoteEvent {
 #if defined(__wasm32__)
 // Emscripten wasm32 uses 4-byte alignment for pointers and scalar members here.
 // Keep the exact compiler-observed ABI locked: NoteEvent is 88 bytes.
-static_assert(sizeof(NoteEvent) == 88, "WASM NoteEvent ABI size changed");
+static_assert(sizeof(NoteEvent) == 104, "WASM NoteEvent ABI size changed");
 static_assert(offsetof(NoteEvent, wav_path) == 0, "WASM NoteEvent wav_path offset changed");
 static_assert(offsetof(NoteEvent, pitch_curve) == 4, "WASM NoteEvent pitch_curve offset changed");
 static_assert(offsetof(NoteEvent, pitch_length) == 8, "WASM NoteEvent pitch_length offset changed");
@@ -85,11 +85,11 @@ static_assert(offsetof(NoteEvent, vibrato_rate_curve) == 44, "WASM NoteEvent vib
 static_assert(offsetof(NoteEvent, vibrato_curve_length) == 52, "WASM NoteEvent vibrato_curve_length offset changed");
 static_assert(offsetof(NoteEvent, portamento_offsets) == 56, "WASM NoteEvent portamento_offsets offset changed");
 static_assert(offsetof(NoteEvent, portamento_length) == 60, "WASM NoteEvent portamento_length offset changed");
-static_assert(offsetof(NoteEvent, intensity) == 48, "WASM NoteEvent intensity offset changed");
-static_assert(offsetof(NoteEvent, modulation) == 56, "WASM NoteEvent modulation offset changed");
-static_assert(offsetof(NoteEvent, start_time_ms) == 64, "WASM NoteEvent start_time_ms offset changed");
-static_assert(offsetof(NoteEvent, preutterance_ms) == 72, "WASM NoteEvent preutterance_ms offset changed");
-static_assert(offsetof(NoteEvent, overlap_ms) == 80, "WASM NoteEvent overlap_ms offset changed");
+static_assert(offsetof(NoteEvent, intensity) == 64, "WASM NoteEvent intensity offset changed");
+static_assert(offsetof(NoteEvent, modulation) == 72, "WASM NoteEvent modulation offset changed");
+static_assert(offsetof(NoteEvent, start_time_ms) == 80, "WASM NoteEvent start_time_ms offset changed");
+static_assert(offsetof(NoteEvent, preutterance_ms) == 88, "WASM NoteEvent preutterance_ms offset changed");
+static_assert(offsetof(NoteEvent, overlap_ms) == 96, "WASM NoteEvent overlap_ms offset changed");
 #endif
 #pragma pack(pop)
 
