@@ -1692,7 +1692,7 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     // 急なピッチベンドまで別のF0へ変形してしまう。特に短いノートでは隣接
     // フレームの混合が「音程がおかしい」「別の音程が混じる」原因になるため、
     // 明示的な pitch_curve をそのまま WORLD へ渡す。
-    // smooth_f0_gaussian() は互換用に残すが、render path では適用しない。
+    // Gaussian smoothing helper is retained for compatibility; render path does not apply it.
 
     // ビブラートカーブが NoteEvent にあれば使用、なければデフォルト (depth=1.0, rate=6Hz)
     // NoteEvent 側に vibrato_depth_curve / vibrato_rate_curve / vibrato_curve_length
