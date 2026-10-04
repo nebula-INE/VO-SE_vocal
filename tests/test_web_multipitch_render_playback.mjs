@@ -107,6 +107,19 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
   } catch (error) { error.message += '\nserver stderr:\n' + stderr; throw error; }
 });
 
+test('Web voicebank resolution trims and NFC-normalizes the requested name', () => {
+  const server = readFileSync('server.js', 'utf8');
+  assert.match(server, /String\(targetName\)\.normalize\('NFC'\)\.trim\(\)/);
+  assert.match(server, /const lowerTarget = normalizedTargetName\.toLowerCase\(\);/);
+});
+
+test('Web sample fetch logs the HTTP failure detail instead of hiding every unresolved sample', () => {
+  const client = readFileSync('src/voseCoreClient.ts', 'utf8');
+  assert.match(client, /サンプル取得失敗 status=/);
+  assert.match(client, /await res\.text\(\)/);
+  assert.match(client, /detail=/);
+});
+
 test('Web prefix.map two-column entries use the suffix like Desktop', () => {
   const server = readFileSync('server.js', 'utf8');
   assert.match(server, /if \(cols\.length >= 3\)/);
