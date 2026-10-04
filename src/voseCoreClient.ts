@@ -104,7 +104,19 @@ async function fetchRawSample(
     if (noteNum !== undefined) url += `&noteNum=${encodeURIComponent(String(noteNum))}`;
 
     const res = await fetch(url);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      let detail = '';
+      try {
+        detail = (await res.text()).slice(0, 240).replace(/\s+/g, ' ');
+      } catch (_) {
+        // The status code itself is enough to diagnose transport failures.
+      }
+      console.warn(
+        `[voseCoreClient] サンプル取得失敗 status=${res.status} alias='${alias}' ` +
+        `prevLyric='${prevLyric || ''}' noteNum=${noteNum ?? ''} detail='${detail}'`
+      );
+      return null;
+    }
 
     const baseMidi = parseFloat(res.headers.get('X-Sample-Base-Midi') || '60');
     // oto.iniの値は生のまま(符号・単位ms)渡す。map_time()側で
