@@ -1411,7 +1411,10 @@ function ensureDefaultVoicebanks() {
     if (!fs.existsSync(voicebanksDir)) {
       fs.mkdirSync(voicebanksDir, { recursive: true });
     }
-    const defaultName = 'Standard Japanese CV';
+    // The Web UI's built-in vocal track uses this exact voicebank name.
+    // Keep the legacy "Standard Japanese CV" directory compatible below so
+    // existing installations do not lose their previously generated bank.
+    const defaultName = 'Official Voice (VCV)';
     const targetDir = path.join(voicebanksDir, defaultName);
     const otoPath = path.join(targetDir, 'oto.ini');
     let needsRebuild = !fs.existsSync(targetDir) || !fs.existsSync(otoPath);
@@ -1429,6 +1432,8 @@ function ensureDefaultVoicebanks() {
     if (needsRebuild) {
       createDefaultVoicebank(defaultName, true);
     }
+    // Legacy installations are handled by resolveVoicebankPath() when the
+    // Web UI requests the new default name and only the old directory exists.
   } catch (e) {
     console.warn('[VO-SE] ensureDefaultVoicebanks failed:', e && e.message ? e.message : e);
   }
@@ -1640,6 +1645,19 @@ function resolveVoicebankPath(targetName) {
 
     if (hasRequestedName) {
       const lowerTarget = normalizedTargetName.toLowerCase();
+
+      // Compatibility with older builds that generated "Standard Japanese CV".
+      if (lowerTarget === 'official voice (vcv)') {
+        const legacyDefault = dirs.find(d => d.toLowerCase() === 'standard japanese cv');
+        if (legacyDefault) {
+          console.warn(
+            '[VO-SE] resolveVoicebankPath: using legacy default voicebank "' +
+            legacyDefault + '" for requested "' + normalizedTargetName + '".'
+          );
+          return { resolvedName: legacyDefault, resolvedPath: path.join(baseDir, legacyDefault) };
+        }
+      }
+
       const ciMatch = dirs.find(d => d.toLowerCase() === lowerTarget);
       if (ciMatch) {
         return { resolvedName: ciMatch, resolvedPath: path.join(baseDir, ciMatch) };
