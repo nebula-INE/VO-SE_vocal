@@ -275,7 +275,7 @@ test('Web normalized alias lookup survives the registry cache and separator norm
   await writeFile(join(nestedDir, 'a.wav'), makeWav(64));
   await writeFile(
     join(nestedDir, 'oto.ini'),
-    'a.wav=あ,0,0,0,0,0\\n',
+    'a.wav=あ,0,0,0,0,0\n',
     'utf8'
   );
 
