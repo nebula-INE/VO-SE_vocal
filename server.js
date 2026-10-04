@@ -89,6 +89,32 @@ function decodeTextBuffer(buffer) {
   }
 }
 
+// oto.ini is commonly UTF-8 or CP932/Shift-JIS, but some voicebanks are
+// distributed as UTF-16LE/BE. Detect BOMs first and also reject NUL-heavy
+// mis-decoding so an otherwise valid voicebank does not become aliasCount=0.
+function decodeOtoIniBuffer(buffer) {
+  if (!buffer || buffer.length === 0) return '';
+
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(buffer);
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(buffer);
+  }
+
+  const text = decodeTextBuffer(buffer);
+  const nulCount = (text.match(/\u0000/g) || []).length;
+  if (nulCount === 0) return text;
+
+  // If decoding produced embedded NULs, retry as UTF-16 even without a BOM.
+  // UTAU text files are overwhelmingly little-endian on Windows.
+  try {
+    const utf16le = new TextDecoder('utf-16le').decode(buffer);
+    if (utf16le.includes('=') && !utf16le.includes('\uFFFD')) return utf16le;
+  } catch (e) {}
+  return text.replace(/\u0000/g, '');
+}
+
 // ============================================================
 // oto.ini Parser
 // ============================================================
@@ -156,8 +182,8 @@ async function parseOtoIniFull(dirPath) {
 
       try {
         const buf = await fs.promises.readFile(fullPath);
-        const content = decodeTextBuffer(buf);
-        const lines = content.split(/\r?\n/);
+        const content = decodeOtoIniBuffer(buf);
+        const lines = content.split(/\r\n|\n|\r/);
 
         let linesSinceYield = 0;
 
@@ -248,7 +274,12 @@ async function parseOtoIniFull(dirPath) {
           }
         }
       } catch (err) {
-        // Ignore bad lines safely
+        // Do not let one malformed oto.ini abort the whole voicebank index.
+        // Keep a diagnostic so an aliasCount=0 failure is distinguishable from
+        // a genuinely empty voicebank.
+        console.warn(
+          `[VO-SE] parseOtoIniFull: failed to parse oto.ini="${fullPath}" error="${err?.message || err}"`
+        );
       }
 
       // ★複数音源フォルダをまとめて置いているケース（oto.iniファイルが多数）でもyield
