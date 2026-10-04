@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 
@@ -9,8 +10,9 @@ from modules.audio.vo_se_engine import VO_SE_Engine
 def test_empty_pitch_curve_uses_note_base_frequency():
     note = SimpleNamespace(note_number=60, start_time=0.0, duration=0.5)
 
+    engine = cast(VO_SE_Engine, SimpleNamespace(aural_ai=None))
     curve = VO_SE_Engine._get_sampled_curve(
-        object(), [], note, 5, is_pitch=True
+        engine, [], note, 5, is_pitch=True
     )
 
     expected = 440.0 * (2.0 ** ((60.0 - 69.0) / 12.0))
@@ -25,8 +27,9 @@ def test_explicit_pitch_curve_is_still_interpreted_as_semitone_offset():
         SimpleNamespace(time=0.5, value=12.0),
     ]
 
+    engine = cast(VO_SE_Engine, SimpleNamespace(aural_ai=None))
     curve = VO_SE_Engine._get_sampled_curve(
-        object(), events, note, 3, is_pitch=True
+        engine, events, note, 3, is_pitch=True
     )
 
     assert np.allclose(
