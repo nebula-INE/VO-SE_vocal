@@ -429,7 +429,7 @@ export async function renderStudioOffline(
     if (!probe.ok) {
       let detail = '';
       try {
-        detail = (await probe.text()).slice(0, 500).replace(/\\s+/g, ' ');
+        detail = (await probe.text()).slice(0, 500).replace(/\s+/g, ' ');
       } catch (_) {}
       throw new Error(
         `音源解決に失敗しました: voicebank="${voicebank}" alias="${firstSampleEntry.alias}" ` +
