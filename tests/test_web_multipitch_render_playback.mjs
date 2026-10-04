@@ -275,6 +275,42 @@ test('Web server keeps normalized alias candidates indexed for nested oto.ini fo
   assert.match(server, /prefixedLookupKey/);
 });
 
+test('Web parser accepts UTF-16 oto.ini voicebanks', async (t) => {
+  const voicebank = '__test_utf16_oto_' + process.pid;
+  const voiceDir = join(VOICEBANKS, voicebank);
+  await mkdir(voiceDir, { recursive: true });
+  const expectedWav = makeWav(64);
+  await writeFile(join(voiceDir, 'a.wav'), expectedWav);
+  const otoText = 'a.wav=あ,0,0,0,0,0\\r\\n';
+  await writeFile(
+    join(voiceDir, 'oto.ini'),
+    Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(otoText, 'utf16le')])
+  );
+
+  const port = 35600 + (process.pid % 500);
+  const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  await waitForServer(child, port);
+  const sample = await request(
+    port,
+    'GET',
+    '/api/py/voicebank-sample?name=' +
+      encodeURIComponent(voicebank) +
+      '&alias=' +
+      encodeURIComponent('あ')
+  );
+  assert.equal(sample.status, 200, sample.body.toString());
+  assert.deepEqual(sample.body, expectedWav);
+});
+
 test('Web normalized alias lookup survives the registry cache and separator normalization', async (t) => {
   const voicebank = '__test_registry_alias_lookup_' + process.pid;
   const voiceDir = join(VOICEBANKS, voicebank);
