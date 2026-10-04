@@ -1764,13 +1764,50 @@ app.get('/api/py/voicebank-alias-info', async (req, res) => {
   const { resolvedName, resolvedPath } = resolved;
   const indexed = await vbRegistry.getOrIndex(resolvedName, resolvedPath);
   
-  let entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
-  
-  if (entry) {
-    return res.json({ success: true, entry });
-  } else {
-    return res.status(404).json({ success: false, error: 'Alias not found' });
+  const entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
+  let wavFile = entry ? entry.wav_path : null;
+  if (wavFile && !fs.existsSync(wavFile) && entry.filename) {
+    wavFile = resolveWavFilePath(path.dirname(wavFile), entry.filename);
   }
+
+  if (!entry) {
+    return res.status(404).json({
+      success: false,
+      error: 'Alias not found',
+      voicebank: resolvedName,
+      requestedAlias: String(alias),
+      prevLyric: String(prevLyric || ''),
+      noteNum: noteNum == null ? null : Number(noteNum),
+      indexedEntryCount: Array.isArray(indexed.entries) ? indexed.entries.length : 0
+    });
+  }
+
+  if (!wavFile || !fs.existsSync(wavFile)) {
+    return res.status(404).json({
+      success: false,
+      error: 'Alias resolved but WAV file is missing',
+      voicebank: resolvedName,
+      requestedAlias: String(alias),
+      matchedAlias: String(entry.alias || alias),
+      filename: String(entry.filename || ''),
+      wavPath: String(entry.wav_path || ''),
+      resolvedWavPath: wavFile || null
+    });
+  }
+
+  const baseMidi = detectWavBaseMidi(wavFile, entry.alias, entry.filename);
+  return res.json({
+    success: true,
+    voicebank: resolvedName,
+    requestedAlias: String(alias),
+    matchedAlias: String(entry.alias || alias),
+    prevLyric: String(prevLyric || ''),
+    noteNum: noteNum == null ? null : Number(noteNum),
+    filename: String(entry.filename || ''),
+    wavPath: wavFile,
+    baseMidi,
+    entry
+  });
 });
 
 app.get('/api/py/voicebank-sample', async (req, res) => {
