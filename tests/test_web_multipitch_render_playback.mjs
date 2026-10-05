@@ -380,7 +380,8 @@ test('WASM worker loader explicitly binds invoke_ilj', () => {
 
 test('WASM worker fetches the engine without reusing a stale browser cache entry', () => {
   const worker = readFileSync('src/voseCoreWorker.ts', 'utf8');
-  assert.match(worker, /fetch\('\/wasm\/vose_core\.wasm',\s*\{\s*cache:\s*'no-store'/);
+  assert.match(worker, /const wasmUrl = \`\/wasm\/vose_core\.wasm\?cacheBust=\$\{Date\.now\(\)\}\`/);
+  assert.match(worker, /fetch\(wasmUrl,\s*\{\s*cache:\s*'no-store'/);
 });
 
 test('WASM render does not silently fall back to Web Audio', () => {
