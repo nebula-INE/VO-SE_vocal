@@ -58,6 +58,25 @@ jobs:
           grep -q "invoke_ilj:invoke_ilj," build/wasm/vose_core.js
           echo "Required env.invoke_ilj bridge is explicitly bound."
 
+      - name: Verify WASM import contract against generated loader
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const wasm = readFileSync('build/wasm/vose_core.wasm');
+          const loader = readFileSync('build/wasm/vose_core.js', 'utf8');
+          const module = new WebAssembly.Module(wasm);
+          const imports = WebAssembly.Module.imports(module);
+          const invokeImports = imports
+            .filter((entry) => entry.module === 'env' && entry.name.startsWith('invoke_'))
+            .map((entry) => entry.name)
+            .sort();
+          console.log('Generated WASM invoke imports:', invokeImports.join(', '));
+          if (invokeImports.includes('invoke_ilj') && !loader.includes('invoke_ilj:invoke_ilj')) {
+            throw new Error('WASM requires env.invoke_ilj but generated loader does not bind invoke_ilj');
+          }
+          console.log('WASM import contract is compatible with the generated loader.');
+          NODE
+
       - name: Verify required WebAssembly exports
         run: |
           set -eu
