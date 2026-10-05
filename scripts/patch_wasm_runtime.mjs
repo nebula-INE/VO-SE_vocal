@@ -14,12 +14,12 @@ if (!source.includes('function invoke_ilj(')) {
   source = source.replace(marker, helper + ' ' + marker);
 }
 
-if (!source.includes('invoke_ilj:invoke_ilj')) {
-  const importMarker = 'invoke_diii:invoke_diii,';
+if (!source.includes('invoke_ilj,')) {
+  const importMarker = 'invoke_diii,';
   if (!source.includes(importMarker)) {
     throw new Error('Emscripten wasmImports invoke list marker not found');
   }
-  source = source.replace(importMarker, importMarker + 'invoke_ilj:invoke_ilj,');
+  source = source.replace(importMarker, importMarker + 'invoke_ilj,');
 }
 
 fs.writeFileSync(file, source);
