@@ -536,12 +536,17 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       (self as unknown as Worker).postMessage(resp);
     }, 'vi');
 
+    console.log('[voseCoreWorker] execute_render_cancelable START request=' + requestId +
+      ' notes=' + notes.length + ' samples=' + samples.length + ' mode=' + modeFlag);
+    const renderStartedAt = performance.now();
     mod.ccall(
       'execute_render_cancelable',
       null,
       ['number', 'number', 'string', 'number', 'number', 'number'],
       [notesPtr, notes.length, outputPath, modeFlag, progressFnPtr, 0] // cancel_cb=0(nullptr)=キャンセル無し
     );
+    console.log('[voseCoreWorker] execute_render_cancelable END request=' + requestId +
+      ' elapsedMs=' + Math.round(performance.now() - renderStartedAt));
 
     let wavBytes: Uint8Array;
     try {
