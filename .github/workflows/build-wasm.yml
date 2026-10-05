@@ -83,6 +83,7 @@ jobs:
           set -eu
           mkdir -p public/wasm
           cp build/wasm/vose_core.js public/wasm/vose_core.js
+          cp build/wasm/vose_core.js src/wasm/vose_core.js
           cp build/wasm/vose_core.wasm public/wasm/vose_core.wasm
 
           git config user.name "github-actions[bot]"
