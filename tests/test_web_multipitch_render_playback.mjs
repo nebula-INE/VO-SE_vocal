@@ -117,6 +117,11 @@ test('Web sample resolution never falls back to an unrelated bundled voicebank',
   assert.doesNotMatch(coreClient, /fallbackUrl.*Official Voice/s);
 });
 
+test('Server treats Japanese small tsu as a timing rest', () => {
+  const server = readFileSync('server.js', 'utf8');
+  assert.match(server, /REST_PATTERNS = \[[^\]]*'っ', 'ッ'/);
+});
+
 test('Japanese small tsu is treated as a timing rest instead of a missing sample', () => {
   const engine = readFileSync('src/wasmEngine.ts', 'utf8');
   const app = readFileSync('src/App.tsx', 'utf8');
