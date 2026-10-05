@@ -44,7 +44,7 @@ const CORE_SAMPLE_RATE = 44100;
 const PITCH_FRAME_PERIOD_MS = 5;
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', 'っ', 'ッ', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
 ]);
 
 function isRest(lyric?: string): boolean {
@@ -252,11 +252,12 @@ function getWorker(): Worker {
   return worker;
 }
 
-export let lastUsedEngine: 'wasm' | 'js-fallback' | null = null;
+export let lastUsedEngine: 'wasm' | null = null;
 
 /**
  * C++ WebAssembly (vose_core.wasm / WORLDボコーダー) 専用レンダリング関数。
- * 万が一WASM環境で問題が発生した場合も、Web Audioオフラインエンジンへ安全にフォールバック。
+ * WASMが失敗した場合は別エンジンへ暗黙に切り替えず、呼び出し側へ失敗を返す。
+ * これにより「WASMで合成したつもりがJSフォールバックだった」という状態を防ぐ。
  */
 export async function renderStudioCore(
   notes: any[],
@@ -265,23 +266,26 @@ export async function renderStudioCore(
   onProgress?: (pct: number) => void
 ): Promise<string | null> {
   if (!notes || notes.length === 0) return null;
+  if (!voicebank || !voicebank.trim()) {
+    lastUsedEngine = null;
+    throw new Error('音源が選択されていません。先に音源を選択してください。');
+  }
 
   console.log('[voseCoreClient] 🚀 C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) でレンダリングを開始します...');
   try {
     const result = await renderViaCore(notes, tempo, voicebank, onProgress);
-    if (result) {
-      lastUsedEngine = 'wasm';
-      console.log('[voseCoreClient] ✅ C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) での合成が正常に完了しました！');
-      return result;
+    if (!result) {
+      lastUsedEngine = null;
+      throw new Error('C++ WebAssembly エンジンがWAVを生成しませんでした。');
     }
+    lastUsedEngine = 'wasm';
+    console.log('[voseCoreClient] ✅ C++ WebAssembly エンジン (vose_core.wasm / WORLDボコーダー) での合成が正常に完了しました！');
+    return result;
   } catch (err: any) {
-    console.warn('[voseCoreClient] ⚠️ C++ WebAssembly (vose_core.wasm) レンダリングが失敗したため、Web Audio オフラインエンジンへフォールバックします:', err);
+    lastUsedEngine = null;
+    const message = err?.message || String(err);
+    throw new Error('C++ WebAssembly エンジンでの合成に失敗しました。JSフォールバックは使用しません: ' + message);
   }
-
-  // Graceful fallback to wasmEngine.ts renderStudioOffline
-  console.log('[voseCoreClient] 🔄 Web Audio オフラインエンジンでレンダリングを実行中...');
-  lastUsedEngine = 'js-fallback';
-  return await renderStudioOffline(notes, tempo, voicebank, onProgress);
 }
 
 async function renderViaCore(
@@ -428,10 +432,23 @@ async function renderViaCore(
   onProgress?.(5);
 
   // 3. サンプルを並行バッチで取得
-  // VCVを優先し、直接VC aliasが存在する場合だけCVVC遷移候補として取得する。
+  // VCVを優先し、VC遷移候補はVCV形式を持つ音源だけで生成する。
+  // CV/単独音源へ存在しない「a k」等を大量に問い合わせない。
+  let supportsVcTransitions = false;
+  try {
+    const response = await fetch(`/api/py/voicebanks?name=${encodeURIComponent(voicebank)}`);
+    if (response.ok) {
+      const selected = await response.json() as { hasVcv?: boolean };
+      supportsVcTransitions = selected?.hasVcv === true;
+    }
+  } catch (err) {
+    console.warn('[voseCoreClient] 音源形式の取得に失敗したためVC遷移候補を無効化します:', err);
+  }
+
   const cvvcRequests = new Map<string, { alias: string; noteNum: number }>();
-  for (let i = 1; i < sortedNotes.length; i++) {
-    const prev = sortedNotes[i - 1];
+  if (sortedNotes.length && supportsVcTransitions) {
+    for (let i = 1; i < sortedNotes.length; i++) {
+      const prev = sortedNotes[i - 1];
     const n = sortedNotes[i];
     if (isRest(prev.lyric) || isRest(n.lyric)) continue;
     const gap = (n.tick || 0) - ((prev.tick || 0) + (prev.length || 480));
@@ -441,7 +458,8 @@ async function renderViaCore(
     if (!prevVowel || !consonant) continue;
     const alias = prevVowel + ' ' + consonant;
     const key = voicebank + ':' + alias + ':DIRECT:' + (n.noteNum || 60);
-    cvvcRequests.set(key, { alias, noteNum: n.noteNum || 60 });
+      cvvcRequests.set(key, { alias, noteNum: n.noteNum || 60 });
+    }
   }
   const sampleEntries = Array.from(uniqueSampleMap.entries());
   const cvvcSampleEntries = Array.from(cvvcRequests.entries());
