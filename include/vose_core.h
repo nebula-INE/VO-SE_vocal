@@ -125,6 +125,7 @@ extern "C" {
     
     // 3. エンジン管理
     DLLEXPORT float get_engine_version(void);
+    DLLEXPORT const char* get_engine_build_id(void);
     DLLEXPORT void clear_engine_cache(void);
 
     // 4. BigVGAN ボコーダー（Pro版のみ有効。無印版ビルドでは呼んでも無視される）
