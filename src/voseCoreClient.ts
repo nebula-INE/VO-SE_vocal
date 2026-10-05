@@ -666,7 +666,15 @@ async function renderViaCore(
   const timeoutPromise = new Promise<never>((_, reject) => {
     timerId = setTimeout(() => {
       pending.delete(requestId);
-      reject(new Error('WASMレンダリング処理がタイムアウトしました'));
+      // C++ WASMの実行はWorker内で同期的に走るため、タイムアウト後も
+      // Workerを残すと、終了したはずのRenderが裏でCPUを占有し続ける。
+      // ここではWorkerごと破棄し、次回Renderは新しいWASM Workerから開始する。
+      try { worker?.terminate(); } catch (_) {}
+      worker = null;
+      reject(new Error(
+        'WASMレンダリング処理がタイムアウトしました (' + (timeoutMs / 1000) +
+        '秒)。WASM Workerを破棄したため、次回Renderは新しいWorkerで開始します。'
+      ));
     }, timeoutMs);
   });
 
