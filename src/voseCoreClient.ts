@@ -103,16 +103,7 @@ async function fetchRawSample(
     if (prevLyric) url += `&prevLyric=${encodeURIComponent(prevLyric)}`;
     if (noteNum !== undefined) url += `&noteNum=${encodeURIComponent(String(noteNum))}`;
 
-    let res = await fetch(url);
-    if (!res.ok && voicebank !== 'Official Voice (VCV)') {
-      let fallbackUrl = `/api/py/voicebank-sample?name=${encodeURIComponent('Official Voice (VCV)')}&alias=${encodeURIComponent(alias)}`;
-      if (prevLyric) fallbackUrl += `&prevLyric=${encodeURIComponent(prevLyric)}`;
-      if (noteNum !== undefined) fallbackUrl += `&noteNum=${encodeURIComponent(String(noteNum))}`;
-      const fallbackRes = await fetch(fallbackUrl);
-      if (fallbackRes.ok) {
-        res = fallbackRes;
-      }
-    }
+    const res = await fetch(url);
     if (!res.ok) {
       let detail = '';
       try {

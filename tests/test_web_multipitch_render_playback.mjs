@@ -111,8 +111,10 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
 test('Web sample resolution never falls back to an unrelated bundled voicebank', () => {
   const engine = readFileSync('src/wasmEngine.ts', 'utf8');
   const app = readFileSync('src/App.tsx', 'utf8');
+  const coreClient = readFileSync('src/voseCoreClient.ts', 'utf8');
   assert.doesNotMatch(engine, /fallbackUrl.*Official Voice/s);
   assert.doesNotMatch(app, /fallbackUrl.*Official Voice/s);
+  assert.doesNotMatch(coreClient, /fallbackUrl.*Official Voice/s);
 });
 
 test('Japanese small tsu is treated as a timing rest instead of a missing sample', () => {
