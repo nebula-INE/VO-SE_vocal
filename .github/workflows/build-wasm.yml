@@ -55,8 +55,8 @@ jobs:
       - name: Patch Emscripten runtime imports for browser compatibility
         run: |
           node scripts/patch_wasm_runtime.mjs build/wasm/vose_core.js
-          grep -q "invoke_ilj," build/wasm/vose_core.js
-          echo "Required env.invoke_ilj bridge is present."
+          grep -q "invoke_ilj:invoke_ilj," build/wasm/vose_core.js
+          echo "Required env.invoke_ilj bridge is explicitly bound."
 
       - name: Verify required WebAssembly exports
         run: |
