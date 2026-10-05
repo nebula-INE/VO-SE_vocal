@@ -202,6 +202,10 @@ extern "C" void set_oto_data(const OtoEntry* entries, int count) {
 
 struct EmbeddedVoice {
     std::string         path;
+    // Analysis is a property of the actual PCM waveform, not the temporary
+    // NoteEvent/sample key. Web renders may register the same WAV under
+    // different keys (for example because noteNum differs for multipitch).
+    std::string         analysis_key;
     std::vector<double> waveform;
     int                 fs;
     bool                file_backed = false;
@@ -601,6 +605,35 @@ static double parse_pitch_tag_hz(const std::string& path)
 }
 
 // ============================================================
+// Analysis identity
+// ============================================================
+// WORLD analysis depends only on PCM + sample rate. Web renders can register
+// the same decoded WAV under different temporary keys, so the analysis cache
+// must not be keyed by those temporary names.
+static std::string make_analysis_key(const EmbeddedVoice& ev)
+{
+    uint64_t hash = 0xcbf29ce484222325ULL;
+
+    auto mix_bytes = [&](const void* data, size_t size) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (size_t i = 0; i < size; ++i) {
+            hash ^= static_cast<uint64_t>(bytes[i]);
+            hash *= 0x100000001b3ULL;
+        }
+    };
+
+    mix_bytes(&ev.fs, sizeof(ev.fs));
+    const uint64_t sample_count = static_cast<uint64_t>(ev.waveform.size());
+    mix_bytes(&sample_count, sizeof(sample_count));
+    if (!ev.waveform.empty())
+        mix_bytes(ev.waveform.data(), ev.waveform.size() * sizeof(ev.waveform[0]));
+
+    std::ostringstream ss;
+    ss << "pcm_" << std::hex << std::setw(16) << std::setfill('0') << hash;
+    return ss.str();
+}
+
+// ============================================================
 // find_voice_ref
 // ============================================================
 
@@ -649,6 +682,7 @@ std::shared_ptr<const EmbeddedVoice> find_voice_ref(const char* key)
             int nbit = 0;
             ev->waveform.resize(audio_len);
             wavread(key, &ev->fs, &nbit, ev->waveform.data());
+            ev->analysis_key = make_analysis_key(*ev);
 
             g_voice_db.put(cache_key, ev);
             return ev;
@@ -873,7 +907,9 @@ std::shared_ptr<const AnalysisCache>
 get_or_analyze(std::shared_ptr<const EmbeddedVoice> ev_sp, int fft_size, int spec_bins)
 {
     if (!ev_sp) return nullptr;
-    const std::string& key = ev_sp->path;
+    const std::string key = ev_sp->analysis_key.empty()
+        ? ev_sp->path
+        : ev_sp->analysis_key;
 
     // 1. メモリキャッシュをチェック（ロック不要の高速パス。CacheStore内部でロック）
     {
@@ -1802,10 +1838,11 @@ DLLEXPORT void load_embedded_resource(const char* phoneme,
     for (int i = 0; i < sample_count; ++i)
         ev->waveform[i] = static_cast<double>(raw_data[i]) * kInv32768;
 
-    VoseUniqueLock clock(g_analysis_cache_mutex);
-    // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
-    g_analysis_cache.erase(phoneme);
     ev->path = phoneme;
+    ev->analysis_key = make_analysis_key(*ev);
+
+    // Keep the analysis cache content-addressed. Re-registering the same PCM
+    // under another temporary voice key should intentionally reuse the analysis.
     g_voice_db.put(phoneme, std::move(ev));
 }
 DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
@@ -1823,10 +1860,11 @@ DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
         ev->waveform[i] = std::isfinite(sample) ? clamp(sample, -1.0, 1.0) : 0.0;
     }
 
-    VoseUniqueLock clock(g_analysis_cache_mutex);
-    // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
-    g_analysis_cache.erase(phoneme);
     ev->path = phoneme;
+    ev->analysis_key = make_analysis_key(*ev);
+
+    // Keep the analysis cache content-addressed. Re-registering the same PCM
+    // under another temporary voice key should intentionally reuse the analysis.
     g_voice_db.put(phoneme, std::move(ev));
 }
 
