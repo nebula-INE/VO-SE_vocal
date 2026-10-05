@@ -1461,7 +1461,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   if (!rawTrim) return null;
 
   // Strict check for rest notes - rests must NEVER resolve to audio samples
-  const REST_PATTERNS = ['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', ' ', '', '　', '休', '休符', '・', '-', 'ー', '~', 'null'];
+  const REST_PATTERNS = ['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', 'っ', 'ッ', ' ', '', '　', '休', '休符', '・', '-', 'ー', '~', 'null'];
   const rawLow = rawTrim.toLowerCase();
   if (REST_PATTERNS.includes(rawLow) || /^br[0-9]*$/i.test(rawLow) || /^息[0-9]*$/i.test(rawLow) || /^吸[0-9]*$/i.test(rawLow) || /^_?(br|息|吸)[0-9]*$/i.test(rawLow)) {
     return null;
