@@ -2710,7 +2710,16 @@ DLLEXPORT void set_vocal_timeline(const VoseFrame* frames, int frame_count) {
 // エンジンのバージョン番号を返す
 DLLEXPORT float get_engine_version(void)
 {
-    return 1.0f; // 実際のバージョン番号に置き換えてください
+    return 1.0f;
+}
+
+#ifndef VOSE_BUILD_ID
+#define VOSE_BUILD_ID "unknown"
+#endif
+
+DLLEXPORT const char* get_engine_build_id(void)
+{
+    return VOSE_BUILD_ID;
 }
 
 // 音声データベース／解析キャッシュをクリアする
