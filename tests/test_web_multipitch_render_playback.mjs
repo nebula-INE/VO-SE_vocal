@@ -386,3 +386,12 @@ test('WASM client treats Japanese small tsu as a timing rest', () => {
   const client = readFileSync('src/voseCoreClient.ts', 'utf8');
   assert.match(client, /REST_LYRICS_SET[\\s\\S]*?'っ', 'ッ'/);
 });
+
+test('WASM analysis cache is keyed by PCM content rather than temporary sample keys', () => {
+  const source = readFileSync('src/vose_core.cpp', 'utf8');
+  assert.match(source, /std::string\s+analysis_key;/);
+  assert.match(source, /make_analysis_key\(const EmbeddedVoice& ev\)/);
+  assert.match(source, /ev->analysis_key = make_analysis_key\(\*ev\);/);
+  assert.match(source, /const std::string key = ev_sp->analysis_key/);
+  assert.doesNotMatch(source, /g_analysis_cache\.erase\(phoneme\)/);
+});
