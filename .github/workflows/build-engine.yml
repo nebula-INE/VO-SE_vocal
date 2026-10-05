@@ -113,7 +113,7 @@ jobs:
             # Git Bash から cl.exe を直接呼ぶと MSYS の引数変換が
             # /Fe:/I や Windows パスを壊す場合があるため、cmd.exe に
             # 1 行の完全なコマンドとして渡す。
-            cmd.exe //d /s /c "cl.exe /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES /Fe:bin\\vose_core.dll src\\vose_core.cpp src\\vose_streaming_final.cpp src\\world\\cheaptrick.cpp src\\world\\common.cpp src\\world\\d4c.cpp src\\world\\dio.cpp src\\world\\fft.cpp src\\world\\harvest.cpp src\\world\\matlabfunctions.cpp src\\world\\stonemask.cpp src\\world\\synthesis.cpp src\\world\\audioio.cpp /I src /I include /I src\\world /link"
+            MSYS_NO_PATHCONV=1 cmd.exe //d /s /c "cl.exe /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES /Fe:bin\\vose_core.dll src\\vose_core.cpp src\\vose_streaming_final.cpp src\\world\\cheaptrick.cpp src\\world\\common.cpp src\\world\\d4c.cpp src\\world\\dio.cpp src\\world\\fft.cpp src\\world\\harvest.cpp src\\world\\matlabfunctions.cpp src\\world\\stonemask.cpp src\\world\\synthesis.cpp src\\world\\audioio.cpp /I src /I include /I src\\world /link"
           elif [ "${{ matrix.os }}" = "macos-latest" ]; then
             mkdir -p build/macos-world
             for f in src/world/*.cpp; do
