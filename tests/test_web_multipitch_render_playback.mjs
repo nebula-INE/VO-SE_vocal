@@ -107,6 +107,21 @@ test('Web multi-pitch render and playback sample stay on the same WAV', async (t
   } catch (error) { error.message += '\nserver stderr:\n' + stderr; throw error; }
 });
 
+
+test('Web sample resolution never falls back to an unrelated bundled voicebank', () => {
+  const engine = readFileSync('src/wasmEngine.ts', 'utf8');
+  const app = readFileSync('src/App.tsx', 'utf8');
+  assert.doesNotMatch(engine, /fallbackUrl.*Official Voice/s);
+  assert.doesNotMatch(app, /fallbackUrl.*Official Voice/s);
+});
+
+test('Japanese small tsu is treated as a timing rest instead of a missing sample', () => {
+  const engine = readFileSync('src/wasmEngine.ts', 'utf8');
+  const app = readFileSync('src/App.tsx', 'utf8');
+  assert.match(engine, /REST_LYRICS_SET[\s\S]*?'っ', 'ッ'/);
+  assert.match(app, /REST_LYRICS_SET[\s\S]*?'っ', 'ッ'/);
+});
+
 test('Web sample endpoint exposes voicebank and alias context on lookup failure', () => {
   const server = readFileSync('server.js', 'utf8');
   assert.match(server, /voicebank-sample: voicebank not found requested=/);

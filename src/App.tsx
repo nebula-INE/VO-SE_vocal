@@ -87,7 +87,7 @@ interface PyStatus {
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-const REST_LYRICS_SET = new Set(['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null']);
+const REST_LYRICS_SET = new Set(['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null', 'っ', 'ッ']);
 export const isRestLyric = (lyric?: string): boolean => {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
@@ -1233,16 +1233,7 @@ export default function App() {
         if (noteNum) {
           url += `&noteNum=${encodeURIComponent(String(noteNum))}`;
         }
-        let res = await fetch(url);
-        if (!res.ok && vbName !== 'Official Voice (VCV)') {
-          let fallbackUrl = `/api/py/voicebank-sample?name=${encodeURIComponent('Official Voice (VCV)')}&alias=${encodeURIComponent(alias)}`;
-          if (prevLyric) fallbackUrl += `&prevLyric=${encodeURIComponent(prevLyric)}`;
-          if (noteNum) fallbackUrl += `&noteNum=${encodeURIComponent(String(noteNum))}`;
-          const fallbackRes = await fetch(fallbackUrl);
-          if (fallbackRes.ok) {
-            res = fallbackRes;
-          }
-        }
+        const res = await fetch(url);
         if (!res.ok) {
           sampleCacheRef.current.set(cacheKey, null);
           // 診断用: 解決失敗を記録する。ただし「っ」「ッ」（促音）は単独サンプルを

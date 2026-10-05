@@ -42,7 +42,7 @@ export interface FetchedSample {
 }
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null', 'っ', 'ッ'
 ]);
 
 export function isRest(lyric?: string): boolean {
@@ -82,16 +82,7 @@ async function fetchSampleWithMeta(
       if (prevLyric) url += `&prevLyric=${encodeURIComponent(prevLyric)}`;
       if (noteNum !== undefined) url += `&noteNum=${encodeURIComponent(String(noteNum))}`;
 
-      let res = await fetch(url);
-      if (!res.ok && voicebank !== 'Official Voice (VCV)') {
-        let fallbackUrl = `/api/py/voicebank-sample?name=${encodeURIComponent('Official Voice (VCV)')}&alias=${encodeURIComponent(alias)}`;
-        if (prevLyric) fallbackUrl += `&prevLyric=${encodeURIComponent(prevLyric)}`;
-        if (noteNum !== undefined) fallbackUrl += `&noteNum=${encodeURIComponent(String(noteNum))}`;
-        const fallbackRes = await fetch(fallbackUrl);
-        if (fallbackRes.ok) {
-          res = fallbackRes;
-        }
-      }
+      const res = await fetch(url);
       if (!res.ok) {
         let detail = '';
         try {
