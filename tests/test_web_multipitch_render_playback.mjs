@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
@@ -217,13 +217,11 @@ test('Web multi-pitch aliases with identical oto aliases select the closest pitc
   }
 });
 
-test('Web default voicebank name matches the UI default and preserves legacy compatibility', () => {
-  const server = readFileSync('server.js', 'utf8');
-  assert.match(server, /const defaultName = 'Official Voice \(VCV\)'/);
-  assert.match(server, /official voice \(vcv\)/i);
-  assert.match(server, /standard japanese cv/i);
-  assert.match(server, /legacyDefault/);
+test('Web starts without bundled default voicebanks', () => {
+  assert.equal(existsSync(join(process.cwd(), 'temp', 'voicebanks', 'Standard Japanese CV')), false);
+  assert.equal(existsSync(join(process.cwd(), 'temp', 'voicebanks', 'TETO-tandoku-100619')), false);
 });
+
 
 test('Web alias resolution normalizes path separators and whitespace without losing pitch selection', async (t) => {
   const voicebank = '__test_alias_normalization_' + process.pid;

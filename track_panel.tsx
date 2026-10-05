@@ -4,7 +4,7 @@
                     <span className="text-[10px] text-slate-400 font-bold tracking-wider">TRACKS</span>
                     <div className="flex space-x-1">
                       <button 
-                        onClick={() => setTracks(prev => [...prev, { id: `track_${Date.now()}`, name: `Vocal ${prev.length + 1}`, type: 'vocal', voicebank: 'Official Voice (VCV)', notes: [], volume: 0.8, isMuted: false, isSolo: false }])}
+                        onClick={() => setTracks(prev => [...prev, { id: `track_${Date.now()}`, name: `Vocal ${prev.length + 1}`, type: 'vocal', voicebank: '', notes: [], volume: 0.8, isMuted: false, isSolo: false }])}
                         className="text-[9px] bg-slate-800 hover:bg-cyan-900 text-cyan-400 px-1.5 py-0.5 rounded transition"
                       >+ VOCAL</button>
                     </div>

@@ -28,7 +28,7 @@ code = code.replace(
       id: 'track_1',
       name: 'Vocal 1',
       type: 'vocal',
-      voicebank: 'Official Voice (VCV)',
+      voicebank: '',
       notes: INITIAL_NOTES,
       volume: 0.8,
       isMuted: false,

@@ -1441,42 +1441,11 @@ function selectBestPitchEntry(indexed, candidate, noteNum) {
 function ensureDefaultVoicebanks() {
   const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
   try {
+    // The repository intentionally ships with no voicebank audio.
+    // Only create the user voicebank container; never synthesize/install a
+    // default voicebank at startup.
     if (!fs.existsSync(voicebanksDir)) {
       fs.mkdirSync(voicebanksDir, { recursive: true });
-    }
-    const defaultName = 'Official Voice (VCV)';
-    const targetDir = path.join(voicebanksDir, defaultName);
-    const otoPath = path.join(targetDir, 'oto.ini');
-    let needsRebuild = !fs.existsSync(targetDir) || !fs.existsSync(otoPath);
-    if (!needsRebuild) {
-      try {
-        const otoText = fs.readFileSync(otoPath, 'utf8');
-        needsRebuild = !otoText.includes('\n') && otoText.includes('\\n');
-      } catch (e) {
-        needsRebuild = true;
-      }
-    }
-    if (needsRebuild) {
-      createDefaultVoicebank(defaultName, true);
-    }
-
-    // Also check and fix Standard Japanese CV if present
-    const stdName = 'Standard Japanese CV';
-    const stdDir = path.join(voicebanksDir, stdName);
-    if (fs.existsSync(stdDir)) {
-      const stdOto = path.join(stdDir, 'oto.ini');
-      let stdNeedsRebuild = !fs.existsSync(stdOto);
-      if (!stdNeedsRebuild) {
-        try {
-          const text = fs.readFileSync(stdOto, 'utf8');
-          stdNeedsRebuild = (!text.includes('\n') && text.includes('\\n')) || fs.readdirSync(stdDir).length < 20;
-        } catch (e) {
-          stdNeedsRebuild = true;
-        }
-      }
-      if (stdNeedsRebuild) {
-        createDefaultVoicebank(stdName, true);
-      }
     }
   } catch (e) {
     console.warn('[VO-SE] ensureDefaultVoicebanks failed:', e && e.message ? e.message : e);

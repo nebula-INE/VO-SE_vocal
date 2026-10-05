@@ -1,3 +1,0 @@
-name=重音テト (Kasane Teto)
-author=線 / 小山乃舞世 / OTW
-sample=vocal_00.wav
