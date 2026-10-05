@@ -258,17 +258,6 @@ function validateWasmImports(
   }
 }
 
-async function instantiateVoseCore(
-  imports: WebAssembly.Imports,
-  bytes: ArrayBuffer
-): Promise<WebAssembly.Instance> {
-  const module = await WebAssembly.compile(bytes);
-  validateWasmImports(imports, module);
-  return (await WebAssembly.instantiate(module, imports)).exports
-    ? (await WebAssembly.instantiate(module, imports)) as unknown as WebAssembly.Instance
-    : Promise.reject(new Error('WASM instance has no exports'));
-}
-
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
