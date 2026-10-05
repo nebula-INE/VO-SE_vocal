@@ -23,7 +23,7 @@ jobs:
         run: |
           mkdir -p build/wasm
           cp include/world/*.h src/world/
-          em++ src/vose_core.cpp \
+          em++ -DVOSE_BUILD_ID=\\\"$GITHUB_SHA\\\" src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
                src/world/common.cpp \
