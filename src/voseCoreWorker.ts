@@ -218,6 +218,57 @@ function validateWavIsAudible(wavBytes: Uint8Array): void {
   }
 }
 
+function validateWasmImports(
+  imports: WebAssembly.Imports,
+  module: WebAssembly.Module
+): void {
+  const env = (imports.env || {}) as Record<string, unknown>;
+  const required = WebAssembly.Module.imports(module);
+  const missing: string[] = [];
+  const nonCallable: string[] = [];
+
+  for (const entry of required) {
+    if (entry.module !== 'env') continue;
+    const value = env[entry.name];
+    if (value === undefined) {
+      missing.push(entry.name);
+    } else if (entry.kind === 'function' && typeof value !== 'function') {
+      nonCallable.push(entry.name);
+    }
+  }
+
+  if (missing.length || nonCallable.length) {
+    const invokeKeys = Object.keys(env).filter((key) => key.startsWith('invoke_')).sort();
+    throw new Error(
+      'WASM import contract mismatch: ' +
+      [
+        missing.length ? `missing=[${missing.join(',')}]` : '',
+        nonCallable.length ? `nonCallable=[${nonCallable.join(',')}]` : '',
+        `availableInvoke=[${invokeKeys.join(',')}]`
+      ].filter(Boolean).join(' ')
+    );
+  }
+
+  const requiredInvoke = required
+    .filter((entry) => entry.module === 'env' && entry.name.startsWith('invoke_'))
+    .map((entry) => entry.name)
+    .sort();
+  if (requiredInvoke.length) {
+    console.log('[voseCoreWorker] WASM invoke imports validated:', requiredInvoke.join(', '));
+  }
+}
+
+async function instantiateVoseCore(
+  imports: WebAssembly.Imports,
+  bytes: ArrayBuffer
+): Promise<WebAssembly.Instance> {
+  const module = await WebAssembly.compile(bytes);
+  validateWasmImports(imports, module);
+  return (await WebAssembly.instantiate(module, imports)).exports
+    ? (await WebAssembly.instantiate(module, imports)) as unknown as WebAssembly.Instance
+    : Promise.reject(new Error('WASM instance has no exports'));
+}
+
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
@@ -226,26 +277,15 @@ async function getModule(): Promise<VoseCoreModule> {
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
         (async () => {
           try {
-            let instance: WebAssembly.Instance | null = null;
-            try {
-              const res = await fetch('/wasm/vose_core.wasm');
-              if (res.ok) {
-                const streamRes = await WebAssembly.instantiateStreaming(res, imports);
-                instance = streamRes.instance;
-              }
-            } catch (streamErr) {
-              console.warn('[voseCoreWorker] instantiateStreaming failed, falling back to ArrayBuffer:', streamErr);
-            }
-            if (!instance) {
-              const bufRes = await fetch('/wasm/vose_core.wasm');
-              if (!bufRes.ok) throw new Error(`HTTP ${bufRes.status} on /wasm/vose_core.wasm`);
-              const bytes = await bufRes.arrayBuffer();
-              const compiled = await WebAssembly.instantiate(bytes, imports);
-              instance = compiled.instance;
-            }
+            const res = await fetch('/wasm/vose_core.wasm');
+            if (!res.ok) throw new Error(`HTTP ${res.status} on /wasm/vose_core.wasm`);
+            const bytes = await res.arrayBuffer();
+            const module = await WebAssembly.compile(bytes);
+            validateWasmImports(imports, module);
+            const instance = await WebAssembly.instantiate(module, imports);
             successCallback(instance);
           } catch (err: any) {
-            console.error('[voseCoreWorker] Failed to instantiate WASM via instantiateWasm:', err);
+            console.error('[voseCoreWorker] Failed to instantiate WASM via validated path:', err);
             const resp: RenderResponseMsg = {
               type: 'error',
               requestId: 0,
