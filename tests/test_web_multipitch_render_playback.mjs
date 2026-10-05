@@ -369,6 +369,15 @@ test('Web render preflights one voice sample before bulk fetches', () => {
 });
 
 
+test('WASM worker loader explicitly binds invoke_ilj', () => {
+  const workerLoader = readFileSync('src/wasm/vose_core.js', 'utf8');
+  const publicLoader = readFileSync('public/wasm/vose_core.js', 'utf8');
+  assert.match(workerLoader, /function invoke_ilj\\(/);
+  assert.match(workerLoader, /invoke_ilj:invoke_ilj,/);
+  assert.match(publicLoader, /function invoke_ilj\\(/);
+  assert.match(publicLoader, /invoke_ilj:invoke_ilj,/);
+});
+
 test('WASM render does not silently fall back to Web Audio', () => {
   const client = readFileSync('src/voseCoreClient.ts', 'utf8');
   assert.match(client, /C\+\+ WebAssembly エンジンでの合成に失敗しました。JSフォールバックは使用しません/);
