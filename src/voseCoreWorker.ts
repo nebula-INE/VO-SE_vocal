@@ -265,6 +265,12 @@ async function getModule(): Promise<VoseCoreModule> {
         console.error('[vose_core stderr]', text);
       }
     });
+    try {
+      const buildId = mod.ccall('get_engine_build_id', 'string', [], []) as string;
+      console.log(`[voseCoreWorker] vose_core WASM build=${buildId || 'unknown'}`);
+    } catch (err) {
+      console.warn('[voseCoreWorker] WASM build ID is unavailable:', err);
+    }
     if (!mod.HEAPF32 && mod.HEAPU8) {
       try {
         (mod as any).HEAPF32 = new Float32Array(mod.HEAPU8.buffer);
