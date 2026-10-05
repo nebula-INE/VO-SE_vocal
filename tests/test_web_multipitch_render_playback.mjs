@@ -119,7 +119,7 @@ test('Web sample resolution never falls back to an unrelated bundled voicebank',
 
 test('Server treats Japanese small tsu as a timing rest', () => {
   const server = readFileSync('server.js', 'utf8');
-  assert.match(server, /REST_PATTERNS = \[[^\]]*'っ', 'ッ'/);
+  assert.match(server, /REST_PATTERNS\s*=\s*\[[^\]]*'っ', 'ッ'/);
 });
 
 test('Japanese small tsu is treated as a timing rest instead of a missing sample', () => {
