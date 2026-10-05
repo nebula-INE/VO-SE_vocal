@@ -362,3 +362,22 @@ test('Web render preflights one voice sample before bulk fetches', () => {
   assert.match(engine, /音源解決に失敗しました/);
   assert.match(engine, /音源解決OK voicebank=/);
 });
+
+
+test('WASM render does not silently fall back to Web Audio', () => {
+  const client = readFileSync('src/voseCoreClient.ts', 'utf8');
+  assert.match(client, /C\+\+ WebAssembly エンジンでの合成に失敗しました。JSフォールバックは使用しません/);
+  assert.doesNotMatch(client, /renderStudioOffline\(notes, tempo, voicebank, onProgress\)/);
+});
+
+test('WASM client does not generate CVVC transition probes for non-VC-transition voicebanks', () => {
+  const client = readFileSync('src/voseCoreClient.ts', 'utf8');
+  assert.match(client, /supportsVcTransitions/);
+  assert.match(client, /selected\?\.hasVcv === true/);
+  assert.match(client, /sortedNotes\.length && supportsVcTransitions/);
+});
+
+test('WASM client treats Japanese small tsu as a timing rest', () => {
+  const client = readFileSync('src/voseCoreClient.ts', 'utf8');
+  assert.match(client, /REST_LYRICS_SET[\\s\\S]*?'っ', 'ッ'/);
+});

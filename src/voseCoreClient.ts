@@ -19,7 +19,6 @@
 //   - kFramePeriod = 5.0ms (vose_core.cpp内で固定)。
 // ============================================================
 
-import { renderStudioOffline } from './wasmEngine';
 import {
   parsePitchBend,
   smoothPitchBendPoints,
