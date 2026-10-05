@@ -384,7 +384,7 @@ test('WASM client does not generate CVVC transition probes for non-VC-transition
 
 test('WASM client treats Japanese small tsu as a timing rest', () => {
   const client = readFileSync('src/voseCoreClient.ts', 'utf8');
-  assert.match(client, /REST_LYRICS_SET[\\s\\S]*?'っ', 'ッ'/);
+  assert.match(client, /REST_LYRICS_SET[\s\S]*?'っ', 'ッ'/);
 });
 
 test('WASM analysis cache is keyed by PCM content rather than temporary sample keys', () => {
