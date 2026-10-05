@@ -56,8 +56,8 @@ code = code.replace(
 
 // Replace selectedVoicebank state
 code = code.replace(
-  "  const [selectedVoicebank, setSelectedVoicebank] = useState<string>('Official Voice (VCV)');",
-  `  const selectedVoicebank = currentTrack?.voicebank || 'Official Voice (VCV)';
+  "  const [selectedVoicebank, setSelectedVoicebank] = useState<string>('');",
+  `  const selectedVoicebank = currentTrack?.voicebank || '';
   const setSelectedVoicebank = (vb: string) => {
     setTracks(prev => prev.map(t => t.id === currentTrackId ? { ...t, voicebank: vb } : t));
   };`
