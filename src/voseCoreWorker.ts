@@ -221,7 +221,7 @@ function validateWavIsAudible(wavBytes: Uint8Array): void {
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
-    return await createVoseCoreModule({
+    const mod = await createVoseCoreModule({
       locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path),
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
         (async () => {
