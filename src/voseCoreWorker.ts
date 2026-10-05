@@ -266,7 +266,8 @@ async function getModule(): Promise<VoseCoreModule> {
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
         (async () => {
           try {
-            const res = await fetch('/wasm/vose_core.wasm', { cache: 'no-store' });
+            const wasmUrl = `/wasm/vose_core.wasm?cacheBust=${Date.now()}`;
+            const res = await fetch(wasmUrl, { cache: 'no-store' });
             if (!res.ok) throw new Error(`HTTP ${res.status} on /wasm/vose_core.wasm`);
             const bytes = await res.arrayBuffer();
             const module = await WebAssembly.compile(bytes);
@@ -281,6 +282,7 @@ async function getModule(): Promise<VoseCoreModule> {
               message: `WASMモジュールの読み込みに失敗しました: ${err?.message || err}`
             };
             (self as unknown as Worker).postMessage(resp);
+            throw err;
           }
         })();
         return {};
