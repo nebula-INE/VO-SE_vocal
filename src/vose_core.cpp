@@ -1705,7 +1705,11 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                 // WORLD のランダム励振による「ザー/ヒス」成分だけを下げられる。
                 // 3500/7000/11000 Hz の境界は smooth_band_value() で連続的に補間する。
                 static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
-                static const double bvals[4]  = {0.003, 0.015, 0.045, 0.08};
+                // Keep the vocal definition in the 2-6 kHz region, but reduce the
+                // high-frequency random excitation that is perceived as hiss/grain.
+                // This is intentionally gentler than a post-render low-pass so that
+                // consonant/formant detail is not blurred.
+                static const double bvals[4]  = {0.003, 0.012, 0.030, 0.050};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
