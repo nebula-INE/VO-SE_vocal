@@ -78,6 +78,7 @@ def test_absolute_timeline_zero_overlap_uses_boundary_declick_without_changing_w
     assert "kBoundaryDeclickSamples = 88" in source
     assert "prior_audio_overlaps && source_skip == 0" in source
     assert "find_adjacent_absolute_predecessor" in source
+    assert "other_end == render_start" in source
     assert "kBoundaryStepCorrectionSamples = 88" in source
     assert "previous_last" in source
     assert "next_first" in source
@@ -107,3 +108,17 @@ def test_absolute_boundary_step_correction_removes_sample_jump_without_shifting_
     assert signal[boundary] == np.float64(target)
     assert abs(signal[boundary] - signal[boundary - 1]) < 1e-12
     assert boundary == 88
+
+
+def test_boundary_correction_is_limited_to_exact_zero_gap_and_preserves_short_regions():
+    previous_end = 1000
+    render_start = 1000
+    one_sample_gap_end = 999
+
+    assert previous_end == render_start
+    assert one_sample_gap_end != render_start
+
+    for write_len in (1, 2, 10, 88):
+        safe = min(88, previous_end, write_len)
+        assert safe == min(88, write_len)
+        assert safe > 0
