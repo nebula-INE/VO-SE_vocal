@@ -68,3 +68,14 @@ def test_world_render_path_keeps_wav_export_after_noise_control():
 
     assert "wavwrite(" in source
     assert "full_song_buffer" in source
+
+
+def test_absolute_timeline_zero_overlap_uses_boundary_declick_without_changing_wav_export():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "kBoundaryDeclickSamples = 88" in source
+    assert "prior_audio_overlaps && source_skip == 0" in source
+    assert "full_song_buffer[render_start + s] * fade_out" in source
+    assert "wavwrite(" in source
