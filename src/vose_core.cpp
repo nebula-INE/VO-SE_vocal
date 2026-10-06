@@ -2308,7 +2308,10 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     auto find_adjacent_absolute_predecessor = [&](int current_idx,
                                                    int64_t render_start,
                                                    int64_t& predecessor_end) -> bool {
-        constexpr int64_t kMaxBoundaryGapSamples = 1; // tolerate one rounding sample
+        // Only an exact end-to-start adjacency is a splice boundary.
+        // Do not treat a one-sample gap as overlap/adjacency: that sample may
+        // legitimately belong to silence or a release region, and modifying it
+        // would turn a timing-rounding tolerance into an audible edit.
         bool found = false;
         int64_t best_end = std::numeric_limits<int64_t>::min();
         for (int j = 0; j < note_count; ++j) {
@@ -2318,8 +2321,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 prepass[j].start_time_ms * kFs / 1000.0));
             const int64_t other_end = other_start + std::max<int64_t>(
                 0, prepass[j].note_samples - prepass[j].preutterance_samples);
-            const int64_t gap = render_start - other_end;
-            if (gap >= 0 && gap <= kMaxBoundaryGapSamples && other_end > best_end) {
+            if (other_end == render_start && other_end > best_end) {
                 best_end = other_end;
                 found = true;
             }
