@@ -1700,8 +1700,12 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             } else {
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
                 // 原音の豊かな倍音・声帯振動を100%保持し、D4Cが誤検出する高域ホワイトノイズ(ヒス・ザー音)を大幅低減
+                // D4C の誤検出による高域の非周期成分を、母音/有声音ではさらに抑える。
+                // ここは無声子音アタックとは分離しているため、子音の明瞭度を犠牲にせず
+                // WORLD のランダム励振による「ザー/ヒス」成分だけを下げられる。
+                // 3500/7000/11000 Hz の境界は smooth_band_value() で連続的に補間する。
                 static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
-                static const double bvals[4]  = {0.005, 0.025, 0.07, 0.15};
+                static const double bvals[4]  = {0.003, 0.015, 0.045, 0.08};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);

@@ -50,3 +50,21 @@ def test_world_render_path_does_not_smooth_explicit_pitch_curve():
     render_pitch_section = source[assignment:vibrato]
 
     assert "smooth_f0_gaussian(" not in render_pitch_section
+
+def test_world_render_path_uses_conservative_voiced_aperiodicity_ceiling():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "{0.003, 0.015, 0.045, 0.08}" in source
+    assert "{0.05, 0.35, 0.70}" in source
+    assert "smooth_band_value(freq, bfreqs, bvals, 3)" in source
+
+
+def test_world_render_path_keeps_wav_export_after_noise_control():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "wavwrite(" in source
+    assert "full_song_buffer" in source
