@@ -56,7 +56,7 @@ def test_world_render_path_uses_conservative_voiced_aperiodicity_ceiling():
         Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
     ).read_text(encoding="utf-8")
 
-    assert "{0.003, 0.015, 0.045, 0.08}" in source
+    assert "{0.003, 0.012, 0.030, 0.050}" in source
     assert "{0.05, 0.35, 0.70}" in source
     assert "smooth_band_value(freq, bfreqs, bvals, 3)" in source
 
