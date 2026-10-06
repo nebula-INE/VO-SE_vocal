@@ -2415,11 +2415,20 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 } else if (prior_audio_overlaps && source_skip == 0) {
-                    // Actual overlap: keep the existing UTAU-style boundary treatment.
+                    // Actual overlap: crossfade the note body as before, then explicitly
+                    // repair the sample-to-sample seam at render_start. The old code began
+                    // the fade at render_start with fade_in=0, which left
+                    //   buffer[render_start-1] -> note_buf[0]
+                    // completely untouched. A large first-sample step could therefore
+                    // survive every "de-click" pass. The continuity correction includes
+                    // both sides of the seam without moving the timeline.
                     constexpr int64_t kBoundaryDeclickSamples = 88; // 約2ms @ 44.1kHz
-                    const int64_t safe_declick = std::min<int64_t>(kBoundaryDeclickSamples, write_len);
+                    const int64_t safe_declick =
+                        std::min<int64_t>(kBoundaryDeclickSamples, write_len);
                     for (int64_t s = 0; s < safe_declick; ++s) {
-                        const double t = (safe_declick > 1) ? static_cast<double>(s) / static_cast<double>(safe_declick) : 1.0;
+                        const double t = (safe_declick > 1)
+                            ? static_cast<double>(s) / static_cast<double>(safe_declick)
+                            : 1.0;
                         const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
                         const double fade_out = 1.0 - fade_in;
                         full_song_buffer[render_start + s] =
@@ -2427,7 +2436,17 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                             note_bufs[idx][static_cast<size_t>(s)] * fade_in;
                     }
                     for (int64_t s = safe_declick; s < write_len; ++s)
-                        full_song_buffer[render_start + s] = note_bufs[idx][static_cast<size_t>(s)];
+                        full_song_buffer[render_start + s] =
+                            note_bufs[idx][static_cast<size_t>(s)];
+
+                    if (render_start > 0) {
+                        const double previous_last =
+                            full_song_buffer[render_start - 1];
+                        const double next_first =
+                            note_bufs[idx][static_cast<size_t>(source_skip)];
+                        apply_boundary_step_correction(
+                            render_start, write_len, previous_last, next_first);
+                    }
                 } else if (source_skip == 0) {
                     // True adjacent zero-overlap boundary: the previous note ends
                     // at render_start, so raw assignment would preserve a sample step.
