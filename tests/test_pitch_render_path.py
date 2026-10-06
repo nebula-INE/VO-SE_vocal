@@ -77,5 +77,33 @@ def test_absolute_timeline_zero_overlap_uses_boundary_declick_without_changing_w
 
     assert "kBoundaryDeclickSamples = 88" in source
     assert "prior_audio_overlaps && source_skip == 0" in source
+    assert "find_adjacent_absolute_predecessor" in source
+    assert "kBoundaryStepCorrectionSamples = 88" in source
+    assert "previous_last" in source
+    assert "next_first" in source
     assert "full_song_buffer[render_start + s] * fade_out" in source
     assert "wavwrite(" in source
+
+
+def test_absolute_boundary_step_correction_removes_sample_jump_without_shifting_timeline():
+    boundary = 88
+    previous_last = -0.544403076171875
+    next_first = 0.755218505859375
+    signal = np.zeros(boundary + 88, dtype=np.float64)
+    signal[boundary - 1] = previous_last
+    signal[boundary] = next_first
+
+    safe = 88
+    target = 0.5 * (previous_last + next_first)
+    previous_delta = target - previous_last
+    next_delta = target - next_first
+    for i in range(safe):
+        t = i / (safe - 1)
+        fade = 0.5 * (1.0 - np.cos(np.pi * t))
+        signal[boundary - safe + i] += previous_delta * fade
+        signal[boundary + i] += next_delta * (1.0 - fade)
+
+    assert signal[boundary - 1] == np.float64(target)
+    assert signal[boundary] == np.float64(target)
+    assert abs(signal[boundary] - signal[boundary - 1]) < 1e-12
+    assert boundary == 88

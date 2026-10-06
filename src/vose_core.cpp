@@ -6,6 +6,7 @@
 #include <map>
 #include <unordered_map>
 #include <list>
+#include <limits>
 #include <algorithm>
 #include <cmath>
 #include <sys/stat.h>
@@ -997,7 +998,6 @@ static double map_time_with_preutterance(double t_out_ms, const OtoEntry& oto,
     if (cutoff_pos <= offset + fixed) {
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
-
     const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double safe_pre = std::min(pre, std::max(0.0, safe_cutoff_pos - offset));
@@ -2303,6 +2303,54 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         return false;
     };
 
+    // Find a renderable absolute-timeline note whose musical audio ends exactly
+    // where this note starts rendering. This is the zero-overlap splice case.
+    auto find_adjacent_absolute_predecessor = [&](int current_idx,
+                                                   int64_t render_start,
+                                                   int64_t& predecessor_end) -> bool {
+        constexpr int64_t kMaxBoundaryGapSamples = 1; // tolerate one rounding sample
+        bool found = false;
+        int64_t best_end = std::numeric_limits<int64_t>::min();
+        for (int j = 0; j < note_count; ++j) {
+            if (j == current_idx || prepass[j].state != NoteState::RENDERABLE ||
+                !prepass[j].absolute_timing) continue;
+            const int64_t other_start = static_cast<int64_t>(std::llround(
+                prepass[j].start_time_ms * kFs / 1000.0));
+            const int64_t other_end = other_start + std::max<int64_t>(
+                0, prepass[j].note_samples - prepass[j].preutterance_samples);
+            const int64_t gap = render_start - other_end;
+            if (gap >= 0 && gap <= kMaxBoundaryGapSamples && other_end > best_end) {
+                best_end = other_end;
+                found = true;
+            }
+        }
+        if (found) predecessor_end = best_end;
+        return found;
+    };
+
+    // Remove a true zero-overlap splice step without shifting either note.
+    // A short raised-cosine offset preserves the local waveform shape while
+    // forcing the final sample of the previous note and first sample of the
+    // next note to meet at the same target value.
+    auto apply_boundary_step_correction = [&](int64_t boundary,
+                                               int64_t write_len,
+                                               double previous_last,
+                                               double next_first) {
+        constexpr int64_t kBoundaryStepCorrectionSamples = 88; // ~2 ms total
+        const int64_t safe = std::min<int64_t>(
+            kBoundaryStepCorrectionSamples, std::min<int64_t>(boundary, write_len));
+        if (safe <= 0) return;
+        const double target = 0.5 * (previous_last + next_first);
+        const double previous_delta = target - previous_last;
+        const double next_delta = target - next_first;
+        for (int64_t i = 0; i < safe; ++i) {
+            const double t = (safe > 1) ? static_cast<double>(i) / static_cast<double>(safe - 1) : 1.0;
+            const double fade = 0.5 * (1.0 - std::cos(M_PI * t));
+            full_song_buffer[boundary - safe + i] += previous_delta * fade;
+            full_song_buffer[boundary + i] += next_delta * (1.0 - fade);
+        }
+    };
+
     bool last_note_rendered = false;
 
     for (int idx = 0; idx < note_count; ++idx) {
@@ -2365,28 +2413,35 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 } else if (prior_audio_overlaps && source_skip == 0) {
-                    // VoiceOverlap=0 のノートでも、前音の末尾から現在音の先頭へ
-                    // いきなり波形を置き換えると、両方の振幅が異なる位置で
-                    // サンプル境界が切れ、クリック/クラックが発生する。
-                    // タイミング自体は変更せず、最初の約2msだけを安全に
-                    // raised-cosine で接続する。明示的な overlap がある場合は
-                    // 上の UTAU-style crossfade をそのまま使う。
+                    // Actual overlap: keep the existing UTAU-style boundary treatment.
                     constexpr int64_t kBoundaryDeclickSamples = 88; // 約2ms @ 44.1kHz
-                    const int64_t safe_declick = std::min<int64_t>(
-                        kBoundaryDeclickSamples, write_len);
+                    const int64_t safe_declick = std::min<int64_t>(kBoundaryDeclickSamples, write_len);
                     for (int64_t s = 0; s < safe_declick; ++s) {
-                        const double t = (safe_declick > 1)
-                            ? static_cast<double>(s) / static_cast<double>(safe_declick)
-                            : 1.0;
+                        const double t = (safe_declick > 1) ? static_cast<double>(s) / static_cast<double>(safe_declick) : 1.0;
                         const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
                         const double fade_out = 1.0 - fade_in;
                         full_song_buffer[render_start + s] =
                             full_song_buffer[render_start + s] * fade_out +
                             note_bufs[idx][static_cast<size_t>(s)] * fade_in;
                     }
-                    for (int64_t s = safe_declick; s < write_len; ++s) {
-                        full_song_buffer[render_start + s] =
-                            note_bufs[idx][static_cast<size_t>(s)];
+                    for (int64_t s = safe_declick; s < write_len; ++s)
+                        full_song_buffer[render_start + s] = note_bufs[idx][static_cast<size_t>(s)];
+                } else if (source_skip == 0) {
+                    // True adjacent zero-overlap boundary: the previous note ends
+                    // at render_start, so raw assignment would preserve a sample step.
+                    int64_t predecessor_end = 0;
+                    const bool adjacent_boundary =
+                        find_adjacent_absolute_predecessor(idx, render_start, predecessor_end) &&
+                        predecessor_end <= render_start && render_start > 0;
+                    if (adjacent_boundary) {
+                        const double previous_last = full_song_buffer[render_start - 1];
+                        const double next_first = note_bufs[idx][static_cast<size_t>(source_skip)];
+                        for (int64_t s = 0; s < write_len; ++s)
+                            full_song_buffer[render_start + s] = note_bufs[idx][static_cast<size_t>(source_skip + s)];
+                        apply_boundary_step_correction(render_start, write_len, previous_last, next_first);
+                    } else {
+                        for (int64_t s = 0; s < write_len; ++s)
+                            full_song_buffer[render_start + s] = note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 } else {
                     for (int64_t s = 0; s < write_len; ++s) {
