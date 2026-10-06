@@ -2364,6 +2364,30 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         full_song_buffer[render_start + s] =
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
+                } else if (prior_audio_overlaps && source_skip == 0) {
+                    // VoiceOverlap=0 のノートでも、前音の末尾から現在音の先頭へ
+                    // いきなり波形を置き換えると、両方の振幅が異なる位置で
+                    // サンプル境界が切れ、クリック/クラックが発生する。
+                    // タイミング自体は変更せず、最初の約2msだけを安全に
+                    // raised-cosine で接続する。明示的な overlap がある場合は
+                    // 上の UTAU-style crossfade をそのまま使う。
+                    constexpr int64_t kBoundaryDeclickSamples = 88; // 約2ms @ 44.1kHz
+                    const int64_t safe_declick = std::min<int64_t>(
+                        kBoundaryDeclickSamples, write_len);
+                    for (int64_t s = 0; s < safe_declick; ++s) {
+                        const double t = (safe_declick > 1)
+                            ? static_cast<double>(s) / static_cast<double>(safe_declick)
+                            : 1.0;
+                        const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
+                        const double fade_out = 1.0 - fade_in;
+                        full_song_buffer[render_start + s] =
+                            full_song_buffer[render_start + s] * fade_out +
+                            note_bufs[idx][static_cast<size_t>(s)] * fade_in;
+                    }
+                    for (int64_t s = safe_declick; s < write_len; ++s) {
+                        full_song_buffer[render_start + s] =
+                            note_bufs[idx][static_cast<size_t>(s)];
+                    }
                 } else {
                     for (int64_t s = 0; s < write_len; ++s) {
                         full_song_buffer[render_start + s] =
