@@ -122,3 +122,39 @@ def test_boundary_correction_is_limited_to_exact_zero_gap_and_preserves_short_re
         safe = min(88, previous_end, write_len)
         assert safe == min(88, write_len)
         assert safe > 0
+
+def test_absolute_overlap_declick_repairs_the_actual_first_sample_step():
+    previous_last = -0.544403076171875
+    next_first = 0.755218505859375
+    boundary = 88
+    signal = np.zeros(boundary + 88, dtype=np.float64)
+    signal[boundary - 1] = previous_last
+    signal[boundary] = next_first
+
+    safe = 88
+    target = 0.5 * (previous_last + next_first)
+    previous_delta = target - previous_last
+    next_delta = target - next_first
+    for i in range(safe):
+        t = i / (safe - 1)
+        fade = 0.5 * (1.0 - np.cos(np.pi * t))
+        signal[boundary - safe + i] += previous_delta * fade
+        signal[boundary + i] += next_delta * (1.0 - fade)
+
+    assert signal[boundary - 1] == np.float64(target)
+    assert signal[boundary] == np.float64(target)
+    assert abs(signal[boundary] - signal[boundary - 1]) < 1e-12
+
+
+def test_world_overlap_boundary_path_applies_continuity_correction_after_crossfade():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    branch = source.index("} else if (prior_audio_overlaps && source_skip == 0)")
+    following = source.index("} else if (source_skip == 0)", branch)
+    section = source[branch:following]
+
+    assert "apply_boundary_step_correction(" in section
+    assert "previous_last" in section
+    assert "next_first" in section
