@@ -1852,7 +1852,7 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     log_render_stage_diagnostics(
         "world",
         note_buf,
-        -1
+        p.note_index,
         n.wav_path,
         p.global_time_sec);
 
@@ -2684,6 +2684,20 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         const double* src   = full_song_buffer.data();
         const int     n_src = static_cast<int>(total_samples);
 
+        // Measure the complete WORLD/placement buffer before any optional
+        // BigVGAN vocoder. If the final WAV has an anomaly that is absent here,
+        // the cause is downstream of note synthesis/placement.
+        {
+            std::vector<double> diagnostic_copy(
+                full_song_buffer.begin(), full_song_buffer.end());
+            log_render_stage_diagnostics(
+                "full_song_buffer",
+                diagnostic_copy,
+                -1,
+                output_path,
+                0.0);
+        }
+
 #ifdef VOSE_PRO
         // [修正] set_bigvgan_model() によるセッション差し替え（reset/再生成）と
         // ここでの読み取り・Run() 呼び出しが無保護で競合していた（UAFの危険）。
@@ -2899,6 +2913,16 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             std::vector<double> bigvgan_out(n_src);
             for (int i = 0; i < n_src; ++i)
                 bigvgan_out[i] = clamp(static_cast<double>(out_pcm[i]), -1.0, 1.0);
+
+            // Final BigVGAN output diagnostic. This is intentionally separate
+            // from full_song_buffer so a vocoder/chunk OLA artifact can be
+            // distinguished from a WORLD/placement artifact.
+            log_render_stage_diagnostics(
+                "bigvgan_output",
+                bigvgan_out,
+                -1,
+                output_path,
+                0.0);
 
             report_progress(95);
             if (is_cancelled()) return;
