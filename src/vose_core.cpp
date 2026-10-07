@@ -1452,6 +1452,10 @@ struct RenderPlacementDiagnostic {
     double preutterance_ms = 0.0;
     double overlap_ms = 0.0;
     double pitch_hz = 0.0;
+    double oto_offset_ms = 0.0;
+    double oto_consonant_ms = 0.0;
+    double oto_blank_ms = 0.0;
+    double oto_cutoff_ms = 0.0;
     std::string wav_path;
     std::string alias;
 };
@@ -1538,6 +1542,16 @@ static void log_full_song_anomaly_context(
                     p.overlap_ms,
                     static_cast<long long>(p.source_skip),
                     p.pitch_hz);
+            if (!p.alias.empty()) {
+                fprintf(stderr,
+                        "[RenderAnomaly] oto alias=%s offset_ms=%.3f "
+                        "consonant_ms=%.3f blank_ms=%.3f cutoff_ms=%.3f\n",
+                        p.alias.c_str(),
+                        p.oto_offset_ms,
+                        p.oto_consonant_ms,
+                        p.oto_blank_ms,
+                        p.oto_cutoff_ms);
+            }
         }
 
         if (!matched)
@@ -2607,6 +2621,12 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 placement.overlap_ms = pp.overlap_ms;
                 placement.pitch_hz = (n.pitch_curve && n.pitch_length > 0)
                     ? n.pitch_curve[0] : 0.0;
+                if (pp.has_oto) {
+                    placement.oto_offset_ms = pp.oto.offset;
+                    placement.oto_consonant_ms = pp.oto.consonant;
+                    placement.oto_blank_ms = pp.oto.blank;
+                    placement.oto_cutoff_ms = pp.oto.cutoff;
+                }
                 placement.wav_path = n.wav_path ? n.wav_path : "";
                 placement.alias = pp.has_oto ? pp.oto.alias : "";
                 placement_diagnostics.push_back(std::move(placement));
