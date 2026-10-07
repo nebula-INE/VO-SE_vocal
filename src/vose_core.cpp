@@ -1394,6 +1394,54 @@ static const double kPostEQ[4][5] = {
     {  1.0000000000,  0.0000000000,  0.0000000000,  0.0000000000,  0.0000000000 }, // 6kHz  Bypassed / Flat (prevents boosting breath noise)
 };
 
+static void log_render_stage_diagnostics(
+    const char* stage,
+    const std::vector<double>& samples,
+    int note_index,
+    const char* wav_path,
+    double global_time_sec)
+{
+    if (!stage || samples.size() < 2) return;
+
+    double peak = 0.0;
+    double sum_sq = 0.0;
+    double max_step = 0.0;
+    size_t max_step_index = 0;
+
+    for (size_t i = 0; i < samples.size(); ++i) {
+        const double value = samples[i];
+        peak = std::max(peak, std::abs(value));
+        sum_sq += value * value;
+        if (i > 0) {
+            const double step = std::abs(value - samples[i - 1]);
+            if (step > max_step) {
+                max_step = step;
+                max_step_index = i;
+            }
+        }
+    }
+
+    // Diagnostics stay quiet for ordinary voiced material. The threshold is
+    // intentionally well above normal sample-to-sample movement so this does
+    // not turn a normal render into a log flood.
+    if (max_step < 0.18 && peak < 1.2)
+        return;
+
+    const double rms = std::sqrt(sum_sq / static_cast<double>(samples.size()));
+    fprintf(stderr,
+            "[RenderDiag] stage=%s note=%d wav=%s time=%.6f "
+            "peak=%.9f rms=%.9f max_step=%.9f step_index=%zu step_time_ms=%.6f\n",
+            stage,
+            note_index,
+            wav_path ? wav_path : "(null)",
+            global_time_sec,
+            peak,
+            rms,
+            max_step,
+            max_step_index,
+            static_cast<double>(max_step_index) * 1000.0 / kFs);
+}
+
 static void apply_post_eq(double* y, int y_length)
 {
     if (!y || y_length <= 0) return;
@@ -1798,6 +1846,15 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         throw std::runtime_error(buf);
     }
 
+    // WORLD合成直後を記録する。ここで異常が既に存在するなら、
+    // placement/crossfadeより前のWORLD入力・分析・スペクトル補間を疑う。
+    log_render_stage_diagnostics(
+        "world",
+        note_buf,
+        -1
+        n.wav_path,
+        p.global_time_sec);
+
     // WORLD合成が例外なく完了しても、入力解析やパラメータ異常で
     // 全サンプルが0になる可能性がある。無音を成功扱いにしない。
     double synth_peak = 0.0;
@@ -1816,6 +1873,15 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
     // ポストEQ: WORLD出力の金属的倍音・箱鳴り補正、ヌケの向上
     apply_post_eq(note_buf.data(), static_cast<int>(note_samples));
+
+    // EQ直後も同じ指標を測る。WORLD直後との差が大きければ、
+    // ノート単位IIRの状態リセットを含むpost-EQを原因候補として確定できる。
+    log_render_stage_diagnostics(
+        "post_eq",
+        note_buf,
+        -1,
+        n.wav_path,
+        p.global_time_sec);
 
     // シマー(振幅ゆらぎ)は出力波形に対して適用する
     try {
