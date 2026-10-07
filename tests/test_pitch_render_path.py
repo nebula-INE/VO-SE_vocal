@@ -158,3 +158,17 @@ def test_world_overlap_boundary_path_applies_continuity_correction_after_crossfa
     assert "apply_boundary_step_correction(" in section
     assert "previous_last" in section
     assert "next_first" in section
+
+def test_world_overlap_crossfade_branch_also_repairs_the_actual_seam():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    overlap_branch = source.index("if (overlap_samples > 0)")
+    next_branch = source.index("} else if (prior_audio_overlaps && source_skip == 0)", overlap_branch)
+    section = source[overlap_branch:next_branch]
+
+    assert "prior_audio_overlaps && source_skip == 0 && render_start > 0" in section
+    assert "const double previous_last" in section
+    assert "const double next_first" in section
+    assert "apply_boundary_step_correction(" in section
