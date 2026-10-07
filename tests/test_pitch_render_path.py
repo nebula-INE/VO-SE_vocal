@@ -172,3 +172,17 @@ def test_world_overlap_crossfade_branch_also_repairs_the_actual_seam():
     assert "const double previous_last" in section
     assert "const double next_first" in section
     assert "apply_boundary_step_correction(" in section
+
+
+def test_final_audio_diagnostics_map_anomalies_to_note_placement():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "struct RenderPlacementDiagnostic" in source
+    assert "log_full_song_anomaly_context(" in source
+    assert "[RenderAnomaly] final_buffer anomalies=" in source
+    assert "placement_diagnostics" in source
+    assert "placement.alias" in source
+    assert "placement.pitch_hz" in source
+    assert "placement.source_skip" in source
