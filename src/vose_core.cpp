@@ -1442,6 +1442,111 @@ static void log_render_stage_diagnostics(
             static_cast<double>(max_step_index) * 1000.0 / kFs);
 }
 
+struct RenderPlacementDiagnostic {
+    int note_index = -1;
+    int64_t render_start = 0;
+    int64_t write_len = 0;
+    int64_t source_skip = 0;
+    int64_t nominal_start = 0;
+    double start_time_ms = -1.0;
+    double preutterance_ms = 0.0;
+    double overlap_ms = 0.0;
+    double pitch_hz = 0.0;
+    std::string wav_path;
+    std::string alias;
+};
+
+static void log_full_song_anomaly_context(
+    const std::vector<double>& samples,
+    const std::vector<RenderPlacementDiagnostic>& placements)
+{
+    if (samples.size() < 2 || placements.empty())
+        return;
+
+    struct Anomaly {
+        size_t index = 0;
+        double step = 0.0;
+    };
+    std::vector<Anomaly> anomalies;
+
+    constexpr double kAnomalyThreshold = 0.22;
+    constexpr size_t kClusterDistance = 256;
+
+    for (size_t i = 1; i + 1 < samples.size(); ++i) {
+        const double step = std::abs(samples[i] - samples[i - 1]);
+        if (step < kAnomalyThreshold)
+            continue;
+
+        const double prev_step = std::abs(samples[i - 1] - samples[i - 2]);
+        const double next_step = std::abs(samples[i + 1] - samples[i]);
+        if (step < prev_step || step < next_step)
+            continue;
+
+        if (!anomalies.empty() &&
+            i - anomalies.back().index < kClusterDistance) {
+            if (step > anomalies.back().step)
+                anomalies.back() = {i, step};
+        } else {
+            anomalies.push_back({i, step});
+        }
+    }
+
+    if (anomalies.empty())
+        return;
+
+    constexpr size_t kMaxAnomalies = 12;
+    if (anomalies.size() > kMaxAnomalies)
+        anomalies.resize(kMaxAnomalies);
+
+    fprintf(stderr,
+            "[RenderAnomaly] final_buffer anomalies=%zu threshold=%.3f\n",
+            anomalies.size(), kAnomalyThreshold);
+
+    for (const auto& anomaly : anomalies) {
+        const size_t boundary = anomaly.index;
+        fprintf(stderr,
+                "[RenderAnomaly] sample=%zu time_sec=%.9f step=%.9f "
+                "prev=%.9f next=%.9f\n",
+                boundary,
+                static_cast<double>(boundary) / kFs,
+                anomaly.step,
+                samples[boundary - 1],
+                samples[boundary]);
+
+        bool matched = false;
+        for (const auto& p : placements) {
+            const int64_t begin = p.render_start;
+            const int64_t end = p.render_start + p.write_len;
+            const int64_t sample = static_cast<int64_t>(boundary);
+            if (sample < begin - 1 || sample > end)
+                continue;
+
+            matched = true;
+            fprintf(stderr,
+                    "[RenderAnomaly] note=%d range=[%lld,%lld) "
+                    "wav=%s alias=%s start_ms=%.3f nominal_sample=%lld "
+                    "preutterance_ms=%.3f overlap_ms=%.3f source_skip=%lld "
+                    "pitch_hz=%.3f\n",
+                    p.note_index,
+                    static_cast<long long>(begin),
+                    static_cast<long long>(end),
+                    p.wav_path.empty() ? "(null)" : p.wav_path.c_str(),
+                    p.alias.empty() ? "(unknown)" : p.alias.c_str(),
+                    p.start_time_ms,
+                    static_cast<long long>(p.nominal_start),
+                    p.preutterance_ms,
+                    p.overlap_ms,
+                    static_cast<long long>(p.source_skip),
+                    p.pitch_hz);
+        }
+
+        if (!matched)
+            fprintf(stderr,
+                    "[RenderAnomaly] note_context=none sample=%zu\n",
+                    boundary);
+    }
+}
+
 static void apply_post_eq(double* y, int y_length)
 {
     if (!y || y_length <= 0) return;
@@ -2445,6 +2550,8 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     };
 
     bool last_note_rendered = false;
+    std::vector<RenderPlacementDiagnostic> placement_diagnostics;
+    placement_diagnostics.reserve(static_cast<size_t>(note_count));
 
     for (int idx = 0; idx < note_count; ++idx) {
         const NotePrepass& pp = prepass[idx];
@@ -2489,6 +2596,22 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 total_samples - render_start);
 
             if (write_len > 0) {
+                RenderPlacementDiagnostic placement;
+                placement.note_index = idx;
+                placement.render_start = render_start;
+                placement.write_len = write_len;
+                placement.source_skip = source_skip;
+                placement.nominal_start = nominal_start;
+                placement.start_time_ms = pp.start_time_ms;
+                placement.preutterance_ms = pp.preutterance_ms;
+                placement.overlap_ms = pp.overlap_ms;
+                placement.pitch_hz = (n.pitch_curve && n.pitch_length > 0)
+                    ? n.pitch_curve[0] : 0.0;
+                placement.wav_path = n.wav_path ? n.wav_path : "";
+                placement.alias = pp.has_oto ? pp.oto.alias : "";
+                placement_diagnostics.push_back(std::move(placement));
+
+
                 if (overlap_samples > 0) {
                     const int64_t safe_xfade = std::min(overlap_samples, write_len);
                     for (int64_t s = 0; s < safe_xfade; ++s) {
@@ -2696,6 +2819,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 -1,
                 output_path,
                 0.0);
+            log_full_song_anomaly_context(
+                diagnostic_copy,
+                placement_diagnostics);
         }
 
 #ifdef VOSE_PRO
