@@ -2438,6 +2438,21 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         full_song_buffer[render_start + s] =
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
+
+                    // Even when UTAU overlap itself is active, the raised-cosine
+                    // starts with fade_in=0 at render_start. That means the first
+                    // sample of the new note is not actually blended with the
+                    // previous sample. Repair the real sample-to-sample seam after
+                    // the overlap crossfade so the correction is not bypassed by
+                    // the overlap_samples > 0 branch.
+                    if (prior_audio_overlaps && source_skip == 0 && render_start > 0) {
+                        const double previous_last =
+                            full_song_buffer[render_start - 1];
+                        const double next_first =
+                            note_bufs[idx][static_cast<size_t>(source_skip)];
+                        apply_boundary_step_correction(
+                            render_start, write_len, previous_last, next_first);
+                    }
                 } else if (prior_audio_overlaps && source_skip == 0) {
                     // Actual overlap: crossfade the note body as before, then explicitly
                     // repair the sample-to-sample seam at render_start. The old code began
