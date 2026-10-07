@@ -177,43 +177,64 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
 
   const inv32768 = 1.0 / 32768.0;
 
-  // --- パス 0: サンプル間デクリック（急峻なインパルススパイクの修復） ---
+  // Convert to high-precision Float64 working buffer to prevent rounding/quantization noise
+  const channelsData = Array.from({ length: numChannels }, () => new Float64Array(totalFrames));
   for (let c = 0; c < numChannels; c++) {
-    for (let f = 1; f < totalFrames - 1; f++) {
-      const idx = f * numChannels + c;
-      const prevIdx = (f - 1) * numChannels + c;
-      const nextIdx = (f + 1) * numChannels + c;
-      const sPrev = pcm[prevIdx] * inv32768;
-      const sCur = pcm[idx] * inv32768;
-      const sNext = pcm[nextIdx] * inv32768;
+    const ch = channelsData[c];
+    for (let f = 0; f < totalFrames; f++) {
+      ch[f] = pcm[f * numChannels + c] * inv32768;
+    }
+  }
 
-      const diff1 = sCur - sPrev;
-      const diff2 = sCur - sNext;
-      // 孤立した急峻なステップ変化（0.20以上の急激なスパイク）を平滑化
-      if ((diff1 > 0.20 && diff2 > 0.20) || (diff1 < -0.20 && diff2 < -0.20)) {
-        pcm[idx] = Math.round(((sPrev + sNext) * 0.5) * 32767.0);
+  // --- パス 0: 高精度インパルス・デクリック（境界スパイクや不連続点の修復） ---
+  for (let c = 0; c < numChannels; c++) {
+    const ch = channelsData[c];
+    for (let f = 1; f < totalFrames - 1; f++) {
+      const sPrev = ch[f - 1];
+      const sCur = ch[f];
+      const sNext = ch[f + 1];
+      const mid = (sPrev + sNext) * 0.5;
+      const deviation = Math.abs(sCur - mid);
+      const localStep = Math.abs(sNext - sPrev);
+      // 孤立した単一サンプルスパイクのみを平滑化（正常な高域波形は localStep が同等になるため保護）
+      if (deviation > 0.08 && deviation > localStep * 2.2) {
+        ch[f] = mid;
       }
     }
   }
 
   // --- フィルター設計 (VO-SE Studio Crystal Clarity Vocal Chain) ---
-  // 1. サブベース/DCドリフト除去 (60Hz HPF, Q=0.707)
-  const hpfCoeffs = makeBiquadHpf(60, sampleRate, 0.707);
+  // 1. サブベース/DCドリフト除去 (65Hz HPF, Q=0.707)
+  const hpfCoeffs = makeBiquadHpf(65, sampleRate, 0.707);
   const hpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
 
-  // 2. 超高域 LPF (16.0kHz, Q=0.707): 可聴域外の折り返しノイズのみをカットし、母音の抜け・子音の自然な透明感を100%保持
-  const lpfCoeffs = makeBiquadLpf(16000, sampleRate, 0.707);
+  // 2. 箱鳴り・こもり感除去 (380Hz, -1.2dB, Q=1.2) Peaking: ヌケの改善
+  const boxinessCoeffs = makeBiquadPeaking(380, sampleRate, -1.2, 1.2);
+  const boxinessFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
+
+  // 3. 歯擦音・金属的耳障りピークの緩和 (6.2kHz, -5.0dB, Q=1.3) Peaking:
+  //    無声子音（し、す、て、ち、つ等）の過剰な高周波摩擦やボコーダー金属鳴りを自然で滑らかに抑制
+  const deHarshCoeffs = makeBiquadPeaking(6200, sampleRate, -5.0, 1.3);
+  const deHarshFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
+
+  // 4. 定常ヒスノイズ緩和 (8.8kHz, -3.5dB, S=0.8) High Shelf:
+  //    母音の明るさを失わずにボコーダー特有の背景ざらつき・砂嵐ノイズを自然に低減
+  const hissShelfCoeffs = makeBiquadHighShelf(8800, sampleRate, -3.5, 0.8);
+  const hissShelfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
+
+  // 5. 超高域 LPF (13.2kHz, Q=0.707): 可聴域外のボコーダーエイリアシングおよび高域ホワイトノイズを完全遮断
+  const lpfCoeffs = makeBiquadLpf(13200, sampleRate, 0.707);
   const lpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
 
   // 曲頭・曲末のデクリック・フェード（6ms）
   const fadeFrames = Math.min(Math.floor(sampleRate * 0.006), Math.floor(totalFrames / 4));
 
-  // --- パス 1: フィルタリング + ノイズフロア解析 ---
+  // --- パス 1: フィルタリング + ノイズフロア追従 ---
   // ダウンワード・エクスパンダーのエンベロープフォロワー用パラメータ
-  const attackAlpha = Math.exp(-1.0 / (sampleRate * 0.015)); // 15ms attack
-  const releaseAlpha = Math.exp(-1.0 / (sampleRate * 0.070)); // 70ms release
+  const attackAlpha = Math.exp(-1.0 / (sampleRate * 0.010)); // 10ms attack
+  const releaseAlpha = Math.exp(-1.0 / (sampleRate * 0.060)); // 60ms release
   let envLevel = 0.0;
-  const gateThreshold = 0.004; // 約 -48dBFS 以下のフロアノイズを検出
+  const gateThreshold = 0.005; // -46dBFS 以下の休符フロアノイズを検出
 
   for (let f = 0; f < totalFrames; f++) {
     // 曲頭・曲末フェード
@@ -225,21 +246,19 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
       edgeGain = 0.5 * (1.0 - Math.cos((Math.PI * rem) / fadeFrames));
     }
 
-    // チャネル全体の瞬時振幅
     let frameMaxAbs = 0.0;
 
     for (let c = 0; c < numChannels; c++) {
-      const idx = f * numChannels + c;
-      let sNorm = pcm[idx] * inv32768;
+      let s = channelsData[c][f];
+      s = hpfFilters[c].process(s, hpfCoeffs);
+      s = boxinessFilters[c].process(s, boxinessCoeffs);
+      s = deHarshFilters[c].process(s, deHarshCoeffs);
+      s = hissShelfFilters[c].process(s, hissShelfCoeffs);
+      s = lpfFilters[c].process(s, lpfCoeffs);
+      channelsData[c][f] = s;
 
-      // HPF -> LPF のみで、声本来のフォルマントや倍音構造をそのまま通す
-      sNorm = hpfFilters[c].process(sNorm, hpfCoeffs);
-      sNorm = lpfFilters[c].process(sNorm, lpfCoeffs);
-
-      const absS = Math.abs(sNorm);
+      const absS = Math.abs(s);
       if (absS > frameMaxAbs) frameMaxAbs = absS;
-
-      pcm[idx] = Math.max(-32768, Math.min(32767, Math.round(sNorm * 32767.0)));
     }
 
     // スムーズ・エンベロープ追従
@@ -249,29 +268,25 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
       envLevel = releaseAlpha * envLevel + (1 - releaseAlpha) * frameMaxAbs;
     }
 
-    // ダウンワード・エクスパンダーゲイン（歌声が鳴っていない休符・無音区間の残留ノイズのみを自然に-60dB以下へ低減）
+    // ダウンワード・エクスパンダーゲイン（休符・無音区間の残留ノイズを自然に消音）
     let expanderGain = 1.0;
     if (envLevel < gateThreshold) {
       const ratio = Math.max(0.0, envLevel / gateThreshold);
-      // 滑らかなコサイン・イージングでチャタリングゼロ
-      expanderGain = Math.max(0.05, 0.5 * (1.0 - Math.cos(Math.PI * ratio)));
+      expanderGain = Math.max(0.005, 0.5 * (1.0 - Math.cos(Math.PI * ratio)));
     }
 
     const netGain = edgeGain * expanderGain;
 
-    // ゲイン適用 + ソフトピークリミッター（0.92以上）
+    // ゲイン適用 + 透明ソフトピークリミッター（0.88以上でソフトクリップしハードクリップ皆無）
     for (let c = 0; c < numChannels; c++) {
-      const idx = f * numChannels + c;
-      let y = (pcm[idx] * inv32768) * netGain;
-
+      let y = channelsData[c][f] * netGain;
       const absY = Math.abs(y);
-      if (absY > 0.92) {
+      if (absY > 0.88) {
         const sign = y < 0 ? -1 : 1;
-        const excess = absY - 0.92;
-        y = sign * (0.92 + 0.08 * Math.tanh(excess / 0.08));
+        const excess = absY - 0.88;
+        y = sign * (0.88 + 0.10 * Math.tanh(excess / 0.10));
       }
-
-      pcm[idx] = Math.max(-32768, Math.min(32767, Math.round(y * 32767.0)));
+      pcm[f * numChannels + c] = Math.max(-32768, Math.min(32767, Math.round(y * 32767.0)));
     }
   }
 

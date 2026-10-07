@@ -1,6 +1,26 @@
 <!DOCTYPE html>
 <html lang="ja">
   <head>
+    <script>
+      (function() {
+        function shouldIgnore(err) {
+          var s = String((err && (err.message || err.stack || err.filename || err)) || '');
+          return s.includes('WebSocket') || s.includes('@vite/client') || s.includes('vite-hmr');
+        }
+        window.addEventListener('unhandledrejection', function(e) {
+          if (shouldIgnore(e.reason || e)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('error', function(e) {
+          if (shouldIgnore(e.error || e.message || e)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VO-SE Pro Vocal Synthesizer</title>

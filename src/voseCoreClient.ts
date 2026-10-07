@@ -520,10 +520,14 @@ async function renderViaCore(
       const hasOverlap = note._ust_overlap_explicit === true ||
         (Number.isFinite(overlapValue) && overlapValue > 0);
 
+      const rawIntensity = typeof note.intensity === 'number' ? note.intensity : 120;
+      // App.tsx standard nominal intensity is 120. Scale to 90 for vose_core to ensure optimal headroom and avoid clipping.
+      const scaledIntensity = Math.max(10, Math.min(160, Math.round((rawIntensity / 120) * 90)));
+
       workerNotes.push({
         key,
         pitchCurveHz: buildPitchCurveHz(note, p, durationMs),
-        intensity: typeof note.intensity === 'number' ? note.intensity : 100,
+        intensity: scaledIntensity,
         modulation: typeof note.modulation === 'number' ? note.modulation : 0,
         startTimeMs,
         preutteranceMs: hasPre ? preValue : -1,

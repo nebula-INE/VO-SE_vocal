@@ -133,47 +133,6 @@ static void GetPeriodicResponse(int fft_size, const double *spectrum,
     2.0 * world::kPi * fractional_time_shift * fs / fft_size;
   GetSpectrumWithFractionalTimeShift(fft_size, coefficient, inverse_real_fft);
 
-  // ★ 人間の声帯振動（LFモデル等の声帯流波形）および声道伝達における位相分散（Phase Dispersion）と
-  //   開閉サイクルごとの微小な位相ゆらぎ（Glottal Jitter）を再現。
-  //   最小位相によって全周波数が時間軸0で一斉に急峻なスパイク状に立ち上がり、
-  //   ノコギリ波やブザーに似た金属的・人工的「ジー」というバズ音を生じる現象を根本から解消する。
-  double pulse_jitter = 0.0;
-  if (randn_state != nullptr) {
-    pulse_jitter = randn(randn_state);
-    if (pulse_jitter < -2.0) pulse_jitter = -2.0;
-    if (pulse_jitter > 2.0) pulse_jitter = 2.0;
-    pulse_jitter *= 0.15; // 最大約 +/- 0.3 rad の高域微小ゆらぎ
-  }
-
-  const double nyquist = fs / 2.0;
-  const double f_disp_start = 900.0;
-  const double disp_coeff = 35.0; // 約0.35msの自然な声帯リターンフェーズ位相分散
-
-  for (int i = 0; i <= fft_size / 2; ++i) {
-    const double freq = static_cast<double>(i) * fs / fft_size;
-    double dphi = 0.0;
-    if (freq > f_disp_start) {
-      const double u = (freq - f_disp_start) / (nyquist - f_disp_start);
-      // 滑らかな位相分散（C1連続な3次多項式）
-      dphi -= disp_coeff * (1.5 * u * u - 0.5 * u * u * u);
-
-      // 高域(2kHz以上)におけるサイクル間の微小な位相ゆらぎ
-      if (freq > 2000.0) {
-        const double w_jit = (freq - 2000.0) / (nyquist - 2000.0);
-        dphi += pulse_jitter * w_jit;
-      }
-    }
-
-    if (dphi != 0.0) {
-      const double re = inverse_real_fft->spectrum[i][0];
-      const double im = inverse_real_fft->spectrum[i][1];
-      const double c = cos(dphi);
-      const double s = sin(dphi);
-      inverse_real_fft->spectrum[i][0] = re * c - im * s;
-      inverse_real_fft->spectrum[i][1] = re * s + im * c;
-    }
-  }
-
   fft_execute(inverse_real_fft->inverse_fft);
   fftshift(inverse_real_fft->waveform, fft_size, periodic_response);
   RemoveDCComponent(periodic_response, fft_size, dc_remover,

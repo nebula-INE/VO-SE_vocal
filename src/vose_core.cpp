@@ -998,7 +998,11 @@ static double map_time_with_preutterance(double t_out_ms, const OtoEntry& oto,
     if (cutoff_pos <= offset + fixed) {
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
-    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
+    const double available_vowel = cutoff_pos - (offset + fixed);
+    const double cutoff_margin = (available_vowel > 60.0)
+        ? std::min(40.0, std::max(15.0, available_vowel * 0.20))
+        : 15.0;
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - cutoff_margin);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double safe_pre = std::min(pre, std::max(0.0, safe_cutoff_pos - offset));
 
@@ -1044,7 +1048,11 @@ double map_time(double t_out_ms, const OtoEntry& oto,
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
 
-    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
+    const double available_vowel = cutoff_pos - (offset + fixed);
+    const double cutoff_margin = (available_vowel > 60.0)
+        ? std::min(40.0, std::max(15.0, available_vowel * 0.20))
+        : 15.0;
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - cutoff_margin);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double output_stretch = std::max(1.0, note_duration_ms - fixed);
 
@@ -1610,15 +1618,30 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         const double t_out_ms = j * kFramePeriod;
         const double t_src_ms = map_time_with_preutterance(
             t_out_ms, current_oto, src_ms, note_ms, pp.preutterance_ms);
-        const int src_frame   = clamp(
-            static_cast<int>(t_src_ms / kFramePeriod), 0, cache_cur->length - 1);
+        const double frame_pos = clamp(
+            t_src_ms / kFramePeriod, 0.0, static_cast<double>(cache_cur->length - 1));
+        const int frame0 = static_cast<int>(frame_pos);
+        const int frame1 = std::min(frame0 + 1, cache_cur->length - 1);
+        const double frac = frame_pos - frame0;
+        const int src_frame = frame0;
 
         double* sr = tl_scratch.spec_ptrs[j];
         double* ar = tl_scratch.ap_ptrs[j];
-        std::copy_n(&cache_cur->flat_spec[static_cast<size_t>(src_frame) * spec_bins],
-                    spec_bins, sr);
-        std::copy_n(&cache_cur->flat_ap[static_cast<size_t>(src_frame) * spec_bins],
-                    spec_bins, ar);
+        const double* s0 = &cache_cur->flat_spec[static_cast<size_t>(frame0) * spec_bins];
+        const double* s1 = &cache_cur->flat_spec[static_cast<size_t>(frame1) * spec_bins];
+        const double* a0 = &cache_cur->flat_ap[static_cast<size_t>(frame0) * spec_bins];
+        const double* a1 = &cache_cur->flat_ap[static_cast<size_t>(frame1) * spec_bins];
+
+        if (frac < 1e-4 || frame0 == frame1) {
+            std::copy_n(s0, spec_bins, sr);
+            std::copy_n(a0, spec_bins, ar);
+        } else {
+            const double w0 = 1.0 - frac;
+            for (int k = 0; k < spec_bins; ++k) {
+                sr[k] = w0 * s0[k] + frac * s1[k];
+                ar[k] = w0 * a0[k] + frac * a1[k];
+            }
+        }
 
         // ---- 1. ベースF0を計算 ----
         const int curve_idx = std::max(0, j - lead_frames);
@@ -1680,38 +1703,35 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         const double pitch_noise_suppress = (f0_ratio > 1.0)
             ? std::max(0.20, 1.0 / (1.0 + (f0_ratio - 1.0) * 0.8))
             : (f0_ratio < 0.7 ? 0.70 : 1.0); // 極端な低音化時の濁りも緩和
-        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.2 * pitch_noise_suppress : 0.0;
+        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.15 * pitch_noise_suppress : 0.0;
         const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path) ||
                                   (pp.has_oto && is_unvoiced_phoneme_name(current_oto.wav_path)) ||
                                   (pp.has_oto && is_unvoiced_phoneme_name(current_oto.alias)) ||
                                   (pp.has_oto && is_unvoiced_vc_alias(current_oto.alias));
         const double fixed_ms = std::max(0.0, current_oto.consonant);
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
-        const bool in_consonant_friction = (t_out_ms < unvoiced_attack_ms);
+
+        // 無声子音アタックから母音への滑らかなクロスフェード（急激なステップ切り替えによるノイズバーストを完全解消）
+        double consonant_weight = 0.0;
+        if (has_unvoiced && unvoiced_attack_ms > 0.0) {
+            if (t_out_ms < unvoiced_attack_ms * 0.5) {
+                consonant_weight = 1.0;
+            } else if (t_out_ms < unvoiced_attack_ms) {
+                const double t = (t_out_ms - unvoiced_attack_ms * 0.5) / (unvoiced_attack_ms * 0.5);
+                consonant_weight = 0.5 * (1.0 + std::cos(M_PI * t));
+            }
+        }
+
+        static const double bfreqs_c[2] = {2500.0, 5000.0};
+        static const double bvals_c[3]  = {0.02, 0.07, 0.15}; // 自然な子音摩擦を保ちつつ、ホワイトノイズ爆発を防止
+        static const double bfreqs_v[3] = {3500.0, 7000.0, 11000.0};
+        static const double bvals_v[4]  = {0.002, 0.006, 0.015, 0.025}; // 母音の定常ヒスを徹底除去
 
         for (int k = 0; k < spec_bins; ++k) {
             const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
-            double max_ap;
-            if (in_consonant_friction) {
-                // 無声子音アタック (k, s, t, h, p など): 子音の破裂・摩擦に必要な自然な高域非周期性を維持
-                static const double bfreqs[2] = {2000.0, 4000.0};
-                static const double bvals[3]  = {0.05, 0.35, 0.70};
-                max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
-            } else {
-                // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
-                // 原音の豊かな倍音・声帯振動を100%保持し、D4Cが誤検出する高域ホワイトノイズ(ヒス・ザー音)を大幅低減
-                // D4C の誤検出による高域の非周期成分を、母音/有声音ではさらに抑える。
-                // ここは無声子音アタックとは分離しているため、子音の明瞭度を犠牲にせず
-                // WORLD のランダム励振による「ザー/ヒス」成分だけを下げられる。
-                // 3500/7000/11000 Hz の境界は smooth_band_value() で連続的に補間する。
-                static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
-                // Keep the vocal definition in the 2-6 kHz region, but reduce the
-                // high-frequency random excitation that is perceived as hiss/grain.
-                // This is intentionally gentler than a post-render low-pass so that
-                // consonant/formant detail is not blurred.
-                static const double bvals[4]  = {0.003, 0.012, 0.030, 0.050};
-                max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
-            }
+            const double max_ap_consonant = smooth_band_value(freq, bfreqs_c, bvals_c, 2);
+            const double max_ap_vowel = smooth_band_value(freq, bfreqs_v, bvals_v, 3) * pitch_noise_suppress;
+            double max_ap = consonant_weight * max_ap_consonant + (1.0 - consonant_weight) * max_ap_vowel;
             max_ap = std::min(1.0, max_ap + breath_allowance);
             if (ar[k] > max_ap) {
                 ar[k] = max_ap;
