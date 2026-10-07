@@ -186,3 +186,15 @@ def test_final_audio_diagnostics_map_anomalies_to_note_placement():
     assert "placement.alias" in source
     assert "placement.pitch_hz" in source
     assert "placement.source_skip" in source
+
+
+def test_final_audio_diagnostics_include_oto_metadata():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "oto_offset_ms" in source
+    assert "oto_consonant_ms" in source
+    assert "oto_blank_ms" in source
+    assert "oto_cutoff_ms" in source
+    assert "[RenderAnomaly] oto alias=%s" in source
