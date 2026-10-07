@@ -1474,6 +1474,7 @@ struct SynthNoteParams {
     NoteEvent&         n;
     int                fft_size;
     int                spec_bins;
+    int                note_index = -1;
     double             global_time_sec = 0.0;  // 曲先頭からのオフセット（ビブラート位相連続化）
 };
 
@@ -1879,7 +1880,7 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     log_render_stage_diagnostics(
         "post_eq",
         note_buf,
-        -1,
+        p.note_index,
         n.wav_path,
         p.global_time_sec);
 
@@ -2220,7 +2221,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
                 const int idx = renderable_indices[bi];
                 try {
-                    SynthNoteParams p{ prepass[idx], notes[idx], fft_size, spec_bins,
+                    SynthNoteParams p{ prepass[idx], notes[idx], fft_size, spec_bins, idx,
                                        note_global_time[idx] };
                     synthesize_note_impl(p, note_bufs[idx]);
                 } catch (const std::exception& e) {
