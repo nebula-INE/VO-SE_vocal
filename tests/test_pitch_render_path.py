@@ -51,14 +51,19 @@ def test_world_render_path_does_not_smooth_explicit_pitch_curve():
 
     assert "smooth_f0_gaussian(" not in render_pitch_section
 
-def test_world_render_path_uses_conservative_voiced_aperiodicity_ceiling():
+def test_world_render_path_uses_native_world_synthesis_without_added_noise():
     source = (
         Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
     ).read_text(encoding="utf-8")
 
-    assert "{0.003, 0.012, 0.030, 0.050}" in source
-    assert "{0.05, 0.35, 0.70}" in source
-    assert "smooth_band_value(freq, bfreqs, bvals, 3)" in source
+    start = source.index("static void VOSE_Synthesis(")
+    end = source.index("// ============================================================\n// apply_post_eq", start)
+    synthesis_section = source[start:end]
+
+    assert "Synthesis(f0, f0_length, spectrogram, aperiodicity," in synthesis_section
+    assert "ランダムノイズの混入や不自然なHPFは全廃" in synthesis_section
+    assert "std::uniform_real_distribution" not in synthesis_section
+    assert "std::normal_distribution" not in synthesis_section
 
 
 def test_world_render_path_keeps_wav_export_after_noise_control():
@@ -146,7 +151,7 @@ def test_absolute_overlap_declick_repairs_the_actual_first_sample_step():
     assert abs(signal[boundary] - signal[boundary - 1]) < 1e-12
 
 
-def test_world_overlap_boundary_path_applies_continuity_correction_after_crossfade():
+def test_world_overlap_boundary_path_uses_crossfade_without_extra_step_correction():
     source = (
         Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
     ).read_text(encoding="utf-8")
@@ -155,11 +160,12 @@ def test_world_overlap_boundary_path_applies_continuity_correction_after_crossfa
     following = source.index("} else if (source_skip == 0)", branch)
     section = source[branch:following]
 
-    assert "apply_boundary_step_correction(" in section
-    assert "previous_last" in section
-    assert "next_first" in section
+    assert "kBoundaryDeclickSamples = 88" in section
+    assert "apply_boundary_step_correction(" not in section
+    assert "previous_last" not in section
+    assert "next_first" not in section
 
-def test_world_overlap_crossfade_branch_also_repairs_the_actual_seam():
+def test_world_overlap_crossfade_branch_does_not_add_boundary_step_correction():
     source = (
         Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
     ).read_text(encoding="utf-8")
@@ -168,10 +174,11 @@ def test_world_overlap_crossfade_branch_also_repairs_the_actual_seam():
     next_branch = source.index("} else if (prior_audio_overlaps && source_skip == 0)", overlap_branch)
     section = source[overlap_branch:next_branch]
 
-    assert "prior_audio_overlaps && source_skip == 0 && render_start > 0" in section
-    assert "const double previous_last" in section
-    assert "const double next_first" in section
-    assert "apply_boundary_step_correction(" in section
+    assert "const int64_t safe_xfade" in section
+    assert "std::cos(M_PI * t)" in section
+    assert "apply_boundary_step_correction(" not in section
+    assert "previous_last" not in section
+    assert "next_first" not in section
 
 
 def test_final_audio_diagnostics_map_anomalies_to_note_placement():
