@@ -508,17 +508,16 @@ async function renderViaCore(
     const startTimeMs = Math.max(0, startTimeSec * 1000.0);
 
     if (key !== null && note) {
-      // NoteEvent の dataclass 既定値は 0.0 なので、値が存在するだけでは
-      // UST の明示指定とは限らない。明示フラグを最優先し、後方互換として
-      // 正の上書き値だけは従来のWebデータからも受け付ける。
+      // NoteEvent の dataclass 既定値は 0.0 なので、明示フラグまたは有効な数値を判定する。
+      // 0 (プレアタランス無し) も正当な指定として -1 ではなく 0 を維持する。
       const preValue = typeof note.pre_utterance === 'number'
         ? Number(note.pre_utterance) : NaN;
       const overlapValue = typeof note.overlap === 'number'
         ? Number(note.overlap) : NaN;
       const hasPre = note._ust_preutterance_explicit === true ||
-        (Number.isFinite(preValue) && preValue > 0);
+        (Number.isFinite(preValue) && preValue >= 0);
       const hasOverlap = note._ust_overlap_explicit === true ||
-        (Number.isFinite(overlapValue) && overlapValue > 0);
+        (Number.isFinite(overlapValue) && overlapValue >= 0);
 
       const rawIntensity = typeof note.intensity === 'number' ? note.intensity : 120;
       // App.tsx standard nominal intensity is 120. Scale to 90 for vose_core to ensure optimal headroom and avoid clipping.
@@ -578,6 +577,52 @@ async function renderViaCore(
       if (!s || !wasmKey) {
         pushEvent(null, null, noteStartSec, noteDurationMs);
       } else {
+        // --- ノート境界でのPreutterance / Overlap 衝突防止（ブツブツ音・切り刻みの解消） ---
+        const rawPreMs = Number(n.pre_utterance);
+        const hasExplicitPre = n._ust_preutterance_explicit === true || (Number.isFinite(rawPreMs) && rawPreMs >= 0);
+        const reqPreMs = hasExplicitPre ? rawPreMs : Number(s.oto.preutteranceMs || 0);
+
+        const rawOverlapMs = Number(n.overlap);
+        const hasExplicitOverlap = n._ust_overlap_explicit === true || (Number.isFinite(rawOverlapMs) && rawOverlapMs >= 0);
+        const reqOverlapMs = hasExplicitOverlap ? rawOverlapMs : Number(s.oto.overlapMs || 0);
+
+        let safePreMs = Math.max(0, reqPreMs);
+        let safeOverlapMs = Math.max(0, reqOverlapMs);
+
+        if (prevNote && !isRest(prevNote.lyric)) {
+          const prevStartSec = tickToTimeSec(prevNote.tick || 0);
+          const prevEndSec = tickToTimeSec((prevNote.tick || 0) + (prevNote.length || 480));
+          const prevDurMs = (prevEndSec - prevStartSec) * 1000;
+          const gapMs = (noteStartSec - prevEndSec) * 1000;
+
+          if (gapMs <= 40) {
+            // 前のノートと連続している場合: 前のノートの母音を削り潰さないよう、
+            // 前ノート長の最大45%までしかPreutteranceを食い込ませない
+            const maxBorrowMs = Math.max(0, gapMs) + Math.max(10, prevDurMs * 0.45);
+            safePreMs = Math.min(safePreMs, maxBorrowMs);
+            safeOverlapMs = Math.min(safeOverlapMs, safePreMs * 0.7);
+          } else {
+            // 前に休符/無音ギャップがある場合: ギャップの範囲内に収める
+            const maxBorrowMs = Math.max(0, gapMs - 5);
+            safePreMs = Math.min(safePreMs, maxBorrowMs);
+            // 休符・無音からの立ち上がりでも直角ハードアタックによるクリックを防ぐため
+            // 5〜15msの安全なマイクロクロスフェード値を確保
+            safeOverlapMs = Math.min(15, Math.max(5, safePreMs * 0.5));
+          }
+        } else {
+          // 曲先頭または先行が無声の場合
+          safePreMs = Math.min(safePreMs, noteStartSec * 1000);
+          safeOverlapMs = Math.min(15, Math.max(5, safePreMs * 0.5));
+        }
+
+        const boundedNote = {
+          ...n,
+          pre_utterance: safePreMs,
+          overlap: safeOverlapMs,
+          _ust_preutterance_explicit: true,
+          _ust_overlap_explicit: true
+        };
+
         const prevForCvvc = i > 0 ? sortedNotes[i - 1] : null;
         const continuousForCvvc = !!prevForCvvc && !isRest(prevForCvvc.lyric) &&
           (startTick - ((prevForCvvc.tick || 0) + (prevForCvvc.length || 480)) <= 240);
@@ -588,37 +633,42 @@ async function renderViaCore(
           : '';
         const vcKey = vcAlias ? voicebank + ':' + vcAlias + ':DIRECT:' + noteNum : '';
         const vcSample = vcKey ? rawSampleMap.get(vcKey) : null;
-        const rawPreMs = Number(n.pre_utterance);
-        const hasExplicitPre = n._ust_preutterance_explicit === true;
-        // Web timeline notes commonly carry the dataclass default 0.0 even
-        // when UST did not explicitly specify PreUtterance. In that case use
-        // the following CV's OTO preutterance, matching CVVC's standard timing.
-        const preMs = !hasExplicitPre && (!Number.isFinite(rawPreMs) || rawPreMs <= 0)
-          ? Number(s.oto.preutteranceMs)
-          : rawPreMs;
         const vcMatchesExactly = !!vcSample &&
           vcSample.matchedAlias.trim().toLowerCase() === vcAlias.toLowerCase();
-        // VCV has priority when the requested previous-vowel + lyric alias
-        // actually exists. CVVC is only a fallback for banks that do not
-        // provide the corresponding VCV transition.
         const vcvMatched = continuousForCvvc &&
           !!s.matchedAlias &&
           isVcvMatchedAlias(s.matchedAlias, prevVowelForCvvc);
         
-        if (continuousForCvvc && !vcvMatched && vcMatchesExactly && Number.isFinite(preMs) && preMs > 0) {
+        // WORLDボコーダーのFFT窓長（約46ms）を下回る極小ノートを分割生成すると
+        // 境界で激しいインパルス破裂音（プツプツ音）が発生するため、
+        // safePreMs >= 50ms かつ noteDurationMs >= 80ms の安定長がある場合のみVC分割を行う
+        if (continuousForCvvc && !vcvMatched && vcMatchesExactly && Number.isFinite(safePreMs) && safePreMs >= 50 && noteDurationMs >= 80) {
           const vcWasmKey = cacheKeyToWasmKey.get(vcKey);
           if (vcWasmKey) {
-            const vcStartSec = Math.max(0, noteStartSec - preMs / 1000.0);
-            pushEvent(vcWasmKey, n, vcStartSec, preMs);
-            // The VC already occupies the preutterance window. Do not apply
-            // the same preutterance a second time to the following CV.
-            const cvNote = { ...n, pre_utterance: 0, overlap: 0 };
+            const vcStartSec = Math.max(0, noteStartSec - safePreMs / 1000.0);
+            const vcOverlap = Math.min(safePreMs * 0.5, 20);
+            const vcNote = {
+              ...boundedNote,
+              pre_utterance: safePreMs,
+              overlap: vcOverlap,
+              _ust_preutterance_explicit: true,
+              _ust_overlap_explicit: true
+            };
+            pushEvent(vcWasmKey, vcNote, vcStartSec, safePreMs);
+            const cvOverlap = Math.min(safePreMs * 0.5, 20);
+            const cvNote = {
+              ...boundedNote,
+              pre_utterance: 0,
+              overlap: cvOverlap,
+              _ust_preutterance_explicit: true,
+              _ust_overlap_explicit: true
+            };
             pushEvent(wasmKey, cvNote, noteStartSec, noteDurationMs);
           } else {
-            pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
+            pushEvent(wasmKey, boundedNote, noteStartSec, noteDurationMs);
           }
         } else {
-          pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
+          pushEvent(wasmKey, boundedNote, noteStartSec, noteDurationMs);
         }
       }
     }

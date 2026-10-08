@@ -186,55 +186,97 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
     }
   }
 
-  // --- パス 0: 高精度インパルス・デクリック（境界スパイクや不連続点の修復） ---
+  // --- パス 0: 音符境界・休符境界のブツブツ音（アタック/リリースクリック・スプライス段差）完全解消 ---
+  // 1. 静寂（無音）から急激に非ゼロ振幅へ立ち上がるノート先頭の段差に 5ms のコサイン・マイクロフェードインを適用
+  // 2. ノート末尾が急激に切断されて静寂へ落ちる段差に 5ms のコサイン・マイクロフェードアウトを適用
+  // 3. スプライス境界（非物理的な孤立段差・不連続ステップ）を局所平滑化してプツプツ音を根絶
+  const microFadeFrames = Math.min(Math.floor(sampleRate * 0.005), 240); // 5ms (~220 frames @ 44.1kHz)
+  const quietWindow = Math.min(Math.floor(sampleRate * 0.003), 130); // ~3ms (約130サンプル)
+  const quietThreshold = 0.04;
+  const loudThreshold = 0.08;
+
   for (let c = 0; c < numChannels; c++) {
     const ch = channelsData[c];
-    for (let f = 1; f < totalFrames - 1; f++) {
-      const sPrev = ch[f - 1];
-      const sCur = ch[f];
-      const sNext = ch[f + 1];
-      const mid = (sPrev + sNext) * 0.5;
-      const deviation = Math.abs(sCur - mid);
-      const localStep = Math.abs(sNext - sPrev);
-      // 孤立した単一サンプルスパイクのみを平滑化（正常な高域波形は localStep が同等になるため保護）
-      if (deviation > 0.08 && deviation > localStep * 2.2) {
-        ch[f] = mid;
+
+    // (A) アタッククリック解消 (無音から有音への滑らかなフェードイン)
+    for (let f = quietWindow; f < totalFrames - microFadeFrames; f++) {
+      if (Math.abs(ch[f]) >= loudThreshold) {
+        // 直前 quietWindow サンプルの最大振幅を検査
+        let maxPrior = 0.0;
+        for (let p = 1; p <= quietWindow; p++) {
+          const absP = Math.abs(ch[f - p]);
+          if (absP > maxPrior) maxPrior = absP;
+        }
+        if (maxPrior < quietThreshold) {
+          // 真のアタック境界を検出: f から microFadeFrames にかけて Hann フェードイン
+          for (let k = 0; k < microFadeFrames; k++) {
+            const t = k / microFadeFrames;
+            const fadeIn = 0.5 * (1.0 - Math.cos(Math.PI * t));
+            ch[f + k] *= fadeIn;
+          }
+          f += microFadeFrames; // フェード適用済み区間をスキップ
+        }
+      }
+    }
+
+    // (B) リリースクリック解消 (有音から無音への滑らかなフェードアウト)
+    for (let f = microFadeFrames; f < totalFrames - quietWindow; f++) {
+      if (Math.abs(ch[f - 1]) >= loudThreshold) {
+        // 直後 quietWindow サンプルの最大振幅を検査
+        let maxNext = 0.0;
+        for (let n = 0; n < quietWindow; n++) {
+          const absN = Math.abs(ch[f + n]);
+          if (absN > maxNext) maxNext = absN;
+        }
+        if (maxNext < quietThreshold) {
+          // 真のリリース切断境界を検出: f - microFadeFrames から f にかけて Hann フェードアウト
+          for (let k = 0; k < microFadeFrames; k++) {
+            const t = k / microFadeFrames;
+            const fadeOut = 0.5 * (1.0 + Math.cos(Math.PI * t));
+            ch[f - microFadeFrames + k] *= fadeOut;
+          }
+          f += quietWindow; // スキップ
+        }
+      }
+    }
+
+    // (C) 孤立した非連続スプライス段差（声帯周期ではない継ぎ目のステップ）の修復
+    // 歌声の自然な波形は1サンプルで不連続にジャンプせず傾きが連続する。
+    // スプライス境界で生じた前後の傾きと矛盾する断絶点のみを2〜3サンプルで修復。
+    for (let f = 2; f < totalFrames - 2; f++) {
+      const step = Math.abs(ch[f] - ch[f - 1]);
+      if (step > 0.18) {
+        const prevSlope = ch[f - 1] - ch[f - 2];
+        const nextSlope = ch[f + 1] - ch[f];
+        // 前後の傾きとステップ方向が急変（符号反転またはステップが異常に巨大）
+        const isDiscontinuousStep =
+          (prevSlope * nextSlope < 0 && step > Math.abs(prevSlope) * 3.0 && step > Math.abs(nextSlope) * 3.0) ||
+          (step > 0.30 && Math.abs(prevSlope) < 0.06 && Math.abs(nextSlope) < 0.06);
+
+        if (isDiscontinuousStep) {
+          const interp = 0.5 * (ch[f - 1] + ch[f]);
+          ch[f - 1] = 0.7 * ch[f - 1] + 0.3 * interp;
+          ch[f] = 0.7 * ch[f] + 0.3 * interp;
+        }
       }
     }
   }
 
-  // --- フィルター設計 (VO-SE Studio Crystal Clarity Vocal Chain) ---
-  // 1. サブベース/DCドリフト除去 (65Hz HPF, Q=0.707)
-  const hpfCoeffs = makeBiquadHpf(65, sampleRate, 0.707);
+  // --- フィルター設計 (VO-SE Studio Transparent Clean Vocal Chain) ---
+  // 1. サブベース/DCドリフト除去 (40Hz HPF, Q=0.707): 可聴帯域を全く損なわずに超低域のうなりとDCを除去
+  const hpfCoeffs = makeBiquadHpf(40, sampleRate, 0.707);
   const hpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
-
-  // 2. 箱鳴り・こもり感除去 (380Hz, -1.2dB, Q=1.2) Peaking: ヌケの改善
-  const boxinessCoeffs = makeBiquadPeaking(380, sampleRate, -1.2, 1.2);
-  const boxinessFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
-
-  // 3. 歯擦音・金属的耳障りピークの緩和 (6.2kHz, -5.0dB, Q=1.3) Peaking:
-  //    無声子音（し、す、て、ち、つ等）の過剰な高周波摩擦やボコーダー金属鳴りを自然で滑らかに抑制
-  const deHarshCoeffs = makeBiquadPeaking(6200, sampleRate, -5.0, 1.3);
-  const deHarshFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
-
-  // 4. 定常ヒスノイズ緩和 (8.8kHz, -3.5dB, S=0.8) High Shelf:
-  //    母音の明るさを失わずにボコーダー特有の背景ざらつき・砂嵐ノイズを自然に低減
-  const hissShelfCoeffs = makeBiquadHighShelf(8800, sampleRate, -3.5, 0.8);
-  const hissShelfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
-
-  // 5. 超高域 LPF (13.2kHz, Q=0.707): 可聴域外のボコーダーエイリアシングおよび高域ホワイトノイズを完全遮断
-  const lpfCoeffs = makeBiquadLpf(13200, sampleRate, 0.707);
-  const lpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
 
   // 曲頭・曲末のデクリック・フェード（6ms）
   const fadeFrames = Math.min(Math.floor(sampleRate * 0.006), Math.floor(totalFrames / 4));
 
   // --- パス 1: フィルタリング + ノイズフロア追従 ---
-  // ダウンワード・エクスパンダーのエンベロープフォロワー用パラメータ
-  const attackAlpha = Math.exp(-1.0 / (sampleRate * 0.010)); // 10ms attack
-  const releaseAlpha = Math.exp(-1.0 / (sampleRate * 0.060)); // 60ms release
+  // エクスパンダーは本物の無音区間（-70dBFS以下）のみを静かにフェードさせ、
+  // 歌声の減衰や息漏れでのチャタリング・ポンピングを完全防止
+  const attackAlpha = Math.exp(-1.0 / (sampleRate * 0.025)); // 25ms attack
+  const releaseAlpha = Math.exp(-1.0 / (sampleRate * 0.180)); // 180ms smooth release
   let envLevel = 0.0;
-  const gateThreshold = 0.005; // -46dBFS 以下の休符フロアノイズを検出
+  const gateThreshold = 0.0003; // -70dBFS (真の無音フロアのみ対象)
 
   for (let f = 0; f < totalFrames; f++) {
     // 曲頭・曲末フェード
@@ -251,10 +293,6 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
     for (let c = 0; c < numChannels; c++) {
       let s = channelsData[c][f];
       s = hpfFilters[c].process(s, hpfCoeffs);
-      s = boxinessFilters[c].process(s, boxinessCoeffs);
-      s = deHarshFilters[c].process(s, deHarshCoeffs);
-      s = hissShelfFilters[c].process(s, hissShelfCoeffs);
-      s = lpfFilters[c].process(s, lpfCoeffs);
       channelsData[c][f] = s;
 
       const absS = Math.abs(s);
@@ -268,23 +306,23 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
       envLevel = releaseAlpha * envLevel + (1 - releaseAlpha) * frameMaxAbs;
     }
 
-    // ダウンワード・エクスパンダーゲイン（休符・無音区間の残留ノイズを自然に消音）
+    // ダウンワード・エクスパンダーゲイン（真の無音区間のみ自然に消音）
     let expanderGain = 1.0;
     if (envLevel < gateThreshold) {
       const ratio = Math.max(0.0, envLevel / gateThreshold);
-      expanderGain = Math.max(0.005, 0.5 * (1.0 - Math.cos(Math.PI * ratio)));
+      expanderGain = Math.max(0.001, 0.5 * (1.0 - Math.cos(Math.PI * ratio)));
     }
 
     const netGain = edgeGain * expanderGain;
 
-    // ゲイン適用 + 透明ソフトピークリミッター（0.88以上でソフトクリップしハードクリップ皆無）
+    // ゲイン適用 + 透明ソフトピークリミッター（0.92以上でソフトクリップしハードクリップ皆無）
     for (let c = 0; c < numChannels; c++) {
       let y = channelsData[c][f] * netGain;
       const absY = Math.abs(y);
-      if (absY > 0.88) {
+      if (absY > 0.92) {
         const sign = y < 0 ? -1 : 1;
-        const excess = absY - 0.88;
-        y = sign * (0.88 + 0.10 * Math.tanh(excess / 0.10));
+        const excess = absY - 0.92;
+        y = sign * (0.92 + 0.07 * Math.tanh(excess / 0.07));
       }
       pcm[f * numChannels + c] = Math.max(-32768, Math.min(32767, Math.round(y * 32767.0)));
     }

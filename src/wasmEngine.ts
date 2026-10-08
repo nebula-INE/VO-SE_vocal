@@ -619,14 +619,15 @@ export async function renderStudioOffline(
         const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.92;
 
         const tStart = actualStartTime;
+        const totalNoteDur = Math.max(0.02, (startTimeSec + durationSec) - tStart);
         const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / baseRate;
-        const attackDur = Math.max(0.006, Math.min(0.03, overlapSec || 0.008));
+        const attackDur = Math.max(0.004, Math.min(Math.min(0.03, totalNoteDur * 0.35), overlapSec || 0.008));
         const tAttack = tStart + attackDur;
 
         const noteEndTime = startTimeSec + durationSec;
-        const releaseDur = 0.015;
-        const tDecay = Math.max(tAttack + 0.003, noteEndTime - releaseDur);
-        const tEnd = Math.min(tDecay + releaseDur, noteEndTime);
+        const releaseDur = Math.min(0.015, Math.max(0.004, totalNoteDur * 0.25));
+        const tDecay = Math.max(tAttack + 0.002, noteEndTime - releaseDur);
+        const tEnd = Math.max(tDecay + 0.002, noteEndTime);
 
         gain.gain.setValueAtTime(0.0, tStart);
         gain.gain.linearRampToValueAtTime(volGain, tAttack);

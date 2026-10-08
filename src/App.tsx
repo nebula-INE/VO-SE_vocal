@@ -2257,16 +2257,17 @@ export default function App() {
         // 「ブツッ」という衝突音の原因になっていた。
         // oto.ini の Overlap（前のノートとクロスフェードする長さ）を使って、
         // アタックは実際の音声開始位置(tStart)からOverlap分だけで完了させる。
+        const totalNoteDur = Math.max(0.02, (noteStartCtxTime + durSec) - tStart);
         const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / baseRate;
-        const attackDur = Math.max(0.006, Math.min(0.03, overlapSec || 0.008));
+        const attackDur = Math.max(0.004, Math.min(Math.min(0.03, totalNoteDur * 0.35), overlapSec || 0.008));
         const tAttack = tStart + attackDur;
 
         // フェードアウトは必ずノート自身の終了時刻(noteStartCtxTime + durSec)までに
-        // 完了させ、次のノートの領域へ音量が食い込まないようにする。
+        // 完了させ、短音でもアタックと交差しないよう安全にスケーリング
         const noteEndTime = noteStartCtxTime + durSec;
-        const releaseDur = 0.015;
-        const tDecay = Math.max(tAttack + 0.003, noteEndTime - releaseDur);
-        const tEnd = Math.min(tDecay + releaseDur, noteEndTime);
+        const releaseDur = Math.min(0.015, Math.max(0.004, totalNoteDur * 0.25));
+        const tDecay = Math.max(tAttack + 0.002, noteEndTime - releaseDur);
+        const tEnd = Math.max(tDecay + 0.002, noteEndTime);
 
         gain.gain.setValueAtTime(0.0001, tStart);
         gain.gain.linearRampToValueAtTime(volGain, tAttack);
