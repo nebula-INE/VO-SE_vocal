@@ -1476,7 +1476,7 @@ static void log_full_song_anomaly_context(
     constexpr double kAnomalyThreshold = 0.22;
     constexpr size_t kClusterDistance = 256;
 
-    for (size_t i = 1; i + 1 < samples.size(); ++i) {
+    for (size_t i = 2; i + 1 < samples.size(); ++i) {
         const double step = std::abs(samples[i] - samples[i - 1]);
         if (step < kAnomalyThreshold)
             continue;
