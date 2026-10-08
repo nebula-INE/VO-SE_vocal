@@ -198,3 +198,11 @@ def test_final_audio_diagnostics_include_oto_metadata():
     assert "oto_blank_ms" in source
     assert "oto_cutoff_ms" in source
     assert "[RenderAnomaly] oto alias=%s" in source
+
+
+def test_final_audio_diagnostics_avoids_boundary_underflow():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "for (size_t i = 2; i + 1 < samples.size(); ++i)" in source
