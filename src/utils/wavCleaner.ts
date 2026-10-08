@@ -186,77 +186,53 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
     }
   }
 
-  // --- パス 0: 音符境界・休符境界のブツブツ音（アタック/リリースクリック・スプライス段差）完全解消 ---
-  // 1. 静寂（無音）から急激に非ゼロ振幅へ立ち上がるノート先頭の段差に 5ms のコサイン・マイクロフェードインを適用
-  // 2. ノート末尾が急激に切断されて静寂へ落ちる段差に 5ms のコサイン・マイクロフェードアウトを適用
-  // 3. スプライス境界（非物理的な孤立段差・不連続ステップ）を局所平滑化してプツプツ音を根絶
+  // --- パス 0: 音符境界・休符境界のブツブツ音（アタック/リリースクリック）完全解消 ---
+  // 1. 真の静寂（無音）から急激に非ゼロ振幅へ立ち上がるノート先頭の段差に 5ms のコサイン・マイクロフェードインを適用
+  // 2. ノート末尾が急激に切断されて真の静寂へ落ちる段差に 5ms のコサイン・マイクロフェードアウトを適用
+  // 注意: 歌声の自然な声帯振動パルス（F0周期のアタック急峻波）を誤検出して破壊・変形させないよう、
+  // 真の無音（-46dBFS以下: < 0.005）からの急峻な立ち上がり/立ち下がり境界のみを対象とする。
   const microFadeFrames = Math.min(Math.floor(sampleRate * 0.005), 240); // 5ms (~220 frames @ 44.1kHz)
   const quietWindow = Math.min(Math.floor(sampleRate * 0.003), 130); // ~3ms (約130サンプル)
-  const quietThreshold = 0.04;
+  const quietThreshold = 0.008; // -42dBFS以下の真の休符・無音フロア
   const loudThreshold = 0.08;
 
   for (let c = 0; c < numChannels; c++) {
     const ch = channelsData[c];
 
-    // (A) アタッククリック解消 (無音から有音への滑らかなフェードイン)
+    // (A) アタッククリック解消 (完全な無音から有音への滑らかなフェードイン)
     for (let f = quietWindow; f < totalFrames - microFadeFrames; f++) {
       if (Math.abs(ch[f]) >= loudThreshold) {
-        // 直前 quietWindow サンプルの最大振幅を検査
         let maxPrior = 0.0;
         for (let p = 1; p <= quietWindow; p++) {
           const absP = Math.abs(ch[f - p]);
           if (absP > maxPrior) maxPrior = absP;
         }
         if (maxPrior < quietThreshold) {
-          // 真のアタック境界を検出: f から microFadeFrames にかけて Hann フェードイン
           for (let k = 0; k < microFadeFrames; k++) {
             const t = k / microFadeFrames;
             const fadeIn = 0.5 * (1.0 - Math.cos(Math.PI * t));
             ch[f + k] *= fadeIn;
           }
-          f += microFadeFrames; // フェード適用済み区間をスキップ
+          f += microFadeFrames;
         }
       }
     }
 
-    // (B) リリースクリック解消 (有音から無音への滑らかなフェードアウト)
+    // (B) リリースクリック解消 (有音から完全な無音への滑らかなフェードアウト)
     for (let f = microFadeFrames; f < totalFrames - quietWindow; f++) {
       if (Math.abs(ch[f - 1]) >= loudThreshold) {
-        // 直後 quietWindow サンプルの最大振幅を検査
         let maxNext = 0.0;
         for (let n = 0; n < quietWindow; n++) {
           const absN = Math.abs(ch[f + n]);
           if (absN > maxNext) maxNext = absN;
         }
         if (maxNext < quietThreshold) {
-          // 真のリリース切断境界を検出: f - microFadeFrames から f にかけて Hann フェードアウト
           for (let k = 0; k < microFadeFrames; k++) {
             const t = k / microFadeFrames;
             const fadeOut = 0.5 * (1.0 + Math.cos(Math.PI * t));
             ch[f - microFadeFrames + k] *= fadeOut;
           }
-          f += quietWindow; // スキップ
-        }
-      }
-    }
-
-    // (C) 孤立した非連続スプライス段差（声帯周期ではない継ぎ目のステップ）の修復
-    // 歌声の自然な波形は1サンプルで不連続にジャンプせず傾きが連続する。
-    // スプライス境界で生じた前後の傾きと矛盾する断絶点のみを2〜3サンプルで修復。
-    for (let f = 2; f < totalFrames - 2; f++) {
-      const step = Math.abs(ch[f] - ch[f - 1]);
-      if (step > 0.18) {
-        const prevSlope = ch[f - 1] - ch[f - 2];
-        const nextSlope = ch[f + 1] - ch[f];
-        // 前後の傾きとステップ方向が急変（符号反転またはステップが異常に巨大）
-        const isDiscontinuousStep =
-          (prevSlope * nextSlope < 0 && step > Math.abs(prevSlope) * 3.0 && step > Math.abs(nextSlope) * 3.0) ||
-          (step > 0.30 && Math.abs(prevSlope) < 0.06 && Math.abs(nextSlope) < 0.06);
-
-        if (isDiscontinuousStep) {
-          const interp = 0.5 * (ch[f - 1] + ch[f]);
-          ch[f - 1] = 0.7 * ch[f - 1] + 0.3 * interp;
-          ch[f] = 0.7 * ch[f] + 0.3 * interp;
+          f += quietWindow;
         }
       }
     }

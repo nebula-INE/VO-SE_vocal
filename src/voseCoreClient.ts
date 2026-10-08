@@ -605,14 +605,12 @@ async function renderViaCore(
             // 前に休符/無音ギャップがある場合: ギャップの範囲内に収める
             const maxBorrowMs = Math.max(0, gapMs - 5);
             safePreMs = Math.min(safePreMs, maxBorrowMs);
-            // 休符・無音からの立ち上がりでも直角ハードアタックによるクリックを防ぐため
-            // 5〜15msの安全なマイクロクロスフェード値を確保
-            safeOverlapMs = Math.min(15, Math.max(5, safePreMs * 0.5));
+            safeOverlapMs = 0;
           }
         } else {
           // 曲先頭または先行が無声の場合
           safePreMs = Math.min(safePreMs, noteStartSec * 1000);
-          safeOverlapMs = Math.min(15, Math.max(5, safePreMs * 0.5));
+          safeOverlapMs = 0;
         }
 
         const boundedNote = {
@@ -658,7 +656,7 @@ async function renderViaCore(
             const cvOverlap = Math.min(safePreMs * 0.5, 20);
             const cvNote = {
               ...boundedNote,
-              pre_utterance: 0,
+              pre_utterance: cvOverlap,
               overlap: cvOverlap,
               _ust_preutterance_explicit: true,
               _ust_overlap_explicit: true

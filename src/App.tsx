@@ -105,15 +105,21 @@ const getNoteName = (midiNum: number) => {
   return `${noteName}${octave}`;
 };
 
-export const getLoopCrossfadedBuffer = (
+export interface LoopCrossfadeResult {
+  buffer: AudioBuffer;
+  loopStartSec: number;
+  loopEndSec: number;
+}
+
+const getLoopCrossfadedBuffer = (
   ctx: AudioContext,
   cached: any,
   loopStartSec: number,
   loopEndSec: number
-): AudioBuffer => {
+): LoopCrossfadeResult => {
   const key = `${loopStartSec.toFixed(4)}_${loopEndSec.toFixed(4)}`;
   if (!cached._loopXfadeCache) {
-    cached._loopXfadeCache = new Map<string, AudioBuffer>();
+    cached._loopXfadeCache = new Map<string, LoopCrossfadeResult>();
   }
   const existing = cached._loopXfadeCache.get(key);
   if (existing) return existing;
@@ -181,8 +187,14 @@ export const getLoopCrossfadedBuffer = (
     }
   }
 
-  cached._loopXfadeCache.set(key, newBuffer);
-  return newBuffer;
+  const result: LoopCrossfadeResult = {
+    buffer: newBuffer,
+    loopStartSec: loopStartSample / sr,
+    loopEndSec: loopEndSample / sr
+  };
+
+  cached._loopXfadeCache.set(key, result);
+  return result;
 };
 
 const isBlackKey = (midiNum: number) => {
@@ -2233,14 +2245,16 @@ export default function App() {
           const loopStartSec = Math.min(cutoffEndSec - 0.06, offsetSec + Math.max(0.02, fixedSec || preuttSec || 0.05));
           const loopEndSec = Math.min(wavDuration - 0.01, Math.max(loopStartSec + 0.04, cutoffEndSec - 0.01));
           if (loopEndSec > loopStartSec + 0.03) {
-            source.loop = true;
-            source.loopStart = loopStartSec;
-            source.loopEnd = loopEndSec;
-            // ループ境界のクリック音を消すため、クロスフェード済みバッファに差し替える
             try {
-              source.buffer = getLoopCrossfadedBuffer(ctx, cached, loopStartSec, loopEndSec);
+              const loopInfo = getLoopCrossfadedBuffer(ctx, cached, loopStartSec, loopEndSec);
+              source.loop = true;
+              source.loopStart = loopInfo.loopStartSec;
+              source.loopEnd = loopInfo.loopEndSec;
+              source.buffer = loopInfo.buffer;
             } catch (e) {
-              // 失敗しても元のバッファのまま続行（無音になるよりはクリック音の方がまし）
+              source.loop = true;
+              source.loopStart = loopStartSec;
+              source.loopEnd = loopEndSec;
             }
           }
         }
@@ -2269,6 +2283,7 @@ export default function App() {
         const tDecay = Math.max(tAttack + 0.002, noteEndTime - releaseDur);
         const tEnd = Math.max(tDecay + 0.002, noteEndTime);
 
+        gain.gain.cancelScheduledValues(tStart);
         gain.gain.setValueAtTime(0.0001, tStart);
         gain.gain.linearRampToValueAtTime(volGain, tAttack);
         if (tDecay > tAttack + 0.002) {
