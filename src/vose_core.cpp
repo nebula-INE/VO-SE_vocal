@@ -2619,15 +2619,15 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 placement.start_time_ms = pp.start_time_ms;
                 placement.preutterance_ms = pp.preutterance_ms;
                 placement.overlap_ms = pp.overlap_ms;
-                placement.pitch_hz = (n.pitch_curve && n.pitch_length > 0)
-                    ? n.pitch_curve[0] : 0.0;
+                placement.pitch_hz = (notes[idx].pitch_curve && notes[idx].pitch_length > 0)
+                    ? notes[idx].pitch_curve[0] : 0.0;
                 if (pp.has_oto) {
                     placement.oto_offset_ms = pp.oto.offset;
                     placement.oto_consonant_ms = pp.oto.consonant;
                     placement.oto_blank_ms = pp.oto.blank;
                     placement.oto_cutoff_ms = pp.oto.cutoff;
                 }
-                placement.wav_path = n.wav_path ? n.wav_path : "";
+                placement.wav_path = notes[idx].wav_path ? notes[idx].wav_path : "";
                 placement.alias = pp.has_oto ? pp.oto.alias : "";
                 placement_diagnostics.push_back(std::move(placement));
 
