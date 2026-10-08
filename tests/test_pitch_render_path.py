@@ -206,3 +206,14 @@ def test_final_audio_diagnostics_avoids_boundary_underflow():
     ).read_text(encoding="utf-8")
 
     assert "for (size_t i = 2; i + 1 < samples.size(); ++i)" in source
+
+
+def test_placement_diagnostics_use_note_event_scope():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "placement.pitch_hz = (notes[idx].pitch_curve" in source
+    assert 'placement.wav_path = notes[idx].wav_path' in source
+    assert "placement.pitch_hz = (n.pitch_curve" not in source
+    assert 'placement.wav_path = n.wav_path' not in source
