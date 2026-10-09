@@ -520,8 +520,11 @@ async function renderViaCore(
         (Number.isFinite(overlapValue) && overlapValue >= 0);
 
       const rawIntensity = typeof note.intensity === 'number' ? note.intensity : 120;
-      // App.tsx standard nominal intensity is 120. Scale to 90 for vose_core to ensure optimal headroom and avoid clipping.
-      const scaledIntensity = Math.max(10, Math.min(160, Math.round((rawIntensity / 120) * 90)));
+      // App.tsx standard nominal intensity is 120. WORLD vocoder minimum-phase impulse responses
+      // exhibit high crest factors (peak 1.35x - 1.80x higher than RMS/source audio).
+      // Scale nominal 120 to 58 (gain 0.58) so synthesized peaks peak around 0.75 - 0.80 (-2.5 dBFS),
+      // completely eliminating hard-clipping at 16-bit PCM boundaries (which produces "ザラザラした" raspy distortion).
+      const scaledIntensity = Math.max(10, Math.min(140, Math.round((rawIntensity / 120) * 58)));
 
       workerNotes.push({
         key,

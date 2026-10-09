@@ -17,7 +17,8 @@ function parseWav(buffer) {
   throw new Error('No data chunk');
 }
 
-const otoText = fs.readFileSync('temp/voicebanks/TETO-tandoku-100619/oto.ini', 'utf-8');
+const vbBase = 'temp/voicebanks/Standard Japanese CV/';
+const otoText = fs.readFileSync(vbBase + 'oto.ini', 'utf-8');
 const otoMap = new Map();
 otoText.split(/\r?\n/).forEach(line => {
   const eq = line.indexOf('=');
@@ -65,7 +66,6 @@ import('./public/wasm/vose_core.js').then(m => {
     }
   });
 }).then(async mod => {
-  const vbBase = 'temp/voicebanks/TETO-tandoku-100619/';
   
   const OTO_SIZE = 632;
   const otoPtr = mod._malloc(songNotes.length * OTO_SIZE);

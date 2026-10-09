@@ -485,10 +485,10 @@ export async function renderStudioOffline(
   masterAir.frequency.setValueAtTime(9000, 0);
   masterAir.gain.setValueAtTime(0.0, 0);
 
-  // 5. [スタジオ超高域セーフティLPF] 17.5kHz以上の不要な折り返しノイズのみをカット
+  // 5. [スタジオ超高域セーフティLPF] 14.0kHz以上の不要な折り返し・量子化ノイズをカット
   const masterLpf = offlineCtx.createBiquadFilter();
   masterLpf.type = 'lowpass';
-  masterLpf.frequency.setValueAtTime(17500, 0);
+  masterLpf.frequency.setValueAtTime(14000, 0);
   masterLpf.Q.setValueAtTime(0.707, 0);
 
   // クリッピング防止コンプレッサー/リミッター

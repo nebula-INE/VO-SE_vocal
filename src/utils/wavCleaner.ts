@@ -179,10 +179,25 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
 
   // Convert to high-precision Float64 working buffer to prevent rounding/quantization noise
   const channelsData = Array.from({ length: numChannels }, () => new Float64Array(totalFrames));
+  let globalMax = 0.0;
   for (let c = 0; c < numChannels; c++) {
     const ch = channelsData[c];
     for (let f = 0; f < totalFrames; f++) {
-      ch[f] = pcm[f * numChannels + c] * inv32768;
+      const val = pcm[f * numChannels + c] * inv32768;
+      ch[f] = val;
+      const a = Math.abs(val);
+      if (a > globalMax) globalMax = a;
+    }
+  }
+
+  // Headroom assurance: ensure signal does not drive the biquad filter into saturation or hit the limiter.
+  if (globalMax > 0.89) {
+    const scale = 0.89 / globalMax;
+    for (let c = 0; c < numChannels; c++) {
+      const ch = channelsData[c];
+      for (let f = 0; f < totalFrames; f++) {
+        ch[f] *= scale;
+      }
     }
   }
 
@@ -239,9 +254,17 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
   }
 
   // --- フィルター設計 (VO-SE Studio Transparent Clean Vocal Chain) ---
-  // 1. サブベース/DCドリフト除去 (40Hz HPF, Q=0.707): 可聴帯域を全く損なわずに超低域のうなりとDCを除去
+  // 1. サブベース/DCドリフト除去 (40Hz HPF, Q=0.707): 可聴帯域を損なわずに超低域のうなりとDCを除去
   const hpfCoeffs = makeBiquadHpf(40, sampleRate, 0.707);
   const hpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
+
+  // 2. 高域ザラつき・金属的共鳴・ヒスノイズ抑制 (5.8kHz -4.5dB, Q=1.2 Peaking)
+  const deHissCoeffs = makeBiquadPeaking(5800, sampleRate, -4.5, 1.2);
+  const deHissFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
+
+  // 3. 超高域エイリアシング・量子化ノイズ遮断 (13.5kHz 2次 LPF, Q=0.707)
+  const lpfCoeffs = makeBiquadLpf(13500, sampleRate, 0.707);
+  const lpfFilters = Array.from({ length: numChannels }, () => new BiquadFilter());
 
   // 曲頭・曲末のデクリック・フェード（6ms）
   const fadeFrames = Math.min(Math.floor(sampleRate * 0.006), Math.floor(totalFrames / 4));
@@ -269,6 +292,8 @@ export function cleanWavArrayBuffer(wavBuffer: ArrayBuffer): ArrayBuffer {
     for (let c = 0; c < numChannels; c++) {
       let s = channelsData[c][f];
       s = hpfFilters[c].process(s, hpfCoeffs);
+      s = deHissFilters[c].process(s, deHissCoeffs);
+      s = lpfFilters[c].process(s, lpfCoeffs);
       channelsData[c][f] = s;
 
       const absS = Math.abs(s);

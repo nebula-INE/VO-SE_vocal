@@ -504,7 +504,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       const {
         key,
         pitchCurveHz,
-        intensity = 100,
+        intensity = 58,
         modulation = 0,
         startTimeMs = -1,
         preutteranceMs = -1,
@@ -540,7 +540,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       // 64-bit scalar fields must use the exact 8-byte-aligned offsets from
       // vose_core.h. Leaving these fields unwritten is an ABI violation:
       // C++ would read arbitrary heap bytes as gain/modulation/timing.
-      mod.setValue(base + OFF_INTENSITY, Number.isFinite(intensity) ? intensity : 100, 'double');
+      mod.setValue(base + OFF_INTENSITY, Number.isFinite(intensity) ? intensity : 58, 'double');
       mod.setValue(base + OFF_MODULATION, Number.isFinite(modulation) ? modulation : 0, 'double');
       mod.setValue(base + OFF_START_TIME_MS, Number.isFinite(startTimeMs) ? startTimeMs : -1, 'double');
       mod.setValue(base + OFF_PREUTTERANCE_MS, Number.isFinite(preutteranceMs) ? preutteranceMs : -1, 'double');

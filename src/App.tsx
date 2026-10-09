@@ -890,23 +890,23 @@ export default function App() {
       deMud.gain.setValueAtTime(-2.5, ctx.currentTime);
       deMud.Q.setValueAtTime(1.2, ctx.currentTime);
 
-      // 3. Presence & Articulation ブースト (3.8kHz, +3.0dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、歌詞をはっきりと聴かせる
+      // 3. Presence & Articulation (3.8kHz, フラット0.0dB): 人工的な高域ザラつき・耳障りな子音擦過音のブーストを抑止
       const presence = ctx.createBiquadFilter();
       presence.type = 'peaking';
       presence.frequency.setValueAtTime(3800, ctx.currentTime);
-      presence.gain.setValueAtTime(3.0, ctx.currentTime);
+      presence.gain.setValueAtTime(0.0, ctx.currentTime);
       presence.Q.setValueAtTime(1.0, ctx.currentTime);
 
-      // 4. Air & Brilliance ハイシェルフ (9.0kHz, +3.2dB): こもった音を解消し、透明感・抜け・空気感を付加
+      // 4. Air & Brilliance (9.0kHz, フラット0.0dB): 息漏れ・マイクヒス・高域ジリジリ感の増幅を防止
       const airShelf = ctx.createBiquadFilter();
       airShelf.type = 'highshelf';
       airShelf.frequency.setValueAtTime(9000, ctx.currentTime);
-      airShelf.gain.setValueAtTime(3.2, ctx.currentTime);
+      airShelf.gain.setValueAtTime(0.0, ctx.currentTime);
 
-      // 5. 超高域セーフティ LPF (17.5kHz, Q=0.707): 可聴域の歌声を一切減衰させずに超高域の折り返しノイズのみを遮断
+      // 5. 超高域セーフティ LPF (14.0kHz, Q=0.707): 可聴域の歌声を減衰させずに超高域の折り返し・量子化・ヒスノイズのみを遮断
       const safetyLpf = ctx.createBiquadFilter();
       safetyLpf.type = 'lowpass';
-      safetyLpf.frequency.setValueAtTime(17500, ctx.currentTime);
+      safetyLpf.frequency.setValueAtTime(14000, ctx.currentTime);
       safetyLpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
       const limiter = ctx.createDynamicsCompressor();
