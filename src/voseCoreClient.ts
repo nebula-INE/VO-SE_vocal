@@ -487,7 +487,9 @@ async function renderViaCore(
     const wasmKey = `s${wasmKeySeq++}`;
     cacheKeyToWasmKey.set(key, wasmKey);
     const origAlias = uniqueSampleMap.get(key)?.alias || cvvcRequests.get(key)?.alias || s.matchedAlias;
-    samples.push({ key: wasmKey, pcmF32: s.pcmF32.buffer.slice(0), oto: s.oto, origAlias });
+    // PCMは後続処理で再参照しないためコピーを作らず、Workerへ所有権を移す。
+    // postMessageのtransfer後に元bufferはdetachedになるが、以降はs.oto / s.matchedAliasのみを参照する。
+    samples.push({ key: wasmKey, pcmF32: s.pcmF32.buffer as ArrayBuffer, oto: s.oto, origAlias });
   }
 
   // 4. Build NoteEvents with their real musical positions.
