@@ -95,3 +95,26 @@ test('serializer converts semitone offsets to UST tenths and round-trips through
   );
   assert.deepEqual(reparsed, original);
 });
+
+
+test('representative existing UST bend values retain the fixed tenths scale', () => {
+  // Shape already used by the repository's UST parser regression fixture.
+  // This guards compatibility for imported UST data while the editor serializer
+  // is corrected independently.
+  assert.deepEqual(
+    pitchCurve.parsePitchBend('0;0', '50,100', '0,5'),
+    [
+      { offsetMs: 0, semitone: 0 },
+      { offsetMs: 50, semitone: 0 },
+      { offsetMs: 150, semitone: 0.5 },
+    ],
+  );
+
+  assert.deepEqual(
+    pitchCurve.parsePitchBend('0;5', '100', '10'),
+    [
+      { offsetMs: 0, semitone: 0.5 },
+      { offsetMs: 100, semitone: 1 },
+    ],
+  );
+});
