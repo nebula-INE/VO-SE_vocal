@@ -93,14 +93,18 @@ export function serializePitchBend(points: PitchPoint[]): { pbs: string; pbw: st
     return { pbs: '0;0', pbw: '', pby: '' };
   }
   const [first, ...rest] = points;
-  const pbs = `${Math.round(first.offsetMs)};${roundTo(first.semitone, 2)}`;
+  // PitchPoint.semitone is expressed in semitones, while UST PBS/PBY
+  // heights use tenths of a semitone (10 raw units = 1 semitone).
+  // Keep this conversion at the editor serialization boundary; the parser
+  // and renderer retain their existing interpretation.
+  const pbs = `${Math.round(first.offsetMs)};${roundTo(first.semitone * 10, 2)}`;
 
   const widths: number[] = [];
   const heights: number[] = [];
   let prevMs = first.offsetMs;
   for (const p of rest) {
     widths.push(Math.max(1, Math.round(p.offsetMs - prevMs)));
-    heights.push(roundTo(p.semitone, 2));
+    heights.push(roundTo(p.semitone * 10, 2));
     prevMs = p.offsetMs;
   }
 
