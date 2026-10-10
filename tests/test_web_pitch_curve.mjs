@@ -73,3 +73,25 @@ test('tempo conversion uses 480 ticks per beat and is inverse at positive tempo'
     assert.ok(Math.abs(pitchCurve.ticksToMs(ticks, tempo) - 375) < 1e-9);
   }
 });
+
+test('serializer converts semitone offsets to UST tenths and round-trips through parser', () => {
+  const original = [
+    { offsetMs: -50, semitone: 1.25 },
+    { offsetMs: 50, semitone: -1.5 },
+    { offsetMs: 175, semitone: 0.35 },
+  ];
+
+  const serialized = pitchCurve.serializePitchBend(original);
+  assert.deepEqual(serialized, {
+    pbs: '-50;12.5',
+    pbw: '100,125',
+    pby: '-15,3.5',
+  });
+
+  const reparsed = pitchCurve.parsePitchBend(
+    serialized.pbs,
+    serialized.pbw,
+    serialized.pby,
+  );
+  assert.deepEqual(reparsed, original);
+});
