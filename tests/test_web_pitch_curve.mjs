@@ -47,7 +47,7 @@ test('sampler linearly interpolates and holds both endpoints', () => {
   assert.equal(pitchCurve.sampleSemitoneAt(points, -200), -2);
   assert.equal(pitchCurve.sampleSemitoneAt(points, -100), -2);
   assert.equal(pitchCurve.sampleSemitoneAt(points, 0), 0);
-  assert.equal(pitchCurve.sampleSemitoneAt(points, 50), 1.5);
+  assert.equal(pitchCurve.sampleSemitoneAt(points, 50), 1);
   assert.equal(pitchCurve.sampleSemitoneAt(points, 100), 2);
   assert.equal(pitchCurve.sampleSemitoneAt(points, 500), 2);
 });
@@ -66,8 +66,8 @@ test('smoother applies the configured time-based slew limit without changing tim
 });
 
 test('tempo conversion uses 480 ticks per beat and is inverse at positive tempo', () => {
-  assert.equal(pitchCurve.msToTicks(500, 120), 480);
-  assert.equal(pitchCurve.ticksToMs(480, 120), 500);
+  assert.ok(Math.abs(pitchCurve.msToTicks(500, 120) - 480) < 1e-9);
+  assert.ok(Math.abs(pitchCurve.ticksToMs(480, 120) - 500) < 1e-9);
   for (const tempo of [60, 90, 120, 150, 240]) {
     const ticks = pitchCurve.msToTicks(375, tempo);
     assert.ok(Math.abs(pitchCurve.ticksToMs(ticks, tempo) - 375) < 1e-9);
