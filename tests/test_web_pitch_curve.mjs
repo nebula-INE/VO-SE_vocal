@@ -118,3 +118,64 @@ test('representative existing UST bend values retain the fixed tenths scale', ()
     ],
   );
 });
+
+
+test('WASM pitch bridge converts sampled semitone bends to absolute Hz without renderer changes', async () => {
+  // Exercise the actual private bridge helper from voseCoreClient.ts while
+  // importing the actual pitchCurve.ts utility. The source is instrumented
+  // only in-memory; production exports and audio code remain unchanged.
+  const clientSource = readFileSync(resolve(here, '../src/voseCoreClient.ts'), 'utf8');
+  const helperMatch = clientSource.match(
+    /function buildPitchCurveHz\\(note: any, frameCount: number, durationMs: number\\): number\\[\\] \\{[\\s\\S]*?\\n\\}\\n\\nfunction silentFrames/
+  );
+  assert.ok(helperMatch, 'buildPitchCurveHz helper must exist in production source');
+  const helperSource = helperMatch[0].replace(/\\n\\nfunction silentFrames$/, '\\nexport { buildPitchCurveHz };');
+  const utilityUrl = 'data:text/javascript;base64,' + Buffer.from(compiled, 'utf8').toString('base64');
+  const bridgeModuleSource = `import { parsePitchBend, smoothPitchBendPoints } from ${JSON.stringify(utilityUrl)};\\n${helperSource}`;
+  const bridgeCompiled = ts.transpileModule(bridgeModuleSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const bridge = await import(
+    'data:text/javascript;base64,' + Buffer.from(bridgeCompiled, 'utf8').toString('base64')
+  );
+
+  const curve = bridge.buildPitchCurveHz({
+    noteNum: 69,
+    pbs: '0;0',
+    pbw: '50,50',
+    pby: '10,20',
+  }, 3, 100);
+  const semitoneHz = (semitones) => 440 * Math.pow(2, semitones / 12);
+  assert.equal(curve.length, 3);
+  assert.ok(Math.abs(curve[0] - 440) < 1e-9);
+  assert.ok(Math.abs(curve[1] - semitoneHz(1)) < 1e-9);
+  assert.ok(Math.abs(curve[2] - semitoneHz(2)) < 1e-9);
+});
+
+test('WASM pitch bridge preserves base frequency for notes without bend data', async () => {
+  const clientSource = readFileSync(resolve(here, '../src/voseCoreClient.ts'), 'utf8');
+  const helperMatch = clientSource.match(
+    /function buildPitchCurveHz\\(note: any, frameCount: number, durationMs: number\\): number\\[\\] \\{[\\s\\S]*?\\n\\}\\n\\nfunction silentFrames/
+  );
+  assert.ok(helperMatch, 'buildPitchCurveHz helper must exist in production source');
+  const helperSource = helperMatch[0].replace(/\\n\\nfunction silentFrames$/, '\\nexport { buildPitchCurveHz };');
+  const utilityUrl = 'data:text/javascript;base64,' + Buffer.from(compiled, 'utf8').toString('base64');
+  const bridgeModuleSource = `import { parsePitchBend, smoothPitchBendPoints } from ${JSON.stringify(utilityUrl)};\\n${helperSource}`;
+  const bridgeCompiled = ts.transpileModule(bridgeModuleSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const bridge = await import(
+    'data:text/javascript;base64,' + Buffer.from(bridgeCompiled, 'utf8').toString('base64')
+  );
+
+  const curve = bridge.buildPitchCurveHz({ noteNum: 60 }, 3, 10);
+  const expectedHz = 440 * Math.pow(2, (60 - 69) / 12);
+  assert.equal(curve.length, 3);
+  for (const hz of curve) assert.ok(Math.abs(hz - expectedHz) < 1e-9);
+});
