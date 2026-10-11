@@ -130,7 +130,7 @@ async function loadPitchBridgeHelper() {
   assert.ok(helperMatch, 'buildPitchCurveHz helper must exist in production source');
   const helperSource = helperMatch[0].replace(/\n\nfunction silentFrames$/, '\nexport { buildPitchCurveHz };');
   const utilityUrl = 'data:text/javascript;base64,' + Buffer.from(compiled, 'utf8').toString('base64');
-  const bridgeModuleSource = \`import { parsePitchBend, smoothPitchBendPoints } from \${JSON.stringify(utilityUrl)};\n\${helperSource}\`;
+  const bridgeModuleSource = 'import { parsePitchBend, smoothPitchBendPoints } from ' + JSON.stringify(utilityUrl) + ';\n' + helperSource;
   const bridgeCompiled = ts.transpileModule(bridgeModuleSource, {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
