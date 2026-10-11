@@ -125,10 +125,10 @@ async function loadPitchBridgeHelper() {
   // Instrument the actual private helper in-memory; do not alter production exports.
   const clientSource = readFileSync(resolve(here, '../src/voseCoreClient.ts'), 'utf8');
   const helperMatch = clientSource.match(
-    /function buildPitchCurveHz\(note: any, frameCount: number, durationMs: number\): number\[\] \{[\s\S]*?\n\}\n\nfunction silentFrames/
+    /function buildPitchCurveHz\(note: any, frameCount: number, durationMs: number\): number\[\] \{[\s\S]*?\r?\n\}\r?\n\r?\nfunction silentFrames/
   );
   assert.ok(helperMatch, 'buildPitchCurveHz helper must exist in production source');
-  const helperSource = helperMatch[0].replace(/\n\nfunction silentFrames$/, '\nexport { buildPitchCurveHz };');
+  const helperSource = helperMatch[0].replace(/\r?\n\r?\nfunction silentFrames$/, '\nexport { buildPitchCurveHz };');
   const utilityUrl = 'data:text/javascript;base64,' + Buffer.from(compiled, 'utf8').toString('base64');
   const bridgeModuleSource = 'import { parsePitchBend, smoothPitchBendPoints } from ' + JSON.stringify(utilityUrl) + ';\n' + helperSource;
   const bridgeCompiled = ts.transpileModule(bridgeModuleSource, {
