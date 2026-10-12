@@ -42,7 +42,7 @@ namespace AutomationRanges
     {
         const double clamped = std::clamp (value, kPitchMin, kPitchMax);
         if (clamped < 0.0)
-            return (clamped / -kPitchMin) * -kPitchAutomationSemitoneRange;
+            return (clamped / -kPitchMin) * kPitchAutomationSemitoneRange;
         return (clamped / kPitchMax) * kPitchAutomationSemitoneRange;
     }
 }
