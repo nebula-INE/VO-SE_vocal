@@ -248,3 +248,19 @@ def test_ust_vibrato_cycle_converts_seconds_to_milliseconds():
     assert np.isclose(_vibrato_cycles(0.08, 160.0), 0.5)
     assert np.isclose(_vibrato_cycles(0.16, 160.0), 1.0)
     assert np.isclose(_vibrato_cycles(0.08, 160.0, 0.25), 0.75)
+
+
+def test_world_analysis_keeps_raw_f0_separate_from_continuous_analysis_f0():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    start = source.index("build_analysis_cache(")
+    end = source.index("// ============================================================\n// get_or_analyze", start)
+    section = source[start:end]
+
+    # Continuous F0 is required by CheapTrick/D4C, but the cache's F0 is also
+    # consumed by UST modulation and must retain zero-valued unvoiced frames.
+    assert "continuous_f0.data(), harvest_len, &ct_opt" in section
+    assert "continuous_f0.data(), harvest_len, fft_size" in section
+    assert "cache->f0 = std::move(continuous_f0)" not in section
