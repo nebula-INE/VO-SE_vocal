@@ -29,6 +29,14 @@ int main()
     assert (near (pitchValueToSemitones (-9000.0), -2.0));
     assert (near (pitchValueToSemitones (9000.0), 2.0));
 
+    // Desktop's semitone-to-frequency ratio must match the Web bridge formula.
+    using AutomationRanges::semitonesToFrequencyRatio;
+    assert (near (semitonesToFrequencyRatio (-2.0), std::pow (2.0, -2.0 / 12.0)));
+    assert (near (semitonesToFrequencyRatio (-1.0), std::pow (2.0, -1.0 / 12.0)));
+    assert (near (semitonesToFrequencyRatio (0.0), 1.0));
+    assert (near (semitonesToFrequencyRatio (1.0), std::pow (2.0, 1.0 / 12.0)));
+    assert (near (semitonesToFrequencyRatio (2.0), std::pow (2.0, 2.0 / 12.0)));
+
     // Native automation sampling is step-hold: a point remains active until the next point.
     AutomationCurves curves;
     assert (! curves.evaluate (AutomationParam::pitch, 0.0).has_value());
