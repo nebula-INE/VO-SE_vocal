@@ -5,6 +5,7 @@ on:
     paths:
       - "include/AutomationCurves.h"
       - "include/AutomationPoint.h"
+      - "src/PluginProcessor.cpp"
       - "tests/native/test_automation_curves.cpp"
       - ".github/workflows/test-automation-curves.yml"
   push:
