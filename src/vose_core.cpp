@@ -894,9 +894,11 @@ build_analysis_cache(const EmbeddedVoice& ev, int fft_size, int spec_bins)
     D4C(ev.waveform.data(), wav_len, ev.fs,
         cache->time.data(), continuous_f0.data(), harvest_len, fft_size, &d4c_opt, ap.data());
 
-    // 平均ピッチおよびフォルマント計算の安定化のため、連続化されたF0を保持
-    cache->f0 = std::move(continuous_f0);
-
+    // 重要: cache->f0 には Harvest/StoneMask 由来の元の F0（無声区間は 0）を保持する。
+    // continuous_f0 は CheapTrick/D4C の解析入力にだけ使う。
+    // ここで cache->f0 を continuous_f0 に置き換えると、無声区間まで有声の F0 として
+    // 扱われ、synthesize_note_impl の UST modulation が補間値に追従してしまう。
+    // その結果、子音区間に不要なピッチ変調が入りうる。
     return cache;
 }
 
