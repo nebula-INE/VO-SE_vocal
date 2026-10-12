@@ -1,0 +1,43 @@
+name: Native Automation Curve Tests
+
+on:
+  pull_request:
+    paths:
+      - "include/AutomationCurves.h"
+      - "include/AutomationPoint.h"
+      - "tests/native/test_automation_curves.cpp"
+      - ".github/workflows/test-automation-curves.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "include/AutomationCurves.h"
+      - "include/AutomationPoint.h"
+      - "tests/native/test_automation_curves.cpp"
+      - ".github/workflows/test-automation-curves.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-automation-curves:
+    name: Compile and test native automation curves
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up C++ compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++
+
+      - name: Compile regression test
+        run: >-
+          c++ -std=c++20 -Wall -Wextra -Werror
+          -I include
+          tests/native/test_automation_curves.cpp
+          -o /tmp/test_automation_curves
+
+      - name: Run regression test
+        run: /tmp/test_automation_curves
