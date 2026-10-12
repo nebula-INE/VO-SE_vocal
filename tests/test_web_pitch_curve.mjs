@@ -164,3 +164,30 @@ test('WASM pitch bridge preserves base frequency for notes without bend data', a
   assert.equal(curve.length, 3);
   for (const hz of curve) assert.ok(Math.abs(hz - expectedHz) < 1e-9);
 });
+
+test('Desktop/Web shared frequency contract matches for a constant pitch automation offset', async () => {
+  // Desktop automation maps 4095.5 to +1 semitone; Web UST uses +1 semitone
+  // at every control point (raw PBS/PBY values are tenths of a semitone).
+  // Constant bends deliberately avoid interpolation/slew-policy differences.
+  const bridge = await loadPitchBridgeHelper();
+  const semitoneOffset = 1;
+  const noteNumbers = [48, 60, 69, 81];
+  for (const noteNum of noteNumbers) {
+    const baseHz = 440 * Math.pow(2, (noteNum - 69) / 12);
+    const curve = bridge.buildPitchCurveHz({
+      noteNum,
+      pbs: '0;10',
+      pbw: '50,50',
+      pby: '10,10',
+    }, 3, 100);
+    const expectedHz = baseHz * Math.pow(2, semitoneOffset / 12);
+    assert.equal(curve.length, 3);
+    for (const hz of curve) {
+      assert.ok(
+        Math.abs(hz - expectedHz) < 1e-9,
+        `noteNum=${noteNum}: expected ${expectedHz} Hz, received ${hz} Hz`,
+      );
+    }
+  }
+});
+
