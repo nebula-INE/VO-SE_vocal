@@ -224,3 +224,19 @@ def test_placement_diagnostics_use_note_event_scope():
     assert 'placement.wav_path = notes[idx].wav_path' in source
     assert "placement.pitch_hz = (n.pitch_curve" not in source
     assert 'placement.wav_path = n.wav_path' not in source
+
+def test_portamento_curve_uses_note_timeline_after_preutterance_lead_in():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    start = source.index(
+        "if (n.portamento_offsets && n.portamento_length > 0)"
+    )
+    end = source.index("// 歌唱合成では、各ノートは常に指定のピッチ", start)
+    section = source[start:end]
+
+    # Pitch and portamento curves must use the same lead-compensated time axis.
+    assert "std::min(curve_idx, curve_frames - 1), curve_frames" in section
+    assert "j, output_frames" not in section
+    assert "j < n.portamento_length" not in section
