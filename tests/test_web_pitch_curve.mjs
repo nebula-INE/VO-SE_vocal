@@ -191,3 +191,48 @@ test('Desktop/Web shared frequency contract matches for a constant pitch automat
   }
 });
 
+
+
+test('WASM pitch bridge keeps negative bends in semitone-to-Hz conversion', async () => {
+  const bridge = await loadPitchBridgeHelper();
+  const curve = bridge.buildPitchCurveHz({
+    noteNum: 69,
+    pbs: '0;0',
+    pbw: '50,50',
+    pby: '-10,-20',
+  }, 3, 100);
+  const semitoneHz = (semitones) => 440 * Math.pow(2, semitones / 12);
+  assert.equal(curve.length, 3);
+  assert.ok(Math.abs(curve[0] - semitoneHz(0)) < 1e-9);
+  assert.ok(Math.abs(curve[1] - semitoneHz(-1)) < 1e-9);
+  assert.ok(Math.abs(curve[2] - semitoneHz(-2)) < 1e-9);
+});
+
+test('WASM pitch bridge samples full duration endpoints on a non-5ms-aligned duration', async () => {
+  const bridge = await loadPitchBridgeHelper();
+  const curve = bridge.buildPitchCurveHz({
+    noteNum: 69,
+    pbs: '0;0',
+    pbw: '103',
+    pby: '0,20',
+  }, 3, 103);
+  const semitoneHz = (semitones) => 440 * Math.pow(2, semitones / 12);
+  assert.equal(curve.length, 3);
+  assert.ok(Math.abs(curve[0] - semitoneHz(0)) < 1e-9);
+  assert.ok(Math.abs(curve[1] - semitoneHz(1)) < 1e-9);
+  assert.ok(Math.abs(curve[2] - semitoneHz(2)) < 1e-9);
+});
+
+test('WASM pitch bridge applies the existing slew limit to a steep bend', async () => {
+  const bridge = await loadPitchBridgeHelper();
+  const curve = bridge.buildPitchCurveHz({
+    noteNum: 69,
+    pbs: '0;0',
+    pbw: '10',
+    pby: '0,100',
+  }, 2, 10);
+  const semitoneHz = (semitones) => 440 * Math.pow(2, semitones / 12);
+  assert.equal(curve.length, 2);
+  assert.ok(Math.abs(curve[0] - semitoneHz(0)) < 1e-9);
+  assert.ok(Math.abs(curve[1] - semitoneHz(0.8)) < 1e-9);
+});
