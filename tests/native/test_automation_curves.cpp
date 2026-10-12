@@ -25,6 +25,10 @@ int main()
     assert (near (pitchValueToSemitones (-4096.0), -1.0));
     assert (near (pitchValueToSemitones (4095.5), 1.0));
 
+    // Malformed/out-of-range automation values must not exceed the supported pitch range.
+    assert (near (pitchValueToSemitones (-9000.0), -2.0));
+    assert (near (pitchValueToSemitones (9000.0), 2.0));
+
     // Native automation sampling is step-hold: a point remains active until the next point.
     AutomationCurves curves;
     assert (! curves.evaluate (AutomationParam::pitch, 0.0).has_value());
