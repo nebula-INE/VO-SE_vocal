@@ -720,7 +720,7 @@ static void save_cache(const std::string& cache_path, const AnalysisCache& cache
 
     bool ok = true;
     VoseCacheHeader header;
-    header.magic     = 0x45534F56;
+    header.magic     = 0x45534F57;
     header.length    = cache.length;
     header.spec_bins = cache.spec_bins;
 
@@ -763,7 +763,7 @@ static std::shared_ptr<AnalysisCache> load_cache(const std::string& path,
     if (!ifs.read(reinterpret_cast<char*>(&header), sizeof(header))) return nullptr;
 
     // マジック検証
-    if (header.magic != 0x45534F56) return nullptr;
+    if (header.magic != 0x45534F57) return nullptr;
 
     // サニティチェック: 長さ・spec_bins が異常値ならキャッシュ破棄（OOM防止）
     if (header.length <= 0 || header.length > 1'000'000) return nullptr;
