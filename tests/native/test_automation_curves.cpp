@@ -37,6 +37,14 @@ int main()
     assert (near (semitonesToFrequencyRatio (1.0), std::pow (2.0, 1.0 / 12.0)));
     assert (near (semitonesToFrequencyRatio (2.0), std::pow (2.0, 2.0 / 12.0)));
 
+    // The render path multiplies the base note frequency by this ratio. Verify
+    // the resulting absolute Hz for both bend directions, not just the ratio.
+    constexpr double baseHz = 440.0; // MIDI note 69
+    assert (near (baseHz * semitonesToFrequencyRatio (-2.0),
+                  440.0 * std::pow (2.0, -2.0 / 12.0)));
+    assert (near (baseHz * semitonesToFrequencyRatio (2.0),
+                  440.0 * std::pow (2.0, 2.0 / 12.0)));
+
     // Native automation sampling is step-hold: a point remains active until the next point.
     AutomationCurves curves;
     assert (! curves.evaluate (AutomationParam::pitch, 0.0).has_value());
