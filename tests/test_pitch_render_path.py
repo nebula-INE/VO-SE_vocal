@@ -264,3 +264,9 @@ def test_world_analysis_keeps_raw_f0_separate_from_continuous_analysis_f0():
     assert "continuous_f0.data(), harvest_len, &ct_opt" in section
     assert "continuous_f0.data(), harvest_len, fft_size" in section
     assert "cache->f0 = std::move(continuous_f0)" not in section
+
+    # Existing native disk caches contain the old interpolated F0 track.
+    # A cache-format magic bump forces them to be rebuilt with the new semantics.
+    assert "header.magic     = 0x45534F57" in source
+    assert "header.magic != 0x45534F57" in source
+    assert "0x45534F56" not in source
