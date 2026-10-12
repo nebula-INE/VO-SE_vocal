@@ -240,3 +240,11 @@ def test_portamento_curve_uses_note_timeline_after_preutterance_lead_in():
     assert "std::min(curve_idx, curve_frames - 1), curve_frames" in section
     assert "j, output_frames" not in section
     assert "j < n.portamento_length" not in section
+
+def test_ust_vibrato_cycle_converts_seconds_to_milliseconds():
+    from modules.audio.vo_se_engine_patch import _vibrato_cycles
+
+    # A 160 ms UST cycle completes half a cycle in 80 ms and one cycle in 160 ms.
+    assert np.isclose(_vibrato_cycles(0.08, 160.0), 0.5)
+    assert np.isclose(_vibrato_cycles(0.16, 160.0), 1.0)
+    assert np.isclose(_vibrato_cycles(0.08, 160.0, 0.25), 0.75)
