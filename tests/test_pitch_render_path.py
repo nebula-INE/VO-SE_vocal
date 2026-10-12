@@ -224,3 +224,27 @@ def test_placement_diagnostics_use_note_event_scope():
     assert 'placement.wav_path = notes[idx].wav_path' in source
     assert "placement.pitch_hz = (n.pitch_curve" not in source
     assert 'placement.wav_path = n.wav_path' not in source
+
+def test_portamento_curve_uses_note_timeline_after_preutterance_lead_in():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    start = source.index(
+        "if (n.portamento_offsets && n.portamento_length > 0)"
+    )
+    end = source.index("// 歌唱合成では、各ノートは常に指定のピッチ", start)
+    section = source[start:end]
+
+    # Pitch and portamento curves must use the same lead-compensated time axis.
+    assert "std::min(curve_idx, curve_frames - 1), curve_frames" in section
+    assert "j, output_frames" not in section
+    assert "j < n.portamento_length" not in section
+
+def test_ust_vibrato_cycle_converts_seconds_to_milliseconds():
+    from modules.audio.vo_se_engine_patch import _vibrato_cycles
+
+    # A 160 ms UST cycle completes half a cycle in 80 ms and one cycle in 160 ms.
+    assert np.isclose(_vibrato_cycles(0.08, 160.0), 0.5)
+    assert np.isclose(_vibrato_cycles(0.16, 160.0), 1.0)
+    assert np.isclose(_vibrato_cycles(0.08, 160.0, 0.25), 0.75)
