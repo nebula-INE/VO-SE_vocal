@@ -17,6 +17,7 @@
 #include "AutomationPoint.h"
 #include <vector>
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 enum class AutomationParam
@@ -37,6 +38,13 @@ namespace AutomationRanges
     // Pitchオートメーションの値域(-8192..8191)は0を中心に非対称なので、
     // 負側と正側で別々に正規化し、両端を厳密に-2/+2半音へ対応させる。
     constexpr double kPitchAutomationSemitoneRange = 2.0;
+
+    // Shared conversion used by Desktop pitch automation; matches the Web bridge's
+    // baseHz * pow(2, semitoneOffset / 12) calculation.
+    inline double semitonesToFrequencyRatio (double semitones)
+    {
+        return std::pow (2.0, semitones / 12.0);
+    }
 
     inline double pitchValueToSemitones (double value)
     {
