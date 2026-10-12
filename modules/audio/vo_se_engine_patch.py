@@ -43,6 +43,11 @@ from modules.data.ust_parser import UstParser, UstConverter, UstVibratoParams
 logger = logging.getLogger(__name__)
 
 
+def _vibrato_cycles(elapsed_sec: float, cycle_ms: float, phase: float = 0.0) -> float:
+    """Convert elapsed seconds and UST cycle milliseconds to cycles."""
+    return elapsed_sec * 1000.0 / max(float(cycle_ms), 1e-6) + phase
+
+
 def build_vibrato_curves(
     duration_sec: float,
     vibrato_params: Optional[UstVibratoParams],
@@ -511,7 +516,8 @@ def _export_to_wav_v2(
                 env = max(0.0, min(1.0, env))
 
                 phase = ust_vib.phase / 100.0
-                cycles = elapsed * (1000.0 / max(ust_vib.cycle, 1e-6)) / 1000.0 + phase
+                # elapsed is seconds while UST VBR cycle is milliseconds.
+                cycles = _vibrato_cycles(elapsed, ust_vib.cycle, phase)
                 cents = math.sin(2.0 * math.pi * cycles) * ust_vib.depth * env + ust_vib.height
                 semitone_offset[idx] = cents / 100.0
 
