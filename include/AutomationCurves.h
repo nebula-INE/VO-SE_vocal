@@ -34,14 +34,16 @@ namespace AutomationRanges
     constexpr double kNormMin  = 0.0;
     constexpr double kNormMax  = 1.0;
 
-    // Pitchオートメーションの値レンジ(-8192..8191)を半音オフセットに変換する際の
-    // 可動域。DAW一般のピッチベンドレンジ(±2半音)に合わせた暫定値で、実際の
-    // 音楽的要件に応じて調整してよい（PluginProcessor.cpp側で使用）。
+    // Pitchオートメーションの値域(-8192..8191)は0を中心に非対称なので、
+    // 負側と正側で別々に正規化し、両端を厳密に-2/+2半音へ対応させる。
     constexpr double kPitchAutomationSemitoneRange = 2.0;
 
     inline double pitchValueToSemitones (double value)
     {
-        return (value / kPitchMax) * kPitchAutomationSemitoneRange;
+        const double clamped = std::clamp (value, kPitchMin, kPitchMax);
+        if (clamped < 0.0)
+            return (clamped / -kPitchMin) * -kPitchAutomationSemitoneRange;
+        return (clamped / kPitchMax) * kPitchAutomationSemitoneRange;
     }
 }
 
