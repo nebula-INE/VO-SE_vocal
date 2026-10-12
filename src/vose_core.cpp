@@ -1829,9 +1829,15 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             }
         }
 
-        // ---- 3. ★★★ ポルタメントオフセットを適用（セント → Hz） ★★★ ----
-        if (n.portamento_offsets && n.portamento_length > 0 && j < n.portamento_length) {
-            double cents = resample_curve(n.portamento_offsets, n.portamento_length, j, output_frames);
+        // ---- 3. ポルタメントオフセットを適用（セント → Hz） ----
+        // pitch_curve と同じ「ノート時間軸」を使う。j は先行発声のリードインを
+        // 含む出力インデックスなので、そのまま使うとポルタメントが前倒しになり、
+        // ノート末尾でカーブが切れて音程が跳ねる。curve_idx / curve_frames で
+        // 先行発声分を除外し、両カーブの時刻を一致させる。
+        if (n.portamento_offsets && n.portamento_length > 0) {
+            const double cents = resample_curve(
+                n.portamento_offsets, n.portamento_length,
+                std::min(curve_idx, curve_frames - 1), curve_frames);
             base_f0_val *= std::pow(2.0, cents / 1200.0);
         }
 
