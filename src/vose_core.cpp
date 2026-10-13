@@ -2669,8 +2669,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                     const int64_t safe_declick =
                         std::min<int64_t>(kBoundaryDeclickSamples, write_len);
                     for (int64_t s = 0; s < safe_declick; ++s) {
+                        // Reach exactly 1.0 on the last blended sample before switching to pure note audio.
                         const double t = (safe_declick > 1)
-                            ? static_cast<double>(s) / static_cast<double>(safe_declick)
+                            ? static_cast<double>(s) / static_cast<double>(safe_declick - 1)
                             : 1.0;
                         const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
                         const double fade_out = 1.0 - fade_in;
