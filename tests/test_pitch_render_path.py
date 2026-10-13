@@ -265,3 +265,14 @@ def test_world_overlap_crossfade_reaches_exact_endpoint():
     assert "static_cast<double>(s) / static_cast<double>(safe_xfade - 1)" in section
     assert "static_cast<double>(s) / static_cast<double>(safe_xfade)" not in section
 
+    # The zero-overlap boundary declick path has the same endpoint requirement.
+    declick_start = source.index(
+        "} else if (prior_audio_overlaps && source_skip == 0)", overlap_branch
+    )
+    declick_end = source.index(
+        "} else if (source_skip == 0)", declick_start
+    )
+    declick_section = source[declick_start:declick_end]
+    assert "static_cast<double>(s) / static_cast<double>(safe_declick - 1)" in declick_section
+    assert "static_cast<double>(s) / static_cast<double>(safe_declick)" not in declick_section
+
