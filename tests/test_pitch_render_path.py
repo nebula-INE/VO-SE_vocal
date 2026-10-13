@@ -248,3 +248,31 @@ def test_ust_vibrato_cycle_converts_seconds_to_milliseconds():
     assert np.isclose(_vibrato_cycles(0.08, 160.0), 0.5)
     assert np.isclose(_vibrato_cycles(0.16, 160.0), 1.0)
     assert np.isclose(_vibrato_cycles(0.08, 160.0, 0.25), 0.75)
+
+def test_world_overlap_crossfade_reaches_exact_endpoint():
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "vose_core.cpp"
+    ).read_text(encoding="utf-8")
+
+    overlap_branch = source.index("if (overlap_samples > 0)")
+    next_branch = source.index(
+        "} else if (prior_audio_overlaps && source_skip == 0)", overlap_branch
+    )
+    section = source[overlap_branch:next_branch]
+
+    # The last blended sample must be 100% the incoming note, so the following
+    # pure-note sample does not introduce a crossfade-end step.
+    assert "static_cast<double>(s) / static_cast<double>(safe_xfade - 1)" in section
+    assert "static_cast<double>(s) / static_cast<double>(safe_xfade)" not in section
+
+    # The zero-overlap boundary declick path has the same endpoint requirement.
+    declick_start = source.index(
+        "} else if (prior_audio_overlaps && source_skip == 0)", overlap_branch
+    )
+    declick_end = source.index(
+        "} else if (source_skip == 0)", declick_start
+    )
+    declick_section = source[declick_start:declick_end]
+    assert "static_cast<double>(s) / static_cast<double>(safe_declick - 1)" in declick_section
+    assert "static_cast<double>(s) / static_cast<double>(safe_declick)" not in declick_section
+
