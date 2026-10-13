@@ -42,7 +42,7 @@ export interface FetchedSample {
 }
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null', 'っ', 'ッ'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
 ]);
 
 export function isRest(lyric?: string): boolean {
@@ -84,16 +84,6 @@ async function fetchSampleWithMeta(
 
       const res = await fetch(url);
       if (!res.ok) {
-        let detail = '';
-        try {
-          detail = (await res.text()).slice(0, 240).replace(/\s+/g, ' ');
-        } catch (_) {
-          // HTTP status is still useful when the response body cannot be read.
-        }
-        console.warn(
-          `[wasmEngine] サンプル取得失敗 status=${res.status} alias='${alias}' ` +
-          `prevLyric='${prevLyric || ''}' noteNum=${noteNum ?? ''} detail='${detail}'`
-        );
         sampleCache.set(key, null);
         return null;
       }
@@ -189,12 +179,37 @@ function getLoopCrossfadedBuffer(
   const rawStart = Math.max(0, Math.floor(loopStartSec * sr));
   const rawEnd = Math.min(src.length, Math.floor(loopEndSec * sr));
 
-  // 1. ループ境界は近傍のゼロクロスだけを探索する。
-  // 以前は loopEnd ごとに多数の候補×波形相関を計算していたため、
-  // 長い曲や多音源ではメインスレッドを大きく占有していた。
-  const searchRadius = Math.min(240, Math.floor(sr * 0.006));
-  const loopStartSample = findZeroCrossing(ch0, rawStart, searchRadius);
-  const loopEndSample = findZeroCrossing(ch0, rawEnd, searchRadius);
+  // 1. 正のゼロ交差点検出 (loopStartSample)
+  let loopStartSample = rawStart;
+  let minStartDist = 999999;
+  const searchStartRad = Math.min(400, Math.floor(sr * 0.010));
+  for (let i = Math.max(1, rawStart - searchStartRad); i < Math.min(src.length - 1, rawStart + searchStartRad); i++) {
+    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
+      const dist = Math.abs(i - rawStart);
+      if (dist < minStartDist) {
+        minStartDist = dist;
+        loopStartSample = i;
+      }
+    }
+  }
+
+  // 2. 位相・波形相関が最大となる正のゼロ交差点検出 (loopEndSample)
+  const corrLen = Math.min(180, Math.floor(sr * 0.004));
+  let loopEndSample = rawEnd;
+  let bestCorr = -Infinity;
+  const searchEndRad = Math.min(500, Math.floor(sr * 0.012));
+  for (let i = Math.max(1, rawEnd - searchEndRad); i < Math.min(src.length - 1 - corrLen, rawEnd + searchEndRad); i++) {
+    if (ch0[i - 1] <= 0 && ch0[i] > 0) {
+      let corr = 0;
+      for (let k = 0; k < corrLen; k++) {
+        corr += ch0[loopStartSample + k] * ch0[i + k];
+      }
+      if (corr > bestCorr) {
+        bestCorr = corr;
+        loopEndSample = i;
+      }
+    }
+  }
 
   const loopLenSamples = Math.max(100, loopEndSample - loopStartSample);
   const xfadeSec = Math.min(0.010, (loopLenSamples / sr) * 0.25);
@@ -206,13 +221,10 @@ function getLoopCrossfadedBuffer(
     const dstData = newBuffer.getChannelData(ch);
     dstData.set(srcData);
 
-    // ループ開始より前の音素を混ぜない。
-    // 旧実装は loopStartSample - xfadeSamples を参照していたため、
-    // 子音/前音素がループ末尾へ混入し「別の音が混じる」原因になり得た。
-    // ループ内部の先頭 xfadeSamples と末尾だけをクロスフェードする。
+    // 位相連続クロスフェード: loopEnd の手前 xfadeSamples を loopStart の手前波形と滑らかにブレンド
     for (let i = 0; i < xfadeSamples; i++) {
       const tailIdx = loopEndSample - xfadeSamples + i;
-      const headIdx = loopStartSample + i;
+      const headIdx = loopStartSample - xfadeSamples + i;
       if (tailIdx < 0 || tailIdx >= src.length || headIdx < 0 || headIdx >= src.length) continue;
       const t = i / xfadeSamples;
       const fadeOut = Math.cos((t * Math.PI) / 2);
@@ -257,6 +269,8 @@ function buildRawSegment(
   const xfaded = getLoopCrossfadedBuffer(ctx, cached, loopRange.loopStartSec, loopRange.loopEndSec);
   const loopStartSample = Math.max(0, Math.floor(loopRange.loopStartSec * sr));
   const loopEndSample = Math.min(xfaded.length, Math.floor(loopRange.loopEndSec * sr));
+  const loopLenSec = Math.max(0.001, loopRange.loopEndSec - loopRange.loopStartSec);
+  const xfadeSamples = Math.max(1, Math.min(Math.floor(0.020 * sr), Math.floor((loopEndSample - loopStartSample) * 0.25)));
   // クロスフェード完了後の実効ループ周回長
   const loopLen = Math.max(1, loopEndSample - loopStartSample);
 
@@ -388,47 +402,10 @@ export async function renderStudioOffline(
     });
   }
 
-  const sampleEntries = Array.from(uniqueSampleMap.entries());
-
   onProgress?.(5);
 
-  // 音源解決の共通経路をレンダリング開始時に1音だけ事前検証する。
-  // ここで失敗させることで、数百ノートのHTTP 404を発生させず、
-  // voicebank / oto.ini / alias / WAV のどこで止まったかを即座に判定できる。
-  const firstSampleEntry = sampleEntries.length > 0 ? sampleEntries[0][1] : null;
-  if (firstSampleEntry) {
-    const probeUrl =
-      `/api/py/voicebank-alias-info?name=${encodeURIComponent(voicebank)}&alias=${encodeURIComponent(firstSampleEntry.alias)}` +
-      (firstSampleEntry.prevLyric ? `&prevLyric=${encodeURIComponent(firstSampleEntry.prevLyric)}` : '') +
-      `&noteNum=${encodeURIComponent(String(firstSampleEntry.noteNum))}`;
-    const probe = await fetch(probeUrl);
-    if (!probe.ok) {
-      let detail = '';
-      try {
-        detail = (await probe.text()).slice(0, 500).replace(/\s+/g, ' ');
-      } catch (_) {}
-      throw new Error(
-        `音源解決に失敗しました: voicebank="${voicebank}" alias="${firstSampleEntry.alias}" ` +
-        `prevLyric="${firstSampleEntry.prevLyric || ''}" noteNum=${firstSampleEntry.noteNum} ` +
-        `status=${probe.status} detail=${detail || 'diagnostic endpoint returned no detail'}`
-      );
-    }
-    const probeData = await probe.json();
-    if (!probeData?.success || !probeData?.wavPath) {
-      throw new Error(
-        `音源WAVを解決できませんでした: voicebank="${voicebank}" alias="${firstSampleEntry.alias}" ` +
-        `matchedAlias="${probeData?.matchedAlias || ''}" ` +
-        `filename="${probeData?.filename || ''}"`
-      );
-    }
-    console.info(
-      `[wasmEngine] 音源解決OK voicebank="${probeData.voicebank}" ` +
-      `alias="${probeData.requestedAlias}" -> "${probeData.matchedAlias}" ` +
-      `wav="${probeData.filename}" baseMidi=${probeData.baseMidi}`
-    );
-  }
-
   // 3. サンプルを並行バッチで取得 (進捗: 5% -> 30%)
+  const sampleEntries = Array.from(uniqueSampleMap.entries());
   const BATCH_SIZE = 8;
   const sampleDataMap = new Map<string, FetchedSample | null>();
 
@@ -485,10 +462,10 @@ export async function renderStudioOffline(
   masterAir.frequency.setValueAtTime(9000, 0);
   masterAir.gain.setValueAtTime(0.0, 0);
 
-  // 5. [スタジオ超高域セーフティLPF] 14.0kHz以上の不要な折り返し・量子化ノイズをカット
+  // 5. [スタジオ超高域セーフティLPF] 17.5kHz以上の不要な折り返しノイズのみをカット
   const masterLpf = offlineCtx.createBiquadFilter();
   masterLpf.type = 'lowpass';
-  masterLpf.frequency.setValueAtTime(14000, 0);
+  masterLpf.frequency.setValueAtTime(17500, 0);
   masterLpf.Q.setValueAtTime(0.707, 0);
 
   // クリッピング防止コンプレッサー/リミッター
@@ -619,15 +596,14 @@ export async function renderStudioOffline(
         const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.92;
 
         const tStart = actualStartTime;
-        const totalNoteDur = Math.max(0.02, (startTimeSec + durationSec) - tStart);
         const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / baseRate;
-        const attackDur = Math.max(0.004, Math.min(Math.min(0.03, totalNoteDur * 0.35), overlapSec || 0.008));
+        const attackDur = Math.max(0.006, Math.min(0.03, overlapSec || 0.008));
         const tAttack = tStart + attackDur;
 
         const noteEndTime = startTimeSec + durationSec;
-        const releaseDur = Math.min(0.015, Math.max(0.004, totalNoteDur * 0.25));
-        const tDecay = Math.max(tAttack + 0.002, noteEndTime - releaseDur);
-        const tEnd = Math.max(tDecay + 0.002, noteEndTime);
+        const releaseDur = 0.015;
+        const tDecay = Math.max(tAttack + 0.003, noteEndTime - releaseDur);
+        const tEnd = Math.min(tDecay + releaseDur, noteEndTime);
 
         gain.gain.setValueAtTime(0.0, tStart);
         gain.gain.linearRampToValueAtTime(volGain, tAttack);

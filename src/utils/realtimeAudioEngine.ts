@@ -52,11 +52,9 @@ class RealtimeAudioEngine {
 
       // Envelope
       const now = ctx.currentTime;
-      const releaseStart = Math.max(now + 0.03, now + durationSec - 0.02);
       gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(volume, now + 0.015);
-      gain.gain.setValueAtTime(volume * 0.9, releaseStart);
-      gain.gain.linearRampToValueAtTime(0, now + durationSec);
+      gain.gain.linearRampToValueAtTime(volume, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec);
 
       osc.connect(presenceFilter);
       presenceFilter.connect(filter);
@@ -64,7 +62,7 @@ class RealtimeAudioEngine {
       gain.connect(ctx.destination);
 
       osc.start(now);
-      osc.stop(now + durationSec + 0.005);
+      osc.stop(now + durationSec);
     } catch (e) {
       console.warn('Realtime preview audio error:', e);
     }

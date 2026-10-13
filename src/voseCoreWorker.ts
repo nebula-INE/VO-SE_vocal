@@ -84,12 +84,21 @@ self.onunhandledrejection = (e: PromiseRejectionEvent) => {
 };
 
 // ------------------------------------------------------------
-// NoteEvent構造体レイアウト (vose_core.wasm / wasm32)
-// IMPORTANT: Emscripten wasm32 の NoteEvent は sizeof=88。ポインタは4-byte、
-// doubleは#pragma pack(push, 8)により8-byte境界へ配置される。
-// vose_core.h の wasm32 static_assert とこのオフセットを同じ契約として維持する。
+// NoteEvent構造体レイアウト (vose_core.wasm / wasm32環境: 各フィールド4バイト、計44バイト)
+//   wav_path:               offset 0   (4B, const char*)
+//   pitch_curve:            offset 4   (4B, double*)
+//   pitch_length:           offset 8   (4B, int)
+//   gender_curve:           offset 12  (4B, double*)
+//   tension_curve:          offset 16  (4B, double*)
+//   breath_curve:           offset 20  (4B, double*)
+//   vibrato_depth_curve:    offset 24  (4B, double*)
+//   vibrato_rate_curve:     offset 28  (4B, double*)
+//   vibrato_curve_length:   offset 32  (4B, int)
+//   portamento_offsets:     offset 36  (4B, double*)
+//   portamento_length:      offset 40  (4B, int)
+//   合計44バイト (sizeof(NoteEvent) = 44)
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 88;
+const NOTE_EVENT_SIZE = 44;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
@@ -101,11 +110,6 @@ const OFF_VIBRATO_RATE_CURVE = 28;
 const OFF_VIBRATO_CURVE_LENGTH = 32;
 const OFF_PORTAMENTO_OFFSETS = 36;
 const OFF_PORTAMENTO_LENGTH = 40;
-const OFF_INTENSITY = 48;
-const OFF_MODULATION = 56;
-const OFF_START_TIME_MS = 64;
-const OFF_PREUTTERANCE_MS = 72;
-const OFF_OVERLAP_MS = 80;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
@@ -218,71 +222,40 @@ function validateWavIsAudible(wavBytes: Uint8Array): void {
   }
 }
 
-function validateWasmImports(
-  imports: WebAssembly.Imports,
-  module: WebAssembly.Module
-): void {
-  const env = (imports.env || {}) as Record<string, unknown>;
-  const required = WebAssembly.Module.imports(module);
-  const missing: string[] = [];
-  const nonCallable: string[] = [];
-
-  for (const entry of required) {
-    if (entry.module !== 'env') continue;
-    const value = env[entry.name];
-    if (value === undefined) {
-      missing.push(entry.name);
-    } else if (entry.kind === 'function' && typeof value !== 'function') {
-      nonCallable.push(entry.name);
-    }
-  }
-
-  if (missing.length || nonCallable.length) {
-    const invokeKeys = Object.keys(env).filter((key) => key.startsWith('invoke_')).sort();
-    throw new Error(
-      'WASM import contract mismatch: ' +
-      [
-        missing.length ? `missing=[${missing.join(',')}]` : '',
-        nonCallable.length ? `nonCallable=[${nonCallable.join(',')}]` : '',
-        `availableInvoke=[${invokeKeys.join(',')}]`
-      ].filter(Boolean).join(' ')
-    );
-  }
-
-  const requiredInvoke = required
-    .filter((entry) => entry.module === 'env' && entry.name.startsWith('invoke_'))
-    .map((entry) => entry.name)
-    .sort();
-  if (requiredInvoke.length) {
-    console.log('[voseCoreWorker] WASM invoke imports validated:', requiredInvoke.join(', '));
-  }
-}
-
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
-    const mod = await createVoseCoreModule({
+    return await createVoseCoreModule({
       locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path),
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
         (async () => {
           try {
-            const wasmUrl = `/wasm/vose_core.wasm?cacheBust=${Date.now()}`;
-            const res = await fetch(wasmUrl, { cache: 'no-store' });
-            if (!res.ok) throw new Error(`HTTP ${res.status} on /wasm/vose_core.wasm`);
-            const bytes = await res.arrayBuffer();
-            const module = await WebAssembly.compile(bytes);
-            validateWasmImports(imports, module);
-            const instance = await WebAssembly.instantiate(module, imports);
+            let instance: WebAssembly.Instance | null = null;
+            try {
+              const res = await fetch('/wasm/vose_core.wasm');
+              if (res.ok) {
+                const streamRes = await WebAssembly.instantiateStreaming(res, imports);
+                instance = streamRes.instance;
+              }
+            } catch (streamErr) {
+              console.warn('[voseCoreWorker] instantiateStreaming failed, falling back to ArrayBuffer:', streamErr);
+            }
+            if (!instance) {
+              const bufRes = await fetch('/wasm/vose_core.wasm');
+              if (!bufRes.ok) throw new Error(`HTTP ${bufRes.status} on /wasm/vose_core.wasm`);
+              const bytes = await bufRes.arrayBuffer();
+              const compiled = await WebAssembly.instantiate(bytes, imports);
+              instance = compiled.instance;
+            }
             successCallback(instance);
           } catch (err: any) {
-            console.error('[voseCoreWorker] Failed to instantiate WASM via validated path:', err);
+            console.error('[voseCoreWorker] Failed to instantiate WASM via instantiateWasm:', err);
             const resp: RenderResponseMsg = {
               type: 'error',
               requestId: 0,
               message: `WASMモジュールの読み込みに失敗しました: ${err?.message || err}`
             };
             (self as unknown as Worker).postMessage(resp);
-            throw err;
           }
         })();
         return {};
@@ -296,12 +269,6 @@ async function getModule(): Promise<VoseCoreModule> {
         console.error('[vose_core stderr]', text);
       }
     });
-    try {
-      const buildId = mod.ccall('get_engine_build_id', 'string', [], []) as string;
-      console.log(`[voseCoreWorker] vose_core WASM build=${buildId || 'unknown'}`);
-    } catch (err) {
-      console.warn('[voseCoreWorker] WASM build ID is unavailable:', err);
-    }
     if (!mod.HEAPF32 && mod.HEAPU8) {
       try {
         (mod as any).HEAPF32 = new Float32Array(mod.HEAPU8.buffer);
@@ -501,15 +468,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     allocatedPtrs.push(notesPtr);
 
     for (let i = 0; i < notes.length; i++) {
-      const {
-        key,
-        pitchCurveHz,
-        intensity = 58,
-        modulation = 0,
-        startTimeMs = -1,
-        preutteranceMs = -1,
-        overlapMs = -1
-      } = notes[i];
+      const { key, pitchCurveHz, intensity, modulation } = notes[i];
       const base = notesPtr + i * NOTE_EVENT_SIZE;
 
       const isVoiced = key !== null;
@@ -536,15 +495,6 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
-
-      // 64-bit scalar fields must use the exact 8-byte-aligned offsets from
-      // vose_core.h. Leaving these fields unwritten is an ABI violation:
-      // C++ would read arbitrary heap bytes as gain/modulation/timing.
-      mod.setValue(base + OFF_INTENSITY, Number.isFinite(intensity) ? intensity : 58, 'double');
-      mod.setValue(base + OFF_MODULATION, Number.isFinite(modulation) ? modulation : 0, 'double');
-      mod.setValue(base + OFF_START_TIME_MS, Number.isFinite(startTimeMs) ? startTimeMs : -1, 'double');
-      mod.setValue(base + OFF_PREUTTERANCE_MS, Number.isFinite(preutteranceMs) ? preutteranceMs : -1, 'double');
-      mod.setValue(base + OFF_OVERLAP_MS, Number.isFinite(overlapMs) ? overlapMs : -1, 'double');
     }
 
     (self as unknown as Worker).postMessage({
@@ -567,17 +517,12 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       (self as unknown as Worker).postMessage(resp);
     }, 'vi');
 
-    console.log('[voseCoreWorker] execute_render_cancelable START request=' + requestId +
-      ' notes=' + notes.length + ' samples=' + samples.length + ' mode=' + modeFlag);
-    const renderStartedAt = performance.now();
     mod.ccall(
       'execute_render_cancelable',
       null,
       ['number', 'number', 'string', 'number', 'number', 'number'],
       [notesPtr, notes.length, outputPath, modeFlag, progressFnPtr, 0] // cancel_cb=0(nullptr)=キャンセル無し
     );
-    console.log('[voseCoreWorker] execute_render_cancelable END request=' + requestId +
-      ' elapsedMs=' + Math.round(performance.now() - renderStartedAt));
 
     let wavBytes: Uint8Array;
     try {

@@ -87,7 +87,7 @@ interface PyStatus {
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-const REST_LYRICS_SET = new Set(['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null', 'っ', 'ッ']);
+const REST_LYRICS_SET = new Set(['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null']);
 export const isRestLyric = (lyric?: string): boolean => {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
@@ -105,21 +105,15 @@ const getNoteName = (midiNum: number) => {
   return `${noteName}${octave}`;
 };
 
-export interface LoopCrossfadeResult {
-  buffer: AudioBuffer;
-  loopStartSec: number;
-  loopEndSec: number;
-}
-
-const getLoopCrossfadedBuffer = (
+export const getLoopCrossfadedBuffer = (
   ctx: AudioContext,
   cached: any,
   loopStartSec: number,
   loopEndSec: number
-): LoopCrossfadeResult => {
+): AudioBuffer => {
   const key = `${loopStartSec.toFixed(4)}_${loopEndSec.toFixed(4)}`;
   if (!cached._loopXfadeCache) {
-    cached._loopXfadeCache = new Map<string, LoopCrossfadeResult>();
+    cached._loopXfadeCache = new Map<string, AudioBuffer>();
   }
   const existing = cached._loopXfadeCache.get(key);
   if (existing) return existing;
@@ -187,14 +181,8 @@ const getLoopCrossfadedBuffer = (
     }
   }
 
-  const result: LoopCrossfadeResult = {
-    buffer: newBuffer,
-    loopStartSec: loopStartSample / sr,
-    loopEndSec: loopEndSample / sr
-  };
-
-  cached._loopXfadeCache.set(key, result);
-  return result;
+  cached._loopXfadeCache.set(key, newBuffer);
+  return newBuffer;
 };
 
 const isBlackKey = (midiNum: number) => {
@@ -890,23 +878,23 @@ export default function App() {
       deMud.gain.setValueAtTime(-2.5, ctx.currentTime);
       deMud.Q.setValueAtTime(1.2, ctx.currentTime);
 
-      // 3. Presence & Articulation (3.8kHz, フラット0.0dB): 人工的な高域ザラつき・耳障りな子音擦過音のブーストを抑止
+      // 3. Presence & Articulation ブースト (3.8kHz, +3.0dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、歌詞をはっきりと聴かせる
       const presence = ctx.createBiquadFilter();
       presence.type = 'peaking';
       presence.frequency.setValueAtTime(3800, ctx.currentTime);
-      presence.gain.setValueAtTime(0.0, ctx.currentTime);
+      presence.gain.setValueAtTime(3.0, ctx.currentTime);
       presence.Q.setValueAtTime(1.0, ctx.currentTime);
 
-      // 4. Air & Brilliance (9.0kHz, フラット0.0dB): 息漏れ・マイクヒス・高域ジリジリ感の増幅を防止
+      // 4. Air & Brilliance ハイシェルフ (9.0kHz, +3.2dB): こもった音を解消し、透明感・抜け・空気感を付加
       const airShelf = ctx.createBiquadFilter();
       airShelf.type = 'highshelf';
       airShelf.frequency.setValueAtTime(9000, ctx.currentTime);
-      airShelf.gain.setValueAtTime(0.0, ctx.currentTime);
+      airShelf.gain.setValueAtTime(3.2, ctx.currentTime);
 
-      // 5. 超高域セーフティ LPF (14.0kHz, Q=0.707): 可聴域の歌声を減衰させずに超高域の折り返し・量子化・ヒスノイズのみを遮断
+      // 5. 超高域セーフティ LPF (17.5kHz, Q=0.707): 可聴域の歌声を一切減衰させずに超高域の折り返しノイズのみを遮断
       const safetyLpf = ctx.createBiquadFilter();
       safetyLpf.type = 'lowpass';
-      safetyLpf.frequency.setValueAtTime(14000, ctx.currentTime);
+      safetyLpf.frequency.setValueAtTime(17500, ctx.currentTime);
       safetyLpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
       const limiter = ctx.createDynamicsCompressor();
@@ -1161,19 +1149,16 @@ export default function App() {
   const fetchVoicebanks = async () => {
     try {
       const res = await fetch('/api/py/voicebanks');
-      if (!res.ok) return;
-      const ct = res.headers.get('content-type');
-      if (!ct || !ct.includes('application/json')) return;
       const data = await res.json();
       if (data.success && Array.isArray(data.voicebanks)) {
         setCustomVoicebanks(data.voicebanks);
         if (data.voicebanks.length > 0) {
-          // If a track has no voicebank, select the first user-imported voicebank.
-          // Never invent or select a bundled/default voicebank.
-          const firstUserVoicebank = data.voicebanks[0].name;
+          // If current track has no voicebank or invalid one, auto-select the best available one (preferring richer voicebank like TETO)
+          const sortedVbs = [...data.voicebanks].sort((a: any, b: any) => (b.aliasCount || 0) - (a.aliasCount || 0));
+          const bestVbName = sortedVbs[0]?.name || data.voicebanks[0].name;
           setTracks(prev => prev.map(t => {
             if (!t.voicebank || !data.voicebanks.some((v: any) => v.name === t.voicebank)) {
-              return { ...t, voicebank: firstUserVoicebank };
+              return { ...t, voicebank: bestVbName };
             }
             return t;
           }));
@@ -1181,8 +1166,8 @@ export default function App() {
           setTracks(prev => prev.map(t => ({ ...t, voicebank: '' })));
         }
       }
-    } catch (e: any) {
-      console.warn('Failed to load voicebanks:', e?.message || e);
+    } catch (e) {
+      console.warn('Failed to load voicebanks:', e);
     }
   };
 
@@ -1798,15 +1783,12 @@ export default function App() {
   const fetchPyStatus = async () => {
     try {
       const res = await fetch('/api/py/status');
-      if (!res.ok) return;
-      const ct = res.headers.get('content-type');
-      if (!ct || !ct.includes('application/json')) return;
       const data = await res.json();
       if (data.success) {
         setPyStatus(data);
       }
-    } catch (e: any) {
-      console.warn('Backend Py API not responding:', e?.message || e);
+    } catch (e) {
+      console.warn('Backend Py API not responding:', e);
     }
   };
 
@@ -2245,16 +2227,14 @@ export default function App() {
           const loopStartSec = Math.min(cutoffEndSec - 0.06, offsetSec + Math.max(0.02, fixedSec || preuttSec || 0.05));
           const loopEndSec = Math.min(wavDuration - 0.01, Math.max(loopStartSec + 0.04, cutoffEndSec - 0.01));
           if (loopEndSec > loopStartSec + 0.03) {
+            source.loop = true;
+            source.loopStart = loopStartSec;
+            source.loopEnd = loopEndSec;
+            // ループ境界のクリック音を消すため、クロスフェード済みバッファに差し替える
             try {
-              const loopInfo = getLoopCrossfadedBuffer(ctx, cached, loopStartSec, loopEndSec);
-              source.loop = true;
-              source.loopStart = loopInfo.loopStartSec;
-              source.loopEnd = loopInfo.loopEndSec;
-              source.buffer = loopInfo.buffer;
+              source.buffer = getLoopCrossfadedBuffer(ctx, cached, loopStartSec, loopEndSec);
             } catch (e) {
-              source.loop = true;
-              source.loopStart = loopStartSec;
-              source.loopEnd = loopEndSec;
+              // 失敗しても元のバッファのまま続行（無音になるよりはクリック音の方がまし）
             }
           }
         }
@@ -2271,19 +2251,17 @@ export default function App() {
         // 「ブツッ」という衝突音の原因になっていた。
         // oto.ini の Overlap（前のノートとクロスフェードする長さ）を使って、
         // アタックは実際の音声開始位置(tStart)からOverlap分だけで完了させる。
-        const totalNoteDur = Math.max(0.02, (noteStartCtxTime + durSec) - tStart);
         const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / baseRate;
-        const attackDur = Math.max(0.004, Math.min(Math.min(0.03, totalNoteDur * 0.35), overlapSec || 0.008));
+        const attackDur = Math.max(0.006, Math.min(0.03, overlapSec || 0.008));
         const tAttack = tStart + attackDur;
 
         // フェードアウトは必ずノート自身の終了時刻(noteStartCtxTime + durSec)までに
-        // 完了させ、短音でもアタックと交差しないよう安全にスケーリング
+        // 完了させ、次のノートの領域へ音量が食い込まないようにする。
         const noteEndTime = noteStartCtxTime + durSec;
-        const releaseDur = Math.min(0.015, Math.max(0.004, totalNoteDur * 0.25));
-        const tDecay = Math.max(tAttack + 0.002, noteEndTime - releaseDur);
-        const tEnd = Math.max(tDecay + 0.002, noteEndTime);
+        const releaseDur = 0.015;
+        const tDecay = Math.max(tAttack + 0.003, noteEndTime - releaseDur);
+        const tEnd = Math.min(tDecay + releaseDur, noteEndTime);
 
-        gain.gain.cancelScheduledValues(tStart);
         gain.gain.setValueAtTime(0.0001, tStart);
         gain.gain.linearRampToValueAtTime(volGain, tAttack);
         if (tDecay > tAttack + 0.002) {

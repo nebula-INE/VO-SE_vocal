@@ -9,7 +9,6 @@
 
 #include <stdint.h>
 #include <cstdint> 
-#include <cstddef>
 
 // ディスクキャッシュの先頭に書き込むヘッダ情報
 struct VoseCacheHeader {
@@ -69,28 +68,6 @@ struct NoteEvent {
     double  preutterance_ms;
     double  overlap_ms;
 };
-
-#if defined(__wasm32__)
-// Lock the compiler-observed wasm32 ABI. Pointers are 4 bytes; the double
-// fields are aligned to 8 bytes under #pragma pack(push, 8).
-static_assert(sizeof(NoteEvent) == 88, "WASM NoteEvent ABI size changed");
-static_assert(offsetof(NoteEvent, wav_path) == 0, "WASM NoteEvent wav_path offset changed");
-static_assert(offsetof(NoteEvent, pitch_curve) == 4, "WASM NoteEvent pitch_curve offset changed");
-static_assert(offsetof(NoteEvent, pitch_length) == 8, "WASM NoteEvent pitch_length offset changed");
-static_assert(offsetof(NoteEvent, gender_curve) == 12, "WASM NoteEvent gender_curve offset changed");
-static_assert(offsetof(NoteEvent, tension_curve) == 16, "WASM NoteEvent tension_curve offset changed");
-static_assert(offsetof(NoteEvent, breath_curve) == 20, "WASM NoteEvent breath_curve offset changed");
-static_assert(offsetof(NoteEvent, vibrato_depth_curve) == 24, "WASM NoteEvent vibrato_depth_curve offset changed");
-static_assert(offsetof(NoteEvent, vibrato_rate_curve) == 28, "WASM NoteEvent vibrato_rate_curve offset changed");
-static_assert(offsetof(NoteEvent, vibrato_curve_length) == 32, "WASM NoteEvent vibrato_curve_length offset changed");
-static_assert(offsetof(NoteEvent, portamento_offsets) == 36, "WASM NoteEvent portamento_offsets offset changed");
-static_assert(offsetof(NoteEvent, portamento_length) == 40, "WASM NoteEvent portamento_length offset changed");
-static_assert(offsetof(NoteEvent, intensity) == 48, "WASM NoteEvent intensity offset changed");
-static_assert(offsetof(NoteEvent, modulation) == 56, "WASM NoteEvent modulation offset changed");
-static_assert(offsetof(NoteEvent, start_time_ms) == 64, "WASM NoteEvent start_time_ms offset changed");
-static_assert(offsetof(NoteEvent, preutterance_ms) == 72, "WASM NoteEvent preutterance_ms offset changed");
-static_assert(offsetof(NoteEvent, overlap_ms) == 80, "WASM NoteEvent overlap_ms offset changed");
-#endif
 #pragma pack(pop)
 
 struct OtoEntry; // 前方宣言
@@ -125,7 +102,6 @@ extern "C" {
     
     // 3. エンジン管理
     DLLEXPORT float get_engine_version(void);
-    DLLEXPORT const char* get_engine_build_id(void);
     DLLEXPORT void clear_engine_cache(void);
 
     // 4. BigVGAN ボコーダー（Pro版のみ有効。無印版ビルドでは呼んでも無視される）

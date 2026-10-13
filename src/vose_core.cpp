@@ -6,7 +6,6 @@
 #include <map>
 #include <unordered_map>
 #include <list>
-#include <limits>
 #include <algorithm>
 #include <cmath>
 #include <sys/stat.h>
@@ -203,10 +202,6 @@ extern "C" void set_oto_data(const OtoEntry* entries, int count) {
 
 struct EmbeddedVoice {
     std::string         path;
-    // Analysis is a property of the actual PCM waveform, not the temporary
-    // NoteEvent/sample key. Web renders may register the same WAV under
-    // different keys (for example because noteNum differs for multipitch).
-    std::string         analysis_key;
     std::vector<double> waveform;
     int                 fs;
     bool                file_backed = false;
@@ -606,35 +601,6 @@ static double parse_pitch_tag_hz(const std::string& path)
 }
 
 // ============================================================
-// Analysis identity
-// ============================================================
-// WORLD analysis depends only on PCM + sample rate. Web renders can register
-// the same decoded WAV under different temporary keys, so the analysis cache
-// must not be keyed by those temporary names.
-static std::string make_analysis_key(const EmbeddedVoice& ev)
-{
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    auto mix_bytes = [&](const void* data, size_t size) {
-        const auto* bytes = static_cast<const unsigned char*>(data);
-        for (size_t i = 0; i < size; ++i) {
-            hash ^= static_cast<uint64_t>(bytes[i]);
-            hash *= 0x100000001b3ULL;
-        }
-    };
-
-    mix_bytes(&ev.fs, sizeof(ev.fs));
-    const uint64_t sample_count = static_cast<uint64_t>(ev.waveform.size());
-    mix_bytes(&sample_count, sizeof(sample_count));
-    if (!ev.waveform.empty())
-        mix_bytes(ev.waveform.data(), ev.waveform.size() * sizeof(ev.waveform[0]));
-
-    std::ostringstream ss;
-    ss << "pcm_" << std::hex << std::setw(16) << std::setfill('0') << hash;
-    return ss.str();
-}
-
-// ============================================================
 // find_voice_ref
 // ============================================================
 
@@ -683,7 +649,6 @@ std::shared_ptr<const EmbeddedVoice> find_voice_ref(const char* key)
             int nbit = 0;
             ev->waveform.resize(audio_len);
             wavread(key, &ev->fs, &nbit, ev->waveform.data());
-            ev->analysis_key = make_analysis_key(*ev);
 
             g_voice_db.put(cache_key, ev);
             return ev;
@@ -908,9 +873,7 @@ std::shared_ptr<const AnalysisCache>
 get_or_analyze(std::shared_ptr<const EmbeddedVoice> ev_sp, int fft_size, int spec_bins)
 {
     if (!ev_sp) return nullptr;
-    const std::string key = ev_sp->analysis_key.empty()
-        ? ev_sp->path
-        : ev_sp->analysis_key;
+    const std::string& key = ev_sp->path;
 
     // 1. メモリキャッシュをチェック（ロック不要の高速パス。CacheStore内部でロック）
     {
@@ -998,11 +961,8 @@ static double map_time_with_preutterance(double t_out_ms, const OtoEntry& oto,
     if (cutoff_pos <= offset + fixed) {
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
-    const double available_vowel = cutoff_pos - (offset + fixed);
-    const double cutoff_margin = (available_vowel > 60.0)
-        ? std::min(40.0, std::max(15.0, available_vowel * 0.20))
-        : 15.0;
-    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - cutoff_margin);
+
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double safe_pre = std::min(pre, std::max(0.0, safe_cutoff_pos - offset));
 
@@ -1048,11 +1008,7 @@ double map_time(double t_out_ms, const OtoEntry& oto,
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
 
-    const double available_vowel = cutoff_pos - (offset + fixed);
-    const double cutoff_margin = (available_vowel > 60.0)
-        ? std::min(40.0, std::max(15.0, available_vowel * 0.20))
-        : 15.0;
-    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - cutoff_margin);
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double output_stretch = std::max(1.0, note_duration_ms - fixed);
 
@@ -1394,173 +1350,6 @@ static const double kPostEQ[4][5] = {
     {  1.0000000000,  0.0000000000,  0.0000000000,  0.0000000000,  0.0000000000 }, // 6kHz  Bypassed / Flat (prevents boosting breath noise)
 };
 
-static void log_render_stage_diagnostics(
-    const char* stage,
-    const std::vector<double>& samples,
-    int note_index,
-    const char* wav_path,
-    double global_time_sec)
-{
-    if (!stage || samples.size() < 2) return;
-
-    double peak = 0.0;
-    double sum_sq = 0.0;
-    double max_step = 0.0;
-    size_t max_step_index = 0;
-
-    for (size_t i = 0; i < samples.size(); ++i) {
-        const double value = samples[i];
-        peak = std::max(peak, std::abs(value));
-        sum_sq += value * value;
-        if (i > 0) {
-            const double step = std::abs(value - samples[i - 1]);
-            if (step > max_step) {
-                max_step = step;
-                max_step_index = i;
-            }
-        }
-    }
-
-    // Diagnostics stay quiet for ordinary voiced material. The threshold is
-    // intentionally well above normal sample-to-sample movement so this does
-    // not turn a normal render into a log flood.
-    if (max_step < 0.18 && peak < 1.2)
-        return;
-
-    const double rms = std::sqrt(sum_sq / static_cast<double>(samples.size()));
-    fprintf(stderr,
-            "[RenderDiag] stage=%s note=%d wav=%s time=%.6f "
-            "peak=%.9f rms=%.9f max_step=%.9f step_index=%zu step_time_ms=%.6f\n",
-            stage,
-            note_index,
-            wav_path ? wav_path : "(null)",
-            global_time_sec,
-            peak,
-            rms,
-            max_step,
-            max_step_index,
-            static_cast<double>(max_step_index) * 1000.0 / kFs);
-}
-
-struct RenderPlacementDiagnostic {
-    int note_index = -1;
-    int64_t render_start = 0;
-    int64_t write_len = 0;
-    int64_t source_skip = 0;
-    int64_t nominal_start = 0;
-    double start_time_ms = -1.0;
-    double preutterance_ms = 0.0;
-    double overlap_ms = 0.0;
-    double pitch_hz = 0.0;
-    double oto_offset_ms = 0.0;
-    double oto_consonant_ms = 0.0;
-    double oto_blank_ms = 0.0;
-    double oto_cutoff_ms = 0.0;
-    std::string wav_path;
-    std::string alias;
-};
-
-static void log_full_song_anomaly_context(
-    const std::vector<double>& samples,
-    const std::vector<RenderPlacementDiagnostic>& placements)
-{
-    if (samples.size() < 2 || placements.empty())
-        return;
-
-    struct Anomaly {
-        size_t index = 0;
-        double step = 0.0;
-    };
-    std::vector<Anomaly> anomalies;
-
-    constexpr double kAnomalyThreshold = 0.22;
-    constexpr size_t kClusterDistance = 256;
-
-    for (size_t i = 2; i + 1 < samples.size(); ++i) {
-        const double step = std::abs(samples[i] - samples[i - 1]);
-        if (step < kAnomalyThreshold)
-            continue;
-
-        const double prev_step = std::abs(samples[i - 1] - samples[i - 2]);
-        const double next_step = std::abs(samples[i + 1] - samples[i]);
-        if (step < prev_step || step < next_step)
-            continue;
-
-        if (!anomalies.empty() &&
-            i - anomalies.back().index < kClusterDistance) {
-            if (step > anomalies.back().step)
-                anomalies.back() = {i, step};
-        } else {
-            anomalies.push_back({i, step});
-        }
-    }
-
-    if (anomalies.empty())
-        return;
-
-    constexpr size_t kMaxAnomalies = 12;
-    if (anomalies.size() > kMaxAnomalies)
-        anomalies.resize(kMaxAnomalies);
-
-    fprintf(stderr,
-            "[RenderAnomaly] final_buffer anomalies=%zu threshold=%.3f\n",
-            anomalies.size(), kAnomalyThreshold);
-
-    for (const auto& anomaly : anomalies) {
-        const size_t boundary = anomaly.index;
-        fprintf(stderr,
-                "[RenderAnomaly] sample=%zu time_sec=%.9f step=%.9f "
-                "prev=%.9f next=%.9f\n",
-                boundary,
-                static_cast<double>(boundary) / kFs,
-                anomaly.step,
-                samples[boundary - 1],
-                samples[boundary]);
-
-        bool matched = false;
-        for (const auto& p : placements) {
-            const int64_t begin = p.render_start;
-            const int64_t end = p.render_start + p.write_len;
-            const int64_t sample = static_cast<int64_t>(boundary);
-            if (sample < begin - 1 || sample > end)
-                continue;
-
-            matched = true;
-            fprintf(stderr,
-                    "[RenderAnomaly] note=%d range=[%lld,%lld) "
-                    "wav=%s alias=%s start_ms=%.3f nominal_sample=%lld "
-                    "preutterance_ms=%.3f overlap_ms=%.3f source_skip=%lld "
-                    "pitch_hz=%.3f\n",
-                    p.note_index,
-                    static_cast<long long>(begin),
-                    static_cast<long long>(end),
-                    p.wav_path.empty() ? "(null)" : p.wav_path.c_str(),
-                    p.alias.empty() ? "(unknown)" : p.alias.c_str(),
-                    p.start_time_ms,
-                    static_cast<long long>(p.nominal_start),
-                    p.preutterance_ms,
-                    p.overlap_ms,
-                    static_cast<long long>(p.source_skip),
-                    p.pitch_hz);
-            if (!p.alias.empty()) {
-                fprintf(stderr,
-                        "[RenderAnomaly] oto alias=%s offset_ms=%.3f "
-                        "consonant_ms=%.3f blank_ms=%.3f cutoff_ms=%.3f\n",
-                        p.alias.c_str(),
-                        p.oto_offset_ms,
-                        p.oto_consonant_ms,
-                        p.oto_blank_ms,
-                        p.oto_cutoff_ms);
-            }
-        }
-
-        if (!matched)
-            fprintf(stderr,
-                    "[RenderAnomaly] note_context=none sample=%zu\n",
-                    boundary);
-    }
-}
-
 static void apply_post_eq(double* y, int y_length)
 {
     if (!y || y_length <= 0) return;
@@ -1593,7 +1382,6 @@ struct SynthNoteParams {
     NoteEvent&         n;
     int                fft_size;
     int                spec_bins;
-    int                note_index = -1;
     double             global_time_sec = 0.0;  // 曲先頭からのオフセット（ビブラート位相連続化）
 };
 
@@ -1786,30 +1574,15 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         const double t_out_ms = j * kFramePeriod;
         const double t_src_ms = map_time_with_preutterance(
             t_out_ms, current_oto, src_ms, note_ms, pp.preutterance_ms);
-        const double frame_pos = clamp(
-            t_src_ms / kFramePeriod, 0.0, static_cast<double>(cache_cur->length - 1));
-        const int frame0 = static_cast<int>(frame_pos);
-        const int frame1 = std::min(frame0 + 1, cache_cur->length - 1);
-        const double frac = frame_pos - frame0;
-        const int src_frame = frame0;
+        const int src_frame   = clamp(
+            static_cast<int>(t_src_ms / kFramePeriod), 0, cache_cur->length - 1);
 
         double* sr = tl_scratch.spec_ptrs[j];
         double* ar = tl_scratch.ap_ptrs[j];
-        const double* s0 = &cache_cur->flat_spec[static_cast<size_t>(frame0) * spec_bins];
-        const double* s1 = &cache_cur->flat_spec[static_cast<size_t>(frame1) * spec_bins];
-        const double* a0 = &cache_cur->flat_ap[static_cast<size_t>(frame0) * spec_bins];
-        const double* a1 = &cache_cur->flat_ap[static_cast<size_t>(frame1) * spec_bins];
-
-        if (frac < 1e-4 || frame0 == frame1) {
-            std::copy_n(s0, spec_bins, sr);
-            std::copy_n(a0, spec_bins, ar);
-        } else {
-            const double w0 = 1.0 - frac;
-            for (int k = 0; k < spec_bins; ++k) {
-                sr[k] = w0 * s0[k] + frac * s1[k];
-                ar[k] = w0 * a0[k] + frac * a1[k];
-            }
-        }
+        std::copy_n(&cache_cur->flat_spec[static_cast<size_t>(src_frame) * spec_bins],
+                    spec_bins, sr);
+        std::copy_n(&cache_cur->flat_ap[static_cast<size_t>(src_frame) * spec_bins],
+                    spec_bins, ar);
 
         // ---- 1. ベースF0を計算 ----
         const int curve_idx = std::max(0, j - lead_frames);
@@ -1829,15 +1602,9 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             }
         }
 
-        // ---- 3. ポルタメントオフセットを適用（セント → Hz） ----
-        // pitch_curve と同じ「ノート時間軸」を使う。j は先行発声のリードインを
-        // 含む出力インデックスなので、そのまま使うとポルタメントが前倒しになり、
-        // ノート末尾でカーブが切れて音程が跳ねる。curve_idx / curve_frames で
-        // 先行発声分を除外し、両カーブの時刻を一致させる。
-        if (n.portamento_offsets && n.portamento_length > 0) {
-            const double cents = resample_curve(
-                n.portamento_offsets, n.portamento_length,
-                std::min(curve_idx, curve_frames - 1), curve_frames);
+        // ---- 3. ★★★ ポルタメントオフセットを適用（セント → Hz） ★★★ ----
+        if (n.portamento_offsets && n.portamento_length > 0 && j < n.portamento_length) {
+            double cents = resample_curve(n.portamento_offsets, n.portamento_length, j, output_frames);
             base_f0_val *= std::pow(2.0, cents / 1200.0);
         }
 
@@ -1877,35 +1644,30 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         const double pitch_noise_suppress = (f0_ratio > 1.0)
             ? std::max(0.20, 1.0 / (1.0 + (f0_ratio - 1.0) * 0.8))
             : (f0_ratio < 0.7 ? 0.70 : 1.0); // 極端な低音化時の濁りも緩和
-        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.15 * pitch_noise_suppress : 0.0;
+        const double breath_allowance = (breath > 0.5) ? (breath - 0.5) * 0.2 * pitch_noise_suppress : 0.0;
         const bool has_unvoiced = is_unvoiced_phoneme_name(pp.ev->path) ||
                                   (pp.has_oto && is_unvoiced_phoneme_name(current_oto.wav_path)) ||
                                   (pp.has_oto && is_unvoiced_phoneme_name(current_oto.alias)) ||
                                   (pp.has_oto && is_unvoiced_vc_alias(current_oto.alias));
         const double fixed_ms = std::max(0.0, current_oto.consonant);
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
-
-        // 無声子音アタックから母音への滑らかなクロスフェード（急激なステップ切り替えによるノイズバーストを完全解消）
-        double consonant_weight = 0.0;
-        if (has_unvoiced && unvoiced_attack_ms > 0.0) {
-            if (t_out_ms < unvoiced_attack_ms * 0.5) {
-                consonant_weight = 1.0;
-            } else if (t_out_ms < unvoiced_attack_ms) {
-                const double t = (t_out_ms - unvoiced_attack_ms * 0.5) / (unvoiced_attack_ms * 0.5);
-                consonant_weight = 0.5 * (1.0 + std::cos(M_PI * t));
-            }
-        }
-
-        static const double bfreqs_c[2] = {2500.0, 5000.0};
-        static const double bvals_c[3]  = {0.02, 0.07, 0.15}; // 自然な子音摩擦を保ちつつ、ホワイトノイズ爆発を防止
-        static const double bfreqs_v[3] = {3500.0, 7000.0, 11000.0};
-        static const double bvals_v[4]  = {0.002, 0.006, 0.015, 0.025}; // 母音の定常ヒスを徹底除去
+        const bool in_consonant_friction = (t_out_ms < unvoiced_attack_ms);
 
         for (int k = 0; k < spec_bins; ++k) {
             const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
-            const double max_ap_consonant = smooth_band_value(freq, bfreqs_c, bvals_c, 2);
-            const double max_ap_vowel = smooth_band_value(freq, bfreqs_v, bvals_v, 3) * pitch_noise_suppress;
-            double max_ap = consonant_weight * max_ap_consonant + (1.0 - consonant_weight) * max_ap_vowel;
+            double max_ap;
+            if (in_consonant_friction) {
+                // 無声子音アタック (k, s, t, h, p など): 子音の破裂・摩擦に必要な自然な高域非周期性を維持
+                static const double bfreqs[2] = {2000.0, 4000.0};
+                static const double bvals[3]  = {0.05, 0.35, 0.70};
+                max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
+            } else {
+                // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
+                // 原音の豊かな倍音・声帯振動を100%保持し、D4Cが誤検出する高域ホワイトノイズ(ヒス・ザー音)を大幅低減
+                static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
+                static const double bvals[4]  = {0.005, 0.025, 0.07, 0.15};
+                max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
+            }
             max_ap = std::min(1.0, max_ap + breath_allowance);
             if (ar[k] > max_ap) {
                 ar[k] = max_ap;
@@ -1925,12 +1687,7 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     // 子音のアタックを壊すスペクトル空間でのブレンドは行わない。
     // ----------------------------------------------------------------
 
-    // Python/FFI から渡された pitch_curve はすでに Hz 単位でノートごとに
-    // サンプリング済みであり、ここで再度 Gaussian 平滑化すると、音符境界や
-    // 急なピッチベンドまで別のF0へ変形してしまう。特に短いノートでは隣接
-    // フレームの混合が「音程がおかしい」「別の音程が混じる」原因になるため、
-    // 明示的な pitch_curve をそのまま WORLD へ渡す。
-    // Gaussian smoothing helper is retained for compatibility; render path does not apply it.
+    smooth_f0_gaussian(tl_scratch.f0.data(), output_frames);
 
     // ビブラートカーブが NoteEvent にあれば使用、なければデフォルト (depth=1.0, rate=6Hz)
     // NoteEvent 側に vibrato_depth_curve / vibrato_rate_curve / vibrato_curve_length
@@ -1972,15 +1729,6 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         throw std::runtime_error(buf);
     }
 
-    // WORLD合成直後を記録する。ここで異常が既に存在するなら、
-    // placement/crossfadeより前のWORLD入力・分析・スペクトル補間を疑う。
-    log_render_stage_diagnostics(
-        "world",
-        note_buf,
-        p.note_index,
-        n.wav_path,
-        p.global_time_sec);
-
     // WORLD合成が例外なく完了しても、入力解析やパラメータ異常で
     // 全サンプルが0になる可能性がある。無音を成功扱いにしない。
     double synth_peak = 0.0;
@@ -1999,15 +1747,6 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
     // ポストEQ: WORLD出力の金属的倍音・箱鳴り補正、ヌケの向上
     apply_post_eq(note_buf.data(), static_cast<int>(note_samples));
-
-    // EQ直後も同じ指標を測る。WORLD直後との差が大きければ、
-    // ノート単位IIRの状態リセットを含むpost-EQを原因候補として確定できる。
-    log_render_stage_diagnostics(
-        "post_eq",
-        note_buf,
-        p.note_index,
-        n.wav_path,
-        p.global_time_sec);
 
     // シマー(振幅ゆらぎ)は出力波形に対して適用する
     try {
@@ -2058,11 +1797,10 @@ DLLEXPORT void load_embedded_resource(const char* phoneme,
     for (int i = 0; i < sample_count; ++i)
         ev->waveform[i] = static_cast<double>(raw_data[i]) * kInv32768;
 
+    VoseUniqueLock clock(g_analysis_cache_mutex);
+    // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
+    g_analysis_cache.erase(phoneme);
     ev->path = phoneme;
-    ev->analysis_key = make_analysis_key(*ev);
-
-    // Keep the analysis cache content-addressed. Re-registering the same PCM
-    // under another temporary voice key should intentionally reuse the analysis.
     g_voice_db.put(phoneme, std::move(ev));
 }
 DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
@@ -2080,11 +1818,10 @@ DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
         ev->waveform[i] = std::isfinite(sample) ? clamp(sample, -1.0, 1.0) : 0.0;
     }
 
+    VoseUniqueLock clock(g_analysis_cache_mutex);
+    // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
+    g_analysis_cache.erase(phoneme);
     ev->path = phoneme;
-    ev->analysis_key = make_analysis_key(*ev);
-
-    // Keep the analysis cache content-addressed. Re-registering the same PCM
-    // under another temporary voice key should intentionally reuse the analysis.
     g_voice_db.put(phoneme, std::move(ev));
 }
 
@@ -2346,7 +2083,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
                 const int idx = renderable_indices[bi];
                 try {
-                    SynthNoteParams p{ prepass[idx], notes[idx], fft_size, spec_bins, idx,
+                    SynthNoteParams p{ prepass[idx], notes[idx], fft_size, spec_bins,
                                        note_global_time[idx] };
                     synthesize_note_impl(p, note_bufs[idx]);
                 } catch (const std::exception& e) {
@@ -2519,59 +2256,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         return false;
     };
 
-    // Find a renderable absolute-timeline note whose musical audio ends exactly
-    // where this note starts rendering. This is the zero-overlap splice case.
-    auto find_adjacent_absolute_predecessor = [&](int current_idx,
-                                                   int64_t render_start,
-                                                   int64_t& predecessor_end) -> bool {
-        // Only an exact end-to-start adjacency is a splice boundary.
-        // Do not treat a one-sample gap as overlap/adjacency: that sample may
-        // legitimately belong to silence or a release region, and modifying it
-        // would turn a timing-rounding tolerance into an audible edit.
-        bool found = false;
-        int64_t best_end = std::numeric_limits<int64_t>::min();
-        for (int j = 0; j < note_count; ++j) {
-            if (j == current_idx || prepass[j].state != NoteState::RENDERABLE ||
-                !prepass[j].absolute_timing) continue;
-            const int64_t other_start = static_cast<int64_t>(std::llround(
-                prepass[j].start_time_ms * kFs / 1000.0));
-            const int64_t other_end = other_start + std::max<int64_t>(
-                0, prepass[j].note_samples - prepass[j].preutterance_samples);
-            if (other_end == render_start && other_end > best_end) {
-                best_end = other_end;
-                found = true;
-            }
-        }
-        if (found) predecessor_end = best_end;
-        return found;
-    };
-
-    // Remove a true zero-overlap splice step without shifting either note.
-    // A short raised-cosine offset preserves the local waveform shape while
-    // forcing the final sample of the previous note and first sample of the
-    // next note to meet at the same target value.
-    auto apply_boundary_step_correction = [&](int64_t boundary,
-                                               int64_t write_len,
-                                               double previous_last,
-                                               double next_first) {
-        constexpr int64_t kBoundaryStepCorrectionSamples = 88; // ~2 ms total
-        const int64_t safe = std::min<int64_t>(
-            kBoundaryStepCorrectionSamples, std::min<int64_t>(boundary, write_len));
-        if (safe <= 0) return;
-        const double target = 0.5 * (previous_last + next_first);
-        const double previous_delta = target - previous_last;
-        const double next_delta = target - next_first;
-        for (int64_t i = 0; i < safe; ++i) {
-            const double t = (safe > 1) ? static_cast<double>(i) / static_cast<double>(safe - 1) : 1.0;
-            const double fade = 0.5 * (1.0 - std::cos(M_PI * t));
-            full_song_buffer[boundary - safe + i] += previous_delta * fade;
-            full_song_buffer[boundary + i] += next_delta * (1.0 - fade);
-        }
-    };
-
     bool last_note_rendered = false;
-    std::vector<RenderPlacementDiagnostic> placement_diagnostics;
-    placement_diagnostics.reserve(static_cast<size_t>(note_count));
 
     for (int idx = 0; idx < note_count; ++idx) {
         const NotePrepass& pp = prepass[idx];
@@ -2616,36 +2301,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 total_samples - render_start);
 
             if (write_len > 0) {
-                RenderPlacementDiagnostic placement;
-                placement.note_index = idx;
-                placement.render_start = render_start;
-                placement.write_len = write_len;
-                placement.source_skip = source_skip;
-                placement.nominal_start = nominal_start;
-                placement.start_time_ms = pp.start_time_ms;
-                placement.preutterance_ms = pp.preutterance_ms;
-                placement.overlap_ms = pp.overlap_ms;
-                placement.pitch_hz = (notes[idx].pitch_curve && notes[idx].pitch_length > 0)
-                    ? notes[idx].pitch_curve[0] : 0.0;
-                if (pp.has_oto) {
-                    placement.oto_offset_ms = pp.oto.offset;
-                    placement.oto_consonant_ms = pp.oto.consonant;
-                    placement.oto_blank_ms = pp.oto.blank;
-                    placement.oto_cutoff_ms = pp.oto.cutoff;
-                }
-                placement.wav_path = notes[idx].wav_path ? notes[idx].wav_path : "";
-                placement.alias = pp.has_oto ? pp.oto.alias : "";
-                placement_diagnostics.push_back(std::move(placement));
-
-
                 if (overlap_samples > 0) {
                     const int64_t safe_xfade = std::min(overlap_samples, write_len);
                     for (int64_t s = 0; s < safe_xfade; ++s) {
-                        // Reach exactly 1.0 on the final blended sample. Dividing by
-                        // safe_xfade leaves the last blend short of the new note,
-                        // creating a small discontinuity when the pure-note region begins.
                         const double t = (safe_xfade > 1)
-                            ? static_cast<double>(s) / static_cast<double>(safe_xfade - 1)
+                            ? static_cast<double>(s) / static_cast<double>(safe_xfade)
                             : 1.0;
                         const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
                         const double fade_out = 1.0 - fade_in;
@@ -2656,61 +2316,6 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                     for (int64_t s = safe_xfade; s < write_len; ++s) {
                         full_song_buffer[render_start + s] =
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
-                    }
-
-                    // overlap_samples > 0 のクロスフェード処理:
-                    // raised-cosine により render_start では前のノートの波形が保持され、
-                    // safe_xfade にかけて滑らかに新ノートへと遷移する。
-                    // ここで以前のように note_buf[0] との平均値オフセットを加算すると
-                    // 逆に激しい人工スパイク段差（最大0.7）を自ら注入してしまうため、
-                    // スムーズなクロスフェード完了後は追加の段差修正を行わない。
-                } else if (prior_audio_overlaps && source_skip == 0) {
-                    constexpr int64_t kBoundaryDeclickSamples = 88; // 約2ms @ 44.1kHz
-                    const int64_t safe_declick =
-                        std::min<int64_t>(kBoundaryDeclickSamples, write_len);
-                    for (int64_t s = 0; s < safe_declick; ++s) {
-                        // Reach exactly 1.0 on the last blended sample before switching to pure note audio.
-                        const double t = (safe_declick > 1)
-                            ? static_cast<double>(s) / static_cast<double>(safe_declick - 1)
-                            : 1.0;
-                        const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
-                        const double fade_out = 1.0 - fade_in;
-                        full_song_buffer[render_start + s] =
-                            full_song_buffer[render_start + s] * fade_out +
-                            note_bufs[idx][static_cast<size_t>(s)] * fade_in;
-                    }
-                    for (int64_t s = safe_declick; s < write_len; ++s)
-                        full_song_buffer[render_start + s] =
-                            note_bufs[idx][static_cast<size_t>(s)];
-                } else if (source_skip == 0) {
-                    // True adjacent zero-overlap boundary: the previous note ends
-                    // at render_start, so raw assignment would preserve a sample step.
-                    int64_t predecessor_end = 0;
-                    const bool adjacent_boundary =
-                        find_adjacent_absolute_predecessor(idx, render_start, predecessor_end) &&
-                        predecessor_end <= render_start && render_start > 0;
-                    if (adjacent_boundary) {
-                        const double previous_last = full_song_buffer[render_start - 1];
-                        const double next_first = note_bufs[idx][static_cast<size_t>(source_skip)];
-                        for (int64_t s = 0; s < write_len; ++s)
-                            full_song_buffer[render_start + s] = note_bufs[idx][static_cast<size_t>(source_skip + s)];
-                        apply_boundary_step_correction(render_start, write_len, previous_last, next_first);
-                    } else {
-                        // 先行音声がない場合(休符後・曲頭): 急激な直角代入によるアタッククリックを根絶するため
-                        // ノート先頭に 5ms (~220サンプル) の滑らかなコサイン・フェードインを適用
-                        const int64_t fade_in_samples = std::min<int64_t>(
-                            220, std::max<int64_t>(0, write_len / 4));
-                        for (int64_t s = 0; s < fade_in_samples; ++s) {
-                            const double t = (fade_in_samples > 1)
-                                ? static_cast<double>(s) / static_cast<double>(fade_in_samples) : 1.0;
-                            const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
-                            full_song_buffer[render_start + s] =
-                                note_bufs[idx][static_cast<size_t>(source_skip + s)] * fade_in;
-                        }
-                        for (int64_t s = fade_in_samples; s < write_len; ++s) {
-                            full_song_buffer[render_start + s] =
-                                note_bufs[idx][static_cast<size_t>(source_skip + s)];
-                        }
                     }
                 } else {
                     for (int64_t s = 0; s < write_len; ++s) {
@@ -2825,23 +2430,6 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 {
         const double* src   = full_song_buffer.data();
         const int     n_src = static_cast<int>(total_samples);
-
-        // Measure the complete WORLD/placement buffer before any optional
-        // BigVGAN vocoder. If the final WAV has an anomaly that is absent here,
-        // the cause is downstream of note synthesis/placement.
-        {
-            std::vector<double> diagnostic_copy(
-                full_song_buffer.begin(), full_song_buffer.end());
-            log_render_stage_diagnostics(
-                "full_song_buffer",
-                diagnostic_copy,
-                -1,
-                output_path,
-                0.0);
-            log_full_song_anomaly_context(
-                diagnostic_copy,
-                placement_diagnostics);
-        }
 
 #ifdef VOSE_PRO
         // [修正] set_bigvgan_model() によるセッション差し替え（reset/再生成）と
@@ -3059,16 +2647,6 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             for (int i = 0; i < n_src; ++i)
                 bigvgan_out[i] = clamp(static_cast<double>(out_pcm[i]), -1.0, 1.0);
 
-            // Final BigVGAN output diagnostic. This is intentionally separate
-            // from full_song_buffer so a vocoder/chunk OLA artifact can be
-            // distinguished from a WORLD/placement artifact.
-            log_render_stage_diagnostics(
-                "bigvgan_output",
-                bigvgan_out,
-                -1,
-                output_path,
-                0.0);
-
             report_progress(95);
             if (is_cancelled()) return;
             wavwrite(bigvgan_out.data(), n_src, out_fs, out_bit_depth, output_path);
@@ -3127,16 +2705,7 @@ DLLEXPORT void set_vocal_timeline(const VoseFrame* frames, int frame_count) {
 // エンジンのバージョン番号を返す
 DLLEXPORT float get_engine_version(void)
 {
-    return 1.0f;
-}
-
-#ifndef VOSE_BUILD_ID
-#define VOSE_BUILD_ID "unknown"
-#endif
-
-DLLEXPORT const char* get_engine_build_id(void)
-{
-    return VOSE_BUILD_ID;
+    return 1.0f; // 実際のバージョン番号に置き換えてください
 }
 
 // 音声データベース／解析キャッシュをクリアする

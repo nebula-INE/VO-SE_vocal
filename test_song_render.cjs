@@ -17,8 +17,7 @@ function parseWav(buffer) {
   throw new Error('No data chunk');
 }
 
-const vbBase = 'temp/voicebanks/Standard Japanese CV/';
-const otoText = fs.readFileSync(vbBase + 'oto.ini', 'utf-8');
+const otoText = fs.readFileSync('temp/voicebanks/TETO-tandoku-100619/重音テト音声ライブラリー/重音テト単独音/oto.ini', 'binary');
 const otoMap = new Map();
 otoText.split(/\r?\n/).forEach(line => {
   const eq = line.indexOf('=');
@@ -39,21 +38,13 @@ otoText.split(/\r?\n/).forEach(line => {
 });
 
 const songNotes = [
-  { lyric: 'ど', noteNum: 62, frames: 60 },
-  { lyric: 'う', noteNum: 62, frames: 40 },
-  { lyric: 'し', noteNum: 65, frames: 50 },
-  { lyric: 'て', noteNum: 67, frames: 50 },
-  { lyric: 'す', noteNum: 69, frames: 50 },
-  { lyric: 'ぐ', noteNum: 67, frames: 50 },
-  { lyric: 'に', noteNum: 65, frames: 60 },
-  { lyric: 'し', noteNum: 62, frames: 50 },
-  { lyric: 'ん', noteNum: 62, frames: 40 },
-  { lyric: 'で', noteNum: 65, frames: 50 },
-  { lyric: 'し', noteNum: 67, frames: 50 },
-  { lyric: 'ま', noteNum: 69, frames: 60 },
-  { lyric: 'う', noteNum: 67, frames: 40 },
+  { lyric: 'か', noteNum: 60, frames: 50 },
+  { lyric: 'え', noteNum: 62, frames: 50 },
+  { lyric: 'る', noteNum: 64, frames: 50 },
   { lyric: 'の', noteNum: 65, frames: 50 },
-  { lyric: 'よ', noteNum: 62, frames: 100 },
+  { lyric: 'う', noteNum: 64, frames: 50 },
+  { lyric: 'た', noteNum: 62, frames: 50 },
+  { lyric: 'が', noteNum: 60, frames: 100 },
 ];
 
 import('./public/wasm/vose_core.js').then(m => {
@@ -66,6 +57,7 @@ import('./public/wasm/vose_core.js').then(m => {
     }
   });
 }).then(async mod => {
+  const vbBase = 'temp/voicebanks/TETO-tandoku-100619/重音テト音声ライブラリー/重音テト単独音/';
   
   const OTO_SIZE = 632;
   const otoPtr = mod._malloc(songNotes.length * OTO_SIZE);
@@ -100,7 +92,7 @@ import('./public/wasm/vose_core.js').then(m => {
   mod.ccall('set_oto_data', null, ['number', 'number'], [otoPtr, songNotes.length]);
   mod._free(otoPtr);
   
-  const NOTE_SIZE = 88;
+  const NOTE_SIZE = 44;
   const notesPtr = mod._malloc(songNotes.length * NOTE_SIZE);
   mod.HEAPU8.fill(0, notesPtr, notesPtr + songNotes.length * NOTE_SIZE);
   
@@ -120,11 +112,6 @@ import('./public/wasm/vose_core.js').then(m => {
     mod.setValue(base + 4, pitchPtr, 'i32');
     mod.setValue(base + 8, sn.frames, 'i32');
     mod.setValue(base + 20, breathPtr, 'i32');
-    mod.setValue(base + 48, 100.0, 'double'); // intensity = 100
-    mod.setValue(base + 56, 0.0, 'double');   // modulation = 0
-    mod.setValue(base + 64, -1.0, 'double');  // start_time_ms = -1
-    mod.setValue(base + 72, -1.0, 'double');  // preutterance_ms = -1
-    mod.setValue(base + 80, -1.0, 'double');  // overlap_ms = -1
   }
   
   const outPath = '/song_test.wav';

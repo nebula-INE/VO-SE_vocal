@@ -28,7 +28,7 @@ code = code.replace(
       id: 'track_1',
       name: 'Vocal 1',
       type: 'vocal',
-      voicebank: '',
+      voicebank: 'Official Voice (VCV)',
       notes: INITIAL_NOTES,
       volume: 0.8,
       isMuted: false,
@@ -56,8 +56,8 @@ code = code.replace(
 
 // Replace selectedVoicebank state
 code = code.replace(
-  "  const [selectedVoicebank, setSelectedVoicebank] = useState<string>('');",
-  `  const selectedVoicebank = currentTrack?.voicebank || '';
+  "  const [selectedVoicebank, setSelectedVoicebank] = useState<string>('Official Voice (VCV)');",
+  `  const selectedVoicebank = currentTrack?.voicebank || 'Official Voice (VCV)';
   const setSelectedVoicebank = (vb: string) => {
     setTracks(prev => prev.map(t => t.id === currentTrackId ? { ...t, voicebank: vb } : t));
   };`

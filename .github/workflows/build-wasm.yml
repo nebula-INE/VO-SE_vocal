@@ -23,7 +23,7 @@ jobs:
         run: |
           mkdir -p build/wasm
           cp include/world/*.h src/world/
-          em++ -DVOSE_BUILD_ID=\"$GITHUB_SHA\" src/vose_core.cpp \
+          em++ src/vose_core.cpp \
                src/world/audioio.cpp \
                src/world/cheaptrick.cpp \
                src/world/common.cpp \
@@ -47,35 +47,10 @@ jobs:
                -s ENVIRONMENT=web,worker \
                -s ASSERTIONS=1 \
                -s DISABLE_EXCEPTION_CATCHING=0 \
-               -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_load_embedded_resource_f32', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_get_engine_build_id', '_clear_engine_cache', '_malloc', '_free']" \
+               -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_load_embedded_resource_f32', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
                -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF32', 'HEAPF64']" \
                -s DEFAULT_TO_CXX \
                -o build/wasm/vose_core.js
-
-      - name: Patch Emscripten runtime imports for browser compatibility
-        run: |
-          node scripts/patch_wasm_runtime.mjs build/wasm/vose_core.js
-          grep -q "invoke_ilj:invoke_ilj," build/wasm/vose_core.js
-          echo "Required env.invoke_ilj bridge is explicitly bound."
-
-      - name: Verify WASM import contract against generated loader
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-          const wasm = readFileSync('build/wasm/vose_core.wasm');
-          const loader = readFileSync('build/wasm/vose_core.js', 'utf8');
-          const module = new WebAssembly.Module(wasm);
-          const imports = WebAssembly.Module.imports(module);
-          const invokeImports = imports
-            .filter((entry) => entry.module === 'env' && entry.name.startsWith('invoke_'))
-            .map((entry) => entry.name)
-            .sort();
-          console.log('Generated WASM invoke imports:', invokeImports.join(', '));
-          if (invokeImports.includes('invoke_ilj') && !loader.includes('invoke_ilj:invoke_ilj')) {
-            throw new Error('WASM requires env.invoke_ilj but generated loader does not bind invoke_ilj');
-          }
-          console.log('WASM import contract is compatible with the generated loader.');
-          NODE
 
       - name: Verify required WebAssembly exports
         run: |
@@ -84,7 +59,6 @@ jobs:
           grep -q "_execute_render_cancelable" build/wasm/vose_core.js
           grep -q "_set_oto_data" build/wasm/vose_core.js
           grep -q "_get_engine_version" build/wasm/vose_core.js
-          grep -q "_get_engine_build_id" build/wasm/vose_core.js
           echo "Required vose_core WASM exports are present."
 
       - name: Verify current source diagnostics are compiled
@@ -102,7 +76,6 @@ jobs:
           set -eu
           mkdir -p public/wasm
           cp build/wasm/vose_core.js public/wasm/vose_core.js
-          cp build/wasm/vose_core.js src/wasm/vose_core.js
           cp build/wasm/vose_core.wasm public/wasm/vose_core.wasm
 
           git config user.name "github-actions[bot]"

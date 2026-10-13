@@ -231,7 +231,7 @@ void VoseAudioProcessor::pushSongNote (const ScheduledSongNote& note)
             if (auto v = curvesSnapshot.evaluate (AutomationParam::pitch, tAbs))
             {
                 const double semitoneOffset = AutomationRanges::pitchValueToSemitones (*v);
-                pitchCurve[(size_t) j] *= AutomationRanges::semitonesToFrequencyRatio (semitoneOffset);
+                pitchCurve[(size_t) j] *= std::pow (2.0, semitoneOffset / 12.0);
             }
         }
     }
