@@ -562,7 +562,10 @@ export async function renderStudioOffline(
           const loopEndSec = Math.max(loopStartSec + 0.04, safeEndSec);
           return loopEndSec > loopStartSec + 0.03 ? { loopStartSec, loopEndSec } : null;
         };
-        const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen * consumeRate;
+        const requiredSampleSec = Math.max(
+          0.02,
+          (startOffsetInWav - offsetSec) + playLen * consumeRate
+        );
         const loopRange = computeLoopRange(requiredSampleSec);
 
         // --- ピッチ生成 ---
@@ -570,17 +573,13 @@ export async function renderStudioOffline(
         // PSOLAのノート単位の波形解析はメインスレッドを長時間占有し、
         // 進捗停止や周期境界のクリック/バズの原因になり得るため、
         // 基準音高はAudioBufferSourceのplaybackRateに一度だけ適用する。
-        const requiredSourceSec = Math.max(
-          0.02,
-          (startOffsetInWav - offsetSec) + playLen * consumeRate
-        );
         const startClamped = Math.max(0, Math.min(wavDuration - 0.02, startOffsetInWav));
         const sourceBuffer = buildRawSegment(
           offlineCtx,
           cached,
           startClamped,
-          requiredSourceSec,
-          computeLoopRange(requiredSourceSec)
+          requiredSampleSec,
+          loopRange
         );
         const sourceRate = safePitchRatio;
 
