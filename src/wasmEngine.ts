@@ -28,7 +28,6 @@ import {
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
-import { psolaPitchAndTimeShiftBuffer } from './psolaPitchShift';
 import { cleanWavArrayBuffer } from './utils/wavCleaner';
 
 export interface FetchedSample {
@@ -238,28 +237,11 @@ function getLoopCrossfadedBuffer(
   return newBuffer;
 }
 
-/** PSOLA出力にNaN/Infや無音化がないか簡易チェック(全サンプルではなく間引いて確認) */
-function isUsableBuffer(buf: AudioBuffer): boolean {
-  if (!buf || buf.length < 1) return false;
-  const d = buf.getChannelData(0);
-  const step = Math.max(1, Math.floor(d.length / 4096));
-  let peak = 0;
-  for (let i = 0; i < d.length; i += step) {
-    const v = d[i];
-    if (!Number.isFinite(v)) return false;
-    if (Math.abs(v) > peak) peak = Math.abs(v);
-  }
-  return peak < 8.0;
-}
-
 /**
  * true: ノートのベースピッチを TD-PSOLA で焼き込み、playbackRate は 1.0 固定にする
  *       (フォルマント保持・折り返しノイズ回避)。失敗時のみ従来の playbackRate にフォールバック。
  * false: 従来どおり playbackRate のみでピッチを作る。
  */
-const USE_PSOLA_PITCH = true;
-/** これ未満(半音)のシフトはPSOLAを通さず原音をそのまま使う */
-const PSOLA_SKIP_SEMITONE = 0.05;
 
 // ------------------------------------------------------------
 // 生波形(未ピッチシフト)のセグメントを組み立てる。
@@ -559,26 +541,18 @@ export async function renderStudioOffline(
         const playLen = effectivePreuttSec + durationSec;
 
         const safePitchRatio = Math.min(4.0, Math.max(0.18, pitchRatio));
-        const usePsola = USE_PSOLA_PITCH && Math.abs(semitoneShift) >= PSOLA_SKIP_SEMITONE;
 
-        // ピッチベンド(小さな揺れ)は playbackRate の相対変化として適用する。
-        // 上方向のベンドで元サンプルを速く消費するぶん、必要な元サンプル長を見積もる。
+        // ピッチベンドは playbackRate に相対適用する。ベース音高も playbackRate で作り、
+        // PSOLAは使わないことで長いノートのレンダリング停止・遅延を避ける。
         let bendPoints: PitchPoint[] | null = null;
-        let maxBendRate = 1.0;
         if (note.pbs && note.pbw && note.pby) {
           try {
             bendPoints = smoothPitchBendPoints(parsePitchBend(note.pbs, note.pbw, note.pby));
-            for (const bp of bendPoints) {
-              maxBendRate = Math.max(maxBendRate, Math.min(2.0, Math.max(0.5, Math.pow(2, bp.semitone / 12))));
-            }
           } catch (e) {
             bendPoints = null;
           }
         }
 
-        // PSOLA使用時は「音高」と「時間」が独立なので、元サンプルは実時間(playLen)ぶんだけ要る。
-        // (従来は playLen * ピッチ比 を消費していたため、高音ほど語尾ループが多発していた)
-        const consumeRate = usePsola ? maxBendRate : safePitchRatio;
         const computeLoopRange = (consumeSec: number): { loopStartSec: number; loopEndSec: number } | null => {
           if (consumeSec <= maxSampleDur + 0.02) return null;
           // 語尾の呼気・息漏れノイズがループに巻き込まれるのを防ぐため、末尾から十分手前(少なくとも40ms)でループ
@@ -588,56 +562,17 @@ export async function renderStudioOffline(
           const loopEndSec = Math.max(loopStartSec + 0.04, safeEndSec);
           return loopEndSec > loopStartSec + 0.03 ? { loopStartSec, loopEndSec } : null;
         };
-        const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen * consumeRate;
-        const loopRange = computeLoopRange(requiredSampleSec);
 
-        // --- ピッチ生成 ---
-        // 1) 通常: TD-PSOLAでノートのベースピッチを焼き込み、playbackRate=1.0 で再生
-        //    (playbackRateのリサンプリングは、上げ方向で折り返しノイズ/声質崩れの原因になる)
-        // 2) PSOLAが失敗/異常値を返した場合のみ、従来の playbackRate にフォールバック
-        const requiredSourceSec = Math.max(0.02, (startOffsetInWav - offsetSec) + playLen * consumeRate);
         const startClamped = Math.max(0, Math.min(wavDuration - 0.02, startOffsetInWav));
-        let sourceBuffer: AudioBuffer = buildRawSegment(
+        const requiredSourceSec = Math.max(0.02, (startOffsetInWav - offsetSec) + playLen * safePitchRatio);
+        const sourceBuffer = buildRawSegment(
           offlineCtx,
           cached,
           startClamped,
           requiredSourceSec,
-          loopRange
+          computeLoopRange((startOffsetInWav - offsetSec) + playLen * safePitchRatio)
         );
-        let sourceRate = 1.0;
-        let psolaApplied = false;
-
-        if (usePsola) {
-          try {
-            const shifted = psolaPitchAndTimeShiftBuffer(
-              offlineCtx,
-              sourceBuffer,
-              safePitchRatio,
-              sourceBuffer.length
-            );
-            if (isUsableBuffer(shifted)) {
-              sourceBuffer = shifted;
-              psolaApplied = true;
-            } else {
-              console.warn('[wasmEngine] PSOLA returned invalid samples; falling back to playbackRate');
-            }
-          } catch (psolaErr) {
-            console.warn('[wasmEngine] PSOLA failed; falling back to playbackRate:', psolaErr);
-          }
-        }
-
-        if (!psolaApplied) {
-          // フォールバック: 従来方式 (必要な元サンプル長・ループ範囲も従来どおり計算し直す)
-          const fbRequiredSourceSec = Math.max(0.02, (startOffsetInWav - offsetSec) + playLen * safePitchRatio);
-          sourceBuffer = buildRawSegment(
-            offlineCtx,
-            cached,
-            startClamped,
-            fbRequiredSourceSec,
-            computeLoopRange((startOffsetInWav - offsetSec) + playLen * safePitchRatio)
-          );
-          sourceRate = safePitchRatio;
-        }
+        const sourceRate = safePitchRatio;
 
         const source = offlineCtx.createBufferSource();
         source.buffer = sourceBuffer;
@@ -651,7 +586,7 @@ export async function renderStudioOffline(
               sourceRate,
               bendPoints,
               startTimeSec,
-              (st) => sourceRate * Math.max(0.5, Math.min(2.0, Math.pow(2, st / 12))),
+              (st) => safePitchRatio * Math.max(0.5, Math.min(2.0, Math.pow(2, st / 12))),
               Math.max(0, actualStartTime),
               startTimeSec + durationSec
             );
@@ -664,7 +599,7 @@ export async function renderStudioOffline(
         const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.92;
 
         const tStart = actualStartTime;
-        const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / (psolaApplied ? 1 : baseRate);
+        const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / baseRate;
         const attackDur = Math.max(0.006, Math.min(0.03, overlapSec || 0.008));
         const tAttack = tStart + attackDur;
 
