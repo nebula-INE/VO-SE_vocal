@@ -237,12 +237,6 @@ function getLoopCrossfadedBuffer(
   return newBuffer;
 }
 
-/**
- * true: ノートのベースピッチを TD-PSOLA で焼き込み、playbackRate は 1.0 固定にする
- *       (フォルマント保持・折り返しノイズ回避)。失敗時のみ従来の playbackRate にフォールバック。
- * false: 従来どおり playbackRate のみでピッチを作る。
- */
-
 // ------------------------------------------------------------
 // 生波形(未ピッチシフト)のセグメントを組み立てる。
 // ------------------------------------------------------------
@@ -522,7 +516,7 @@ export async function renderStudioOffline(
         const offsetSec = Math.max(0, (cached.left_blank || 0) / 1000);
         const preuttSec = Math.max(0, (cached.preutterance || 0) / 1000);
         const fixedSec = Math.max(0, (cached.fixed_range || 0) / 1000);
-        // PSOLAでは時間軸と音高が独立しているため、先行発音(子音)は自然な実時間で発音される
+        // 先行発音時間を基準にノート開始位置を補正する
         const effectivePreuttSec = preuttSec;
         const wavDuration = cached.buffer.duration;
 
