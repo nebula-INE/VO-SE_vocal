@@ -108,15 +108,23 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
     assert native_lib is not None, "native VO-SE Core library is required for this integration test"
     native_api = cast(Any, native_lib)
     captured_paths: list[str] = []
-    native_execute_render = native_api.execute_render
+    # Newer native cores expose execute_render_cancelable(), which the
+    # renderer prefers. Intercept that entry point when available; otherwise
+    # retain coverage for older cores that only expose execute_render().
+    native_entry_name = (
+        "execute_render_cancelable"
+        if callable(getattr(native_api, "execute_render_cancelable", None))
+        else "execute_render"
+    )
+    native_entry = getattr(native_api, native_entry_name)
 
-    def execute_render_spy(c_notes, note_count, output_path, mode_flag):
+    def execute_render_spy(c_notes, note_count, output_path, mode_flag, *callbacks):
         for i in range(int(note_count)):
             ptr = c_notes[i].wav_path
             captured_paths.append(ctypes.string_at(ptr).decode("utf-8") if ptr else "")
-        return native_execute_render(c_notes, note_count, output_path, mode_flag)
+        return native_entry(c_notes, note_count, output_path, mode_flag, *callbacks)
 
-    native_api.execute_render = execute_render_spy
+    setattr(native_api, native_entry_name, execute_render_spy)
 
     rendered = engine.export_to_wav_v2(notes, params, str(output), tempo_bpm=120.0)
 
