@@ -5,7 +5,9 @@
 //
 // 1. 各トラック・各ノートの音源サンプル(oto.ini設定含む)を並行取得
 // 2. OfflineAudioContext (44.1kHz 2ch) 上で完全なUTAU音響パイプラインを構築:
-//    - サンプルベース音高からのピッチシフト (AudioBufferSource playbackRate)
+//    - サンプルベース音高からのピッチシフト
+//        基本: TD-PSOLA (tdPsola.ts) でフォルマントを保ったままシフト
+//        PSOLAの対応範囲(約±9半音)を超える分のみ playbackRate で補う
 //    - USTピッチベンドカーブ (PBS/PBW/PBY) はビブラート等の微小補正として反映
 //    - oto.ini タイムマッピング (Offset, Preutterance, Overlap, Fixed, Cutoff)
 //    - 長音用イコールパワークロスフェードループ (クリック音完全防止)
@@ -28,6 +30,13 @@ import {
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
+import {
+  analyzePitchTrack,
+  periodAtSourceIndex,
+  placeMarks,
+  psolaRender,
+  type PitchTrack
+} from './tdPsola';
 import { cleanWavArrayBuffer } from './utils/wavCleaner';
 
 export interface FetchedSample {
@@ -39,6 +48,8 @@ export interface FetchedSample {
   overlap: number;
   baseMidi: number;
   _loopXfadeCache?: Map<string, AudioBuffer>;
+  /** サンプルごとに1回だけ解析して使い回す周期トラック (PSOLA用) */
+  _pitchTrack?: PitchTrack;
 }
 
 const REST_LYRICS_SET = new Set([
@@ -292,6 +303,70 @@ function buildRawSegment(
   return outBuffer;
 }
 
+// ------------------------------------------------------------
+// フォルマントを保ったピッチシフト (TD-PSOLA)
+//
+// playbackRate でピッチを変えるとフォルマントも一緒に動き、原音から離れた
+// 音高ほど「別人の声」になる。PSOLAは1周期ぶんの波形を置き直すので声色が残る。
+// 重い解析(基本周波数トラック)は FetchedSample ごとに1回だけ行いキャッシュする。
+// ノートごとの処理は O(N) のマーク配置 + オーバーラップ加算のみ。
+// 時間軸は変えないので、ループ/長さの計算は従来のまま使える。
+// ------------------------------------------------------------
+const PSOLA_MIN_RATIO = 0.55; // これより低くするとグレインが離れて隙間が出る
+const PSOLA_MAX_RATIO = 1.8;  // これより高くすると1周期が短くなりすぎて劣化
+
+// buildRawSegment が作ったセグメント上の位置 -> 元WAV上の位置 (ループ込み)
+function makeSourceIndexMapper(
+  cached: FetchedSample,
+  startOffsetInWav: number,
+  loopRange: { loopStartSec: number; loopEndSec: number } | null
+): (segIdx: number) => number {
+  const sr = cached.buffer.sampleRate;
+  const startSample = Math.max(0, Math.floor(startOffsetInWav * sr));
+  if (!loopRange) return (i) => startSample + i;
+  const loopStartSample = Math.max(0, Math.floor(loopRange.loopStartSec * sr));
+  const loopEndSample = Math.min(cached.buffer.length, Math.floor(loopRange.loopEndSec * sr));
+  const loopLen = Math.max(1, loopEndSample - loopStartSample);
+  return (i) => {
+    const abs = startSample + i;
+    return abs < loopEndSample ? abs : loopStartSample + ((abs - loopEndSample) % loopLen);
+  };
+}
+
+function applyFormantPreservingShift(
+  ctx: BaseAudioContext,
+  cached: FetchedSample,
+  segment: AudioBuffer,
+  srcIndexAt: (segIdx: number) => number,
+  ratio: number
+): AudioBuffer {
+  if (Math.abs(ratio - 1) < 0.002) return segment;
+
+  if (!cached._pitchTrack) {
+    cached._pitchTrack = analyzePitchTrack(cached.buffer.getChannelData(0), cached.buffer.sampleRate);
+  }
+  const track = cached._pitchTrack;
+  const sr = segment.sampleRate;
+
+  const chans: Float32Array[] = [];
+  for (let ch = 0; ch < segment.numberOfChannels; ch++) chans.push(segment.getChannelData(ch));
+
+  const marks = placeMarks(
+    chans[0],
+    (i) => periodAtSourceIndex(track, srcIndexAt(i)),
+    Math.round(sr * 0.008)
+  );
+  // 有声マークが取れなかった(完全に無声/解析失敗)場合は元の波形のまま返す
+  let voicedCount = 0;
+  for (let i = 0; i < marks.voiced.length; i++) voicedCount += marks.voiced[i];
+  if (voicedCount < 2) return segment;
+
+  const shifted = psolaRender(chans, marks, ratio);
+  const out = ctx.createBuffer(segment.numberOfChannels, segment.length, sr);
+  for (let ch = 0; ch < shifted.length; ch++) out.getChannelData(ch).set(shifted[ch]);
+  return out;
+}
+
 // ============================================================
 // メインのレンダリング関数
 // ============================================================
@@ -509,9 +584,12 @@ export async function renderStudioOffline(
       try {
         const sampleBase = cached.baseMidi || 60;
         const semitoneShift = softClampSemitone(note.noteNum - sampleBase);
-        // PSOLA非適用時(フォールバック)のオーバーラップ補正用。通常の再生には使わない。
-        const baseRate = Math.min(4.0, Math.max(0.18, Math.pow(2, semitoneShift / 12)));
         const pitchRatio = Math.pow(2, semitoneShift / 12);
+        // 目標ピッチ倍率を2つに分ける:
+        //  - psolaRatio: フォルマントを保ったまま上げ下げする分 (TD-PSOLA)
+        //  - safePitchRatio: PSOLAの対応範囲を超えた残りだけ playbackRate で補う分
+        //    (通常のノートでは 1.0 になり、playbackRate はピッチベンド専用になる)
+        const psolaRatio = Math.min(PSOLA_MAX_RATIO, Math.max(PSOLA_MIN_RATIO, pitchRatio));
 
         const offsetSec = Math.max(0, (cached.left_blank || 0) / 1000);
         const preuttSec = Math.max(0, (cached.preutterance || 0) / 1000);
@@ -534,10 +612,10 @@ export async function renderStudioOffline(
         const startOffsetInWav = Math.min(offsetSec + timeDiff, cutoffEndSec - 0.02);
         const playLen = effectivePreuttSec + durationSec;
 
-        const safePitchRatio = Math.min(4.0, Math.max(0.18, pitchRatio));
+        const safePitchRatio = Math.min(4.0, Math.max(0.18, pitchRatio / psolaRatio));
 
-        // ピッチベンドは playbackRate に相対適用する。ベース音高も playbackRate で作り、
-        // PSOLAは使わないことで長いノートのレンダリング停止・遅延を避ける。
+        // ベース音高は PSOLA(解析はサンプルごとにキャッシュ)で作り、フォルマントを保つ。
+        // ピッチベンドは揺れ幅が小さいので従来どおり playbackRate に相対適用する。
         let bendPoints: PitchPoint[] | null = null;
         if (note.pbs && note.pbw && note.pby) {
           try {
@@ -559,12 +637,21 @@ export async function renderStudioOffline(
 
         const startClamped = Math.max(0, Math.min(wavDuration - 0.02, startOffsetInWav));
         const requiredSourceSec = Math.max(0.02, (startOffsetInWav - offsetSec) + playLen * safePitchRatio);
-        const sourceBuffer = buildRawSegment(
+        const loopRange = computeLoopRange((startOffsetInWav - offsetSec) + playLen * safePitchRatio);
+        const rawSegment = buildRawSegment(
           offlineCtx,
           cached,
           startClamped,
           requiredSourceSec,
-          computeLoopRange((startOffsetInWav - offsetSec) + playLen * safePitchRatio)
+          loopRange
+        );
+        // フォルマントを保ったままベース音高へシフト (長さは変わらない)
+        const sourceBuffer = applyFormantPreservingShift(
+          offlineCtx,
+          cached,
+          rawSegment,
+          makeSourceIndexMapper(cached, startClamped, loopRange),
+          psolaRatio
         );
         const sourceRate = safePitchRatio;
 
@@ -593,7 +680,7 @@ export async function renderStudioOffline(
         const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.92;
 
         const tStart = actualStartTime;
-        const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / baseRate;
+        const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / safePitchRatio;
         const attackDur = Math.max(0.006, Math.min(0.03, overlapSec || 0.008));
         const tAttack = tStart + attackDur;
 
@@ -619,7 +706,7 @@ export async function renderStudioOffline(
         hpf.connect(gain);
         gain.connect(masterGain);
 
-        // shiftedBufferは既に必要な長さぶんだけ用意されているのでオフセット不要
+        // sourceBufferは既に必要な長さぶんだけ用意されているのでオフセット不要
         source.start(actualStartTime, 0);
         source.stop(tEnd + 0.01);
         resolvedSampleCount++;
@@ -651,7 +738,7 @@ export async function renderStudioOffline(
   onProgress?.(40);
 
   // 6. オフラインレンダリング実行 (進捗: 40% -> 90%)
-  // PSOLA処理が加わった分、単純resampleより重いのでETA見積もりを底上げ
+  // (PSOLAはノートのスケジューリング時に実行済み。ここは Web Audio のレンダリング時間のみ)
   let progressInterval: number | null = null;
   let currentRenderPct = 40;
   const estimatedRenderTimeMs = Math.min(15000, Math.max(600, totalDurationSec * 220));
