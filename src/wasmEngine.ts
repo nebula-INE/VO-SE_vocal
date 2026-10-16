@@ -521,26 +521,20 @@ export async function renderStudioOffline(
   const masterDeMud = offlineCtx.createBiquadFilter();
   masterDeMud.type = 'peaking';
   masterDeMud.frequency.setValueAtTime(350, 0);
-  masterDeMud.gain.setValueAtTime(-1.5, 0);
-  masterDeMud.Q.setValueAtTime(1.2, 0);
+  masterDeMud.gain.setValueAtTime(-2.5, 0);
+  masterDeMud.Q.setValueAtTime(1.1, 0);
 
-  // 3. [スタジオPresence & Articulation] 3.8kHz 子音のアタック・発音の輪郭をクリアに強調
+  // 3. [スタジオPresence & Articulation] 3.8kHz 子音のアタック・発音の輪郭をクリアに強調（滑舌と明瞭度を最大化）
   const masterPresence = offlineCtx.createBiquadFilter();
   masterPresence.type = 'peaking';
   masterPresence.frequency.setValueAtTime(3800, 0);
-  masterPresence.gain.setValueAtTime(0.0, 0);
+  masterPresence.gain.setValueAtTime(2.5, 0);
   masterPresence.Q.setValueAtTime(1.0, 0);
 
-  // 4. [スタジオAir & Brilliance] 9.0kHz ハイシェルフで抜けと透明感を付加
-  const masterAir = offlineCtx.createBiquadFilter();
-  masterAir.type = 'highshelf';
-  masterAir.frequency.setValueAtTime(9000, 0);
-  masterAir.gain.setValueAtTime(0.0, 0);
-
-  // 5. [スタジオ超高域セーフティLPF] 17.5kHz以上の不要な折り返しノイズのみをカット
+  // 4. [スタジオ超高域セーフティLPF] 14.5kHz 以上の不要な超高域ヒス・息漏れノイズをカット
   const masterLpf = offlineCtx.createBiquadFilter();
   masterLpf.type = 'lowpass';
-  masterLpf.frequency.setValueAtTime(17500, 0);
+  masterLpf.frequency.setValueAtTime(14500, 0);
   masterLpf.Q.setValueAtTime(0.707, 0);
 
   // クリッピング防止コンプレッサー/リミッター
@@ -554,8 +548,7 @@ export async function renderStudioOffline(
   masterGain.connect(masterHpf);
   masterHpf.connect(masterDeMud);
   masterDeMud.connect(masterPresence);
-  masterPresence.connect(masterAir);
-  masterAir.connect(masterLpf);
+  masterPresence.connect(masterLpf);
   masterLpf.connect(masterLimiter);
   masterLimiter.connect(offlineCtx.destination);
 
@@ -627,10 +620,10 @@ export async function renderStudioOffline(
 
         const computeLoopRange = (consumeSec: number): { loopStartSec: number; loopEndSec: number } | null => {
           if (consumeSec <= maxSampleDur + 0.02) return null;
-          // 語尾の呼気・息漏れノイズがループに巻き込まれるのを防ぐため、末尾から十分手前(少なくとも40ms)でループ
-          const safeEndSec = Math.min(wavDuration - 0.04, cutoffEndSec - 0.04);
+          // [音質改善] 語尾の呼気・息漏れノイズがループに巻き込まれるのを防ぐため、末尾から十分手前(少なくとも80ms)で安全にループ
+          const safeEndSec = Math.min(wavDuration - 0.08, cutoffEndSec - 0.08);
           const safeStartSec = offsetSec + Math.max(0.04, fixedSec || preuttSec || 0.06);
-          const loopStartSec = Math.min(safeEndSec - 0.05, safeStartSec);
+          const loopStartSec = Math.min(safeEndSec - 0.06, safeStartSec);
           const loopEndSec = Math.max(loopStartSec + 0.04, safeEndSec);
           return loopEndSec > loopStartSec + 0.03 ? { loopStartSec, loopEndSec } : null;
         };

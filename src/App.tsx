@@ -865,36 +865,30 @@ export default function App() {
       masterGain.gain.setValueAtTime(0.85, ctx.currentTime);
 
       // スタジオ品質・クリアボーカルマスタリングチェーン (こもり感を一掃し、ヌケと滑舌の明瞭度を最大化)
-      // 1. サブベースカット (60Hz HPF, Q=0.707): 超低域ノイズをカットしボーカルの芯を保護
+      // 1. サブベースカット (75Hz HPF, Q=0.707): 超低域ノイズをカットしボーカルの芯を保護
       const hpf = ctx.createBiquadFilter();
       hpf.type = 'highpass';
-      hpf.frequency.setValueAtTime(60, ctx.currentTime);
+      hpf.frequency.setValueAtTime(75, ctx.currentTime);
       hpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
-      // 2. De-Mud フィルター (350Hz, -2.5dB, Q=1.2): 篭もりの主原因である中低域の箱鳴り・濁りをクリアに除去
+      // 2. De-Mud フィルター (350Hz, -2.5dB, Q=1.1): 篭もりの主原因である中低域の濁りをクリアに除去
       const deMud = ctx.createBiquadFilter();
       deMud.type = 'peaking';
       deMud.frequency.setValueAtTime(350, ctx.currentTime);
       deMud.gain.setValueAtTime(-2.5, ctx.currentTime);
-      deMud.Q.setValueAtTime(1.2, ctx.currentTime);
+      deMud.Q.setValueAtTime(1.1, ctx.currentTime);
 
-      // 3. Presence & Articulation ブースト (3.8kHz, +3.0dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、歌詞をはっきりと聴かせる
+      // 3. Presence & Articulation ブースト (3.8kHz, +2.5dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、滑舌をクリアに
       const presence = ctx.createBiquadFilter();
       presence.type = 'peaking';
       presence.frequency.setValueAtTime(3800, ctx.currentTime);
-      presence.gain.setValueAtTime(3.0, ctx.currentTime);
+      presence.gain.setValueAtTime(2.5, ctx.currentTime);
       presence.Q.setValueAtTime(1.0, ctx.currentTime);
 
-      // 4. Air & Brilliance ハイシェルフ (9.0kHz, +3.2dB): こもった音を解消し、透明感・抜け・空気感を付加
-      const airShelf = ctx.createBiquadFilter();
-      airShelf.type = 'highshelf';
-      airShelf.frequency.setValueAtTime(9000, ctx.currentTime);
-      airShelf.gain.setValueAtTime(3.2, ctx.currentTime);
-
-      // 5. 超高域セーフティ LPF (17.5kHz, Q=0.707): 可聴域の歌声を一切減衰させずに超高域の折り返しノイズのみを遮断
+      // 4. 超高域セーフティ LPF (14.5kHz, Q=0.707): 息漏れ・ヒスノイズ・高周波折り返しのみを遮断
       const safetyLpf = ctx.createBiquadFilter();
       safetyLpf.type = 'lowpass';
-      safetyLpf.frequency.setValueAtTime(17500, ctx.currentTime);
+      safetyLpf.frequency.setValueAtTime(14500, ctx.currentTime);
       safetyLpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
       const limiter = ctx.createDynamicsCompressor();
@@ -907,8 +901,7 @@ export default function App() {
       masterGain.connect(hpf);
       hpf.connect(deMud);
       deMud.connect(presence);
-      presence.connect(airShelf);
-      airShelf.connect(safetyLpf);
+      presence.connect(safetyLpf);
       safetyLpf.connect(limiter);
       limiter.connect(ctx.destination);
 
@@ -1401,8 +1394,12 @@ export default function App() {
       // Seamless looping over vowel body ONLY if requested duration exceeds max sample length
       const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen * baseRate;
       if (requiredSampleSec > maxSampleDur + 0.02) {
-        const loopStartSec = Math.min(cutoffEndSec - 0.06, offsetSec + Math.max(0.02, fixedSec || preuttSec || 0.05));
-        const loopEndSec = Math.min(wavDuration - 0.01, Math.max(loopStartSec + 0.04, cutoffEndSec - 0.01));
+        // [音質改善] 原音末尾（Cutoff付近）の呼気・抜き際ノイズがループに巻き込まれるのを防ぐため、
+        // 末尾から最低80ms手前で安全にループ境界を設定
+        const safeEnd = Math.min(wavDuration - 0.08, cutoffEndSec - 0.08);
+        const safeStart = offsetSec + Math.max(0.04, fixedSec || preuttSec || 0.06);
+        const loopStartSec = Math.min(safeEnd - 0.06, safeStart);
+        const loopEndSec = Math.max(loopStartSec + 0.04, safeEnd);
         if (loopEndSec > loopStartSec + 0.03) {
           source.loop = true;
           source.loopStart = loopStartSec;

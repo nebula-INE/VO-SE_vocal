@@ -1408,12 +1408,23 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   const rawTrim = (rawAlias || '').trim();
   if (!rawTrim) return null;
 
-  // Strict check for rest notes - rests must NEVER resolve to audio samples
-  const REST_PATTERNS = ['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', ' ', '', '　', '休', '休符', '・', '-', 'ー', '~', 'null'];
+  // Strict check for rest and breath notes - rests/breaths must NEVER resolve to singing samples
+  const REST_PATTERNS = ['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', ' ', '', '　', '休', '休符', '・', '-', 'ー', '~', 'null', 'breath', 'inhale', 'exhale'];
   const rawLow = rawTrim.toLowerCase();
-  if (REST_PATTERNS.includes(rawLow) || /^br[0-9]*$/i.test(rawLow) || /^息[0-9]*$/i.test(rawLow) || /^吸[0-9]*$/i.test(rawLow) || /^_?(br|息|吸)[0-9]*$/i.test(rawLow)) {
+  const isBreathOrRestLyric = REST_PATTERNS.includes(rawLow) ||
+    /^(?:\[?(?:息|吸|吸気|息吸い|br|pau|sil|breath|inhale|exhale)\]?[0-9]*|_?(?:br|息|吸)[0-9]*)$/i.test(rawLow);
+  if (isBreathOrRestLyric) {
     return null;
   }
+
+  // Helper to ensure singing notes never accidentally resolve to raw breath audio samples
+  const isBreathEntry = (entry) => {
+    if (!entry) return false;
+    const a = String(entry.alias || '').trim().toLowerCase();
+    const f = path.basename(String(entry.filename || '')).replace(/\.wav$/i, '').trim().toLowerCase();
+    const breathRe = /(?:^|[_\s\-\[・])(?:息|吸|吸気|息吸い|br|pau|sil|breath|inhale|exhale)[0-9]*(?:$|[_\s\-\]・])/i;
+    return breathRe.test(a) || breathRe.test(f);
+  };
 
   const alias = rawTrim.normalize('NFC');
   // Strip pitch/octave suffixes e.g., "_C4", "_A3", "_1", "↑", "↓"
@@ -1439,12 +1450,13 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     // An explicitly written alias must always win over automatic pitch mapping.
     // This is especially important for explicit VCV aliases such as "a い".
     const exact = selectBestPitchEntry(indexed, candidate, noteNum) || aliasMap.get(candidate);
-    if (exact) return exact;
+    if (exact && !isBreathEntry(exact)) return exact;
     if (noteNum === null || noteNum === undefined) return null;
     if (candidate.includes('/') || candidate.includes('\\')) return null;
     const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);
     if (mapped === candidate) return null;
-    return aliasMap.get(mapped) || null;
+    const mappedEntry = aliasMap.get(mapped) || null;
+    return (mappedEntry && !isBreathEntry(mappedEntry)) ? mappedEntry : null;
   };
 
   // Helper to search direct match or pitch-suffixed key in aliasMap
@@ -1455,7 +1467,8 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
 
     // 1. Exact match
     if (aliasMap.has(prefNorm)) {
-      return selectBestPitchEntry(indexed, prefNorm, noteNum) || aliasMap.get(prefNorm);
+      const entry = selectBestPitchEntry(indexed, prefNorm, noteNum) || aliasMap.get(prefNorm);
+      if (entry && !isBreathEntry(entry)) return entry;
     }
 
     // 2. Pitch-suffixed search with proximity to requested noteNum
@@ -1464,6 +1477,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     let minDiff = 999;
 
     for (const [key, entry] of aliasMap.entries()) {
+      if (isBreathEntry(entry)) continue;
       const kNorm = key.normalize('NFC');
       const kLower = kNorm.toLowerCase();
       
@@ -1486,7 +1500,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
         }
       }
     }
-    if (bestEntry) return bestEntry;
+    if (bestEntry && !isBreathEntry(bestEntry)) return bestEntry;
 
     return null;
   };
@@ -1500,7 +1514,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
                   matchPrefixOrExact(`${prevVowel} ${cand}`) ||
                   matchPrefixOrExact(`${prevVowel}_${cand}`) ||
                   matchPrefixOrExact(`${prevVowel}${cand}`);
-      if (entry) return entry;
+      if (entry && !isBreathEntry(entry)) return entry;
     }
   }
 
@@ -1514,7 +1528,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
                 matchPrefixOrExact(`_${cand}`) ||
                 matchPrefixOrExact(`-${cand}`) ||
                 matchPrefixOrExact(cand);
-    if (entry) return entry;
+    if (entry && !isBreathEntry(entry)) return entry;
   }
   // Do not substitute a different VCV context when prevVowel is explicit.
   // If the requested VCV entry is unavailable, the plain CV/standalone
@@ -1527,6 +1541,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     if (!candLower) continue;
     const filenameMatches = [];
     for (const entry of indexed.entries || []) {
+      if (isBreathEntry(entry)) continue;
       const baseName = path.basename(entry.filename || '').replace(/\.wav$/i, '').toLowerCase().normalize('NFC');
       if (
         baseName === candLower ||
@@ -1540,7 +1555,8 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     }
     if (filenameMatches.length > 0) {
       const best = selectBestPitchEntryFromEntries(filenameMatches, noteNum);
-      return best || filenameMatches[0];
+      if (best && !isBreathEntry(best)) return best;
+      if (filenameMatches[0] && !isBreathEntry(filenameMatches[0])) return filenameMatches[0];
     }
   }
 
