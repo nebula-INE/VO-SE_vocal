@@ -84,7 +84,7 @@ self.onunhandledrejection = (e: PromiseRejectionEvent) => {
 };
 
 // ------------------------------------------------------------
-// NoteEvent構造体レイアウト (vose_core.wasm / wasm32環境: 各フィールド4バイト、計44バイト)
+// NoteEvent構造体レイアウト (vose_core.wasm / wasm32環境 / #pragma pack(push, 8))
 //   wav_path:               offset 0   (4B, const char*)
 //   pitch_curve:            offset 4   (4B, double*)
 //   pitch_length:           offset 8   (4B, int)
@@ -96,9 +96,15 @@ self.onunhandledrejection = (e: PromiseRejectionEvent) => {
 //   vibrato_curve_length:   offset 32  (4B, int)
 //   portamento_offsets:     offset 36  (4B, double*)
 //   portamento_length:      offset 40  (4B, int)
-//   合計44バイト (sizeof(NoteEvent) = 44)
+//   (44-47: 4バイトパディング - doubleの8バイトアライメントのため)
+//   intensity:              offset 48  (8B, double)
+//   modulation:             offset 56  (8B, double)
+//   start_time_ms:          offset 64  (8B, double)
+//   preutterance_ms:        offset 72  (8B, double)
+//   overlap_ms:             offset 80  (8B, double)
+//   合計88バイト (sizeof(NoteEvent) = 88)
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 44;
+const NOTE_EVENT_SIZE = 88;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
@@ -110,6 +116,11 @@ const OFF_VIBRATO_RATE_CURVE = 28;
 const OFF_VIBRATO_CURVE_LENGTH = 32;
 const OFF_PORTAMENTO_OFFSETS = 36;
 const OFF_PORTAMENTO_LENGTH = 40;
+const OFF_INTENSITY = 48;
+const OFF_MODULATION = 56;
+const OFF_START_TIME_MS = 64;
+const OFF_PREUTTERANCE_MS = 72;
+const OFF_OVERLAP_MS = 80;
 
 // ------------------------------------------------------------
 // OtoEntry構造体レイアウト (vose_core.h より。wasm32前提)
@@ -466,9 +477,19 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
     // 3. NoteEvent配列を構築する(休符/ギャップは key=null で無声ノートとして渡す)
     const notesPtr = mod._malloc(notes.length * NOTE_EVENT_SIZE);
     allocatedPtrs.push(notesPtr);
+    // 未設定ポインタ・フィールドを確実にゼロクリアして予期せぬメモリアクセスを防止
+    mod.HEAPU8.fill(0, notesPtr, notesPtr + notes.length * NOTE_EVENT_SIZE);
 
     for (let i = 0; i < notes.length; i++) {
-      const { key, pitchCurveHz, intensity, modulation } = notes[i];
+      const {
+        key,
+        pitchCurveHz,
+        intensity,
+        modulation,
+        startTimeMs,
+        preutteranceMs,
+        overlapMs
+      } = notes[i];
       const base = notesPtr + i * NOTE_EVENT_SIZE;
 
       const isVoiced = key !== null;
@@ -495,6 +516,18 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
+
+      const effIntensity = typeof intensity === 'number' && Number.isFinite(intensity) ? intensity : 100.0;
+      const effModulation = typeof modulation === 'number' && Number.isFinite(modulation) ? modulation : 0.0;
+      const effStartTimeMs = typeof startTimeMs === 'number' && Number.isFinite(startTimeMs) ? startTimeMs : -1.0;
+      const effPreutteranceMs = typeof preutteranceMs === 'number' && Number.isFinite(preutteranceMs) ? preutteranceMs : -1.0;
+      const effOverlapMs = typeof overlapMs === 'number' && Number.isFinite(overlapMs) ? overlapMs : -1.0;
+
+      mod.setValue(base + OFF_INTENSITY, effIntensity, 'double');
+      mod.setValue(base + OFF_MODULATION, effModulation, 'double');
+      mod.setValue(base + OFF_START_TIME_MS, effStartTimeMs, 'double');
+      mod.setValue(base + OFF_PREUTTERANCE_MS, effPreutteranceMs, 'double');
+      mod.setValue(base + OFF_OVERLAP_MS, effOverlapMs, 'double');
     }
 
     (self as unknown as Worker).postMessage({

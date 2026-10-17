@@ -89,12 +89,15 @@ interface PyStatus {
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-const REST_LYRICS_SET = new Set(['r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null']);
+const REST_LYRICS_SET = new Set([
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null',
+  'っ', 'ッ', '_っ', '_ッ', 'っ_', 'ッ_'
+]);
 export const isRestLyric = (lyric?: string): boolean => {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
   if (REST_LYRICS_SET.has(l)) return true;
-  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l);
+  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l) || /^[_]?[っッ]+[_]?$/.test(l);
 };
 
 export const getSampleCacheKey = (vb: string, lyric: string, prevLyric?: string, noteNum?: number) => {
@@ -888,45 +891,46 @@ export default function App() {
       const masterGain = ctx.createGain();
       masterGain.gain.setValueAtTime(0.85, ctx.currentTime);
 
-      // スタジオ品質・クリアボーカルマスタリングチェーン (こもり感を一掃し、ヌケと滑舌の明瞭度を最大化)
-      // 1. サブベースカット (60Hz HPF, Q=0.707): 超低域ノイズをカットしボーカルの芯を保護
+      // スタジオ品質・クリアボーカルマスタリングチェーン (ザラつき・歪みを排し、透明感と滑らかさを両立)
+      // 1. サブベースカット (50Hz HPF, Q=0.707): 超低域ノイズをカットしボーカルの芯を保護
       const hpf = ctx.createBiquadFilter();
       hpf.type = 'highpass';
-      hpf.frequency.setValueAtTime(60, ctx.currentTime);
+      hpf.frequency.setValueAtTime(50, ctx.currentTime);
       hpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
-      // 2. De-Mud フィルター (350Hz, -2.5dB, Q=1.2): 篭もりの主原因である中低域の箱鳴り・濁りをクリアに除去
+      // 2. De-Mud フィルター (350Hz, -1.5dB, Q=1.0): 篭もりの原因である中低域の濁りを自然に除去
       const deMud = ctx.createBiquadFilter();
       deMud.type = 'peaking';
       deMud.frequency.setValueAtTime(350, ctx.currentTime);
-      deMud.gain.setValueAtTime(-2.5, ctx.currentTime);
-      deMud.Q.setValueAtTime(1.2, ctx.currentTime);
+      deMud.gain.setValueAtTime(-1.5, ctx.currentTime);
+      deMud.Q.setValueAtTime(1.0, ctx.currentTime);
 
-      // 3. Presence & Articulation ブースト (3.8kHz, +3.0dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、歌詞をはっきりと聴かせる
+      // 3. Clarity & Articulation (3.2kHz, +1.2dB, Q=1.2): 歌詞の輪郭を耳障りな金属音なしに滑らかに明瞭化
       const presence = ctx.createBiquadFilter();
       presence.type = 'peaking';
-      presence.frequency.setValueAtTime(3800, ctx.currentTime);
-      presence.gain.setValueAtTime(3.0, ctx.currentTime);
-      presence.Q.setValueAtTime(1.0, ctx.currentTime);
+      presence.frequency.setValueAtTime(3200, ctx.currentTime);
+      presence.gain.setValueAtTime(1.2, ctx.currentTime);
+      presence.Q.setValueAtTime(1.2, ctx.currentTime);
 
-      // 4. Air & Brilliance ハイシェルフ (9.0kHz, +3.2dB): こもった音を解消し、透明感・抜け・空気感を付加
+      // 4. Smooth Air (10.5kHz, +1.0dB): 録音ヒスノイズを増幅させず、自然で滑らかな高域の抜けを付加
       const airShelf = ctx.createBiquadFilter();
       airShelf.type = 'highshelf';
-      airShelf.frequency.setValueAtTime(9000, ctx.currentTime);
-      airShelf.gain.setValueAtTime(3.2, ctx.currentTime);
+      airShelf.frequency.setValueAtTime(10500, ctx.currentTime);
+      airShelf.gain.setValueAtTime(1.0, ctx.currentTime);
 
-      // 5. 超高域セーフティ LPF (17.5kHz, Q=0.707): 可聴域の歌声を一切減衰させずに超高域の折り返しノイズのみを遮断
+      // 5. 超高域セーフティ LPF (16.5kHz, Q=0.707): 可聴域の歌声を減衰させずに折り返しノイズのみを遮断
       const safetyLpf = ctx.createBiquadFilter();
       safetyLpf.type = 'lowpass';
-      safetyLpf.frequency.setValueAtTime(17500, ctx.currentTime);
+      safetyLpf.frequency.setValueAtTime(16500, ctx.currentTime);
       safetyLpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
+      // 6. 歪みゼロ・ソフトニーコンプレッサー（ポンピング・チャタリング歪みを完全防止）
       const limiter = ctx.createDynamicsCompressor();
-      limiter.threshold.setValueAtTime(-0.8, ctx.currentTime); // -0.8 dBFS ceiling
-      limiter.knee.setValueAtTime(3.0, ctx.currentTime);
-      limiter.ratio.setValueAtTime(16.0, ctx.currentTime);
-      limiter.attack.setValueAtTime(0.003, ctx.currentTime);
-      limiter.release.setValueAtTime(0.050, ctx.currentTime);
+      limiter.threshold.setValueAtTime(-1.5, ctx.currentTime); // -1.5 dBFS
+      limiter.knee.setValueAtTime(6.0, ctx.currentTime); // 広いソフトニーで滑らか
+      limiter.ratio.setValueAtTime(4.0, ctx.currentTime); // 自然な音楽的レシオ
+      limiter.attack.setValueAtTime(0.010, ctx.currentTime); // 10ms
+      limiter.release.setValueAtTime(0.120, ctx.currentTime); // 120msで自然な減衰
 
       masterGain.connect(hpf);
       hpf.connect(deMud);
@@ -1452,10 +1456,10 @@ export default function App() {
       gain.gain.setValueAtTime(volGain, tDecay);
       gain.gain.linearRampToValueAtTime(0.0001, tEnd);
 
-      // Studio High-pass filter (80Hz) to prevent sub-rumble and preserve vocal clarity
+      // Studio High-pass filter (50Hz) to prevent sub-rumble and preserve vocal clarity without phase distortion
       const hpf = ctx.createBiquadFilter();
       hpf.type = 'highpass';
-      hpf.frequency.setValueAtTime(80, tStart);
+      hpf.frequency.setValueAtTime(50, tStart);
       hpf.Q.setValueAtTime(0.707, tStart);
 
       source.connect(hpf);

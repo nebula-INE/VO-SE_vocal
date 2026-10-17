@@ -45,14 +45,15 @@ export interface FetchedSample {
 }
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null',
+  'っ', 'ッ', '_っ', '_ッ', 'っ_', 'ッ_'
 ]);
 
 export function isRest(lyric?: string): boolean {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
   if (REST_LYRICS_SET.has(l)) return true;
-  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l);
+  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l) || /^[_]?[っッ]+[_]?$/.test(l);
 }
 
 const sampleCache = new Map<string, FetchedSample | null>();
@@ -761,21 +762,20 @@ export async function renderStudioOffline(
     }
   }
 
-  // 0dBFSクリッピング防止: ピークが0.965(-0.3dBFS)を超える場合は安全にノーマライズ
+  // 0dBFSクリッピング防止: ピークが0.965(-0.3dBFS)を超える場合はリニアに安全ノーマライズ
+  // 不自然なtanh歪み（高調波サチュレーション）を排除し、透明感のある原音波形を100%保持
   const targetPeak = 0.965;
-  const scale = masterMaxAbs > targetPeak ? targetPeak / masterMaxAbs : (masterMaxAbs > 0.05 ? Math.min(1.0, targetPeak / masterMaxAbs) : 1.0);
-  const threshold = 0.85;
-  const range = 1.0 - threshold;
+  const scale = masterMaxAbs > targetPeak ? targetPeak / masterMaxAbs : 1.0;
 
   for (let ch = 0; ch < nCh; ch++) {
     const data = renderedBuffer.getChannelData(ch);
     for (let i = 0; i < nFrames; i++) {
       let x = data[i] * scale;
       const absX = Math.abs(x);
-      if (absX > threshold) {
-        const over = (absX - threshold) / range;
-        const compressed = threshold + range * Math.tanh(over);
-        x = x < 0 ? -compressed : compressed;
+      if (absX > 0.98) {
+        const sign = x < 0 ? -1 : 1;
+        const excess = absX - 0.98;
+        x = sign * (0.98 + 0.019 * Math.tanh(excess / 0.019));
       }
       data[i] = x;
     }

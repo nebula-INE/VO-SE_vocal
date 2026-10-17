@@ -46,14 +46,15 @@ const CORE_SAMPLE_RATE = 44100;
 const PITCH_FRAME_PERIOD_MS = 5;
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null',
+  'っ', 'ッ', '_っ', '_ッ', 'っ_', 'ッ_'
 ]);
 
 function isRest(lyric?: string): boolean {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
   if (REST_LYRICS_SET.has(l)) return true;
-  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l);
+  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l) || /^[_]?[っッ]+[_]?$/.test(l);
 }
 
 interface FetchedRawSample {
@@ -284,7 +285,8 @@ export async function renderStudioCore(
       return result;
     }
   } catch (err: any) {
-    console.warn('[voseCoreClient] ⚠️ C++ WebAssembly (vose_core.wasm) レンダリングが失敗したため、Web Audio オフラインエンジンへフォールバックします:', err);
+    console.warn('[voseCoreClient] ⚠️ C++ WebAssembly (vose_core.wasm) レンダリングが失敗したため、Web Audio オフラインエンジンへフォールバックします:', err?.message || err);
+    if (err?.stack) console.warn('[voseCoreClient] エラースタック:', err.stack);
   }
 
   // Graceful fallback to wasmEngine.ts renderStudioOffline
@@ -623,6 +625,15 @@ async function renderViaCore(
   const w = getWorker();
   const requestId = nextRequestId++;
 
+  const timeoutMs = 180000;
+  let timerId: any = null;
+  let timeoutReject: ((err: Error) => void) | null = null;
+
+  const onTimeout = () => {
+    pending.delete(requestId);
+    timeoutReject?.(new Error('WASMレンダリング処理がタイムアウトしました'));
+  };
+
   let lastReportedPct = 35;
   const reportCoreProgress = (pct: number) => {
     const mapped = Math.max(35, Math.min(100, Math.round(35 + pct * 0.65)));
@@ -630,6 +641,12 @@ async function renderViaCore(
     // UIの進捗が後戻りしないように単調増加にする。
     lastReportedPct = Math.max(lastReportedPct, mapped);
     onProgress?.(lastReportedPct);
+
+    // 進捗が進んでいる間は処理が正常に継続しているためウォッチドッグタイマーを延長
+    if (timerId) {
+      clearTimeout(timerId);
+      timerId = setTimeout(onTimeout, timeoutMs);
+    }
   };
 
   const resultPromise = new Promise<string | null>((resolve, reject) => {
@@ -652,16 +669,11 @@ async function renderViaCore(
     throw new Error('WASM Workerへのレンダリング要求送信に失敗しました: ' + (err?.message || err));
   }
 
-  // WORLD解析 + 合成は音源数やノート数によって25秒を超えることがある。
-  // 25秒で強制的にJSフォールバックへ落とすと、正常なWebレンダリングまで
-  // 「35%で止まった」ように見えるため、十分な猶予を確保する。
-  const timeoutMs = 180000;
-  let timerId: any = null;
+  // WORLD解析 + 合成は音源数やノート数によって長時間を要することがある。
+  // 進捗が完全に停止した場合のみタイムアウトとする。
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timerId = setTimeout(() => {
-      pending.delete(requestId);
-      reject(new Error('WASMレンダリング処理がタイムアウトしました'));
-    }, timeoutMs);
+    timeoutReject = reject;
+    timerId = setTimeout(onTimeout, timeoutMs);
   });
 
   let url: string | null = null;

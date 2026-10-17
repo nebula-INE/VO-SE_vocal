@@ -372,12 +372,13 @@ export function applyAutoTuneToNotes<T extends {
   const sorted = [...notes].sort((a, b) => (a.tick || 0) - (b.tick || 0));
 
   const REST_SET = new Set([
-    'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
+    'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null',
+    'っ', 'ッ', '_っ', '_ッ', 'っ_', 'ッ_'
   ]);
   const isRest = (lyric?: string) => {
     if (!lyric) return true;
     const l = lyric.trim().toLowerCase();
-    return REST_SET.has(l) || /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l);
+    return REST_SET.has(l) || /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^[_]?[っッ]+[_]?$/.test(l);
   };
 
   return sorted.map((n, idx) => {

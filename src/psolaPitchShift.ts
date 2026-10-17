@@ -241,7 +241,8 @@ function applyStudioSoftLimiter(samples: Float32Array): void {
     if (a > maxAbs) maxAbs = a;
   }
 
-  // 2. 0dBFS超過時のオートゲイン調整（目標ピーク: -0.4dBFS = 0.955）
+  // 2. 0dBFS超過時のリニアオートゲイン調整（目標ピーク: -0.4dBFS = 0.955）
+  // 線形スケールにより高調波歪みゼロで安全にヘッドルームを確保
   const targetPeak = 0.955;
   if (maxAbs > targetPeak) {
     const scale = targetPeak / maxAbs;
@@ -250,9 +251,9 @@ function applyStudioSoftLimiter(samples: Float32Array): void {
     }
   }
 
-  // 3. 高精度ソフトニー (Soft-Knee Tanh) サチュレーション
-  // 振幅が0.82を超えた部分のみ滑らかな曲線で頭打ちにし、一切の矩形波歪みを排除
-  const threshold = 0.82;
+  // 3. 極限過渡ピークのみを安全に保護する高透明度ソフトニー
+  // 0.96以下の通常音声信号は100%完全なリニア線形性を維持し、サチュレーション歪みを発生させない
+  const threshold = 0.96;
   const range = 1.0 - threshold;
   for (let i = 0; i < n; i++) {
     const x = samples[i];

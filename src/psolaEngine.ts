@@ -39,14 +39,15 @@ export interface FetchedSample {
 }
 
 const REST_LYRICS_SET = new Set([
-  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
+  'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null',
+  'っ', 'ッ', '_っ', '_ッ', 'っ_', 'ッ_'
 ]);
 
 export function isRest(lyric?: string): boolean {
   if (!lyric) return true;
   const l = lyric.trim().toLowerCase();
   if (REST_LYRICS_SET.has(l)) return true;
-  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l);
+  return /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l) || /^_?(br|息|吸)[0-9]*$/i.test(l) || /^[_]?[っッ]+[_]?$/.test(l);
 }
 
 const sampleCache = new Map<string, FetchedSample | null>();
