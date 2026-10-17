@@ -603,10 +603,10 @@ export async function renderStudioOffline(
                 minF0Hz: 75,
                 maxF0Hz: 850,
                 voicingThreshold: 0.6,
-                pitchCurveSemitones: curveFn
+                pitchCurveSemitones: curveFn,
+                onPitchCurveApplied: (applied) => { bendAppliedInPsola = applied; }
               }
             );
-            bendAppliedInPsola = !!curveFn && finalBuffer !== rawSegmentBuffer;
             sourceRate = 1.0;
           } catch (psolaErr) {
             console.warn('[wasmEngine] PSOLA processing fallback to resampling:', psolaErr);
