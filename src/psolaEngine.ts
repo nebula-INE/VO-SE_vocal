@@ -485,10 +485,10 @@ export async function renderPsolaOffline(
                 minF0Hz: 65,
                 maxF0Hz: 900,
                 voicingThreshold: 0.6,
-                pitchCurveSemitones: curveFn
+                pitchCurveSemitones: curveFn,
+                onPitchCurveApplied: (applied) => { bendAppliedInPsola = applied; }
               }
             );
-            bendAppliedInPsola = !!curveFn;
             isPsolaApplied = true;
           } catch (psolaErr) {
             finalBuffer = sourceBuffer;
