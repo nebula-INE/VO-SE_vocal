@@ -26,6 +26,7 @@ import {
   softClampSemitone,
   scheduleSafePitchRamp,
   generateUtauPortamentoPoints,
+  makeSemitoneCurve,
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
@@ -586,8 +587,14 @@ export async function renderStudioOffline(
 
         // 音高差(semitoneShift)がある場合、TD-PSOLAリサンプラーで原音のフォルマント(声質)を
         // 100%保持したままピッチシフトを行い、ロボット的な不自然さや早回し感を解消
-        if (Math.abs(semitoneShift) >= 0.08) {
+        // ベンド(ポルタメント/ビブラート)もPSOLA内部で適用する。playbackRateで後掛けすると
+        // 声質(フォルマント)が動き、さらに再生速度変化でノートのタイミングもずれるため。
+        let bendAppliedInPsola = false;
+        if (Math.abs(semitoneShift) >= 0.08 || (bendPoints && bendPoints.length > 0)) {
           try {
+            const curveFn = bendPoints && bendPoints.length > 0
+              ? makeSemitoneCurve(bendPoints, startTimeSec - actualStartTime)
+              : undefined;
             finalBuffer = psolaPitchShiftBuffer(
               offlineCtx,
               rawSegmentBuffer,
@@ -595,10 +602,11 @@ export async function renderStudioOffline(
               {
                 minF0Hz: 75,
                 maxF0Hz: 850,
-                reanalysisIntervalMs: 60,
-                voicingThreshold: 0.35
+                voicingThreshold: 0.6,
+                pitchCurveSemitones: curveFn
               }
             );
+            bendAppliedInPsola = !!curveFn && finalBuffer !== rawSegmentBuffer;
             sourceRate = 1.0;
           } catch (psolaErr) {
             console.warn('[wasmEngine] PSOLA processing fallback to resampling:', psolaErr);
@@ -614,7 +622,7 @@ export async function renderStudioOffline(
         source.playbackRate.setValueAtTime(sourceRate, Math.max(0, actualStartTime));
 
         // ピッチベンド（ポルタメントやビブラート）を基準レートに滑らかに適用
-        if (bendPoints) {
+        if (bendPoints && !bendAppliedInPsola) {
           try {
             const isUsingPsola = finalBuffer !== rawSegmentBuffer;
             const bendBaseRate = isUsingPsola ? 1.0 : safePitchRatio;
