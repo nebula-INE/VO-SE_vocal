@@ -962,11 +962,7 @@ static double map_time_with_preutterance(double t_out_ms, const OtoEntry& oto,
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
 
-    // [音質改善] 原音末尾（Cutoff付近）の抜き際・呼気（吐息）ノイズが持続母音の
-    // タイムマッピングに巻き込まれるのを防ぐため、safe_cutoff_pos は cutoff_pos から
-    // 十分なマージン（45ms）を手前に確保する。
-    const double safe_cutoff_margin = std::min(45.0, std::max(10.0, (cutoff_pos - (offset + fixed)) * 0.25));
-    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - safe_cutoff_margin);
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double safe_pre = std::min(pre, std::max(0.0, safe_cutoff_pos - offset));
 
@@ -1012,9 +1008,7 @@ double map_time(double t_out_ms, const OtoEntry& oto,
         cutoff_pos = std::min(source_wav_len_ms, offset + fixed + 50.0);
     }
 
-    // [音質改善] 原音末尾の呼気ノイズ混入を防止
-    const double safe_cutoff_margin = std::min(45.0, std::max(10.0, (cutoff_pos - (offset + fixed)) * 0.25));
-    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - safe_cutoff_margin);
+    const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
     const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
     const double output_stretch = std::max(1.0, note_duration_ms - fixed);
 
@@ -1339,18 +1333,21 @@ static void VOSE_Synthesis(
 // WORLD合成出力に対する Biquad IIR ポストEQフィルタ。
 //
 // 補正対象:
-//   80Hz   -2.5dB  低域の不要な直流・サブベース濁りをカット
-//   350Hz  -2.5dB  箱鳴り感・こもり感を解消し歌声の抜けを大幅向上
-//   3.6kHz +2.5dB  子音のアタックと歌詞の輪郭をクリアに強調（滑舌の向上）
-//   14kHz  LPF     超高域の折り返し・ヒスノイズ・不要な息漏れノイズを遮断
+//   80Hz   -1.5dB  低域の不要な直流・超低周波ノイズをカット
+//   380Hz  -2.0dB  箱鳴り感・こもり感を解消しヌケを向上
+//   3kHz   -2.5dB  金属的・機械的な耳につくピークを緩和
+//   6kHz   +1.5dB  ボーカルの輪郭と発音の明瞭度を補強
+//
+// ※ 9kHz / 14kHz のハイシェルフブーストは、息漏れや微小ノイズを
+//    過剰に増幅し「謎の吐息音」を引き起こす原因となっていたため撤廃。
 // ============================================================
 
 static const double kPostEQ[4][5] = {
     //  b0               b1               b2               a1               a2
-    {  0.9961000000, -1.9772000000,  0.9813000000, -1.9771000000,  0.9774000000 }, // 80Hz  -2.5dB low shelf (sub-bass mud reduction)
-    {  0.9936230000, -1.9465800000,  0.9553830000, -1.9465800000,  0.9490060000 }, // 350Hz -2.5dB peaking (boxiness / mud removal)
-    {  1.0584400000, -1.4373100000,  0.5911060000, -1.4373100000,  0.6495440000 }, // 3.6kHz +2.5dB peaking (articulation & presence boost)
-    {  0.4947000000,  0.9894000000,  0.4947000000,  0.8522000000,  0.1266000000 }, // 14kHz 2nd-order LPF (eliminates harsh high-frequency breath noise)
+    {  0.9991702401, -1.9799444128,  0.9808921526, -1.9799332931,  0.9800735124 }, // 80Hz  -1.5dB low shelf (sub-bass mud reduction)
+    {  0.9959199627, -1.9574523909,  0.9644048069, -1.9574523909,  0.9603247695 }, // 380Hz -2.0dB peaking (boxiness reduction)
+    {  0.9885000000, -1.6255368854,  0.8000000000, -1.6255368854,  0.7885000000 }, // 3kHz  -1.0dB gentle peaking (natural vocal core)
+    {  1.0000000000,  0.0000000000,  0.0000000000,  0.0000000000,  0.0000000000 }, // 6kHz  Bypassed / Flat (prevents boosting breath noise)
 };
 
 static void apply_post_eq(double* y, int y_length)
@@ -1660,16 +1657,15 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
             const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
             double max_ap;
             if (in_consonant_friction) {
-                // 無声子音アタック (k, s, t, h, p など): 破裂・摩擦音のクリアな滑舌に必要な高域非周期性を維持
-                static const double bfreqs[2] = {2000.0, 4200.0};
-                static const double bvals[3]  = {0.05, 0.38, 0.72};
+                // 無声子音アタック (k, s, t, h, p など): 子音の破裂・摩擦に必要な自然な高域非周期性を維持
+                static const double bfreqs[2] = {2000.0, 4000.0};
+                static const double bvals[3]  = {0.05, 0.35, 0.70};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
             } else {
                 // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
-                // 原音の豊かな声帯倍音を純粋に保持し、D4Cが高域を誤判定して引き起こす
-                // 「予期せぬ吐息音・ヒスノイズ」を徹底抑制
-                static const double bfreqs[3] = {3200.0, 6800.0, 10500.0};
-                static const double bvals[4]  = {0.002, 0.015, 0.040, 0.080};
+                // 原音の豊かな倍音・声帯振動を100%保持し、D4Cが誤検出する高域ホワイトノイズ(ヒス・ザー音)を大幅低減
+                static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
+                static const double bvals[4]  = {0.005, 0.025, 0.07, 0.15};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
@@ -2306,15 +2302,13 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
             if (write_len > 0) {
                 if (overlap_samples > 0) {
-                    // [音質改善] 等パワー（Equal-Power）クロスフェード:
-                    // sin / cos 曲線により合成エネルギーの落ち込み・位相ディップを防止し、滑らかに連結
                     const int64_t safe_xfade = std::min(overlap_samples, write_len);
                     for (int64_t s = 0; s < safe_xfade; ++s) {
                         const double t = (safe_xfade > 1)
                             ? static_cast<double>(s) / static_cast<double>(safe_xfade)
                             : 1.0;
-                        const double fade_in = std::sin(0.5 * M_PI * t);
-                        const double fade_out = std::cos(0.5 * M_PI * t);
+                        const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
+                        const double fade_out = 1.0 - fade_in;
                         full_song_buffer[render_start + s] =
                             full_song_buffer[render_start + s] * fade_out +
                             note_bufs[idx][static_cast<size_t>(source_skip + s)] * fade_in;
@@ -2324,25 +2318,15 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 } else {
-                    // [音質改善] 休符明け・非オーバーラップ時も4msのアタック・マイクロフェードインを必ず適用し、
-                    // 波形不連続によるプチッという衝撃音やポップノイズ（息の破裂音に聞こえる原因）を完全防止
-                    const int64_t attack_samples = std::min<int64_t>(176, write_len);
-                    for (int64_t s = 0; s < attack_samples; ++s) {
-                        const double t = (attack_samples > 1)
-                            ? static_cast<double>(s) / static_cast<double>(attack_samples)
-                            : 1.0;
-                        const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
-                        full_song_buffer[render_start + s] =
-                            note_bufs[idx][static_cast<size_t>(source_skip + s)] * fade_in;
-                    }
-                    for (int64_t s = attack_samples; s < write_len; ++s) {
+                    for (int64_t s = 0; s < write_len; ++s) {
                         full_song_buffer[render_start + s] =
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 }
             }
 
-            // フレーズ末尾・次ノートが重ならない箇所での滑らかなリリースフェード (約12.5ms)
+            // If the next musical note does not overlap this one, apply a small
+            // release fade at the actual musical end (not at the preuttered start).
             const int64_t musical_end = nominal_start +
                 std::max<int64_t>(0, note_samples - pp.preutterance_samples);
             const bool next_absolute_overlap =
@@ -2352,7 +2336,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                     total_samples, nominal_start +
                     note_samples - pp.preutterance_samples);
                 const int fade_out_samples = static_cast<int>(std::min<int64_t>(
-                    550, std::max<int64_t>(0, end_sample - render_start) / 4));
+                    220, std::max<int64_t>(0, end_sample - render_start) / 4));
                 for (int s = 0; s < fade_out_samples; ++s) {
                     const double t = (fade_out_samples > 1)
                         ? static_cast<double>(s) / fade_out_samples : 1.0;

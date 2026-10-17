@@ -8,14 +8,6 @@ import {
 } from 'lucide-react';
 import { bufferToWav } from './utils/audioEncoder';
 import {
-  parsePitchBend,
-  msToTicks,
-  smoothPitchBendPoints,
-  calculateFormantCutoff,
-  softClampSemitone,
-  scheduleSafePitchRamp
-} from './utils/pitchCurve';
-import {
   parseUstText, exportUstText,
   parseVsqxXml, exportVsqxXml,
   parseSvpJson, exportSvpJson,
@@ -23,8 +15,18 @@ import {
   decodeTextBuffer,
   ProjectData
 } from './utils/formatConverter';
-// vose_core WASM(本物のC++コア)経由でレンダリング（例外発生時もスキップし、JSへのフォールバックは絶対に行わない）
+import {
+  parsePitchBend,
+  msToTicks,
+  smoothPitchBendPoints,
+  calculateFormantCutoff,
+  softClampSemitone,
+  scheduleSafePitchRamp,
+  applyAutoTuneToNotes
+} from './utils/pitchCurve';
+// vose_core WASM(本物のC++コア)経由でレンダリング
 import { renderStudioCore as renderWasm, lastUsedEngine } from './voseCoreClient';
+import { renderStudioOffline } from './wasmEngine';
 import PitchCurveOverlay from './components/PitchCurveOverlay';
 import PitchCurveMiniEditor from './components/PitchCurveMiniEditor';
 import MultiTrackPanel from './components/MultiTrackPanel';
@@ -320,6 +322,28 @@ export default function App() {
   const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const longPressTimerRef = useRef<number | null>(null);
+
+  // 合成・リサンプラーエンジン選択 ('auto' = WASM WORLD優先/PSOLAフォールバック, 'psola' = TD-PSOLA直接, 'wasm' = WORLD直接)
+  const [renderEngineMode, setRenderEngineMode] = useState<'auto' | 'psola' | 'wasm'>('auto');
+
+  // UTAU標準 P2P3 ポルタメント S字カーブ & 自然なビブラートの一括自動調声
+  const handleAutoTune = () => {
+    if (!notes || notes.length === 0) {
+      setToast({
+        type: 'warning',
+        title: '調声対象がありません',
+        desc: 'アクティブなボーカルトラックにノートが存在しません。'
+      });
+      return;
+    }
+    const tuned = applyAutoTuneToNotes(notes, tempo);
+    setNotes(tuned);
+    setToast({
+      type: 'success',
+      title: '自動調声完了 (UTAU P2P3 & Vibrato)',
+      desc: `全 ${tuned.length} 音に滑らかなS字ポルタメントと自然なビブラートを適用しました。`
+    });
+  };
 
   // Update collapsed/inspector defaults when deviceType changes
   useEffect(() => {
@@ -865,30 +889,36 @@ export default function App() {
       masterGain.gain.setValueAtTime(0.85, ctx.currentTime);
 
       // スタジオ品質・クリアボーカルマスタリングチェーン (こもり感を一掃し、ヌケと滑舌の明瞭度を最大化)
-      // 1. サブベースカット (75Hz HPF, Q=0.707): 超低域ノイズをカットしボーカルの芯を保護
+      // 1. サブベースカット (60Hz HPF, Q=0.707): 超低域ノイズをカットしボーカルの芯を保護
       const hpf = ctx.createBiquadFilter();
       hpf.type = 'highpass';
-      hpf.frequency.setValueAtTime(75, ctx.currentTime);
+      hpf.frequency.setValueAtTime(60, ctx.currentTime);
       hpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
-      // 2. De-Mud フィルター (350Hz, -2.5dB, Q=1.1): 篭もりの主原因である中低域の濁りをクリアに除去
+      // 2. De-Mud フィルター (350Hz, -2.5dB, Q=1.2): 篭もりの主原因である中低域の箱鳴り・濁りをクリアに除去
       const deMud = ctx.createBiquadFilter();
       deMud.type = 'peaking';
       deMud.frequency.setValueAtTime(350, ctx.currentTime);
       deMud.gain.setValueAtTime(-2.5, ctx.currentTime);
-      deMud.Q.setValueAtTime(1.1, ctx.currentTime);
+      deMud.Q.setValueAtTime(1.2, ctx.currentTime);
 
-      // 3. Presence & Articulation ブースト (3.8kHz, +2.5dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、滑舌をクリアに
+      // 3. Presence & Articulation ブースト (3.8kHz, +3.0dB, Q=1.0): 子音のアタック・発音の輪郭を際立たせ、歌詞をはっきりと聴かせる
       const presence = ctx.createBiquadFilter();
       presence.type = 'peaking';
       presence.frequency.setValueAtTime(3800, ctx.currentTime);
-      presence.gain.setValueAtTime(2.5, ctx.currentTime);
+      presence.gain.setValueAtTime(3.0, ctx.currentTime);
       presence.Q.setValueAtTime(1.0, ctx.currentTime);
 
-      // 4. 超高域セーフティ LPF (14.5kHz, Q=0.707): 息漏れ・ヒスノイズ・高周波折り返しのみを遮断
+      // 4. Air & Brilliance ハイシェルフ (9.0kHz, +3.2dB): こもった音を解消し、透明感・抜け・空気感を付加
+      const airShelf = ctx.createBiquadFilter();
+      airShelf.type = 'highshelf';
+      airShelf.frequency.setValueAtTime(9000, ctx.currentTime);
+      airShelf.gain.setValueAtTime(3.2, ctx.currentTime);
+
+      // 5. 超高域セーフティ LPF (17.5kHz, Q=0.707): 可聴域の歌声を一切減衰させずに超高域の折り返しノイズのみを遮断
       const safetyLpf = ctx.createBiquadFilter();
       safetyLpf.type = 'lowpass';
-      safetyLpf.frequency.setValueAtTime(14500, ctx.currentTime);
+      safetyLpf.frequency.setValueAtTime(17500, ctx.currentTime);
       safetyLpf.Q.setValueAtTime(0.707, ctx.currentTime);
 
       const limiter = ctx.createDynamicsCompressor();
@@ -901,7 +931,8 @@ export default function App() {
       masterGain.connect(hpf);
       hpf.connect(deMud);
       deMud.connect(presence);
-      presence.connect(safetyLpf);
+      presence.connect(airShelf);
+      airShelf.connect(safetyLpf);
       safetyLpf.connect(limiter);
       limiter.connect(ctx.destination);
 
@@ -1394,12 +1425,8 @@ export default function App() {
       // Seamless looping over vowel body ONLY if requested duration exceeds max sample length
       const requiredSampleSec = (startOffsetInWav - offsetSec) + playLen * baseRate;
       if (requiredSampleSec > maxSampleDur + 0.02) {
-        // [音質改善] 原音末尾（Cutoff付近）の呼気・抜き際ノイズがループに巻き込まれるのを防ぐため、
-        // 末尾から最低80ms手前で安全にループ境界を設定
-        const safeEnd = Math.min(wavDuration - 0.08, cutoffEndSec - 0.08);
-        const safeStart = offsetSec + Math.max(0.04, fixedSec || preuttSec || 0.06);
-        const loopStartSec = Math.min(safeEnd - 0.06, safeStart);
-        const loopEndSec = Math.max(loopStartSec + 0.04, safeEnd);
+        const loopStartSec = Math.min(cutoffEndSec - 0.06, offsetSec + Math.max(0.02, fixedSec || preuttSec || 0.05));
+        const loopEndSec = Math.min(wavDuration - 0.01, Math.max(loopStartSec + 0.04, cutoffEndSec - 0.01));
         if (loopEndSec > loopStartSec + 0.03) {
           source.loop = true;
           source.loopStart = loopStartSec;
@@ -2074,7 +2101,10 @@ export default function App() {
       desc: 'ノートと音源サンプルを処理し、高音質WAV音声を合成しています...'
     });
     try {
-      const url = await renderWasm(notesToRender, tempo, targetVb, (pct: number) => {
+      const renderFn = renderEngineMode === 'psola'
+        ? renderStudioOffline
+        : renderWasm;
+      const url = await renderFn(notesToRender, tempo, targetVb, (pct: number) => {
         const elapsedSec = (performance.now() - startTime) / 1000;
         let remainingSec: number | null = null;
         if (pct > 2 && pct < 100) {
@@ -2106,15 +2136,15 @@ export default function App() {
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 10000);
-        const engineName = lastUsedEngine === 'wasm'
-          ? 'C++ WebAssembly'
-          : 'JS/WebAudio fallback';
+        const engineName = renderEngineMode === 'psola'
+          ? 'TD-PSOLA (フォルマント保持)'
+          : (lastUsedEngine === 'wasm' ? 'C++ WASM (WORLD)' : 'TD-PSOLA (Web Audio)');
         setLastRenderEngine(engineName);
         setRenderState('complete');
         setToast({
           type: 'success',
           title: 'WAV書き出し完了',
-          desc: `${projectName}_rendered.wav を書き出しました。[エンジン: ${engineName}] (処理時間: ${totalDurationSec}秒)`
+          desc: `${projectName}_rendered.wav を書き出しました。[リサンプラー: ${engineName}] (処理時間: ${totalDurationSec}秒)`
         });
       } else {
         throw new Error('音声データの生成に失敗しました。');
@@ -2816,6 +2846,22 @@ export default function App() {
                 <input type="file" accept=".zip,application/zip,application/x-zip,application/x-zip-compressed,multipart/x-zip,application/octet-stream" onChange={handleVoicebankZipUpload} disabled={isUploadingVb} className="hidden" />
               </label>
 
+              {/* Resampler Engine Mode Select */}
+              <div className="hidden xl:flex items-center space-x-1 bg-[#2a2a2e] border border-[#3a3a40] rounded-md px-2 py-1">
+                <Cpu className="w-3.5 h-3.5 text-[#30d158] shrink-0" />
+                <span className="text-[11px] text-[#9a9aa2] font-medium">エンジン:</span>
+                <select
+                  value={renderEngineMode}
+                  onChange={(e) => setRenderEngineMode(e.target.value as any)}
+                  className="bg-[#18181a] text-[#30d158] text-xs font-semibold rounded px-1.5 py-0.5 border border-[#3a3a40] cursor-pointer focus:outline-none focus:border-[#30d158]"
+                  title="WAV書き出しリサンプラーエンジン選択"
+                >
+                  <option value="auto">自動 (WORLD / 高音質フォルマント保持)</option>
+                  <option value="psola">フォルマント保持 (ノイズレス・原音忠実)</option>
+                  <option value="wasm">WORLD (C++ WASM)</option>
+                </select>
+              </div>
+
               {/* Export Format Select & Download Button */}
               <div className="flex items-center space-x-1 bg-[#2a2a2e] border border-[#3a3a40] rounded-md px-2 py-1">
                 <Download className="w-3.5 h-3.5 text-[#9a9aa2] shrink-0" />
@@ -3321,6 +3367,14 @@ export default function App() {
                     >
                       <Type className="w-3.5 h-3.5 text-[#0a84ff]" />
                       <span>歌詞一括</span>
+                    </button>
+                    <button
+                      onClick={handleAutoTune}
+                      className="flex items-center space-x-1 text-xs bg-[#30d158]/15 hover:bg-[#30d158]/25 text-[#30d158] hover:text-white px-2.5 py-1.5 rounded border border-[#30d158]/40 transition shadow-sm cursor-pointer"
+                      title="UTAU標準P2P3ポルタメントS字カーブと自然なビブラートを全ノートに一括付与し、ロボット声を滑らかな歌声にします"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-[#30d158]" />
+                      <span className="font-semibold">自動調声(P2P3)</span>
                     </button>
                     <button
                       onClick={addNote}

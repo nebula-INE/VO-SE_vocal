@@ -5,9 +5,7 @@
 //
 // 1. 各トラック・各ノートの音源サンプル(oto.ini設定含む)を並行取得
 // 2. OfflineAudioContext (44.1kHz 2ch) 上で完全なUTAU音響パイプラインを構築:
-//    - サンプルベース音高からのピッチシフト
-//        基本: TD-PSOLA (tdPsola.ts) でフォルマントを保ったままシフト
-//        PSOLAの対応範囲(約±9半音)を超える分のみ playbackRate で補う
+//    - サンプルベース音高からのピッチシフト (AudioBufferSource playbackRate)
 //    - USTピッチベンドカーブ (PBS/PBW/PBY) はビブラート等の微小補正として反映
 //    - oto.ini タイムマッピング (Offset, Preutterance, Overlap, Fixed, Cutoff)
 //    - 長音用イコールパワークロスフェードループ (クリック音完全防止)
@@ -27,17 +25,12 @@ import {
   smoothPitchBendPoints,
   softClampSemitone,
   scheduleSafePitchRamp,
+  generateUtauPortamentoPoints,
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
-import {
-  analyzePitchTrack,
-  periodAtSourceIndex,
-  placeMarks,
-  psolaRender,
-  type PitchTrack
-} from './tdPsola';
 import { cleanWavArrayBuffer } from './utils/wavCleaner';
+import { psolaPitchShiftBuffer } from './psolaPitchShift';
 
 export interface FetchedSample {
   buffer: AudioBuffer;
@@ -48,8 +41,6 @@ export interface FetchedSample {
   overlap: number;
   baseMidi: number;
   _loopXfadeCache?: Map<string, AudioBuffer>;
-  /** サンプルごとに1回だけ解析して使い回す周期トラック (PSOLA用) */
-  _pitchTrack?: PitchTrack;
 }
 
 const REST_LYRICS_SET = new Set([
@@ -303,70 +294,6 @@ function buildRawSegment(
   return outBuffer;
 }
 
-// ------------------------------------------------------------
-// フォルマントを保ったピッチシフト (TD-PSOLA)
-//
-// playbackRate でピッチを変えるとフォルマントも一緒に動き、原音から離れた
-// 音高ほど「別人の声」になる。PSOLAは1周期ぶんの波形を置き直すので声色が残る。
-// 重い解析(基本周波数トラック)は FetchedSample ごとに1回だけ行いキャッシュする。
-// ノートごとの処理は O(N) のマーク配置 + オーバーラップ加算のみ。
-// 時間軸は変えないので、ループ/長さの計算は従来のまま使える。
-// ------------------------------------------------------------
-const PSOLA_MIN_RATIO = 0.55; // これより低くするとグレインが離れて隙間が出る
-const PSOLA_MAX_RATIO = 1.8;  // これより高くすると1周期が短くなりすぎて劣化
-
-// buildRawSegment が作ったセグメント上の位置 -> 元WAV上の位置 (ループ込み)
-function makeSourceIndexMapper(
-  cached: FetchedSample,
-  startOffsetInWav: number,
-  loopRange: { loopStartSec: number; loopEndSec: number } | null
-): (segIdx: number) => number {
-  const sr = cached.buffer.sampleRate;
-  const startSample = Math.max(0, Math.floor(startOffsetInWav * sr));
-  if (!loopRange) return (i) => startSample + i;
-  const loopStartSample = Math.max(0, Math.floor(loopRange.loopStartSec * sr));
-  const loopEndSample = Math.min(cached.buffer.length, Math.floor(loopRange.loopEndSec * sr));
-  const loopLen = Math.max(1, loopEndSample - loopStartSample);
-  return (i) => {
-    const abs = startSample + i;
-    return abs < loopEndSample ? abs : loopStartSample + ((abs - loopEndSample) % loopLen);
-  };
-}
-
-function applyFormantPreservingShift(
-  ctx: BaseAudioContext,
-  cached: FetchedSample,
-  segment: AudioBuffer,
-  srcIndexAt: (segIdx: number) => number,
-  ratio: number
-): AudioBuffer {
-  if (Math.abs(ratio - 1) < 0.002) return segment;
-
-  if (!cached._pitchTrack) {
-    cached._pitchTrack = analyzePitchTrack(cached.buffer.getChannelData(0), cached.buffer.sampleRate);
-  }
-  const track = cached._pitchTrack;
-  const sr = segment.sampleRate;
-
-  const chans: Float32Array[] = [];
-  for (let ch = 0; ch < segment.numberOfChannels; ch++) chans.push(segment.getChannelData(ch));
-
-  const marks = placeMarks(
-    chans[0],
-    (i) => periodAtSourceIndex(track, srcIndexAt(i)),
-    Math.round(sr * 0.008)
-  );
-  // 有声マークが取れなかった(完全に無声/解析失敗)場合は元の波形のまま返す
-  let voicedCount = 0;
-  for (let i = 0; i < marks.voiced.length; i++) voicedCount += marks.voiced[i];
-  if (voicedCount < 2) return segment;
-
-  const shifted = psolaRender(chans, marks, ratio);
-  const out = ctx.createBuffer(segment.numberOfChannels, segment.length, sr);
-  for (let ch = 0; ch < shifted.length; ch++) out.getChannelData(ch).set(shifted[ch]);
-  return out;
-}
-
 // ============================================================
 // メインのレンダリング関数
 // ============================================================
@@ -521,20 +448,26 @@ export async function renderStudioOffline(
   const masterDeMud = offlineCtx.createBiquadFilter();
   masterDeMud.type = 'peaking';
   masterDeMud.frequency.setValueAtTime(350, 0);
-  masterDeMud.gain.setValueAtTime(-2.5, 0);
-  masterDeMud.Q.setValueAtTime(1.1, 0);
+  masterDeMud.gain.setValueAtTime(-1.5, 0);
+  masterDeMud.Q.setValueAtTime(1.2, 0);
 
-  // 3. [スタジオPresence & Articulation] 3.8kHz 子音のアタック・発音の輪郭をクリアに強調（滑舌と明瞭度を最大化）
+  // 3. [スタジオPresence & Articulation] 3.8kHz 子音のアタック・発音の輪郭をクリアに強調
   const masterPresence = offlineCtx.createBiquadFilter();
   masterPresence.type = 'peaking';
   masterPresence.frequency.setValueAtTime(3800, 0);
-  masterPresence.gain.setValueAtTime(2.5, 0);
+  masterPresence.gain.setValueAtTime(0.0, 0);
   masterPresence.Q.setValueAtTime(1.0, 0);
 
-  // 4. [スタジオ超高域セーフティLPF] 14.5kHz 以上の不要な超高域ヒス・息漏れノイズをカット
+  // 4. [スタジオAir & Brilliance] 9.0kHz ハイシェルフで抜けと透明感を付加
+  const masterAir = offlineCtx.createBiquadFilter();
+  masterAir.type = 'highshelf';
+  masterAir.frequency.setValueAtTime(9000, 0);
+  masterAir.gain.setValueAtTime(0.0, 0);
+
+  // 5. [スタジオ超高域セーフティLPF] 17.5kHz以上の不要な折り返しノイズのみをカット
   const masterLpf = offlineCtx.createBiquadFilter();
   masterLpf.type = 'lowpass';
-  masterLpf.frequency.setValueAtTime(14500, 0);
+  masterLpf.frequency.setValueAtTime(17500, 0);
   masterLpf.Q.setValueAtTime(0.707, 0);
 
   // クリッピング防止コンプレッサー/リミッター
@@ -548,7 +481,8 @@ export async function renderStudioOffline(
   masterGain.connect(masterHpf);
   masterHpf.connect(masterDeMud);
   masterDeMud.connect(masterPresence);
-  masterPresence.connect(masterLpf);
+  masterPresence.connect(masterAir);
+  masterAir.connect(masterLpf);
   masterLpf.connect(masterLimiter);
   masterLimiter.connect(offlineCtx.destination);
 
@@ -577,12 +511,9 @@ export async function renderStudioOffline(
       try {
         const sampleBase = cached.baseMidi || 60;
         const semitoneShift = softClampSemitone(note.noteNum - sampleBase);
+        // PSOLA非適用時(フォールバック)のオーバーラップ補正用。通常の再生には使わない。
+        const baseRate = Math.min(4.0, Math.max(0.18, Math.pow(2, semitoneShift / 12)));
         const pitchRatio = Math.pow(2, semitoneShift / 12);
-        // 目標ピッチ倍率を2つに分ける:
-        //  - psolaRatio: フォルマントを保ったまま上げ下げする分 (TD-PSOLA)
-        //  - safePitchRatio: PSOLAの対応範囲を超えた残りだけ playbackRate で補う分
-        //    (通常のノートでは 1.0 になり、playbackRate はピッチベンド専用になる)
-        const psolaRatio = Math.min(PSOLA_MAX_RATIO, Math.max(PSOLA_MIN_RATIO, pitchRatio));
 
         const offsetSec = Math.max(0, (cached.left_blank || 0) / 1000);
         const preuttSec = Math.max(0, (cached.preutterance || 0) / 1000);
@@ -605,10 +536,9 @@ export async function renderStudioOffline(
         const startOffsetInWav = Math.min(offsetSec + timeDiff, cutoffEndSec - 0.02);
         const playLen = effectivePreuttSec + durationSec;
 
-        const safePitchRatio = Math.min(4.0, Math.max(0.18, pitchRatio / psolaRatio));
+        const safePitchRatio = Math.min(4.0, Math.max(0.18, pitchRatio));
 
-        // ベース音高は PSOLA(解析はサンプルごとにキャッシュ)で作り、フォルマントを保つ。
-        // ピッチベンドは揺れ幅が小さいので従来どおり playbackRate に相対適用する。
+        // ピッチベンド解析（明示的な指定がない場合も、前のノートと接続していれば自動ポルタメントを適用）
         let bendPoints: PitchPoint[] | null = null;
         if (note.pbs && note.pbw && note.pby) {
           try {
@@ -616,51 +546,84 @@ export async function renderStudioOffline(
           } catch (e) {
             bendPoints = null;
           }
+        } else {
+          // 前のノートが存在し連続している場合、自動でUTAU標準P2P3ポルタメントを付与して機械的階段ピッチを排除
+          const prevInfo = idx > 0 ? schedulingInfos[idx - 1] : null;
+          const isPrevConnected = prevInfo && (startTimeSec - (prevInfo.startTimeSec + prevInfo.durationSec) <= 0.05);
+          if (isPrevConnected && prevInfo && prevInfo.note.noteNum !== note.noteNum) {
+            const autoPoints = generateUtauPortamentoPoints(
+              note.noteNum,
+              prevInfo.note.noteNum,
+              durationSec * 1000,
+              { portamentoMs: 100, vibratoDepthSemitones: durationSec > 0.4 ? 0.3 : 0 }
+            );
+            bendPoints = smoothPitchBendPoints(autoPoints);
+          }
         }
 
         const computeLoopRange = (consumeSec: number): { loopStartSec: number; loopEndSec: number } | null => {
           if (consumeSec <= maxSampleDur + 0.02) return null;
-          // [音質改善] 語尾の呼気・息漏れノイズがループに巻き込まれるのを防ぐため、末尾から十分手前(少なくとも80ms)で安全にループ
-          const safeEndSec = Math.min(wavDuration - 0.08, cutoffEndSec - 0.08);
+          // 語尾の呼気・息漏れノイズがループに巻き込まれるのを防ぐため、末尾から十分手前(少なくとも40ms)でループ
+          const safeEndSec = Math.min(wavDuration - 0.04, cutoffEndSec - 0.04);
           const safeStartSec = offsetSec + Math.max(0.04, fixedSec || preuttSec || 0.06);
-          const loopStartSec = Math.min(safeEndSec - 0.06, safeStartSec);
+          const loopStartSec = Math.min(safeEndSec - 0.05, safeStartSec);
           const loopEndSec = Math.max(loopStartSec + 0.04, safeEndSec);
           return loopEndSec > loopStartSec + 0.03 ? { loopStartSec, loopEndSec } : null;
         };
 
-        const startClamped = Math.max(0, Math.min(wavDuration - 0.02, startOffsetInWav));
-        const requiredSourceSec = Math.max(0.02, (startOffsetInWav - offsetSec) + playLen * safePitchRatio);
-        const loopRange = computeLoopRange((startOffsetInWav - offsetSec) + playLen * safePitchRatio);
-        const rawSegment = buildRawSegment(
+        const requiredSampleSec = Math.max(0.08, playLen + 0.12);
+        const loopRange = computeLoopRange((startOffsetInWav - offsetSec) + playLen);
+        const rawSegmentBuffer = buildRawSegment(
           offlineCtx,
           cached,
-          startClamped,
-          requiredSourceSec,
+          startOffsetInWav,
+          requiredSampleSec,
           loopRange
         );
-        // フォルマントを保ったままベース音高へシフト (長さは変わらない)
-        const sourceBuffer = applyFormantPreservingShift(
-          offlineCtx,
-          cached,
-          rawSegment,
-          makeSourceIndexMapper(cached, startClamped, loopRange),
-          psolaRatio
-        );
-        const sourceRate = safePitchRatio;
+
+        let finalBuffer = rawSegmentBuffer;
+        let sourceRate = 1.0;
+
+        // 音高差(semitoneShift)がある場合、TD-PSOLAリサンプラーで原音のフォルマント(声質)を
+        // 100%保持したままピッチシフトを行い、ロボット的な不自然さや早回し感を解消
+        if (Math.abs(semitoneShift) >= 0.08) {
+          try {
+            finalBuffer = psolaPitchShiftBuffer(
+              offlineCtx,
+              rawSegmentBuffer,
+              safePitchRatio,
+              {
+                minF0Hz: 75,
+                maxF0Hz: 850,
+                reanalysisIntervalMs: 60,
+                voicingThreshold: 0.35
+              }
+            );
+            sourceRate = 1.0;
+          } catch (psolaErr) {
+            console.warn('[wasmEngine] PSOLA processing fallback to resampling:', psolaErr);
+            finalBuffer = rawSegmentBuffer;
+            sourceRate = safePitchRatio;
+          }
+        } else {
+          sourceRate = safePitchRatio;
+        }
 
         const source = offlineCtx.createBufferSource();
-        source.buffer = sourceBuffer;
+        source.buffer = finalBuffer;
         source.playbackRate.setValueAtTime(sourceRate, Math.max(0, actualStartTime));
 
-        // ピッチベンドは標準playbackRateへ相対的に適用する(揺れ幅は小さいのでフォルマントへの影響は軽微)。
+        // ピッチベンド（ポルタメントやビブラート）を基準レートに滑らかに適用
         if (bendPoints) {
           try {
+            const isUsingPsola = finalBuffer !== rawSegmentBuffer;
+            const bendBaseRate = isUsingPsola ? 1.0 : safePitchRatio;
             scheduleSafePitchRamp(
               source.playbackRate,
-              sourceRate,
+              bendBaseRate,
               bendPoints,
               startTimeSec,
-              (st) => safePitchRatio * Math.max(0.5, Math.min(2.0, Math.pow(2, st / 12))),
+              (st) => bendBaseRate * Math.max(0.5, Math.min(2.0, Math.pow(2, st / 12))),
               Math.max(0, actualStartTime),
               startTimeSec + durationSec
             );
@@ -670,17 +633,32 @@ export async function renderStudioOffline(
         }
 
         const gain = offlineCtx.createGain();
-        const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.92;
+        const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.95;
 
         const tStart = actualStartTime;
-        const overlapSec = Math.max(0, (cached.overlap || 0) / 1000) / safePitchRatio;
-        const attackDur = Math.max(0.006, Math.min(0.03, overlapSec || 0.008));
+        // UTAU標準: Overlapに基づくアタック時間
+        const overlapSec = Math.max(0, (cached.overlap || 0) / 1000);
+        const attackDur = Math.max(0.008, Math.min(0.045, overlapSec || 0.012));
         const tAttack = tStart + attackDur;
 
-        const noteEndTime = startTimeSec + durationSec;
-        const releaseDur = 0.015;
+        // 次のノートがあるか確認し、次のノートの先行発声・オーバーラップに合わせてリリースを調整
+        const nextInfo = idx + 1 < schedulingInfos.length ? schedulingInfos[idx + 1] : null;
+        const isNextConnected = nextInfo && (nextInfo.startTimeSec - (startTimeSec + durationSec) <= 0.05);
+
+        let releaseDur = 0.020;
+        let noteEndTime = startTimeSec + durationSec;
+        if (isNextConnected && nextInfo) {
+          const nextCached = sampleDataMap.get(nextInfo.cacheKey);
+          const nextOverlapSec = Math.max(0, (nextCached?.overlap || 0) / 1000);
+          noteEndTime = Math.max(
+            startTimeSec + durationSec,
+            nextInfo.startTimeSec - Math.max(0, (nextCached?.preutterance || 0) / 1000) + nextOverlapSec
+          );
+          releaseDur = Math.max(0.015, nextOverlapSec || 0.020);
+        }
+
         const tDecay = Math.max(tAttack + 0.003, noteEndTime - releaseDur);
-        const tEnd = Math.min(tDecay + releaseDur, noteEndTime);
+        const tEnd = Math.max(tDecay + 0.003, noteEndTime);
 
         gain.gain.setValueAtTime(0.0, tStart);
         gain.gain.linearRampToValueAtTime(volGain, tAttack);
@@ -688,7 +666,7 @@ export async function renderStudioOffline(
           gain.gain.setValueAtTime(volGain, tDecay);
         }
         gain.gain.linearRampToValueAtTime(0.0, tEnd);
-        gain.gain.setValueAtTime(0.0, tEnd + 0.001);
+        gain.gain.setValueAtTime(0.0, tEnd + 0.002);
 
         const hpf = offlineCtx.createBiquadFilter();
         hpf.type = 'highpass';
@@ -699,7 +677,6 @@ export async function renderStudioOffline(
         hpf.connect(gain);
         gain.connect(masterGain);
 
-        // sourceBufferは既に必要な長さぶんだけ用意されているのでオフセット不要
         source.start(actualStartTime, 0);
         source.stop(tEnd + 0.01);
         resolvedSampleCount++;
@@ -731,7 +708,7 @@ export async function renderStudioOffline(
   onProgress?.(40);
 
   // 6. オフラインレンダリング実行 (進捗: 40% -> 90%)
-  // (PSOLAはノートのスケジューリング時に実行済み。ここは Web Audio のレンダリング時間のみ)
+  // PSOLA処理が加わった分、単純resampleより重いのでETA見積もりを底上げ
   let progressInterval: number | null = null;
   let currentRenderPct = 40;
   const estimatedRenderTimeMs = Math.min(15000, Math.max(600, totalDurationSec * 220));
@@ -756,10 +733,11 @@ export async function renderStudioOffline(
 
   onProgress?.(92);
 
-  // 7. DCオフセットの除去とリソース解放
+  // 7. DCオフセットの除去、マスターノーマライズ(-0.3dBFS) & ソフトリミッター
   const nCh = renderedBuffer.numberOfChannels;
   const nFrames = renderedBuffer.length;
 
+  let masterMaxAbs = 0;
   for (let ch = 0; ch < nCh; ch++) {
     const data = renderedBuffer.getChannelData(ch);
     // DCオフセット除去
@@ -768,6 +746,30 @@ export async function renderStudioOffline(
     const dc = sum / Math.max(1, nFrames);
     if (Math.abs(dc) > 1e-5) {
       for (let i = 0; i < nFrames; i++) data[i] -= dc;
+    }
+    for (let i = 0; i < nFrames; i++) {
+      const a = Math.abs(data[i]);
+      if (a > masterMaxAbs) masterMaxAbs = a;
+    }
+  }
+
+  // 0dBFSクリッピング防止: ピークが0.965(-0.3dBFS)を超える場合は安全にノーマライズ
+  const targetPeak = 0.965;
+  const scale = masterMaxAbs > targetPeak ? targetPeak / masterMaxAbs : (masterMaxAbs > 0.05 ? Math.min(1.0, targetPeak / masterMaxAbs) : 1.0);
+  const threshold = 0.85;
+  const range = 1.0 - threshold;
+
+  for (let ch = 0; ch < nCh; ch++) {
+    const data = renderedBuffer.getChannelData(ch);
+    for (let i = 0; i < nFrames; i++) {
+      let x = data[i] * scale;
+      const absX = Math.abs(x);
+      if (absX > threshold) {
+        const over = (absX - threshold) / range;
+        const compressed = threshold + range * Math.tanh(over);
+        x = x < 0 ? -compressed : compressed;
+      }
+      data[i] = x;
     }
   }
 

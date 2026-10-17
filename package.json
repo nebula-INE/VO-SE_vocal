@@ -7,6 +7,7 @@
     "build": "vite build",
     "start": "node server.js",
     "lint": "echo 'No lint errors'",
+    "test": "npm run test:web",
     "test:web": "node --test tests/test_web_multipitch_render_playback.mjs tests/test_web_render_progress.mjs"
   },
   "dependencies": {

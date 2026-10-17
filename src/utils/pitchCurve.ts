@@ -263,3 +263,144 @@ export function scheduleSafePitchRamp(
     }
   }
 }
+
+/**
+ * UTAU標準 P2P3 ポルタメント S字カーブ & 自然なビブラートを自動生成する。
+ * ベタ打ち（階段状の機械的ピッチ遷移）を解消し、音符と音符の継ぎ目を
+ * 人間の声帯の滑らかなピッチグライドとして補間します。
+ */
+export interface AutoTuneConfig {
+  /** ポルタメント遷移時間(ms)。既定: 約90〜120ms */
+  portamentoMs?: number;
+  /** ビブラートを付与する最短ノート長 (ticks)。既定: 360 ticks (~8分音符以上) */
+  minVibratoLengthTicks?: number;
+  /** ビブラート深さ (半音)。既定: 0.32半音 */
+  vibratoDepthSemitones?: number;
+  /** ビブラート周期 (Hz)。既定: 5.5Hz (標準的な人間の歌唱) */
+  vibratoRateHz?: number;
+}
+
+export function generateUtauPortamentoPoints(
+  currentNoteNum: number,
+  prevNoteNum: number | null,
+  noteDurationMs: number,
+  config: AutoTuneConfig = {}
+): PitchPoint[] {
+  const points: PitchPoint[] = [];
+  const portMs = Math.min(
+    Math.max(50, config.portamentoMs || 105),
+    Math.max(40, noteDurationMs * 0.45)
+  );
+  
+  // 1. 直前ノートとのポルタメントS字カーブ (P2P3)
+  if (prevNoteNum !== null && prevNoteNum !== currentNoteNum) {
+    const delta = prevNoteNum - currentNoteNum;
+    // ノートの境界を跨いで遷移させるため、開始位置をノート境界の手前に配置
+    const startMs = -Math.round(portMs * 0.45);
+    const steps = 6;
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      // コサインS字カーブ: t=0で1.0 (prevNoteの音高), t=1で0.0 (currentNoteの音高)
+      const sCurve = 0.5 * (1 + Math.cos(Math.PI * t));
+      const offsetMs = startMs + Math.round(t * portMs);
+      const semitone = roundTo(delta * sCurve, 2);
+      points.push({ offsetMs, semitone });
+    }
+  } else {
+    points.push({ offsetMs: 0, semitone: 0 });
+  }
+
+  // 2. 伸ばし音 (Sustain) に対する自然なビブラートの自動付与
+  const vibDepth = config.vibratoDepthSemitones ?? 0.32;
+  const vibRate = config.vibratoRateHz ?? 5.5;
+  // ビブラートはノートの40%以降、かつポルタメント完了後から開始
+  const vibStartMs = Math.max(portMs + 30, noteDurationMs * 0.38);
+  const vibEndMs = Math.max(vibStartMs + 40, noteDurationMs - 25);
+
+  if (vibEndMs - vibStartMs >= 150 && vibDepth > 0) {
+    // 安定区間の中央点
+    const midMs = Math.round((points[points.length - 1].offsetMs + vibStartMs) / 2);
+    if (midMs > points[points.length - 1].offsetMs + 20) {
+      points.push({ offsetMs: midMs, semitone: 0 });
+    }
+    points.push({ offsetMs: Math.round(vibStartMs), semitone: 0 });
+
+    const vibDur = vibEndMs - vibStartMs;
+    // 約20ms刻みでビブラートをサンプリング
+    const stepMs = Math.max(16, Math.round(1000 / (vibRate * 8)));
+    const totalSteps = Math.floor(vibDur / stepMs);
+    const attackMs = Math.min(160, vibDur * 0.4);
+
+    for (let i = 1; i <= totalSteps; i++) {
+      const curOffset = vibStartMs + i * stepMs;
+      const elapsed = curOffset - vibStartMs;
+      // 導入部フェードイン (クレッシェンド)
+      const envelope = elapsed < attackMs ? elapsed / attackMs : 1.0;
+      const phase = (2 * Math.PI * vibRate * elapsed) / 1000;
+      // 滑らかな正弦波ビブラート
+      const semitone = roundTo(Math.sin(phase) * vibDepth * envelope, 2);
+      points.push({ offsetMs: Math.round(curOffset), semitone });
+    }
+
+    // 終端を0に戻す
+    points.push({ offsetMs: Math.round(noteDurationMs), semitone: 0 });
+  } else {
+    // 短音の場合はノート終端に0を配置してピッチを安定化
+    if (noteDurationMs > points[points.length - 1].offsetMs + 10) {
+      points.push({ offsetMs: Math.round(noteDurationMs), semitone: 0 });
+    }
+  }
+
+  return points;
+}
+
+/**
+ * トラック内の全ノートに対して、UTAU標準のP2P3ポルタメントおよびビブラートを
+ * 自動調声として適用し、新しいNote配列を生成する。
+ */
+export function applyAutoTuneToNotes<T extends {
+  id: string;
+  lyric: string;
+  noteNum: number;
+  tick: number;
+  length: number;
+  pbs?: string;
+  pbw?: string;
+  pby?: string;
+}>(notes: T[], tempoBpm: number, config: AutoTuneConfig = {}): T[] {
+  if (!notes || notes.length === 0) return [];
+  const sorted = [...notes].sort((a, b) => (a.tick || 0) - (b.tick || 0));
+
+  const REST_SET = new Set([
+    'r', 'r_', 'r_0', '[r]', '息', 'br', 'pau', 'sil', '吸', '吸気', '息吸い', '', ' ', '　', '休', '休符', '・', '-', 'ー', '~', 'null'
+  ]);
+  const isRest = (lyric?: string) => {
+    if (!lyric) return true;
+    const l = lyric.trim().toLowerCase();
+    return REST_SET.has(l) || /^br[0-9]*$/i.test(l) || /^息[0-9]*$/i.test(l) || /^吸[0-9]*$/i.test(l);
+  };
+
+  return sorted.map((n, idx) => {
+    if (isRest(n.lyric)) {
+      return { ...n, pbs: '0;0', pbw: '', pby: '' };
+    }
+
+    const prevNote = idx > 0 ? sorted[idx - 1] : null;
+    const prevTickEnd = prevNote ? (prevNote.tick || 0) + (prevNote.length || 480) : -9999;
+    const gapTicks = (n.tick || 0) - prevTickEnd;
+    // 前のノートと繋がっている(または240tick以内の微小な隙間)ならポルタメント接続
+    const isConnected = prevNote && !isRest(prevNote.lyric) && gapTicks <= 240 && gapTicks >= -120;
+    const prevNoteNum = isConnected ? prevNote.noteNum : null;
+
+    const noteDurationMs = ((n.length || 480) / 480) * (60000 / (tempoBpm || 120));
+    const points = generateUtauPortamentoPoints(n.noteNum, prevNoteNum, noteDurationMs, config);
+    const serialized = serializePitchBend(points);
+
+    return {
+      ...n,
+      pbs: serialized.pbs,
+      pbw: serialized.pbw,
+      pby: serialized.pby
+    };
+  });
+}

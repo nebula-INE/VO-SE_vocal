@@ -23,6 +23,7 @@ import { renderStudioOffline } from './wasmEngine';
 import {
   parsePitchBend,
   smoothPitchBendPoints,
+  generateUtauPortamentoPoints,
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
@@ -129,30 +130,49 @@ async function fetchRawSample(
 }
 
 // ノートのピッチベンド(PBS/PBW/PBY)を、5msフレーム周期の絶対Hzカーブへ変換する。
-function buildPitchCurveHz(note: any, frameCount: number, durationMs: number): number[] {
+// 明示的なピッチベンドが存在しない場合も、先行ノートとの音高差から滑らかなUTAU P2P3ポルタメントを自動生成。
+function buildPitchCurveHz(
+  note: any,
+  frameCount: number,
+  durationMs: number,
+  prevNote?: any
+): number[] {
   const baseHz = 440 * Math.pow(2, (note.noteNum - 69) / 12);
 
   let bendSemitoneAt: (tMs: number) => number = () => 0;
+  let points: PitchPoint[] = [];
+
   if (note.pbs && note.pbw && note.pby) {
     try {
       const rawPoints = parsePitchBend(note.pbs, note.pbw, note.pby);
-      const points: PitchPoint[] = smoothPitchBendPoints(rawPoints);
-      bendSemitoneAt = (tMs: number) => {
-        if (points.length === 0) return 0;
-        if (tMs <= points[0].offsetMs) return points[0].semitone;
-        for (let i = 0; i < points.length - 1; i++) {
-          const a = points[i];
-          const b = points[i + 1];
-          if (tMs >= a.offsetMs && tMs <= b.offsetMs) {
-            const ratio = b.offsetMs > a.offsetMs ? (tMs - a.offsetMs) / (b.offsetMs - a.offsetMs) : 0;
-            return a.semitone + (b.semitone - a.semitone) * ratio;
-          }
-        }
-        return points[points.length - 1].semitone;
-      };
+      points = smoothPitchBendPoints(rawPoints);
     } catch (e) {
-      // ピッチベンド解析失敗時はベースピッチのみで続行
+      points = [];
     }
+  } else if (prevNote && typeof prevNote.noteNum === 'number' && prevNote.noteNum !== note.noteNum) {
+    // ベタ打ち（階段状ピッチ）を解消し、先行ノートからの滑らかなS字ポルタメントを自動生成
+    const autoPoints = generateUtauPortamentoPoints(
+      note.noteNum,
+      prevNote.noteNum,
+      durationMs,
+      { portamentoMs: 105, vibratoDepthSemitones: durationMs > 380 ? 0.32 : 0 }
+    );
+    points = smoothPitchBendPoints(autoPoints);
+  }
+
+  if (points.length > 0) {
+    bendSemitoneAt = (tMs: number) => {
+      if (tMs <= points[0].offsetMs) return points[0].semitone;
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        if (tMs >= a.offsetMs && tMs <= b.offsetMs) {
+          const ratio = b.offsetMs > a.offsetMs ? (tMs - a.offsetMs) / (b.offsetMs - a.offsetMs) : 0;
+          return a.semitone + (b.semitone - a.semitone) * ratio;
+        }
+      }
+      return points[points.length - 1].semitone;
+    };
   }
 
   const curve: number[] = new Array(frameCount);
@@ -470,7 +490,8 @@ async function renderViaCore(
     key: string | null,
     note: any | null,
     startTimeSec: number,
-    durationMs: number
+    durationMs: number,
+    prevNote?: any | null
   ) => {
     const p = Math.max(
       2,
@@ -493,7 +514,7 @@ async function renderViaCore(
 
       workerNotes.push({
         key,
-        pitchCurveHz: buildPitchCurveHz(note, p, durationMs),
+        pitchCurveHz: buildPitchCurveHz(note, p, durationMs, prevNote),
         intensity: typeof note.intensity === 'number' ? note.intensity : 100,
         modulation: typeof note.modulation === 'number' ? note.modulation : 0,
         startTimeMs,
@@ -572,20 +593,22 @@ async function renderViaCore(
           !!s.matchedAlias &&
           isVcvMatchedAlias(s.matchedAlias, prevVowelForCvvc);
         
+        const effectivePrev = isContinuous ? prevNote : null;
+
         if (continuousForCvvc && !vcvMatched && vcMatchesExactly && Number.isFinite(preMs) && preMs > 0) {
           const vcWasmKey = cacheKeyToWasmKey.get(vcKey);
           if (vcWasmKey) {
             const vcStartSec = Math.max(0, noteStartSec - preMs / 1000.0);
-            pushEvent(vcWasmKey, n, vcStartSec, preMs);
+            pushEvent(vcWasmKey, n, vcStartSec, preMs, effectivePrev);
             // The VC already occupies the preutterance window. Do not apply
             // the same preutterance a second time to the following CV.
             const cvNote = { ...n, pre_utterance: 0, overlap: 0 };
-            pushEvent(wasmKey, cvNote, noteStartSec, noteDurationMs);
+            pushEvent(wasmKey, cvNote, noteStartSec, noteDurationMs, effectivePrev);
           } else {
-            pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
+            pushEvent(wasmKey, n, noteStartSec, noteDurationMs, effectivePrev);
           }
         } else {
-          pushEvent(wasmKey, n, noteStartSec, noteDurationMs);
+          pushEvent(wasmKey, n, noteStartSec, noteDurationMs, effectivePrev);
         }
       }
     }
