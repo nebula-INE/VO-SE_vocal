@@ -98,7 +98,12 @@ self.onunhandledrejection = (e: PromiseRejectionEvent) => {
 //   portamento_length:      offset 40  (4B, int)
 //   合計44バイト (sizeof(NoteEvent) = 44)
 // ------------------------------------------------------------
-const NOTE_EVENT_SIZE = 44;
+const NOTE_EVENT_SIZE = 88;
+const OFF_INTENSITY = 48;
+const OFF_MODULATION = 56;
+const OFF_START_TIME_MS = 64;
+const OFF_PREUTTERANCE_MS = 72;
+const OFF_OVERLAP_MS = 80;
 const OFF_WAV_PATH = 0;
 const OFF_PITCH_CURVE = 4;
 const OFF_PITCH_LENGTH = 8;
@@ -465,6 +470,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
 
     // 3. NoteEvent配列を構築する(休符/ギャップは key=null で無声ノートとして渡す)
     const notesPtr = mod._malloc(notes.length * NOTE_EVENT_SIZE);
+    mod.HEAPU8.fill(0, notesPtr, notesPtr + notes.length * NOTE_EVENT_SIZE);
     allocatedPtrs.push(notesPtr);
 
     for (let i = 0; i < notes.length; i++) {
@@ -495,6 +501,11 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
       mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
+      mod.setValue(base + OFF_INTENSITY, typeof intensity === 'number' ? intensity : 100, 'double');
+      mod.setValue(base + OFF_MODULATION, typeof modulation === 'number' ? modulation : 0, 'double');
+      mod.setValue(base + OFF_START_TIME_MS, typeof notes[i].startTimeMs === 'number' ? notes[i].startTimeMs : -1, 'double');
+      mod.setValue(base + OFF_PREUTTERANCE_MS, typeof notes[i].preutteranceMs === 'number' ? notes[i].preutteranceMs : -1, 'double');
+      mod.setValue(base + OFF_OVERLAP_MS, typeof notes[i].overlapMs === 'number' ? notes[i].overlapMs : -1, 'double');
     }
 
     (self as unknown as Worker).postMessage({
