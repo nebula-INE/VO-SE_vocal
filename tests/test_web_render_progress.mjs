@@ -63,9 +63,14 @@ test('Web pitch bends use PSOLA semitone curves and keep playback-rate fallback 
   // not a second time through playbackRate.
   assert.match(engine, /makeSemitoneCurve\(bendPoints, startTimeSec - actualStartTime\)/);
   assert.match(engine, /pitchCurveSemitones:\s*curveFn/);
+  assert.match(engine, /onPitchCurveApplied:\s*\(applied\) => \{ bendAppliedInPsola = applied; \}/);
   assert.match(engine, /if \(bendPoints && !bendAppliedInPsola\)/);
   assert.match(curve, /export function makeSemitoneCurve\(/);
   assert.match(curve, /p\.offsetMs \/ 1000/);
+  const psola = fs.readFileSync('src/psolaPitchShift.ts', 'utf8');
+  assert.match(psola, /onPitchCurveApplied\?: \(applied: boolean\) => void/);
+  assert.match(psola, /opts\.onPitchCurveApplied\?\.\(false\)/);
+  assert.match(psola, /opts\.onPitchCurveApplied\?\.\(!!curve\)/);
 
   // If PSOLA is unavailable, the playback-rate fallback remains relative to
   // the note's base pitch ratio.
