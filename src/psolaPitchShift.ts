@@ -48,6 +48,7 @@ const DEFAULT_OPTS: Required<PsolaOptions> = {
   voicingThreshold: 0.6,
   preserveFormants: true,
   pitchCurveSemitones: undefined as unknown as (tOutSec: number) => number,
+  onPitchCurveApplied: undefined as unknown as (applied: boolean) => void,
 };
 
 // ------------------------------------------------------------
