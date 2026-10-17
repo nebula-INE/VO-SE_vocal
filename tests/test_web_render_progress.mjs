@@ -55,13 +55,30 @@ test('Web Audio fallback never synthesizes unresolved notes with a sawtooth osci
   assert.match(engine, /unresolved notes are left silent/);
 });
 
-test('Web Audio pitch bends stay relative to the note base pitch', () => {
+test('Web pitch bends use PSOLA semitone curves and keep playback-rate fallback relative to the base pitch', () => {
   const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
+  const curve = fs.readFileSync('src/utils/pitchCurve.ts', 'utf8');
+
+  // When PSOLA succeeds, pitch bends are applied inside the pitch shifter,
+  // not a second time through playbackRate.
+  assert.match(engine, /makeSemitoneCurve\(bendPoints, startTimeSec - actualStartTime\)/);
+  assert.match(engine, /pitchCurveSemitones:\s*curveFn/);
+  assert.match(engine, /onPitchCurveApplied:\s*\(applied\) => \{ bendAppliedInPsola = applied; \}/);
+  assert.match(engine, /if \(bendPoints && !bendAppliedInPsola\)/);
+  assert.match(curve, /export function makeSemitoneCurve\(/);
+  assert.match(curve, /p\.offsetMs \/ 1000/);
+  const psola = fs.readFileSync('src/psolaPitchShift.ts', 'utf8');
+  assert.match(psola, /onPitchCurveApplied\?: \(applied: boolean\) => void/);
+  assert.match(psola, /opts\.onPitchCurveApplied\?\.\(false\)/);
+  assert.match(psola, /opts\.onPitchCurveApplied\?\.\(!!curve\)/);
+
+  // If PSOLA is unavailable, the playback-rate fallback remains relative to
+  // the note's base pitch ratio.
   const start = engine.indexOf('scheduleSafePitchRamp(');
   assert.notEqual(start, -1);
   const block = engine.slice(start, start + 900);
   assert.match(block, /source\.playbackRate/);
-  assert.match(block, /safePitchRatio/);
-  assert.match(block, /safePitchRatio \* Math\.max\(0\.5, Math\.min\(2\.0, Math\.pow\(2, st \/ 12\)\)\)/);
+  assert.match(block, /bendBaseRate/);
+  assert.match(block, /bendBaseRate \* Math\.max\(0\.5, Math\.min\(2\.0, Math\.pow\(2, st \/ 12\)\)\)/);
 });
 

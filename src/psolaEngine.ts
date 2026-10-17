@@ -20,6 +20,7 @@ import {
   softClampSemitone,
   scheduleSafePitchRamp,
   generateUtauPortamentoPoints,
+  makeSemitoneCurve,
   type PitchPoint
 } from './utils/pitchCurve';
 import { psolaPitchAndTimeShiftBuffer } from './psolaPitchShift';
@@ -468,9 +469,13 @@ export async function renderPsolaOffline(
         let finalBuffer = sourceBuffer;
         let isPsolaApplied = false;
 
-        if (Math.abs(safePitchRatio - 1.0) >= 0.004) {
+        let bendAppliedInPsola = false;
+        if (Math.abs(safePitchRatio - 1.0) >= 0.004 || (bendPoints && bendPoints.length > 0)) {
           try {
             const targetLengthSamples = Math.max(256, Math.round(playLen * offlineCtx.sampleRate));
+            const curveFn = bendPoints && bendPoints.length > 0
+              ? makeSemitoneCurve(bendPoints, startTimeSec - actualStartTime)
+              : undefined;
             finalBuffer = psolaPitchAndTimeShiftBuffer(
               offlineCtx,
               sourceBuffer,
@@ -479,7 +484,9 @@ export async function renderPsolaOffline(
               {
                 minF0Hz: 65,
                 maxF0Hz: 900,
-                voicingThreshold: 0.32
+                voicingThreshold: 0.6,
+                pitchCurveSemitones: curveFn,
+                onPitchCurveApplied: (applied) => { bendAppliedInPsola = applied; }
               }
             );
             isPsolaApplied = true;
@@ -494,7 +501,7 @@ export async function renderPsolaOffline(
         const sourceRate = isPsolaApplied ? 1.0 : safePitchRatio;
         source.playbackRate.setValueAtTime(sourceRate, Math.max(0, actualStartTime));
 
-        if (bendPoints) {
+        if (bendPoints && !bendAppliedInPsola) {
           try {
             scheduleSafePitchRamp(
               source.playbackRate,

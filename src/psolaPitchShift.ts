@@ -37,6 +37,8 @@ export interface PsolaOptions {
    * 声質を保ったままベンドしたい場合はこちらを使う。
    */
   pitchCurveSemitones?: (tOutSec: number) => number;
+  /** Reports whether the curve was applied by the voiced PSOLA path (false on legacy fallback). */
+  onPitchCurveApplied?: (applied: boolean) => void;
 }
 
 const DEFAULT_OPTS: Required<PsolaOptions> = {
@@ -46,6 +48,7 @@ const DEFAULT_OPTS: Required<PsolaOptions> = {
   voicingThreshold: 0.6,
   preserveFormants: true,
   pitchCurveSemitones: undefined as unknown as (tOutSec: number) => number,
+  onPitchCurveApplied: undefined as unknown as (applied: boolean) => void,
 };
 
 // ------------------------------------------------------------
@@ -655,6 +658,7 @@ export function psolaPitchAndTimeShiftBuffer(
   const numCh = srcBuffer.numberOfChannels;
   const outLen = Math.max(1, targetLengthSamples ?? srcBuffer.length);
   const curve = opts.pitchCurveSemitones;
+  opts.onPitchCurveApplied?.(false);
 
   if (!curve && Math.abs(pitchRatio - 1.0) < 0.003 && outLen === srcBuffer.length) {
     return srcBuffer;
@@ -702,6 +706,7 @@ export function psolaPitchAndTimeShiftBuffer(
     applyStudioSoftLimiter(result[ch]);
     outBuffer.copyToChannel(new Float32Array(result[ch]), ch);
   }
+  opts.onPitchCurveApplied?.(!!curve);
   return outBuffer;
 }
 
