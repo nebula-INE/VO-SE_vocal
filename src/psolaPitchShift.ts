@@ -29,16 +29,23 @@ export interface PsolaOptions {
   reanalysisIntervalMs?: number;
   /** 有声/無声判定閾値 */
   voicingThreshold?: number;
-  /** フォルマント（声質）保持フィルタを適用するか */
+  /** (旧リサンプリング経路のみ) フォルマント補償EQを適用するか */
   preserveFormants?: boolean;
+  /**
+   * 出力時刻(秒, バッファ先頭基準)→追加ピッチ(半音)。ビブラート/ポルタメントを
+   * PSOLA内部で適用するための関数。playbackRateで後掛けするとフォルマントまで動くため、
+   * 声質を保ったままベンドしたい場合はこちらを使う。
+   */
+  pitchCurveSemitones?: (tOutSec: number) => number;
 }
 
 const DEFAULT_OPTS: Required<PsolaOptions> = {
   minF0Hz: 75,
   maxF0Hz: 850,
   reanalysisIntervalMs: 60,
-  voicingThreshold: 0.35,
+  voicingThreshold: 0.6,
   preserveFormants: true,
+  pitchCurveSemitones: undefined as unknown as (tOutSec: number) => number,
 };
 
 // ------------------------------------------------------------
@@ -343,6 +350,296 @@ function wsolaTimeStretchChannel(
   }
 }
 
+// ============================================================
+// 本物の TD-PSOLA (Time-Domain Pitch-Synchronous Overlap-Add)
+//
+// 旧実装は「Hermiteリサンプリング(=テープの早回し)+固定EQ」で、フォルマントが
+// ピッチ比と同じだけ移動していた(高音で声が変わる原因)。
+// ここでは原音の声帯1周期ごとの波形(グレイン)を切り出し、新しいピッチの間隔で
+// 並べ直す。グレイン内の波形(=声道の共鳴=フォルマント)は一切変形しない。
+// ============================================================
+
+interface PsolaMark {
+  pos: number;     // 解析マーク位置(サンプル)
+  period: number;  // その地点の局所周期(サンプル)
+  voiced: boolean;
+}
+
+/** 区間ごとのF0(周期)推定: 1/D ダウンサンプルした信号上のNSDF(McLeod) */
+function estimatePeriods(
+  mono: Float32Array,
+  sr: number,
+  o: Required<PsolaOptions>
+): { hop: number; period: number[]; voiced: boolean[] } {
+  const D = Math.max(1, Math.round(sr / 11025));
+  const fsd = sr / D;
+  const nd = Math.floor(mono.length / D);
+  const x = new Float32Array(nd);
+  for (let i = 0; i < nd; i++) {
+    let a = 0;
+    for (let k = 0; k < D; k++) a += mono[i * D + k];
+    x[i] = a / D;
+  }
+
+  const minLag = Math.max(2, Math.floor(fsd / o.maxF0Hz));
+  const maxLag = Math.min(Math.floor(fsd / o.minF0Hz), 400);
+  const W = Math.round(maxLag * 1.6);
+  const hopD = Math.max(1, Math.round(fsd * 0.005)); // 5ms
+  const nFrames = Math.max(1, Math.floor(nd / hopD) + 1);
+
+  let gMax = 0;
+  for (let i = 0; i < nd; i++) gMax = Math.max(gMax, Math.abs(x[i]));
+  const energyGate = Math.max(1e-4, gMax * 0.02);
+
+  const period = new Array<number>(nFrames).fill(0);
+  const voiced = new Array<boolean>(nFrames).fill(false);
+  const nsdf = new Float32Array(maxLag + 2);
+
+  for (let f = 0; f < nFrames; f++) {
+    const start = f * hopD - (W >> 1);
+    let e0 = 0;
+    for (let j = 0; j < W; j++) {
+      const t = start + j;
+      if (t >= 0 && t < nd) e0 += x[t] * x[t];
+    }
+    if (Math.sqrt(e0 / W) < energyGate) continue;
+
+    let best = -1;
+    for (let tau = minLag - 1; tau <= maxLag + 1; tau++) {
+      let acf = 0;
+      let m = 0;
+      for (let j = 0; j < W; j++) {
+        const t = start + j;
+        const u = t + tau;
+        if (t < 0 || u >= nd) continue;
+        acf += x[t] * x[u];
+        m += x[t] * x[t] + x[u] * x[u];
+      }
+      const v = m > 1e-12 ? (2 * acf) / m : 0;
+      nsdf[tau] = v;
+      if (tau >= minLag && tau <= maxLag && v > best) best = v;
+    }
+    if (best < o.voicingThreshold) continue;
+
+    // 最大値の0.9以上で最も短いラグのピークを採用(オクターブ下の誤検出を避ける)
+    let pick = -1;
+    for (let tau = minLag; tau <= maxLag; tau++) {
+      const v = nsdf[tau];
+      if (v >= best * 0.9 && v >= nsdf[tau - 1] && v >= nsdf[tau + 1]) { pick = tau; break; }
+    }
+    if (pick < 0) continue;
+    const a = nsdf[pick - 1], b = nsdf[pick], c = nsdf[pick + 1];
+    const den = a - 2 * b + c;
+    const shift = Math.abs(den) > 1e-9 ? 0.5 * (a - c) / den : 0;
+    period[f] = (pick + Math.max(-1, Math.min(1, shift))) * D;
+    voiced[f] = true;
+  }
+
+  // メディアンフィルタ(3点)でF0の飛びを除去
+  const sm = period.slice();
+  for (let f = 1; f < nFrames - 1; f++) {
+    if (voiced[f] && voiced[f - 1] && voiced[f + 1]) {
+      const t = [period[f - 1], period[f], period[f + 1]].sort((p, q) => p - q);
+      sm[f] = t[1];
+    }
+  }
+  // 孤立した有声フレーム(前後とも無声)は誤検出として捨てる
+  for (let f = 0; f < nFrames; f++) {
+    const l = f > 0 && voiced[f - 1];
+    const r = f < nFrames - 1 && voiced[f + 1];
+    if (voiced[f] && !l && !r) voiced[f] = false;
+  }
+  return { hop: hopD * D, period: sm, voiced };
+}
+
+function buildPitchMarks(
+  mono: Float32Array,
+  sr: number,
+  o: Required<PsolaOptions>
+): { marks: PsolaMark[]; voicedRatio: number } {
+  const n = mono.length;
+  const { hop, period, voiced } = estimatePeriods(mono, sr, o);
+  const nF = period.length;
+
+  const frameAt = (pos: number) => Math.max(0, Math.min(nF - 1, Math.round(pos / hop)));
+  const periodAt = (pos: number): number => {
+    const fp = Math.max(0, Math.min(nF - 1, pos / hop));
+    const f0 = Math.floor(fp);
+    const f1 = Math.min(nF - 1, f0 + 1);
+    const t = fp - f0;
+    if (voiced[f0] && voiced[f1]) return period[f0] * (1 - t) + period[f1] * t;
+    return voiced[f0] ? period[f0] : period[f1];
+  };
+
+  // 極性(正ピークが大きいか負ピークが大きいか)を固定してピーク位置の揺れを抑える
+  let mx = 0, mn = 0;
+  for (let i = 0; i < n; i++) { if (mono[i] > mx) mx = mono[i]; if (mono[i] < mn) mn = mono[i]; }
+  const pol = mx >= -mn ? 1 : -1;
+  const peakNear = (c: number, half: number): number => {
+    const a = Math.max(0, Math.round(c - half));
+    const b = Math.min(n - 1, Math.round(c + half));
+    let bi = Math.max(0, Math.min(n - 1, Math.round(c)));
+    let bv = -Infinity;
+    for (let i = a; i <= b; i++) { const v = pol * mono[i]; if (v > bv) { bv = v; bi = i; } }
+    return bi;
+  };
+
+  const unvoicedHop = Math.max(32, Math.round(sr * 0.006));
+  const marks: PsolaMark[] = [];
+  let pos = 0;
+  let voicedCount = 0;
+  while (pos < n) {
+    const v = voiced[frameAt(pos)];
+    if (v) {
+      const P = periodAt(pos);
+      if (marks.length === 0 || !marks[marks.length - 1].voiced) {
+        // 有声区間の頭: 波形のピークに位相合わせ
+        pos = peakNear(pos + P * 0.5, P * 0.5);
+      }
+      if (pos >= n) break;
+      marks.push({ pos, period: periodAt(pos), voiced: true });
+      voicedCount++;
+      const next = pos + periodAt(pos);
+      const refined = peakNear(next, periodAt(pos) * 0.2);
+      pos = Math.max(pos + Math.round(P * 0.7), refined);
+    } else {
+      marks.push({ pos, period: unvoicedHop, voiced: false });
+      pos += unvoicedHop;
+    }
+  }
+  return { marks, voicedRatio: marks.length ? voicedCount / marks.length : 0 };
+}
+
+/** TD-PSOLA 本体。analysisTime = outputTime * (srcLen/outLen) でピッチと時間を独立制御 */
+function tdPsolaSynthesize(
+  chans: Float32Array[],
+  marks: PsolaMark[],
+  sr: number,
+  baseRatio: number,
+  outLen: number,
+  curve?: (tOutSec: number) => number
+): Float32Array[] {
+  const srcLen = chans[0].length;
+  const timeScale = srcLen / outLen;
+  const outs = chans.map(() => new Float32Array(outLen));
+  const winCache = new Map<number, Float32Array>();
+  const hann = (len: number): Float32Array => {
+    let w = winCache.get(len);
+    if (!w) {
+      w = new Float32Array(len);
+      for (let i = 0; i < len; i++) w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / len);
+      winCache.set(len, w);
+    }
+    return w;
+  };
+
+  let tOut = 0;
+  let mi = 0;
+  let guard = 0;
+  const maxIter = outLen * 2 + 1000;
+  while (tOut < outLen && guard++ < maxIter) {
+    const tIn = tOut * timeScale;
+    while (mi + 1 < marks.length && Math.abs(marks[mi + 1].pos - tIn) <= Math.abs(marks[mi].pos - tIn)) mi++;
+    const m = marks[mi];
+    const P = Math.max(8, Math.round(m.period));
+    let ratio = 1;
+    if (m.voiced) {
+      ratio = baseRatio;
+      if (curve) ratio *= Math.pow(2, curve(tOut / sr) / 12);
+      ratio = Math.max(0.5, Math.min(2.0, ratio));
+    }
+
+    const W = 2 * P;
+    const w = hann(W);
+    const gain = 1 / ratio; // ハン窓和 = P_in/P_out = ratio を打ち消す
+    const srcStart = Math.round(m.pos) - P;
+    const dstStart = Math.round(tOut) - P;
+    for (let c = 0; c < chans.length; c++) {
+      const src = chans[c];
+      const dst = outs[c];
+      for (let i = 0; i < W; i++) {
+        const si = srcStart + i;
+        const di = dstStart + i;
+        if (si < 0 || si >= srcLen || di < 0 || di >= outLen) continue;
+        dst[di] += src[si] * w[i] * gain;
+      }
+    }
+    tOut += m.voiced ? m.period / ratio : m.period;
+  }
+  return outs;
+}
+
+/**
+ * 声質(スペクトル包絡)を保ったままピッチを変えると、F1が基本周波数付近にある母音(う/ゆ/ぶ 等)では
+ * 新しいF0位置の包絡値が下がり、音量が落ちる。元素材の短時間RMSに合わせてゆるやかに補正する。
+ */
+function matchLoudness(srcMono: Float32Array, outs: Float32Array[], sr: number): void {
+  const outLen = outs[0].length;
+  const block = Math.max(64, Math.round(sr * 0.02));
+  const nB = Math.max(1, Math.ceil(outLen / block));
+  const scale = srcMono.length / outLen;
+  const raw = new Float32Array(nB);
+  for (let b = 0; b < nB; b++) {
+    const o0 = b * block, o1 = Math.min(outLen, o0 + block);
+    let eo = 0;
+    for (let i = o0; i < o1; i++) eo += outs[0][i] * outs[0][i];
+    const s0 = Math.floor(o0 * scale), s1 = Math.min(srcMono.length, Math.max(s0 + 1, Math.floor(o1 * scale)));
+    let ei = 0;
+    for (let i = s0; i < s1; i++) ei += srcMono[i] * srcMono[i];
+    const ro = Math.sqrt(eo / Math.max(1, o1 - o0));
+    const ri = Math.sqrt(ei / Math.max(1, s1 - s0));
+    raw[b] = Math.max(0.5, Math.min(2.5, (ri + 1e-4) / (ro + 1e-4)));
+  }
+  const g = new Float32Array(nB);
+  for (let b = 0; b < nB; b++) {
+    let a = 0, c = 0;
+    for (let k = -2; k <= 2; k++) { const j = b + k; if (j >= 0 && j < nB) { a += raw[j]; c++; } }
+    g[b] = a / c;
+  }
+  for (let ch = 0; ch < outs.length; ch++) {
+    const d = outs[ch];
+    for (let i = 0; i < outLen; i++) {
+      const fp = i / block - 0.5;
+      const b0 = Math.max(0, Math.min(nB - 1, Math.floor(fp)));
+      const b1 = Math.min(nB - 1, b0 + 1);
+      const t = Math.max(0, Math.min(1, fp - b0));
+      d[i] *= g[b0] * (1 - t) + g[b1] * t;
+    }
+  }
+}
+
+// ------------------------------------------------------------
+// 旧方式(リサンプリング+EQ+WSOLA): 有声区間が検出できない素材のフォールバック
+// ------------------------------------------------------------
+function legacyResampleShiftBuffer(
+  ctx: BaseAudioContext,
+  srcBuffer: AudioBuffer,
+  pitchRatio: number,
+  targetLengthSamples: number,
+  o: Required<PsolaOptions>
+): AudioBuffer {
+  const sampleRate = srcBuffer.sampleRate;
+  const numCh = srcBuffer.numberOfChannels;
+  const outLen = Math.max(1, targetLengthSamples);
+  const outBuffer = ctx.createBuffer(numCh, outLen, sampleRate);
+  for (let ch = 0; ch < numCh; ch++) {
+    const srcData = srcBuffer.getChannelData(ch);
+    const resampledLen = Math.max(1, Math.round(srcData.length / pitchRatio));
+    const resampled = new Float32Array(resampledLen);
+    resampleChannelHermite(srcData, resampled, pitchRatio);
+    if (o.preserveFormants) applyFormantCompensation(resampled, sampleRate, pitchRatio);
+    const finalChannel = new Float32Array(outLen);
+    if (Math.abs(resampledLen - outLen) <= 4) {
+      finalChannel.set(resampled.subarray(0, Math.min(resampledLen, outLen)));
+    } else {
+      wsolaTimeStretchChannel(resampled, finalChannel, outLen / resampledLen, sampleRate);
+    }
+    applyStudioSoftLimiter(finalChannel);
+    outBuffer.copyToChannel(finalChannel, ch);
+  }
+  return outBuffer;
+}
+
 // ------------------------------------------------------------
 // 公開 API: ピッチ & タイムシフト
 // ------------------------------------------------------------
@@ -353,50 +650,58 @@ export function psolaPitchAndTimeShiftBuffer(
   targetLengthSamples?: number,
   opts: PsolaOptions = {}
 ): AudioBuffer {
-  const o = { ...DEFAULT_OPTS, ...opts };
+  const o = { ...DEFAULT_OPTS, ...opts } as Required<PsolaOptions>;
   const sampleRate = srcBuffer.sampleRate;
   const numCh = srcBuffer.numberOfChannels;
   const outLen = Math.max(1, targetLengthSamples ?? srcBuffer.length);
+  const curve = opts.pitchCurveSemitones;
 
-  // ピッチ比がほぼ1で、長さも同じなら無変換バイパス
-  if (Math.abs(pitchRatio - 1.0) < 0.003 && outLen === srcBuffer.length) {
+  if (!curve && Math.abs(pitchRatio - 1.0) < 0.003 && outLen === srcBuffer.length) {
     return srcBuffer;
   }
 
-  const outBuffer = ctx.createBuffer(numCh, outLen, sampleRate);
-
+  const chans: Float32Array[] = [];
+  for (let ch = 0; ch < numCh; ch++) chans.push(srcBuffer.getChannelData(ch));
+  const mono = new Float32Array(srcBuffer.length);
   for (let ch = 0; ch < numCh; ch++) {
-    const srcData = srcBuffer.getChannelData(ch);
-
-    // 1. 目標ピッチへの高精度エルミート・リサンプリング
-    // ピッチを pitchRatio 倍にするため、再生速度(speedRatio)を pitchRatio に設定
-    const resampledLen = Math.max(1, Math.round(srcData.length / pitchRatio));
-    const resampled = new Float32Array(resampledLen);
-    resampleChannelHermite(srcData, resampled, pitchRatio);
-
-    // 2. フォルマント補償（声道共鳴の復元 & アンチエイリアシング）
-    if (o.preserveFormants) {
-      applyFormantCompensation(resampled, sampleRate, pitchRatio);
-    }
-
-    // 3. 必要に応じた時間長アライメント（WSOLAタイムストレッチ）
-    // resampled を目標の outLen に合わせる
-    const finalChannel = new Float32Array(outLen);
-    if (Math.abs(resampledLen - outLen) <= 4) {
-      // ほぼ同じ長さなら単純線形コピー
-      const copyLen = Math.min(resampledLen, outLen);
-      finalChannel.set(resampled.subarray(0, copyLen));
-    } else {
-      const timeStretchRatio = outLen / resampledLen;
-      wsolaTimeStretchChannel(resampled, finalChannel, timeStretchRatio, sampleRate);
-    }
-
-    // 4. 0dBFS True-Peak ソフトニーリミッター（WAV出力時のクリッピング歪みを完全防止）
-    applyStudioSoftLimiter(finalChannel);
-
-    outBuffer.copyToChannel(finalChannel, ch);
+    const d = chans[ch];
+    for (let i = 0; i < mono.length; i++) mono[i] += d[i] / numCh;
   }
 
+  let marks: PsolaMark[] = [];
+  let voicedRatio = 0;
+  try {
+    ({ marks, voicedRatio } = buildPitchMarks(mono, sampleRate, o));
+  } catch {
+    marks = [];
+  }
+  // 有声区間がほぼ無い(息・摩擦音のみ等)ならピッチ変更の意味が無いが、
+  // 有声音なのに検出失敗した可能性もあるため旧方式へ退避する
+  if (marks.length < 4 || voicedRatio < 0.15) {
+    return legacyResampleShiftBuffer(ctx, srcBuffer, pitchRatio, outLen, o);
+  }
+
+  // PSOLAは概ね±1オクターブまで自然。範囲外は残りだけリサンプリングで補う。
+  const psolaRatio = Math.max(0.5, Math.min(2.0, pitchRatio));
+  const residual = pitchRatio / psolaRatio;
+  const interLen = residual === 1 ? outLen : Math.max(1, Math.round(outLen * residual));
+
+  let result = tdPsolaSynthesize(chans, marks, sampleRate, psolaRatio, interLen, curve);
+  if (residual !== 1) {
+    result = result.map((d) => {
+      const out = new Float32Array(outLen);
+      resampleChannelHermite(d, out, residual);
+      return out;
+    });
+  }
+
+  matchLoudness(mono, result, sampleRate);
+
+  const outBuffer = ctx.createBuffer(numCh, outLen, sampleRate);
+  for (let ch = 0; ch < numCh; ch++) {
+    applyStudioSoftLimiter(result[ch]);
+    outBuffer.copyToChannel(new Float32Array(result[ch]), ch);
+  }
   return outBuffer;
 }
 
@@ -409,11 +714,5 @@ export function psolaPitchShiftBuffer(
   pitchRatio: number,
   opts: PsolaOptions = {}
 ): AudioBuffer {
-  return psolaPitchAndTimeShiftBuffer(
-    ctx,
-    srcBuffer,
-    pitchRatio,
-    srcBuffer.length,
-    opts
-  );
+  return psolaPitchAndTimeShiftBuffer(ctx, srcBuffer, pitchRatio, srcBuffer.length, opts);
 }
