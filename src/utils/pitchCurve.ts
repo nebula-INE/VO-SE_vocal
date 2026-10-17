@@ -404,3 +404,31 @@ export function applyAutoTuneToNotes<T extends {
     };
   });
 }
+
+/**
+ * PitchPoint列を「バッファ先頭からの秒 → 半音オフセット」の関数にする。
+ * PSOLA内部でピッチを動かすために使う(playbackRateで動かすとフォルマントまで動いてしまう)。
+ * scheduleSafePitchRamp と同じ解釈: 最初の制御点より前は0、制御点間は線形、最後以降は保持。
+ * @param noteStartInBufferSec バッファ先頭から見たノート開始位置(秒) = startTimeSec - actualStartTime
+ */
+export function makeSemitoneCurve(
+  points: PitchPoint[],
+  noteStartInBufferSec: number,
+  maxAbsSemitone: number = 12
+): (tSec: number) => number {
+  const pts = points
+    .map((p) => ({ t: noteStartInBufferSec + p.offsetMs / 1000, v: p.semitone }))
+    .sort((a, b) => a.t - b.t);
+  const clamp = (v: number) => Math.max(-maxAbsSemitone, Math.min(maxAbsSemitone, v));
+  return (tSec: number): number => {
+    if (pts.length === 0 || tSec < pts[0].t) return 0;
+    for (let i = 1; i < pts.length; i++) {
+      if (tSec <= pts[i].t) {
+        const a = pts[i - 1], b = pts[i];
+        const span = b.t - a.t;
+        return clamp(span > 1e-6 ? a.v + ((b.v - a.v) * (tSec - a.t)) / span : b.v);
+      }
+    }
+    return clamp(pts[pts.length - 1].v);
+  };
+}
