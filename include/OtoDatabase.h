@@ -404,7 +404,7 @@ private:
             if (firstTab >= 0)
             {
                 boundaryText = rawLine.substring (0, firstTab).trim();
-                const int secondTab = rawLine.indexOf ("\t", false, firstTab + 1);
+                const int secondTab = rawLine.indexOfChar (firstTab + 1, '\t');
                 if (secondTab < 0)
                 {
                     // Legacy two-column format: note + suffix.
