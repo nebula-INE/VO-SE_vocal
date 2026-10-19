@@ -400,11 +400,11 @@ private:
             // Preserve empty tab-separated columns. JUCE tokenization can drop
             // empty fields, which makes a classic row such as C1<TAB><TAB>_C4
             // look like a two-column prefix row and diverge from Python.
-            const int firstTab = rawLine.indexOf ("\\t");
+            const int firstTab = rawLine.indexOf ("\t");
             if (firstTab >= 0)
             {
                 boundaryText = rawLine.substring (0, firstTab).trim();
-                const int secondTab = rawLine.indexOf ("\\t", false, firstTab + 1);
+                const int secondTab = rawLine.indexOf ("\t", false, firstTab + 1);
                 if (secondTab < 0)
                 {
                     // Legacy two-column format: note + suffix.
