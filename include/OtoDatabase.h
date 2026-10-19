@@ -393,11 +393,48 @@ private:
             if (line.isEmpty() || line.startsWithChar ('#') || line.startsWithChar (';'))
                 continue;
 
-            auto columns = juce::StringArray::fromTokens (rawLine, "\t", "");
-            if (columns.size() < 2)
-                columns = juce::StringArray::fromTokens (line, " ", "");
-            if (columns.size() < 2)
-                continue;
+            juce::String boundaryText;
+            juce::String prefix;
+            juce::String suffix;
+
+            // Preserve empty tab-separated columns. JUCE tokenization can drop
+            // empty fields, which makes a classic row such as C1<TAB><TAB>_C4
+            // look like a two-column prefix row and diverge from Python.
+            const int firstTab = rawLine.indexOf ("\\t");
+            if (firstTab >= 0)
+            {
+                boundaryText = rawLine.substring (0, firstTab).trim();
+                const int secondTab = rawLine.indexOf ("\\t", false, firstTab + 1);
+                if (secondTab < 0)
+                {
+                    // Legacy two-column format: note + suffix.
+                    suffix = rawLine.substring (firstTab + 1).trim();
+                }
+                else
+                {
+                    prefix = rawLine.substring (firstTab + 1, secondTab).trim();
+                    suffix = rawLine.substring (secondTab + 1).trim();
+                }
+            }
+            else
+            {
+                // Whitespace-delimited fallback for nonstandard files.
+                auto columns = juce::StringArray::fromTokens (line, " ", "");
+                if (columns.size() < 2)
+                    continue;
+
+                boundaryText = columns[0].trim();
+                if (columns.size() >= 3)
+                {
+                    prefix = columns[1].trim();
+                    suffix = columns[2].trim();
+                }
+                else
+                {
+                    // Match the Python resolver's legacy two-column rule.
+                    suffix = columns[1].trim();
+                }
+            }
 
             const auto midiForNote = [] (juce::String value) -> int
             {
@@ -425,12 +462,10 @@ private:
                 return (octave + 1) * 12 + semitone;
             };
 
-            const int boundary = midiForNote (columns[0]);
+            const int boundary = midiForNote (boundaryText);
             if (boundary < 0)
                 continue;
 
-            const auto prefix = columns.size() >= 2 ? columns[1].trim() : juce::String();
-            const auto suffix = columns.size() >= 3 ? columns[2].trim() : juce::String();
             prefixMap[boundary] = { prefix == "-" ? juce::String() : prefix,
                                     suffix == "-" ? juce::String() : suffix };
         }
