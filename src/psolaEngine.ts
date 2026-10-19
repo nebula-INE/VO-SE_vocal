@@ -422,7 +422,7 @@ export async function renderPsolaOffline(
               note.noteNum,
               prevInfo.note.noteNum,
               durationSec * 1000,
-              { portamentoMs: 105, vibratoDepthSemitones: durationSec > 0.38 ? 0.32 : 0 }
+              { portamentoMs: 105, vibratoDepthSemitones: durationSec > 0.6 ? 0.18 : 0 }
             );
             bendPoints = smoothPitchBendPoints(autoPoints);
           }

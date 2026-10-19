@@ -8,6 +8,33 @@
     <meta property="og:title" content="VO-SE Pro Vocal Synthesizer" />
     <meta property="og:description" content="Vocal Synthesis Engine and Editor supporting Web Studio and Native PySide6 Desktop" />
     <link rel="icon" type="image/png" href="/assets/splash.png" />
+    <script>
+      // Suppress Vite HMR WebSocket connection failure in proxy / iframe environments
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event && event.reason;
+        var reasonStr = String(reason || '');
+        var stackStr = String((reason && reason.stack) || '');
+        if (
+          reasonStr.includes('WebSocket') ||
+          reasonStr.includes('failed to connect') ||
+          stackStr.includes('@vite/client')
+        ) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+      window.addEventListener('error', function(event) {
+        var msg = String((event && event.message) || '');
+        var filename = String((event && event.filename) || '');
+        if (
+          msg.includes('WebSocket') ||
+          filename.includes('@vite/client')
+        ) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }, true);
+    </script>
   </head>
   <body class="antialiased selection:bg-cyan-500 selection:text-black">
     <div id="root"></div>

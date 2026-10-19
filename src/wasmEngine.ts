@@ -557,7 +557,7 @@ export async function renderStudioOffline(
               note.noteNum,
               prevInfo.note.noteNum,
               durationSec * 1000,
-              { portamentoMs: 100, vibratoDepthSemitones: durationSec > 0.4 ? 0.3 : 0 }
+              { portamentoMs: 100, vibratoDepthSemitones: durationSec > 0.6 ? 0.18 : 0 }
             );
             bendPoints = smoothPitchBendPoints(autoPoints);
           }

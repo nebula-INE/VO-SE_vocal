@@ -138,7 +138,9 @@ function buildPitchCurveHz(
   durationMs: number,
   prevNote?: any
 ): number[] {
-  const baseHz = 440 * Math.pow(2, (note.noteNum - 69) / 12);
+  const rawNoteNum = typeof note?.noteNum === 'number' && Number.isFinite(note.noteNum) ? note.noteNum : 60;
+  const noteNum = Math.max(12, Math.min(108, rawNoteNum));
+  const baseHz = 440 * Math.pow(2, (noteNum - 69) / 12);
 
   let bendSemitoneAt: (tMs: number) => number = () => 0;
   let points: PitchPoint[] = [];
@@ -150,13 +152,13 @@ function buildPitchCurveHz(
     } catch (e) {
       points = [];
     }
-  } else if (prevNote && typeof prevNote.noteNum === 'number' && prevNote.noteNum !== note.noteNum) {
+  } else if (prevNote && typeof prevNote.noteNum === 'number' && prevNote.noteNum !== noteNum) {
     // ベタ打ち（階段状ピッチ）を解消し、先行ノートからの滑らかなS字ポルタメントを自動生成
     const autoPoints = generateUtauPortamentoPoints(
-      note.noteNum,
+      noteNum,
       prevNote.noteNum,
       durationMs,
-      { portamentoMs: 105, vibratoDepthSemitones: durationMs > 380 ? 0.32 : 0 }
+      { portamentoMs: 105, vibratoDepthSemitones: durationMs > 600 ? 0.18 : 0 }
     );
     points = smoothPitchBendPoints(autoPoints);
   }
@@ -179,9 +181,51 @@ function buildPitchCurveHz(
   const curve: number[] = new Array(frameCount);
   for (let i = 0; i < frameCount; i++) {
     const tMs = (i / Math.max(1, frameCount - 1)) * durationMs;
-    curve[i] = baseHz * Math.pow(2, bendSemitoneAt(tMs) / 12);
+    const semi = bendSemitoneAt(tMs);
+    const safeSemi = Number.isFinite(semi) ? Math.max(-24, Math.min(24, semi)) : 0;
+    const hz = baseHz * Math.pow(2, safeSemi / 12);
+    curve[i] = Number.isFinite(hz) && hz >= 50.0 && hz <= 2200.0 ? hz : baseHz;
   }
-  return curve;
+
+  // 5点ガウシアン重み付けによる高品位ピッチスムージング
+  // フレーム境界(5ms)での微小な段差・急峻な階段状ピッチ変化を滑らかに補間
+  // （金属的ロボット感や音程の角立ち・ギザギザ感を解消し、肉声のように自然な歌声のうねりへ整える）
+  let finalCurve = curve;
+  if (curve.length >= 5) {
+    const smoothed = new Array(curve.length);
+    smoothed[0] = curve[0];
+    smoothed[1] = 0.25 * curve[0] + 0.50 * curve[1] + 0.25 * curve[2];
+    for (let i = 2; i < curve.length - 2; i++) {
+      smoothed[i] =
+        0.06 * curve[i - 2] +
+        0.24 * curve[i - 1] +
+        0.40 * curve[i] +
+        0.24 * curve[i + 1] +
+        0.06 * curve[i + 2];
+    }
+    smoothed[curve.length - 2] =
+      0.25 * curve[curve.length - 3] + 0.50 * curve[curve.length - 2] + 0.25 * curve[curve.length - 1];
+    smoothed[curve.length - 1] = curve[curve.length - 1];
+    finalCurve = smoothed;
+  } else if (curve.length >= 3) {
+    const smoothed = new Array(curve.length);
+    smoothed[0] = curve[0];
+    for (let i = 1; i < curve.length - 1; i++) {
+      smoothed[i] = 0.25 * curve[i - 1] + 0.50 * curve[i] + 0.25 * curve[i + 1];
+    }
+    smoothed[curve.length - 1] = curve[curve.length - 1];
+    finalCurve = smoothed;
+  }
+
+  // 最終安全バリデーション: 全要素が 50Hz〜2200Hz の有限実数であることを保証
+  for (let i = 0; i < finalCurve.length; i++) {
+    const v = finalCurve[i];
+    if (!Number.isFinite(v) || v < 50.0 || v > 2200.0) {
+      finalCurve[i] = baseHz;
+    }
+  }
+
+  return finalCurve;
 }
 
 function silentFrames(frameCount: number): number[] {
@@ -521,7 +565,9 @@ async function renderViaCore(
         modulation: typeof note.modulation === 'number' ? note.modulation : 0,
         startTimeMs,
         preutteranceMs: hasPre ? preValue : -1,
-        overlapMs: hasOverlap ? overlapValue : -1
+        overlapMs: hasOverlap ? overlapValue : -1,
+        breath: typeof note.breath === 'number' ? note.breath : 0.50,
+        tension: typeof note.tension === 'number' ? note.tension : 0.50
       });
     } else {
       workerNotes.push({

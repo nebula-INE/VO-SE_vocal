@@ -312,6 +312,17 @@ function allocZeroDoubleArray(mod: VoseCoreModule, length: number): number {
   return ptr;
 }
 
+function allocConstantDoubleArray(mod: VoseCoreModule, length: number, val: number): number {
+  if (length <= 0) return 0;
+  const ptr = mod._malloc(length * 8);
+  const heap = mod.HEAPF64;
+  const base = ptr / 8;
+  for (let i = 0; i < length; i++) {
+    heap[base + i] = val;
+  }
+  return ptr;
+}
+
 function allocCString(mod: VoseCoreModule, str: string): number {
   const bytes = mod.lengthBytesUTF8(str) + 1;
   const ptr = mod._malloc(bytes);
@@ -354,6 +365,10 @@ export interface WorkerNoteEntry {
   // Negative = resolve from oto.ini. Explicit 0 is preserved as 0.
   preutteranceMs?: number;
   overlapMs?: number;
+  // 息成分 (0.0=純パルス/硬い 〜 0.5=原音の自然な非周期性・息成分 〜 1.0=強い息漏れ)
+  breath?: number;
+  // 声の張り・倍音 (0.0=軟らかい 〜 0.5=原音そのまま 〜 1.0=強い張り)
+  tension?: number;
 }
 
 export interface RenderRequestMsg {
@@ -488,28 +503,37 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
         modulation,
         startTimeMs,
         preutteranceMs,
-        overlapMs
+        overlapMs,
+        breath,
+        tension
       } = notes[i];
       const base = notesPtr + i * NOTE_EVENT_SIZE;
 
       const isVoiced = key !== null;
-      const pitchCurvePtr = isVoiced ? allocDoubleArray(mod, pitchCurveHz) : 0;
+      // 安全検証: NaNや0Hz、異常周波数を排除してWORLDボコーダー内部のバーストを防止
+      const safePitchCurveHz = isVoiced
+        ? pitchCurveHz.map((hz) => Number.isFinite(hz) && hz >= 50.0 && hz <= 2200.0 ? hz : 440.0)
+        : pitchCurveHz;
+      const pitchCurvePtr = isVoiced ? allocDoubleArray(mod, safePitchCurveHz) : 0;
       if (pitchCurvePtr) allocatedPtrs.push(pitchCurvePtr);
       const wavPathPtr = isVoiced ? allocCString(mod, key as string) : 0;
       if (wavPathPtr) allocatedPtrs.push(wavPathPtr);
 
-      // 息パラメータ: 0(nullptr)を渡すと C++ コア側でデフォルト値 0.5 (50%の息漏れノイズ)
-      // が補完されてしまい、激しいヒスノイズが乗る。
-      // 明示的に 0.0 (純粋な有声調波・息ノイズ0) のカーブを渡すことで、
-      // apply_tension_breath が非周期成分を積極的に抑制するようにする。
-      const breathCurvePtr = isVoiced ? allocZeroDoubleArray(mod, pitchCurveHz.length) : 0;
+      // 息・テンションパラメータ（0.50 = 完全中立・原音そのままの倍音と空気感を100%保持）:
+      const effBreath = typeof breath === 'number' && Number.isFinite(breath) ? breath : 0.50;
+      const effTension = typeof tension === 'number' && Number.isFinite(tension) ? tension : 0.50;
+
+      const breathCurvePtr = isVoiced ? allocConstantDoubleArray(mod, pitchCurveHz.length, effBreath) : 0;
       if (breathCurvePtr) allocatedPtrs.push(breathCurvePtr);
+
+      const tensionCurvePtr = isVoiced ? allocConstantDoubleArray(mod, pitchCurveHz.length, effTension) : 0;
+      if (tensionCurvePtr) allocatedPtrs.push(tensionCurvePtr);
 
       mod.setValue(base + OFF_WAV_PATH, wavPathPtr, 'i32');
       mod.setValue(base + OFF_PITCH_CURVE, pitchCurvePtr, 'i32');
       mod.setValue(base + OFF_PITCH_LENGTH, pitchCurveHz.length, 'i32');
       mod.setValue(base + OFF_GENDER_CURVE, 0, 'i32');
-      mod.setValue(base + OFF_TENSION_CURVE, 0, 'i32');
+      mod.setValue(base + OFF_TENSION_CURVE, tensionCurvePtr, 'i32');
       mod.setValue(base + OFF_BREATH_CURVE, breathCurvePtr, 'i32');
       mod.setValue(base + OFF_VIBRATO_DEPTH_CURVE, 0, 'i32');
       mod.setValue(base + OFF_VIBRATO_RATE_CURVE, 0, 'i32');
