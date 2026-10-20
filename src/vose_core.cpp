@@ -419,6 +419,10 @@ struct NotePrepass {
     double                               overlap_ms = 0.0;
     int64_t                              preutterance_samples = 0;
 
+    // 直前に隣接する RENDERABLE ノートの index（なければ -1）。
+    // オーバーラップ区間のパラメータモーフ(morph_head_toward_previous)が参照する。
+    int                                  prev_idx = -1;
+
     NotePrepass() = default;
     NotePrepass(NoteState s, int64_t ns,
                 std::shared_ptr<const EmbeddedVoice> e,
@@ -543,6 +547,13 @@ static constexpr double kInv32768         = 1.0 / 32768.0;
 static constexpr int    kCrossfadeSamples = static_cast<int>(kFs * 0.030);
 static constexpr int    kMaxPitchLength   = 120000;
 static constexpr int    kTransitionFrames = static_cast<int>(60.0 / kFramePeriod);
+
+// レガート接続の最小オーバーラップ(ms)。oto/USTの値がこれより短い場合に底上げする
+// （UST側で Overlap を明示した場合は尊重して底上げしない）。
+// 0 にすると従来動作。
+static constexpr double kMinLegatoOverlapMs = 20.0;
+// オーバーラップ区間で前ノートのスペクトル/F0へモーフするか。false で従来動作。
+static constexpr bool   kMorphOverlapToPrevious = true;
 
 static int64_t note_samples_safe(int p) {
     // pitch_length は 5ms フレーム数。N フレームなら N * 5ms を
@@ -1383,6 +1394,8 @@ struct SynthNoteParams {
     int                fft_size;
     int                spec_bins;
     double             global_time_sec = 0.0;  // 曲先頭からのオフセット（ビブラート位相連続化）
+    const NotePrepass* prev_pp = nullptr;      // 直前に隣接するノート（なければ nullptr）
+    const NoteEvent*   prev_n  = nullptr;
 };
 
 static const OtoEntry kDefaultOto = {};
@@ -1467,6 +1480,107 @@ static double smooth_band_value(double freq, const double* bfreqs, const double*
         }
     }
     return bvals[n_bounds];
+}
+
+// ============================================================
+// morph_head_toward_previous
+//
+// レガート接続で、現ノートの「オーバーラップ区間」(先頭 overlap_ms)だけ
+// スペクトル包絡・非周期性・F0 を、同じ絶対時刻に鳴っている前ノートの
+// パラメータへ寄せる（寄せ具合は raised-cosine で 前ノート100% → 現ノート100%）。
+//
+// 旧 blend_transition_spectra(未使用) は「前ノート末尾 N フレーム」と
+// 「現ノート先頭 N フレーム」を重ねており、(1) 時刻が合っていない、
+// (2) 子音アタックまで潰して別音素に聞こえる、という問題があった。
+// ここでは
+//   * 前ノートのフレームを絶対時刻で引く（時刻が合う）
+//   * 影響範囲は overlap 区間のみ（それ以降＝子音の本体・母音は一切触れない）
+// ことで子音を壊さずに、波形クロスフェード前の2音のスペクトル/ピッチを近づける。
+// 時間領域のクロスフェード(書き込みフェーズ)は従来どおり残る。
+// ============================================================
+static void morph_head_toward_previous(
+    const SynthNoteParams& p, int output_frames,
+    double* f0, double** spec_ptrs, double** ap_ptrs)
+{
+    if (!kMorphOverlapToPrevious) return;
+    const NotePrepass& pp = p.pp;
+    if (!p.prev_pp || !p.prev_n) return;
+    const NotePrepass& pv = *p.prev_pp;
+    if (!pp.absolute_timing || !pv.absolute_timing) return;
+    if (pv.state != NoteState::RENDERABLE || !pv.ev || !pp.ev) return;
+
+    const double morph_ms = std::min(pp.overlap_ms, pp.preutterance_ms);
+    const int morph_frames = std::min(
+        output_frames, static_cast<int>(std::ceil(morph_ms / kFramePeriod)));
+    if (morph_frames < 2) return;
+
+    const int fft_size  = p.fft_size;
+    const int spec_bins = p.spec_bins;
+    auto cache_prev = get_or_analyze(pv.ev, fft_size, spec_bins);
+    if (!cache_prev || cache_prev->length <= 0) return;
+
+    const OtoEntry& prev_oto = pv.has_oto ? pv.oto : kDefaultOto;
+    const NoteEvent& pn = *p.prev_n;
+    const double prev_note_ms = static_cast<double>(pn.pitch_length) * kFramePeriod;
+    const double prev_src_ms  = get_source_ms(*pv.ev);
+    const int prev_lead = static_cast<int>(std::ceil(
+        static_cast<double>(std::max<int64_t>(0, pv.preutterance_samples)) /
+        (kFramePeriod * kFs / 1000.0)));
+    const int prev_out_frames   = std::max(1, pn.pitch_length + prev_lead);
+    const int prev_curve_frames = std::max(1, prev_out_frames - prev_lead);
+    const double prev_out_ms    = 1000.0 * static_cast<double>(pv.note_samples) / kFs;
+
+    // 現ノートの出力 t=0 が、前ノートの出力時間軸の何 ms に当たるか
+    const double cur_render_start  = pp.start_time_ms - pp.preutterance_ms;
+    const double prev_render_start = pv.start_time_ms - pv.preutterance_ms;
+    const double offset_ms = cur_render_start - prev_render_start;
+
+    constexpr double kFloor = 1e-12;
+    static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
+    static const double bvals[4]  = {0.005, 0.025, 0.07, 0.15};
+    std::vector<double> ap_cap(static_cast<size_t>(spec_bins));
+    for (int k = 0; k < spec_bins; ++k) {
+        const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
+        ap_cap[k] = smooth_band_value(freq, bfreqs, bvals, 3);
+    }
+
+    for (int j = 0; j < morph_frames; ++j) {
+        const double t_prev = offset_ms + j * kFramePeriod;
+        if (t_prev < 0.0 || t_prev >= prev_out_ms) continue;   // 前ノートが鳴っていない
+
+        const double u      = (j + 0.5) / morph_frames;
+        const double w_cur  = 0.5 * (1.0 - std::cos(M_PI * u));
+        const double w_prev = 1.0 - w_cur;
+
+        const int src_frame = clamp(static_cast<int>(
+            map_time_with_preutterance(t_prev, prev_oto, prev_src_ms,
+                                       prev_note_ms, pv.preutterance_ms)
+            / kFramePeriod), 0, cache_prev->length - 1);
+        const double* sp = &cache_prev->flat_spec[static_cast<size_t>(src_frame) * spec_bins];
+        const double* ap = &cache_prev->flat_ap  [static_cast<size_t>(src_frame) * spec_bins];
+        double* sc = spec_ptrs[j];
+        double* ac = ap_ptrs[j];
+        for (int k = 0; k < spec_bins; ++k) {
+            sc[k] = std::exp(w_cur  * std::log(std::max(sc[k], kFloor))
+                           + w_prev * std::log(std::max(sp[k], kFloor)));
+            ac[k] = clamp(w_cur * ac[k] + w_prev * std::min(ap[k], ap_cap[k]), 0.0, 1.0);
+        }
+
+        // F0: 前ノートの同時刻のピッチ（ピッチカーブ＋ポルタメントのみ）へ寄せる
+        const int jp = static_cast<int>(t_prev / kFramePeriod);
+        double prev_f0 = 0.0;
+        if (pn.pitch_curve) {
+            const int ci = std::min(std::max(0, jp - prev_lead), prev_curve_frames - 1);
+            prev_f0 = resample_curve(pn.pitch_curve, pn.pitch_length, ci, prev_curve_frames);
+            if (pn.portamento_offsets && pn.portamento_length > 0 && jp < pn.portamento_length) {
+                const double cents = resample_curve(pn.portamento_offsets, pn.portamento_length,
+                                                    jp, prev_out_frames);
+                prev_f0 *= std::pow(2.0, cents / 1200.0);
+            }
+        }
+        if (prev_f0 > 50.0 && f0[j] > 50.0)
+            f0[j] = std::exp(w_cur * std::log(f0[j]) + w_prev * std::log(prev_f0));
+    }
 }
 
 void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_buf)
@@ -1683,9 +1797,17 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         throw std::runtime_error(buf);
     }
     // ----------------------------------------------------------------
-    // ステップ2: UTAU では音素接続は時間軸上のクロスフェードで行うため、
-    // 子音のアタックを壊すスペクトル空間でのブレンドは行わない。
+    // ステップ2: オーバーラップ区間だけ、同時刻の前ノートのスペクトル/F0へ寄せる。
+    // 子音の本体(オーバーラップ区間より後)は一切触れないので、
+    // かつての blend_transition_spectra で起きた「別音素に聞こえる」問題は避けられる。
+    // 失敗しても従来動作(何もしない)にフォールバックする。
     // ----------------------------------------------------------------
+    try {
+        morph_head_toward_previous(p, output_frames, tl_scratch.f0.data(),
+                                   tl_scratch.spec_ptrs.data(), tl_scratch.ap_ptrs.data());
+    } catch (const std::exception& e) {
+        fprintf(stderr, "[Render] morph_head_toward_previous skipped: %s\n", e.what());
+    }
 
     smooth_f0_gaussian(tl_scratch.f0.data(), output_frames);
 
@@ -1889,6 +2011,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     int     xfade_count      = 0;
     bool    prev_renderable  = false;
     std::shared_ptr<const EmbeddedVoice> last_ev;
+    int     last_idx         = -1;
 
     for (int i = 0; i < note_count; ++i) {
         const int pitch_len = notes[i].pitch_length;
@@ -1949,7 +2072,12 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             prepass[i].absolute_timing = absolute_timing;
             prepass[i].start_time_ms = absolute_timing ? notes[i].start_time_ms : -1.0;
             prepass[i].preutterance_ms = pre_ms;
-            prepass[i].overlap_ms = std::min(ov_ms, pre_ms);
+            // レガート接続(直前が隣接ノート)で UST が Overlap を明示していない場合のみ、
+            // 短すぎるオーバーラップを kMinLegatoOverlapMs まで底上げする。
+            const bool floor_overlap = prev_renderable && notes[i].overlap_ms < 0.0;
+            prepass[i].overlap_ms = std::min(
+                floor_overlap ? std::max(ov_ms, kMinLegatoOverlapMs) : ov_ms, pre_ms);
+            prepass[i].prev_idx = prev_renderable ? last_idx : -1;
             prepass[i].preutterance_samples = static_cast<int64_t>(std::llround(
                 pre_ms * kFs / 1000.0));
             prepass[i].note_samples = base_note_samples + prepass[i].preutterance_samples;
@@ -1957,6 +2085,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             if (prev_renderable) ++xfade_count;
             prev_renderable = true;
             last_ev = ev;
+            last_idx = i;
 
             const int wav_len = static_cast<int>(ev->waveform.size());
             const int harvest_len = GetSamplesForHarvest(ev->fs, wav_len, kFramePeriod);
@@ -2083,8 +2212,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
                 const int idx = renderable_indices[bi];
                 try {
+                    const int pidx = prepass[idx].prev_idx;
                     SynthNoteParams p{ prepass[idx], notes[idx], fft_size, spec_bins,
-                                       note_global_time[idx] };
+                                       note_global_time[idx],
+                                       pidx >= 0 ? &prepass[pidx] : nullptr,
+                                       pidx >= 0 ? &notes[pidx]   : nullptr };
                     synthesize_note_impl(p, note_bufs[idx]);
                 } catch (const std::exception& e) {
                     char buf[512];
