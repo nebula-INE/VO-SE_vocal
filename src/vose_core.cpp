@@ -210,71 +210,10 @@ struct EmbeddedVoice {
 };
 
 // ============================================================
-// VoiceDbStore — LRU エビクション付き音源波形キャッシュ
-//
-// 問題: 従来の g_voice_db (std::map) には上限がなく、長時間セッションで
-//   多数の音源ファイル/エンベッドボイスを読み込むと、波形データ
-//   (EmbeddedVoice::waveform) がメモリ上に無制限に蓄積し続けていた。
-//   clear_engine_cache() を明示的に呼ばない限り解放されない。
-//
-// 解決: g_analysis_cache と同じ LRU パターンを適用し、
-//   最大エントリ数 kMaxEntries を超えたら最も使われていない音源を追い出す。
+// AnalysisCache (解析結果)
+// ※ バイト数見積りを行う ByteBoundedLru が完全型を必要とするため、
+//   キャッシュストアより前に定義する。
 // ============================================================
-class VoiceDbStore {
-    using Key   = std::string;
-    using Value = std::shared_ptr<const EmbeddedVoice>;
-
-    // 音源1件あたりのサイズは波形長に依存し様々だが、通常の音源集
-    // （数百〜数千音素）を想定した上限。必要ならビルド時に調整可能。
-    static constexpr size_t kMaxEntries = 4096;
-
-    mutable VoseSharedMutex mtx;
-    std::list<std::pair<Key, Value>> lru_list;
-    std::unordered_map<Key, std::list<std::pair<Key, Value>>::iterator> index;
-
-public:
-    Value get(const Key& key) {
-        std::unique_lock<VoseSharedMutex> lock(mtx); // splice は変更操作のため排他ロック
-        auto it = index.find(key);
-        if (it == index.end()) return nullptr;
-        lru_list.splice(lru_list.begin(), lru_list, it->second);
-        return it->second->second;
-    }
-
-    void put(const Key& key, const Value& val) {
-        std::unique_lock<VoseSharedMutex> lock(mtx);
-        auto it = index.find(key);
-        if (it != index.end()) {
-            lru_list.erase(it->second);
-            index.erase(it);
-        }
-        lru_list.push_front({key, val});
-        index[key] = lru_list.begin();
-
-        while (index.size() > kMaxEntries) {
-            auto last = std::prev(lru_list.end());
-            index.erase(last->first);
-            lru_list.pop_back();
-        }
-    }
-
-    void erase(const Key& key) {
-        std::unique_lock<VoseSharedMutex> lock(mtx);
-        auto it = index.find(key);
-        if (it == index.end()) return;
-        lru_list.erase(it->second);
-        index.erase(it);
-    }
-
-    void clear() {
-        std::unique_lock<VoseSharedMutex> lock(mtx);
-        lru_list.clear();
-        index.clear();
-    }
-};
-
-static VoiceDbStore g_voice_db;
-
 struct AnalysisCache {
     std::vector<double> f0;
     std::vector<double> time;
@@ -285,62 +224,97 @@ struct AnalysisCache {
 };
 
 // ============================================================
-// AnalysisCacheStore — LRU エビクション付きメモリキャッシュ
+// ByteBoundedLru — メモリ容量(バイト)上限付き LRU キャッシュ
 //
-// 問題: g_analysis_cache が無制限に増える。
-//   100音素 × (harvest_len=2000) × (spec_bins=513) × 2配列 × 8byte
-//   ≈ 1音素あたり約16MB → 100音素で1.6GB
+// 問題: 以前の VoiceDbStore / CacheStore は「件数」だけを上限にしていた。
+//   音源1件のサイズは波形長・解析フレーム数に依存して大きく変わるため、
+//   件数上限では実メモリ使用量を制御できない。
+//     VoiceDbStore: 4096件 × 500KB ≒ 2GB
+//     CacheStore  : 1024件 × 約16MB(flat_spec+flat_ap) ≒ 16GB 級
 //
-// 解決: 最大エントリ数を kMaxCacheEntries に制限し、
-//   LRU（Least Recently Used）で古いエントリを追い出す。
-//   アクセス順を std::list で管理し、O(1) エビクションを実現する。
+// 解決: 各エントリの実バイト数を put() 時に見積もって合計を管理し、
+//   合計が max_bytes を超えたら LRU 順に追い出す。件数上限も安全弁として併用。
+//   ・直近に put したエントリ1件は、それ単体が上限を超えていても残す
+//     （これを追い出すと「解析したのに即破棄」でレンダリングが破綻するため）。
+//   ・追い出されても、利用中のスレッドが shared_ptr を保持している間は
+//     メモリは解放されない（安全）。
+//
+// T ごとに `size_t lru_value_bytes(const T&)` をオーバーロードして
+// サイズ見積りを与える。
 // ============================================================
-// VO-SE専用の型定義（既存の定義に合わせて調整してください）
-struct AnalysisCache; 
+static size_t lru_value_bytes(const EmbeddedVoice& v) {
+    return sizeof(EmbeddedVoice) + v.path.capacity() +
+           v.waveform.capacity() * sizeof(double);
+}
+static size_t lru_value_bytes(const AnalysisCache& c) {
+    return sizeof(AnalysisCache) +
+           (c.f0.capacity() + c.time.capacity() +
+            c.flat_spec.capacity() + c.flat_ap.capacity()) * sizeof(double);
+}
 
-static constexpr size_t kMaxCacheEntries = 1024; // キャッシュ上限を拡張
-
-class CacheStore {
+template <typename T>
+class ByteBoundedLru {
     using Key   = std::string;
-    using Value = std::shared_ptr<const AnalysisCache>;
+    using Value = std::shared_ptr<const T>;
 
-private:
-    mutable VoseSharedMutex mtx;
-    std::list<std::pair<Key, Value>> lru_list;
-    std::unordered_map<Key, std::list<std::pair<Key, Value>>::iterator> index;
+    struct Entry {
+        Key    key;
+        Value  val;
+        size_t bytes;
+    };
+    using List = std::list<Entry>;
+
+    mutable VoseSharedMutex                  mtx;
+    List                                     lru_list;
+    std::unordered_map<Key, typename List::iterator> index;
+    size_t                                   total_bytes = 0;
+    const size_t                             max_bytes;
+    const size_t                             max_entries;
+
+    // mtx を保持した状態で呼ぶこと
+    void evict_locked() {
+        while (lru_list.size() > 1 &&
+               (total_bytes > max_bytes || index.size() > max_entries)) {
+            auto last = std::prev(lru_list.end());
+            total_bytes -= last->bytes;
+            index.erase(last->key);
+            lru_list.pop_back();
+        }
+    }
 
 public:
-    // 読み取り（共有ロック＋MRU移動）
+    ByteBoundedLru(size_t max_bytes_, size_t max_entries_)
+        : max_bytes(max_bytes_), max_entries(max_entries_) {}
+
     Value get(const Key& key) {
-        std::unique_lock<VoseSharedMutex> lock(mtx);  // splice は変更操作のため排他ロック
+        std::unique_lock<VoseSharedMutex> lock(mtx); // splice は変更操作のため排他ロック
         auto it = index.find(key);
         if (it == index.end()) return nullptr;
         lru_list.splice(lru_list.begin(), lru_list, it->second);
-        return it->second->second;
+        return it->second->val;
     }
 
-    // 書き込み（排他ロック）
     void put(const Key& key, const Value& val) {
+        if (!val) return;
+        const size_t bytes = lru_value_bytes(*val);
         std::unique_lock<VoseSharedMutex> lock(mtx);
         auto it = index.find(key);
         if (it != index.end()) {
+            total_bytes -= it->second->bytes;
             lru_list.erase(it->second);
             index.erase(it);
         }
-        lru_list.push_front({key, val});
+        lru_list.push_front(Entry{key, val, bytes});
         index[key] = lru_list.begin();
-
-        while (index.size() > kMaxCacheEntries) {
-            auto last = std::prev(lru_list.end());
-            index.erase(last->first);
-            lru_list.pop_back();
-        }
+        total_bytes += bytes;
+        evict_locked();
     }
 
     void erase(const Key& key) {
         std::unique_lock<VoseSharedMutex> lock(mtx);
         auto it = index.find(key);
         if (it == index.end()) return;
+        total_bytes -= it->second->bytes;
         lru_list.erase(it->second);
         index.erase(it);
     }
@@ -350,43 +324,86 @@ public:
         return index.size();
     }
 
+    size_t bytes_used() const {
+        VoseSharedLock<VoseSharedMutex> lock(mtx);
+        return total_bytes;
+    }
+
     void clear() {
         std::unique_lock<VoseSharedMutex> lock(mtx);
         lru_list.clear();
         index.clear();
+        total_bytes = 0;
     }
 };
 
-static CacheStore g_analysis_cache;
-static std::mutex g_analysis_cache_mutex;
+// ------------------------------------------------------------
+// キャッシュ容量の設定（必要に応じてビルド時に調整）
+//   -DVOSE_VOICE_CACHE_MB=... / -DVOSE_ANALYSIS_CACHE_MB=...
+// 解析キャッシュ1件は 1音素あたり十数MB になり得るため、
+// 波形キャッシュより大きめの予算を割り当てている。
+// ------------------------------------------------------------
+#ifndef VOSE_VOICE_CACHE_MB
+#define VOSE_VOICE_CACHE_MB 256
+#endif
+#ifndef VOSE_ANALYSIS_CACHE_MB
+#define VOSE_ANALYSIS_CACHE_MB 768
+#endif
+
+static constexpr size_t kVoiceCacheMaxBytes    = static_cast<size_t>(VOSE_VOICE_CACHE_MB)    * 1024 * 1024;
+static constexpr size_t kAnalysisCacheMaxBytes = static_cast<size_t>(VOSE_ANALYSIS_CACHE_MB) * 1024 * 1024;
+static constexpr size_t kVoiceCacheMaxEntries    = 4096; // 安全弁（主制限はバイト数）
+static constexpr size_t kAnalysisCacheMaxEntries = 1024; // 安全弁（主制限はバイト数）
+
+using VoiceDbStore = ByteBoundedLru<EmbeddedVoice>;
+using CacheStore   = ByteBoundedLru<AnalysisCache>;
+
+static VoiceDbStore g_voice_db(kVoiceCacheMaxBytes, kVoiceCacheMaxEntries);
+static CacheStore   g_analysis_cache(kAnalysisCacheMaxBytes, kAnalysisCacheMaxEntries);
 
 // ============================================================
 // KeyedLockRegistry — 同一キーに対する重複処理を防ぐための
 // per-key ミューテックス。
 //
-// 問題: get_or_analyze() は「メモリキャッシュ確認 → ディスクキャッシュ
-//   確認 → 新規解析(Harvest/CheapTrick/D4C) → 保存」という一連の流れを
-//   一切ロックせずに実行していた。同一音源を使う複数ノートが並列
-//   ワーカーへ振り分けられた場合、以下が起こり得る:
-//     1) 同じ音源の重い解析処理が複数スレッドで無駄に重複実行される
-//     2) save_cache() が同じ一時ファイル(cache_path + ".tmp")へ
-//        複数スレッドから同時書き込みし、rename() が競合してキャッシュ
-//        ファイルが破損する可能性がある
+// 問題(1): get_or_analyze() は「メモリキャッシュ確認 → ディスクキャッシュ
+//   確認 → 新規解析(Harvest/CheapTrick/D4C) → 保存」を一切ロックせずに
+//   実行していた。同一音源を使う複数ノートが並列ワーカーに割り当たると
+//   重い解析の重複実行や、save_cache() の一時ファイル書き込み競合
+//   (キャッシュ破損)が起こり得た。
+//   → キーごとに個別の mutex を割り当て、同一キーだけ直列化する。
 //
-// 解決: キーごとに個別の mutex を割り当て、get_or_analyze() の
-//   「チェック→解析→保存」区間をキー単位で直列化する。異なるキー同士は
-//   並列のまま進められるため、g_analysis_cache_mutex による全体直列化
-//   よりも並列性を落とさずに済む。
+// 問題(2): 一度作った mutex を map から消さなかったため、読み込んだ音源数
+//   だけ mutex が永久に残り続けた(長期運用でのリーク)。
+//   → map は weak_ptr を保持する。利用中のスレッドが shared_ptr を持つ間
+//     だけ mutex が生存し、誰も使わなくなれば自動で解放される。
+//     期限切れエントリ(map の枠)は、要素数が閾値を超えたときに掃除する。
 // ============================================================
 class KeyedLockRegistry {
     std::mutex map_mutex;
-    std::unordered_map<std::string, std::shared_ptr<std::mutex>> locks;
+    std::unordered_map<std::string, std::weak_ptr<std::mutex>> locks;
+    size_t purge_threshold = 64;
+
+    // map_mutex を保持した状態で呼ぶこと
+    void purge_expired_locked() {
+        for (auto it = locks.begin(); it != locks.end();) {
+            if (it->second.expired()) it = locks.erase(it);
+            else ++it;
+        }
+        purge_threshold = std::max<size_t>(64, locks.size() * 2);
+    }
 
 public:
     std::shared_ptr<std::mutex> get_lock(const std::string& key) {
         std::lock_guard<std::mutex> lg(map_mutex);
         auto it = locks.find(key);
-        if (it != locks.end()) return it->second;
+        if (it != locks.end()) {
+            if (auto existing = it->second.lock()) return existing;
+            // 期限切れ: 同じ枠を使って作り直す
+            auto m = std::make_shared<std::mutex>();
+            it->second = m;
+            return m;
+        }
+        if (locks.size() >= purge_threshold) purge_expired_locked();
         auto m = std::make_shared<std::mutex>();
         locks.emplace(key, m);
         return m;
@@ -1343,14 +1360,15 @@ static void VOSE_Synthesis(
 //
 // WORLD合成出力に対する Biquad IIR ポストEQフィルタ。
 //
-// 補正対象:
+// 現在の実装（kPostEQ の係数と一致）:
 //   80Hz   -1.5dB  低域の不要な直流・超低周波ノイズをカット
 //   380Hz  -2.0dB  箱鳴り感・こもり感を解消しヌケを向上
-//   3kHz   -2.5dB  金属的・機械的な耳につくピークを緩和
-//   6kHz   +1.5dB  ボーカルの輪郭と発音の明瞭度を補強
+//   3kHz   -1.0dB  金属的・機械的な耳につくピークを緩和（穏やかなピーキング）
+//   6kHz   バイパス(フラット)  息漏れノイズの増幅を避けるため補正なし
 //
-// ※ 9kHz / 14kHz のハイシェルフブーストは、息漏れや微小ノイズを
-//    過剰に増幅し「謎の吐息音」を引き起こす原因となっていたため撤廃。
+// ※ 以前の 6kHz +1.5dB 補強、および 9kHz / 14kHz のハイシェルフブーストは、
+//    息漏れや微小ノイズを過剰に増幅し「謎の吐息音」を引き起こす原因となって
+//    いたため撤廃済み。係数テーブルの4段目は単位(b0=1, 他0)で何もしない。
 // ============================================================
 
 static const double kPostEQ[4][5] = {
@@ -1919,7 +1937,7 @@ DLLEXPORT void load_embedded_resource(const char* phoneme,
     for (int i = 0; i < sample_count; ++i)
         ev->waveform[i] = static_cast<double>(raw_data[i]) * kInv32768;
 
-    VoseUniqueLock clock(g_analysis_cache_mutex);
+    // CacheStore / VoiceDbStore は内部で排他制御するため外側のロックは不要。
     // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
     g_analysis_cache.erase(phoneme);
     ev->path = phoneme;
@@ -1940,7 +1958,7 @@ DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
         ev->waveform[i] = std::isfinite(sample) ? clamp(sample, -1.0, 1.0) : 0.0;
     }
 
-    VoseUniqueLock clock(g_analysis_cache_mutex);
+    // CacheStore / VoiceDbStore は内部で排他制御するため外側のロックは不要。
     // パス文字列キーでキャッシュを無効化（再ロード時も確実にヒット）
     g_analysis_cache.erase(phoneme);
     ev->path = phoneme;
@@ -1954,7 +1972,7 @@ DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
 //   パス2を「合成フェーズ」と「書き込みフェーズ」に分離する。
 //
 //   [合成フェーズ・並列]
-//     各ノートの note_buf を std::async で独立して合成する。
+//     各ノートの note_buf を永続ワーカースレッドで独立して合成する。
 //     ノード間の依存関係（current_offset, full_song_buffer）には
 //     一切触れないので安全に並列化できる。
 //     tl_scratch は thread_local なのでスレッドごとに独立している。
@@ -1965,8 +1983,8 @@ DLLEXPORT void load_embedded_resource_f32(const char* phoneme,
 //
 // スレッド数:
 //   std::thread::hardware_concurrency() を上限とするが、
-//   音源の解析（get_or_analyze）は g_analysis_cache_mutex を取るため
-//   キャッシュミス時だけ直列化される。通常はキャッシュヒットするので問題なし。
+//   音源の解析（get_or_analyze）は同一キー(同一音源)に限り KeyedLockRegistry で
+//   直列化される。異なる音源の解析は並列に進む。通常はキャッシュヒットするので問題なし。
 // ============================================================
  
 
@@ -2198,7 +2216,8 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         // 記録した上で他のワーカーにも早期終了させ、メインスレッド側で
         // 安全にレンダリングを打ち切れるようにする。
         std::atomic<bool> worker_failed{false};
-        std::string       worker_error_msg;
+        std::vector<std::string> worker_errors; // 同時失敗した全ノートのエラーを保持（上限あり）
+        constexpr size_t  kMaxRecordedErrors = 64;
         std::mutex        worker_error_mutex;
         std::atomic<int>  failed_note_count{0};
 
@@ -2228,8 +2247,8 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                              e.what());
                     {
                         std::lock_guard<std::mutex> lock(worker_error_mutex);
-                        if (worker_error_msg.empty())
-                            worker_error_msg = buf;
+                        if (worker_errors.size() < kMaxRecordedErrors)
+                            worker_errors.emplace_back(buf);
                     }
                     fprintf(stderr, "[Render] %s\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
@@ -2244,8 +2263,8 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                              idx, wav, notes[idx].pitch_length);
                     {
                         std::lock_guard<std::mutex> lock(worker_error_mutex);
-                        if (worker_error_msg.empty())
-                            worker_error_msg = buf;
+                        if (worker_errors.size() < kMaxRecordedErrors)
+                            worker_errors.emplace_back(buf);
                     }
                     fprintf(stderr, "[Render] %s\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
@@ -2310,7 +2329,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
         if (worker_failed.load(std::memory_order_relaxed)) {
             failed_during_synth = true;
-            fprintf(stderr, "[Render] Worker thread failed: %s\n", worker_error_msg.c_str());
+            // join 済みなので worker_errors へは排他不要。
+            fprintf(stderr, "[Render] Worker thread failed (%zu note error(s) recorded):\n",
+                    worker_errors.size());
+            for (const auto& msg : worker_errors)
+                fprintf(stderr, "[Render]   - %s\n", msg.c_str());
         } else {
             const int nfail = failed_note_count.load(std::memory_order_relaxed);
             if (nfail > 0) {
@@ -2330,6 +2353,23 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // ----------------------------------------------------------------
     // パス2-B: 書き込みフェーズ
     // ----------------------------------------------------------------
+    // [境界アクセス対策] 書き込みフェーズは note_bufs[idx][0..note_samples) を
+    // 無条件に参照する。合成が(例外やスキップで)バッファを埋めなかった、
+    // あるいはサイズが食い違った RENDERABLE ノートがあっても範囲外アクセスに
+    // ならないよう、ここで必ず note_samples 長のバッファに正規化する。
+    // 不足分は無音(0.0)として扱い、タイムライン計算(note_samples)は変えない。
+    for (int i = 0; i < note_count; ++i) {
+        if (prepass[i].state != NoteState::RENDERABLE) continue;
+        const size_t want = static_cast<size_t>(std::max<int64_t>(0, prepass[i].note_samples));
+        if (note_bufs[i].size() != want) {
+            fprintf(stderr,
+                    "[Render] note idx=%d buffer size mismatch (have=%zu want=%zu); "
+                    "padding/truncating with silence\n",
+                    i, note_bufs[i].size(), want);
+            note_bufs[i].resize(want, 0.0);
+        }
+    }
+
     int64_t timeline_offset = 0;
     // Absolute-timeline overlap/release decisions must use actual musical
     // positions, not merely the neighboring array element. A rest, missing
@@ -2636,6 +2676,38 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 }
             }
 
+            // [高速化] FFT で毎フレーム繰り返していた処理を前計算する。
+            //   - ビット反転の入れ替え対象テーブル (swap_pairs)
+            //   - 回転因子 (twiddle) テーブル: tw[k] = exp(-2πi·k/N), k=0..N/2-1
+            //     旧実装は内側ループ(約11,000回/フレーム)で毎回 cos/sin を計算していた。
+            //   - メルフィルタの非零区間 [first,last]: 三角フィルタは狭い帯域にしか
+            //     値を持たないため、全1025ビンを走査せず非零区間だけ積和する。
+            std::vector<std::pair<int,int>> swap_pairs;
+            {
+                int j = 0;
+                for (int i = 1; i < kNFft; ++i) {
+                    int bit = kNFft >> 1;
+                    for (; j & bit; bit >>= 1) j ^= bit;
+                    j ^= bit;
+                    if (i < j) swap_pairs.emplace_back(i, j);
+                }
+            }
+            std::vector<float> tw_re(kNFft / 2), tw_im(kNFft / 2);
+            for (int k = 0; k < kNFft / 2; ++k) {
+                const double a = -2.0 * M_PI * static_cast<double>(k) / kNFft;
+                tw_re[k] = static_cast<float>(std::cos(a));
+                tw_im[k] = static_cast<float>(std::sin(a));
+            }
+            std::vector<int> mel_first(kNMels, 0), mel_last(kNMels, -1);
+            for (int m = 0; m < kNMels; ++m) {
+                for (int k = 0; k < spec_bins_fft; ++k) {
+                    if (mel_fb[m][k] != 0.0f) {
+                        if (mel_last[m] < 0) mel_first[m] = k;
+                        mel_last[m] = k;
+                    }
+                }
+            }
+
             // メルスペクトログラム [n_frames][n_mels]
             std::vector<std::vector<float>> mel_spec(n_frames, std::vector<float>(kNMels, kLogFloor));
             {
@@ -2660,32 +2732,27 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         frame_buf[i] = reflect_sample(s) * window[i];
                     }
 
-                    // Cooley-Tukey 基数2 DIT FFT（正しい順序）
-                    // ステップ1: ビット反転並べ替え（これを先にやる）
+                    // Cooley-Tukey 基数2 DIT FFT（前計算テーブル使用）
+                    // ステップ1: ビット反転並べ替え（入力は実数なので im は 0 のまま）
                     std::copy(frame_buf.begin(), frame_buf.end(), re.begin());
                     std::fill(im.begin(), im.end(), 0.0f);
-                    {
-                        int j = 0;
-                        for (int i = 1; i < kNFft; ++i) {
-                            int bit = kNFft >> 1;
-                            for (; j & bit; bit >>= 1) j ^= bit;
-                            j ^= bit;
-                            if (i < j) { std::swap(re[i], re[j]); }
-                        }
-                    }
-                    // ステップ2: バタフライ演算（並べ替え後に実行）
+                    for (const auto& pr : swap_pairs)
+                        std::swap(re[pr.first], re[pr.second]);
+                    // ステップ2: バタフライ演算。
+                    // 旧: ang = -π·j/step → 新: テーブル index = j·(N/2/step)（同じ回転因子）
                     for (int step = 1; step < kNFft; step <<= 1) {
-                        const float ang_base = -static_cast<float>(M_PI) / step;
+                        const int tw_stride = (kNFft / 2) / step;
                         for (int i = 0; i < kNFft; i += step * 2) {
                             for (int j = 0; j < step; ++j) {
-                                const float ang = ang_base * j;
-                                const float wr  = std::cos(ang), wi = std::sin(ang);
-                                const float tr  = wr*re[i+j+step] - wi*im[i+j+step];
-                                const float ti  = wr*im[i+j+step] + wi*re[i+j+step];
-                                re[i+j+step] = re[i+j] - tr;
-                                im[i+j+step] = im[i+j] - ti;
-                                re[i+j]     += tr;
-                                im[i+j]     += ti;
+                                const float wr = tw_re[j * tw_stride];
+                                const float wi = tw_im[j * tw_stride];
+                                const int   p0 = i + j, p1 = i + j + step;
+                                const float tr = wr * re[p1] - wi * im[p1];
+                                const float ti = wr * im[p1] + wi * re[p1];
+                                re[p1] = re[p0] - tr;
+                                im[p1] = im[p0] - ti;
+                                re[p0] += tr;
+                                im[p0] += ti;
                             }
                         }
                     }
@@ -2696,8 +2763,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
                     for (int m = 0; m < kNMels; ++m) {
                         float val = 0.0f;
-                        for (int k = 0; k < spec_bins_fft; ++k)
-                            val += mel_fb[m][k] * mag[k];
+                        const float* fb = mel_fb[m].data();
+                        for (int k = mel_first[m]; k <= mel_last[m]; ++k)
+                            val += fb[k] * mag[k];
                         mel_spec[t][m] = std::log(std::max(val, kLogFloor));
                     }
                 }
@@ -2843,11 +2911,9 @@ DLLEXPORT float get_engine_version(void)
 // 音声データベース／解析キャッシュをクリアする
 DLLEXPORT void clear_engine_cache(void)
 {
+    // 各ストアが内部でロックするため、外側の mutex は不要。
     g_voice_db.clear();
-    {
-        std::lock_guard<std::mutex> lock(g_analysis_cache_mutex);
-        g_analysis_cache.clear();
-    }
+    g_analysis_cache.clear();
 }
 
 } // extern "C"
