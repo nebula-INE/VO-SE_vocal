@@ -440,6 +440,21 @@ struct NotePrepass {
     // オーバーラップ区間のパラメータモーフ(morph_head_toward_previous)が参照する。
     int                                  prev_idx = -1;
 
+    // レガート連続合成(synthesize_legato_run)用。
+    //   run_head   : 所属する連続合成グループの先頭 index（単独ノートは自分自身）
+    //   run_member : 先頭以外のメンバー（単独では合成/書き込みされない）
+    //   run_next   : 先頭〜メンバーを辿る連結リスト（なければ -1）
+    //   run_last   : 先頭にのみ設定。グループ最後のノート
+    //   run_samples: 先頭にのみ設定。グループ全体のサンプル数
+    //                （先頭の render_start 〜 最後のノートの音楽的終端）
+    //   run_frame_offset: グループ先頭の render_start を 0 とした、このノートの先頭フレーム
+    int                                  run_head = -1;
+    bool                                 run_member = false;
+    int                                  run_next = -1;
+    int                                  run_last = -1;
+    int64_t                              run_samples = 0;
+    int                                  run_frame_offset = 0;
+
     NotePrepass() = default;
     NotePrepass(NoteState s, int64_t ns,
                 std::shared_ptr<const EmbeddedVoice> e,
@@ -571,6 +586,32 @@ static constexpr int    kTransitionFrames = static_cast<int>(60.0 / kFramePeriod
 static constexpr double kMinLegatoOverlapMs = 20.0;
 // オーバーラップ区間で前ノートのスペクトル/F0へモーフするか。false で従来動作。
 static constexpr bool   kMorphOverlapToPrevious = true;
+
+// ---- レガート連続合成 -------------------------------------------------------
+// true: オーバーラップで繋がるノート列を 1 本の f0/スペクトル/非周期性の時系列に
+//       まとめて WORLD を 1 回だけ回す（波形クロスフェードが不要になる）。
+// false: 従来のノート単位合成＋波形クロスフェード。
+static constexpr bool   kContinuousLegatoRuns = true;
+// 1グループの最大長。長いほど滑らかだが、ワーカー1本あたりのメモリが増える
+// （約 1025bin × 2 × 8B × 200フレーム/秒 ≒ 3.3MB/秒）。超えたら次のグループに分け、
+// グループ間は従来の波形クロスフェードで繋ぐ。
+static constexpr double kMaxLegatoRunMs = 4000.0;
+// run 内の補間フレームのエネルギー補正（対数補間による中間の音量の凹みを補う）。
+static constexpr bool   kLegatoEnergyCompensation = true;
+
+// ---- フェード（書き込みフェーズ） ------------------------------------------
+// 休符明け（直前に繋がるノートがない）の立ち上がりフェードイン。
+static constexpr double kOnsetFadeVoicedMs   = 12.0;  // 母音・有声子音始まり
+static constexpr double kOnsetFadeUnvoicedMs = 3.0;   // 無声子音始まり（破裂を鈍らせない）
+// 休符前の終わりのリリースフェード（従来は固定 220 サンプル≒5ms）。
+static constexpr double kReleaseFadeMs       = 35.0;
+// 「隣接」とみなす許容誤差。隣接でオーバーラップが無いノート同士は、
+// 隙間(無音)を作らないよう従来どおりの短いフェードに留める。
+static constexpr double kAdjacentToleranceMs = 2.0;
+// クロスフェード重み: 0=従来(線形和が1の raised-cosine)、1=等パワー(sin/cos)。
+// 位相が揃わない2波形の和は等パワーのほうが音量が凹まず、
+// 揃っている場合は線形和のほうが膨らまない。中間を既定にする。
+static constexpr double kXfadePowerBlend     = 0.5;
 
 static int64_t note_samples_safe(int p) {
     // pitch_length は 5ms フレーム数。N フレームなら N * 5ms を
@@ -1406,6 +1447,18 @@ static void apply_post_eq(double* y, int y_length)
 // vose_streaming.cpp の synth_loop() からも呼べる。
 // ============================================================
 
+// ノートのフレーム単位パラメータ（f0/スペクトル/非周期性）をそのまま受け取るための出力先。
+// SynthNoteParams::sink が非 null のとき、synthesize_note_impl は WORLD 合成を行わず
+// ここへ書き出して返る（レガート連続合成用）。
+struct NoteParamSink {
+    int                 frames = 0;
+    int                 bins   = 0;
+    std::vector<double> f0;      // frames
+    std::vector<double> spec;    // frames * bins
+    std::vector<double> ap;      // frames * bins
+    double              gain   = 1.0;   // UST Intensity / 100
+};
+
 struct SynthNoteParams {
     const NotePrepass& pp;
     NoteEvent&         n;
@@ -1414,6 +1467,7 @@ struct SynthNoteParams {
     double             global_time_sec = 0.0;  // 曲先頭からのオフセット（ビブラート位相連続化）
     const NotePrepass* prev_pp = nullptr;      // 直前に隣接するノート（なければ nullptr）
     const NoteEvent*   prev_n  = nullptr;
+    NoteParamSink*     sink    = nullptr;      // 非 null ならパラメータ出力モード
 };
 
 static const OtoEntry kDefaultOto = {};
@@ -1853,6 +1907,26 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     apply_f0_jitter(tl_scratch.f0.data(), output_frames, kFramePeriod,
                      p.global_time_sec, voice_seed);
 
+    if (p.sink) {
+        // パラメータ出力モード: ここまでで f0（ビブラート・ジッター適用済み）、
+        // スペクトル・非周期性（gender/tension/breath/ap上限適用済み）が確定している。
+        NoteParamSink& sk = *p.sink;
+        sk.frames = output_frames;
+        sk.bins   = spec_bins;
+        sk.f0.assign(tl_scratch.f0.begin(), tl_scratch.f0.begin() + output_frames);
+        sk.spec.resize(static_cast<size_t>(output_frames) * spec_bins);
+        sk.ap  .resize(static_cast<size_t>(output_frames) * spec_bins);
+        for (int j = 0; j < output_frames; ++j) {
+            std::copy(tl_scratch.spec_ptrs[j], tl_scratch.spec_ptrs[j] + spec_bins,
+                      sk.spec.begin() + static_cast<size_t>(j) * spec_bins);
+            std::copy(tl_scratch.ap_ptrs[j], tl_scratch.ap_ptrs[j] + spec_bins,
+                      sk.ap.begin() + static_cast<size_t>(j) * spec_bins);
+        }
+        sk.gain = clamp(n.intensity, 0.0, 200.0) / 100.0;
+        note_buf.clear();
+        return;
+    }
+
     note_buf.assign(static_cast<size_t>(note_samples), 0.0);
     try {
         VOSE_Synthesis(tl_scratch.f0.data(), output_frames,
@@ -1904,6 +1978,174 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         snprintf(buf, sizeof(buf), "apply_shimmer failed: note_samples=%lld : %s",
                  static_cast<long long>(note_samples), e.what());
         throw std::runtime_error(buf);
+    }
+}
+
+
+// ============================================================
+// synthesize_legato_run
+//
+// オーバーラップで繋がるノート列(run)を 1 本の時系列にまとめて WORLD 合成する。
+//
+//   各ノートのパラメータを synthesize_note_impl の「パラメータ出力モード」で作り、
+//   run 共通のフレーム格子に並べる。ノートの先頭 overlap 区間では、
+//   前ノートのパラメータとの間で raised-cosine 補間を行う
+//     * スペクトル包絡 … 対数領域
+//     * F0            … 対数領域（ピッチが段差にならず滑らかにつながる）
+//     * 非周期性/gain … 線形
+//   overlap より後ろ（子音の本体・母音）は現ノートのパラメータをそのまま使う。
+//   こうして作った 1 本の時系列から WORLD を 1 回だけ回すので、
+//   ノート境界で声帯パルスの位相が切れず、波形クロスフェードによる
+//   音量の凹み・櫛形フィルタ・音色の段差が出ない。
+//
+//   ノートの先頭位置は 5ms フレーム格子に丸める（最大 ±2.5ms）。
+//   ポストEQ・ゲイン(UST Intensity)は run 全体に 1 回だけ掛ける。
+// ============================================================
+static void synthesize_legato_run(
+    int head, const std::vector<NotePrepass>& prepass, NoteEvent* notes,
+    const std::vector<double>& note_global_time,
+    int fft_size, int spec_bins, std::vector<double>& out_buf)
+{
+    const NotePrepass& hp = prepass[head];
+    if (!hp.ev) throw std::runtime_error("legato run head has no voice");
+    const int fs = hp.ev->fs;
+    const double frame_samples = static_cast<double>(fs) * kFramePeriod / 1000.0;
+    const int64_t run_samples = hp.run_samples;
+    if (run_samples <= 0) throw std::runtime_error("legato run has no samples");
+
+    std::vector<int> members;
+    for (int i = head; i >= 0; i = prepass[i].run_next) members.push_back(i);
+
+    int run_frames = static_cast<int>(std::ceil(
+        static_cast<double>(run_samples) / frame_samples)) + 1;
+    for (int idx : members) {
+        const NotePrepass& pp = prepass[idx];
+        const int lead = static_cast<int>(std::ceil(
+            static_cast<double>(std::max<int64_t>(0, pp.preutterance_samples)) / frame_samples));
+        const int frames = std::max(1, notes[idx].pitch_length + lead);
+        run_frames = std::max(run_frames, pp.run_frame_offset + frames);
+    }
+
+    const size_t bins = static_cast<size_t>(spec_bins);
+    std::vector<double> f0_run(run_frames, 0.0);
+    std::vector<double> gain_run(run_frames, 1.0);
+    std::vector<double> spec_run(static_cast<size_t>(run_frames) * bins, 0.0);
+    std::vector<double> ap_run  (static_cast<size_t>(run_frames) * bins, 0.0);
+
+    constexpr double kFloor = 1e-12;
+    int written_upto = 0;
+    std::vector<double> dummy;
+
+    for (size_t m = 0; m < members.size(); ++m) {
+        const int idx = members[m];
+        const NotePrepass& pp = prepass[idx];
+
+        NoteParamSink sink;
+        // 先頭だけは、直前の run（長さ上限で分割された場合）の末尾ノートへの
+        // スペクトル/F0 モーフを従来どおり有効にする。2番目以降は run 内補間が担当する。
+        const int pidx = (m == 0) ? pp.prev_idx : -1;
+        SynthNoteParams p{ pp, notes[idx], fft_size, spec_bins, note_global_time[idx],
+                           pidx >= 0 ? &prepass[pidx] : nullptr,
+                           pidx >= 0 ? &notes[pidx]   : nullptr,
+                           &sink };
+        synthesize_note_impl(p, dummy);
+        if (sink.frames <= 0) continue;
+
+        const int off = pp.run_frame_offset;
+        const int ovl_frames = (m == 0) ? 0 : std::min(sink.frames,
+            static_cast<int>(std::ceil(std::min(pp.overlap_ms, pp.preutterance_ms)
+                                       / kFramePeriod)));
+
+        for (int f = 0; f < sink.frames; ++f) {
+            const int rf = off + f;
+            if (rf < 0 || rf >= run_frames) break;
+            const double* cs = &sink.spec[static_cast<size_t>(f) * bins];
+            const double* ca = &sink.ap  [static_cast<size_t>(f) * bins];
+            double* rs = &spec_run[static_cast<size_t>(rf) * bins];
+            double* ra = &ap_run  [static_cast<size_t>(rf) * bins];
+
+            if (f < ovl_frames && rf < written_upto) {
+                const double u     = (f + 0.5) / ovl_frames;
+                const double w_cur = 0.5 * (1.0 - std::cos(M_PI * u));
+                const double w_prv = 1.0 - w_cur;
+                // 対数領域の補間は、ピーク位置の違う2つの包絡の中間でエネルギーが
+                // 落ちる（母音→母音で数dBの凹みになる）。補間後のエネルギーを
+                // 両端の重み付き平均に合わせて、凹みを補正する（上限 +6dB）。
+                double e_cur = 0.0, e_prv = 0.0, e_mix = 0.0;
+                for (size_t k = 0; k < bins; ++k) {
+                    e_cur += cs[k];
+                    e_prv += rs[k];
+                    rs[k] = std::exp(w_cur * std::log(std::max(cs[k], kFloor))
+                                   + w_prv * std::log(std::max(rs[k], kFloor)));
+                    e_mix += rs[k];
+                    ra[k] = clamp(w_cur * ca[k] + w_prv * ra[k], 0.0, 1.0);
+                }
+                if (kLegatoEnergyCompensation && e_mix > 0.0) {
+                    const double target = w_cur * e_cur + w_prv * e_prv;
+                    const double comp = clamp(target / e_mix, 1.0, 4.0);
+                    for (size_t k = 0; k < bins; ++k) rs[k] *= comp;
+                }
+                const double pf = f0_run[rf];
+                const double cf = sink.f0[f];
+                f0_run[rf] = (pf > 50.0 && cf > 50.0)
+                    ? std::exp(w_cur * std::log(cf) + w_prv * std::log(pf)) : cf;
+                gain_run[rf] = w_cur * sink.gain + w_prv * gain_run[rf];
+            } else {
+                std::copy(cs, cs + bins, rs);
+                std::copy(ca, ca + bins, ra);
+                f0_run[rf]   = sink.f0[f];
+                gain_run[rf] = sink.gain;
+            }
+        }
+        written_upto = std::max(written_upto, std::min(run_frames, off + sink.frames));
+    }
+
+    // 末尾の未充填フレーム（フレーム格子とサンプル数の端数）は最後のフレームを延長する。
+    if (written_upto <= 0) throw std::runtime_error("legato run produced no frames");
+    for (int rf = written_upto; rf < run_frames; ++rf) {
+        std::copy(&spec_run[static_cast<size_t>(written_upto - 1) * bins],
+                  &spec_run[static_cast<size_t>(written_upto) * bins],
+                  &spec_run[static_cast<size_t>(rf) * bins]);
+        std::copy(&ap_run[static_cast<size_t>(written_upto - 1) * bins],
+                  &ap_run[static_cast<size_t>(written_upto) * bins],
+                  &ap_run[static_cast<size_t>(rf) * bins]);
+        f0_run[rf]   = f0_run[written_upto - 1];
+        gain_run[rf] = gain_run[written_upto - 1];
+    }
+
+    std::vector<double*> spec_rows(run_frames), ap_rows(run_frames);
+    for (int rf = 0; rf < run_frames; ++rf) {
+        spec_rows[rf] = &spec_run[static_cast<size_t>(rf) * bins];
+        ap_rows[rf]   = &ap_run  [static_cast<size_t>(rf) * bins];
+    }
+
+    out_buf.assign(static_cast<size_t>(run_samples), 0.0);
+    VOSE_Synthesis(f0_run.data(), run_frames, spec_rows.data(), ap_rows.data(),
+                   fft_size, kFramePeriod, fs,
+                   static_cast<int>(run_samples), out_buf.data());
+
+    double peak = 0.0;
+    for (const double v : out_buf) peak = std::max(peak, std::abs(v));
+    if (!(peak > 1.0e-8)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "WORLD synthesis produced silence for legato run: head=%d members=%zu samples=%lld",
+                 head, members.size(), static_cast<long long>(run_samples));
+        throw std::runtime_error(buf);
+    }
+
+    apply_post_eq(out_buf.data(), static_cast<int>(run_samples));
+
+    const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(hp.ev->path));
+    apply_shimmer(out_buf, fs, note_global_time[head], seed);
+
+    // UST Intensity: フレーム単位のゲインをサンプル単位に線形補間して掛ける。
+    for (int64_t s = 0; s < run_samples; ++s) {
+        const double pos = static_cast<double>(s) / frame_samples;
+        const int    fi  = std::min(static_cast<int>(pos), run_frames - 1);
+        const int    fj  = std::min(fi + 1, run_frames - 1);
+        const double fr  = pos - fi;
+        out_buf[static_cast<size_t>(s)] *= gain_run[fi] * (1.0 - fr) + gain_run[fj] * fr;
     }
 }
 
@@ -2134,6 +2376,80 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         }
     }
 
+
+    // ----------------------------------------------------------------
+    // レガート連続合成のグループ分け
+    //   オーバーラップで実際に重なる隣接ノート列を 1 グループ(run)にする。
+    //   単独のノートは従来どおり。
+    // ----------------------------------------------------------------
+    for (int i = 0; i < note_count; ++i)
+        if (prepass[i].state == NoteState::RENDERABLE) prepass[i].run_head = i;
+
+    if (kContinuousLegatoRuns) {
+        const double frame_samples = kFs * kFramePeriod / 1000.0;
+        auto nominal_of = [&](int i) {
+            return static_cast<int64_t>(std::llround(prepass[i].start_time_ms * kFs / 1000.0));
+        };
+        auto musical_end_of = [&](int i) {
+            return nominal_of(i) + std::max<int64_t>(
+                0, prepass[i].note_samples - prepass[i].preutterance_samples);
+        };
+
+        int head = -1, last = -1;
+        for (int i = 0; i < note_count; ++i) {
+            NotePrepass& pi = prepass[i];
+            if (pi.state != NoteState::RENDERABLE || !pi.absolute_timing) {
+                head = last = -1;
+                continue;
+            }
+            bool join = false;
+            if (head >= 0 && pi.prev_idx == last && prepass[last].absolute_timing) {
+                const int64_t render_i = nominal_of(i) - pi.preutterance_samples;
+                const int64_t R0 = nominal_of(head) - prepass[head].preutterance_samples;
+                const double  ovl_ms = std::min(pi.overlap_ms, pi.preutterance_ms);
+                join = render_i >= 0
+                    && render_i < musical_end_of(last)
+                    && nominal_of(i) > nominal_of(last)
+                    && ovl_ms >= 2.0 * kFramePeriod
+                    && static_cast<double>(musical_end_of(i) - R0) * 1000.0 / kFs
+                           <= kMaxLegatoRunMs;
+            }
+            if (join) {
+                prepass[last].run_next = i;
+                pi.run_head   = head;
+                pi.run_member = true;
+                last = i;
+            } else {
+                head = last = i;
+            }
+        }
+
+        int runs = 0, merged = 0;
+        for (int i = 0; i < note_count; ++i) {
+            NotePrepass& hp = prepass[i];
+            if (hp.state != NoteState::RENDERABLE || hp.run_member || hp.run_next < 0)
+                continue;
+            const int64_t R0 = nominal_of(i) - hp.preutterance_samples;
+            int tail = i;
+            int prev_off = 0;
+            for (int j = hp.run_next; j >= 0; j = prepass[j].run_next) {
+                const int64_t render_j = nominal_of(j) - prepass[j].preutterance_samples;
+                prepass[j].run_frame_offset = std::max(prev_off + 1,
+                    static_cast<int>(std::llround(
+                        static_cast<double>(render_j - R0) / frame_samples)));
+                prev_off = prepass[j].run_frame_offset;
+                tail = j;
+                ++merged;
+            }
+            hp.run_last    = tail;
+            hp.run_samples = musical_end_of(tail) - R0;
+            ++runs;
+        }
+        if (runs > 0)
+            fprintf(stderr, "[Render] legato runs: %d (%d notes merged into runs)\n",
+                    runs, merged + runs);
+    }
+
     if (total_samples <= 0) return;
 
     report_progress(2);
@@ -2171,7 +2487,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     std::vector<int> renderable_indices;
     renderable_indices.reserve(note_count);
     for (int i = 0; i < note_count; ++i)
-        if (prepass[i].state == NoteState::RENDERABLE)
+        if (prepass[i].state == NoteState::RENDERABLE && !prepass[i].run_member)
             renderable_indices.push_back(i);
 
     // ノートごとのグローバル時間オフセット（ビブラート位相連続化用）
@@ -2231,12 +2547,17 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
                 const int idx = renderable_indices[bi];
                 try {
-                    const int pidx = prepass[idx].prev_idx;
-                    SynthNoteParams p{ prepass[idx], notes[idx], fft_size, spec_bins,
-                                       note_global_time[idx],
-                                       pidx >= 0 ? &prepass[pidx] : nullptr,
-                                       pidx >= 0 ? &notes[pidx]   : nullptr };
-                    synthesize_note_impl(p, note_bufs[idx]);
+                    if (prepass[idx].run_next >= 0) {
+                        synthesize_legato_run(idx, prepass, notes, note_global_time,
+                                              fft_size, spec_bins, note_bufs[idx]);
+                    } else {
+                        const int pidx = prepass[idx].prev_idx;
+                        SynthNoteParams p{ prepass[idx], notes[idx], fft_size, spec_bins,
+                                           note_global_time[idx],
+                                           pidx >= 0 ? &prepass[pidx] : nullptr,
+                                           pidx >= 0 ? &notes[pidx]   : nullptr };
+                        synthesize_note_impl(p, note_bufs[idx]);
+                    }
                 } catch (const std::exception& e) {
                     char buf[512];
                     snprintf(buf, sizeof(buf),
@@ -2359,8 +2680,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // ならないよう、ここで必ず note_samples 長のバッファに正規化する。
     // 不足分は無音(0.0)として扱い、タイムライン計算(note_samples)は変えない。
     for (int i = 0; i < note_count; ++i) {
-        if (prepass[i].state != NoteState::RENDERABLE) continue;
-        const size_t want = static_cast<size_t>(std::max<int64_t>(0, prepass[i].note_samples));
+        if (prepass[i].state != NoteState::RENDERABLE || prepass[i].run_member) continue;
+        const size_t want = static_cast<size_t>(std::max<int64_t>(0,
+            prepass[i].run_next >= 0 ? prepass[i].run_samples : prepass[i].note_samples));
         if (note_bufs[i].size() != want) {
             fprintf(stderr,
                     "[Render] note idx=%d buffer size mismatch (have=%zu want=%zu); "
@@ -2428,11 +2750,60 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         return false;
     };
 
+    // 直前のノートがオーバーラップなしでぴったり隣接している（隙間も重なりもない）か。
+    // この場合に新たなフェードを足すと無音の凹みができるので、従来の挙動を保つ。
+    auto has_adjacent_prior_audio = [&](int current_idx, int64_t render_start) -> bool {
+        const int64_t tol = static_cast<int64_t>(std::llround(kAdjacentToleranceMs * kFs / 1000.0));
+        const int64_t current_start = static_cast<int64_t>(std::llround(
+            prepass[current_idx].start_time_ms * kFs / 1000.0));
+        for (int j = 0; j < note_count; ++j) {
+            if (j == current_idx || prepass[j].state != NoteState::RENDERABLE ||
+                !prepass[j].absolute_timing) continue;
+            const int64_t other_start = static_cast<int64_t>(std::llround(
+                prepass[j].start_time_ms * kFs / 1000.0));
+            if (other_start >= current_start) continue;
+            const int64_t other_end = other_start +
+                std::max<int64_t>(0, prepass[j].note_samples - prepass[j].preutterance_samples);
+            if (other_end <= render_start && other_end >= render_start - tol) return true;
+        }
+        return false;
+    };
+
+    // 次のノートがオーバーラップなしでぴったり隣接しているか。
+    auto has_following_adjacent = [&](int current_idx, int64_t musical_end) -> bool {
+        const int64_t tol = static_cast<int64_t>(std::llround(kAdjacentToleranceMs * kFs / 1000.0));
+        const int64_t current_start = static_cast<int64_t>(std::llround(
+            prepass[current_idx].start_time_ms * kFs / 1000.0));
+        for (int j = 0; j < note_count; ++j) {
+            if (j == current_idx || prepass[j].state != NoteState::RENDERABLE ||
+                !prepass[j].absolute_timing) continue;
+            const int64_t other_start = static_cast<int64_t>(std::llround(
+                prepass[j].start_time_ms * kFs / 1000.0));
+            if (other_start < current_start) continue;
+            const int64_t other_render_start = other_start - prepass[j].preutterance_samples;
+            if (other_render_start >= musical_end && other_render_start <= musical_end + tol)
+                return true;
+        }
+        return false;
+    };
+
+    // クロスフェード重み。kXfadePowerBlend で線形和(raised-cosine)と等パワーを混ぜる。
+    auto xfade_weights = [](double t, double& w_in, double& w_out) {
+        const double g  = 0.5 * (1.0 - std::cos(M_PI * t));
+        const double ei = std::sin(0.5 * M_PI * t);
+        const double eo = std::cos(0.5 * M_PI * t);
+        w_in  = (1.0 - kXfadePowerBlend) * g         + kXfadePowerBlend * ei;
+        w_out = (1.0 - kXfadePowerBlend) * (1.0 - g) + kXfadePowerBlend * eo;
+    };
+
     bool last_note_rendered = false;
 
     for (int idx = 0; idx < note_count; ++idx) {
         const NotePrepass& pp = prepass[idx];
-        const int64_t note_samples = pp.note_samples;
+        // レガート連続合成のメンバーは先頭ノートのバッファに含まれている。
+        if (pp.run_member) continue;
+        // 先頭ノートは run 全体（先頭の render_start 〜 最後のノートの終端）を 1 ノートとして扱う。
+        const int64_t note_samples = pp.run_next >= 0 ? pp.run_samples : pp.note_samples;
 
         if (pp.state != NoteState::RENDERABLE) {
             if (!pp.absolute_timing) {
@@ -2479,8 +2850,8 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                         const double t = (safe_xfade > 1)
                             ? static_cast<double>(s) / static_cast<double>(safe_xfade)
                             : 1.0;
-                        const double fade_in = 0.5 * (1.0 - std::cos(M_PI * t));
-                        const double fade_out = 1.0 - fade_in;
+                        double fade_in, fade_out;
+                        xfade_weights(t, fade_in, fade_out);
                         full_song_buffer[render_start + s] =
                             full_song_buffer[render_start + s] * fade_out +
                             note_bufs[idx][static_cast<size_t>(source_skip + s)] * fade_in;
@@ -2490,9 +2861,30 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 } else {
+                    // 休符明け（直前に鳴っているノートも隣接ノートもない）の立ち上がりには
+                    // フェードインを入れる。これが無いと WORLD の出力先頭がそのまま
+                    // 急に立ち上がる。無声子音始まりは破裂を鈍らせないよう短くする。
+                    int64_t onset = 0;
+                    if (!prior_audio_overlaps && source_skip == 0 &&
+                        !has_adjacent_prior_audio(idx, render_start)) {
+                        const bool head_unvoiced =
+                            is_unvoiced_phoneme_name(pp.ev->path) ||
+                            (pp.has_oto && (is_unvoiced_phoneme_name(pp.oto.wav_path) ||
+                                            is_unvoiced_phoneme_name(pp.oto.alias) ||
+                                            is_unvoiced_vc_alias(pp.oto.alias)));
+                        const double onset_ms = head_unvoiced ? kOnsetFadeUnvoicedMs
+                                                              : kOnsetFadeVoicedMs;
+                        onset = std::min<int64_t>(
+                            write_len / 4,
+                            static_cast<int64_t>(std::llround(onset_ms * kFs / 1000.0)));
+                    }
                     for (int64_t s = 0; s < write_len; ++s) {
-                        full_song_buffer[render_start + s] =
-                            note_bufs[idx][static_cast<size_t>(source_skip + s)];
+                        double v = note_bufs[idx][static_cast<size_t>(source_skip + s)];
+                        if (s < onset) {
+                            const double t = (onset > 1) ? static_cast<double>(s) / onset : 1.0;
+                            v *= 0.5 * (1.0 - std::cos(M_PI * t));
+                        }
+                        full_song_buffer[render_start + s] = v;
                     }
                 }
             }
@@ -2501,14 +2893,23 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             // release fade at the actual musical end (not at the preuttered start).
             const int64_t musical_end = nominal_start +
                 std::max<int64_t>(0, note_samples - pp.preutterance_samples);
+            // run の場合は最後のメンバーを基準に「後続ノートとの重なり」を判定する。
+            const int tail_idx = pp.run_last >= 0 ? pp.run_last : idx;
             const bool next_absolute_overlap =
-                has_following_absolute_overlap(idx, musical_end);
+                has_following_absolute_overlap(tail_idx, musical_end);
             if (!next_absolute_overlap) {
+                // 後続が隣接している場合は隙間を作らないよう従来の短いフェード(5ms)、
+                // 休符前など後続が離れている場合は kReleaseFadeMs の自然なリリースにする。
+                const bool next_adjacent = has_following_adjacent(tail_idx, musical_end);
                 const int64_t end_sample = std::min<int64_t>(
                     total_samples, nominal_start +
                     note_samples - pp.preutterance_samples);
+                const int64_t body = std::max<int64_t>(0, end_sample - render_start);
+                const int64_t release_target = next_adjacent
+                    ? 220
+                    : static_cast<int64_t>(std::llround(kReleaseFadeMs * kFs / 1000.0));
                 const int fade_out_samples = static_cast<int>(std::min<int64_t>(
-                    220, std::max<int64_t>(0, end_sample - render_start) / 4));
+                    release_target, body / (next_adjacent ? 4 : 3)));
                 for (int s = 0; s < fade_out_samples; ++s) {
                     const double t = (fade_out_samples > 1)
                         ? static_cast<double>(s) / fade_out_samples : 1.0;
