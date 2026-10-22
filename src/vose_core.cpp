@@ -608,6 +608,22 @@ static constexpr double kReleaseFadeMs       = 35.0;
 // 「隣接」とみなす許容誤差。隣接でオーバーラップが無いノート同士は、
 // 隙間(無音)を作らないよう従来どおりの短いフェードに留める。
 static constexpr double kAdjacentToleranceMs = 2.0;
+
+// ---- 先行発声が無い(ほぼ0の)ボイスバンクの隣接ノート ------------------------
+// 先行発声が 0 だと、次のノートは前ノートが終わる位置からちょうど始まり、
+// 重なり(オーバーラップ)区間が作れない。そのため境界で音が一瞬切れて急に繋がる。
+// 直前のノートに隙間なく隣接する場合に限り、仮の先行発声を与えて少し早く鳴らし始め、
+// 前ノートの終わりと重ねる。
+//   * 0 以下で無効（従来動作）。
+//   * 副作用: そのノートの音全体が仮の先行発声の分だけ早くなる。
+//     先行発声0の音源は「サンプルの頭が拍に合っている」前提のことが多く、
+//     リズムの感触が変わる場合があるので、必要なら小さくする。
+static constexpr double kLegatoPseudoPreutterMs = 20.0;
+// この値未満の先行発声を「先行発声なし」とみなす（連続合成の最小オーバーラップと同じ 10ms）。
+static constexpr double kLegatoPseudoPreutterThresholdMs = 10.0;
+// 仮の先行発声のうち、オーバーラップ(クロスフェード)に使う割合。
+// 1.0 だと立ち上がり全体がクロスフェードになり子音の頭が鈍る。
+static constexpr double kLegatoPseudoOverlapRatio = 0.6;
 // クロスフェード重み: 0=従来(線形和が1の raised-cosine)、1=等パワー(sin/cos)。
 // 位相が揃わない2波形の和は等パワーのほうが音量が凹まず、
 // 揃っている場合は線形和のほうが膨らまない。中間を既定にする。
@@ -2324,17 +2340,35 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
             const double oto_pre = has_found_oto ? std::max(0.0, found_oto.preutterance) : 0.0;
             const double oto_ov  = has_found_oto ? std::max(0.0, found_oto.overlap) : 0.0;
-            const double pre_ms = (notes[i].preutterance_ms >= 0.0)
+            double pre_ms = (notes[i].preutterance_ms >= 0.0)
                 ? std::max(0.0, notes[i].preutterance_ms) : oto_pre;
-            const double ov_ms = (notes[i].overlap_ms >= 0.0)
+            double ov_ms = (notes[i].overlap_ms >= 0.0)
                 ? std::max(0.0, notes[i].overlap_ms) : oto_ov;
+
+            // 先行発声なしのボイスバンクで、直前ノートにぴったり隣接している場合のみ
+            // 仮の先行発声を与える（UST 等で正の値が明示されている場合は尊重する）。
+            bool pseudo_pre = false;
+            if (kLegatoPseudoPreutterMs > 0.0 && absolute_timing && prev_renderable &&
+                last_idx >= 0 && pre_ms < kLegatoPseudoPreutterThresholdMs &&
+                !(notes[i].preutterance_ms > 0.0)) {
+                const NotePrepass& pv = prepass[last_idx];
+                const double prev_end_ms = pv.start_time_ms + 1000.0 *
+                    static_cast<double>(pv.note_samples - pv.preutterance_samples) / kFs;
+                if (std::abs(prev_end_ms - notes[i].start_time_ms) <= kAdjacentToleranceMs) {
+                    const double base_ms = 1000.0 * static_cast<double>(base_note_samples) / kFs;
+                    pre_ms = std::min(kLegatoPseudoPreutterMs, 0.4 * base_ms);
+                    if (!(notes[i].overlap_ms > 0.0))
+                        ov_ms = pre_ms * kLegatoPseudoOverlapRatio;
+                    pseudo_pre = true;
+                }
+            }
 
             prepass[i].absolute_timing = absolute_timing;
             prepass[i].start_time_ms = absolute_timing ? notes[i].start_time_ms : -1.0;
             prepass[i].preutterance_ms = pre_ms;
             // レガート接続(直前が隣接ノート)で UST が Overlap を明示していない場合のみ、
             // 短すぎるオーバーラップを kMinLegatoOverlapMs まで底上げする。
-            const bool floor_overlap = prev_renderable && notes[i].overlap_ms < 0.0;
+            const bool floor_overlap = prev_renderable && notes[i].overlap_ms < 0.0 && !pseudo_pre;
             prepass[i].overlap_ms = std::min(
                 floor_overlap ? std::max(ov_ms, kMinLegatoOverlapMs) : ov_ms, pre_ms);
             prepass[i].prev_idx = prev_renderable ? last_idx : -1;
