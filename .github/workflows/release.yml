@@ -887,7 +887,7 @@ jobs:
 
           echo "✅ パッケージング完了: ${DMG_FILE} と ${ZIP_FILE}"
 
-      - name: 🐧 Package Linux artifacts
+      - name: 🐧 Package Linux artifact (CUDA-enabled)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
@@ -895,9 +895,10 @@ jobs:
           test -f dist/VO-SE_vocal_Linux
           mkdir -p dist_out
           chmod +x dist/VO-SE_vocal_Linux
+          # Keep the CUDA-enabled executable intact. Ship one archive only:
+          # ZIP and the raw binary barely compress this executable and duplicate ~3 GB.
           tar -C dist -czf dist_out/VO-SE_vocal_Linux_x86_64.tar.gz VO-SE_vocal_Linux
-          (cd dist && zip -r "../dist_out/VO-SE_vocal_Linux_x86_64.zip" VO-SE_vocal_Linux)
-          cp dist/VO-SE_vocal_Linux dist_out/VO-SE_vocal_Linux_x86_64
+          ls -lh dist/VO-SE_vocal_Linux dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
 
       - name: 📦 Save Artifacts
         uses: actions/upload-artifact@v4
