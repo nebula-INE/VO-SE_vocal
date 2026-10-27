@@ -887,6 +887,46 @@ jobs:
 
           echo "✅ パッケージング完了: ${DMG_FILE} と ${ZIP_FILE}"
 
+      # Diagnostic only: inspect the PyInstaller bundle without changing release contents.
+      - name: 🔎 Report Linux bundle size breakdown (diagnostic only)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -u
+          APP="dist/VO-SE_vocal_Linux"
+          echo "=== Linux release binary ==="
+          if [ -f "$APP" ]; then
+            stat -c 'file=%n bytes=%s' "$APP"
+            ls -lh "$APP"
+          else
+            echo "Binary not found: $APP"
+            exit 0
+          fi
+
+          echo "=== Source payload directory sizes (reference only) ==="
+          du -sh assets modules bin 2>/dev/null || true
+          echo "=== Largest source payload files (reference only) ==="
+          find assets modules bin -type f -printf '%s %p\n' 2>/dev/null | sort -nr | head -40 || true
+
+          echo "=== Largest embedded PyInstaller entries (uncompressed bytes) ==="
+          python - <<'PY' || echo "PyInstaller archive inspection unavailable; release packaging is unaffected."
+          from PyInstaller.archive.readers import CArchiveReader
+
+          path = "dist/VO-SE_vocal_Linux"
+          archive = CArchiveReader(path)
+          rows = []
+          for name, entry in archive.toc.items():
+              try:
+                  # CArchive TOC: offset, compressed size, uncompressed size, compression flag, type.
+                  offset, compressed_size, uncompressed_size, *_ = entry
+                  rows.append((int(uncompressed_size), int(compressed_size), name))
+              except (TypeError, ValueError):
+                  continue
+          for unpacked, packed, name in sorted(rows, reverse=True)[:60]:
+              print(f"{unpacked:>12} bytes unpacked | {packed:>12} bytes packed | {name}")
+          print(f"Entries inspected: {len(rows)}")
+          PY
+
       - name: 🐧 Package Linux artifact (CUDA-enabled)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
