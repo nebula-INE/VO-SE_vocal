@@ -906,7 +906,7 @@ jobs:
           echo "=== Source payload directory sizes (reference only) ==="
           du -sh assets modules bin 2>/dev/null || true
           echo "=== Largest source payload files (reference only) ==="
-          find assets modules bin -type f -printf '%s %p\\n' 2>/dev/null | sort -nr | head -40 || true
+          find assets modules bin -type f -printf '%s %p\n' 2>/dev/null | sort -nr | head -40 || true
 
           echo "=== Largest embedded PyInstaller entries (uncompressed bytes) ==="
           python - <<'PY' || echo "PyInstaller archive inspection unavailable; release packaging is unaffected."
