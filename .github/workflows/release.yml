@@ -721,7 +721,11 @@ jobs:
           QT_MEDIA_BACKEND: ffmpeg
         run: |
             # 1. テスト用依存パッケージをインストール
+            # Build artifact was already packaged with requirements-runtime.txt.
+            # Install optional training deps only in the test environment so existing
+            # adaptation tests can still exercise the training code without bundling it.
             python -m pip install --upgrade pip
+            python -m pip install -r requirements-training.txt
             python -m pip install pytest pytest-xdist pytest-cov pytest-qt
 
             # 2. ビルド成果物の確認（デバッグ用）
@@ -1353,7 +1357,7 @@ jobs:
             portaudio19-dev
 
           python -m pip install --upgrade pip wheel setuptools
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-runtime.txt
           python -m pip install Pillow PySide6 pytest
 
           # Qt の import を pytest より先に検証し、
