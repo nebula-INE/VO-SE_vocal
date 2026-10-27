@@ -87,7 +87,7 @@ jobs:
           fi
 
           # requirements をインストール（prebuilt があればそちらが優先されます）
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-runtime.txt
 
           # 起動に必要なランタイム類を確実に入れる
           python -m pip install Pillow PySide6 sounddevice soundfile
