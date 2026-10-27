@@ -935,8 +935,10 @@ jobs:
           test -f dist/VO-SE_vocal_Linux
           mkdir -p dist_out
           chmod +x dist/VO-SE_vocal_Linux
-          # Keep the CUDA-enabled executable intact. Ship one archive only:
-          # ZIP and the raw binary barely compress this executable and duplicate ~3 GB.
+          # Remove the raw binary copied by the earlier generic packaging step.
+          # Upload only the archive to avoid duplicating this ~3 GB executable.
+          rm -f dist_out/VO-SE_vocal_Linux_x86_64
+          # Keep the CUDA-enabled executable intact; do not modify the binary or audio code.
           tar -C dist -czf dist_out/VO-SE_vocal_Linux_x86_64.tar.gz VO-SE_vocal_Linux
           ls -lh dist/VO-SE_vocal_Linux dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
 
