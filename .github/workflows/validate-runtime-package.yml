@@ -130,7 +130,7 @@ jobs:
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
             --paths . --paths modules \
-            --collect-all=PySide6 \
+            --collect-submodules=PySide6 \
             --exclude-module=PySide6.QtQml \
             --exclude-module=PySide6.QtQuick \
             --exclude-module=PySide6.Qt3DAnimation \
