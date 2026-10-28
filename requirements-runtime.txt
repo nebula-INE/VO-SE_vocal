@@ -1,0 +1,20 @@
+# VO-SE vocal desktop runtime dependencies.
+# Training/adaptation-only packages are intentionally excluded from release builds.
+pyopenjtalk-prebuilt>=0.3.0
+numpy>=1.24,<2.0
+PySide6>=6.6,<7.0
+setuptools>=70,<81
+pyinstaller==6.13.0
+backports.tarfile
+mido==1.3.2
+onnxruntime
+sounddevice
+soundfile
+janome
+Pillow
+scipy
+chardet
+pykakasi
+packaging
+python-rtmidi
+psutil>=5.9.0

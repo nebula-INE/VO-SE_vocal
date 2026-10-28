@@ -1,0 +1,6 @@
+# Optional AI voice adaptation/training dependencies.
+# Install on top of the runtime environment only when using modules/ai training tools.
+torch
+torchaudio
+transformers
+peft
