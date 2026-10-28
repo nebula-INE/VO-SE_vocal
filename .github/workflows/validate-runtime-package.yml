@@ -101,6 +101,30 @@ jobs:
             src/vose_core.cpp src/vose_streaming_final.cpp build/linux-world/*.o
           test -s bin/libvose_core.so
 
+      - name: Audit excluded Qt modules
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          roots = (Path("main.py"), Path("modules"))
+          patterns = re.compile(r"QtWebEngine|QWebEngine|QtDesigner|QDesigner")
+          hits = []
+          for root in roots:
+              files = [root] if root.is_file() else root.rglob("*.py")
+              for path in files:
+                  try:
+                      for lineno, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+                          if patterns.search(line):
+                              hits.append(f"{path}:{lineno}:{line.strip()}")
+                  except OSError:
+                      pass
+          print("Direct/dynamic QtWebEngine/QtDesigner references:")
+          print("\\n".join(hits) if hits else "none found")
+          if hits:
+              raise SystemExit("Review Qt exclusion candidates: references found")
+          PY
+
       - name: Build PyInstaller desktop bundle
         run: |
           set -euo pipefail
@@ -112,6 +136,11 @@ jobs:
             --exclude-module=PySide6.Qt3DAnimation \
             --exclude-module=PySide6.Qt3DCore \
             --exclude-module=PySide6.Qt3DRender \
+            --exclude-module=PySide6.QtWebEngineCore \
+            --exclude-module=PySide6.QtWebEngineWidgets \
+            --exclude-module=PySide6.QtWebEngineQuick \
+            --exclude-module=PySide6.QtWebEngine \
+            --exclude-module=PySide6.QtDesigner \
             --hidden-import=modules.gui.main_window \
             --hidden-import=rtmidi \
             --hidden-import=mido.backends.rtmidi \
