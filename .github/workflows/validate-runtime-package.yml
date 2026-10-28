@@ -71,8 +71,15 @@ jobs:
               raise SystemExit(f"Unexpected training modules in runtime environment: {found}")
           from PySide6 import QtCore, QtGui, QtWidgets
           import soundfile, sounddevice, pyopenjtalk
+          from modules.tools import batch_voice_optimizer
+          from modules.tools.batch_voice_optimizer import BatchVoiceOptimizer
+          assert batch_voice_optimizer.TORCH_AVAILABLE is False, (
+              "Runtime validation must not have PyTorch installed"
+          )
+          assert BatchVoiceOptimizer is not None
           print("Qt:", QtCore.qVersion())
           print("Runtime import smoke: OK")
+          print("Optional BatchVoiceOptimizer import without PyTorch: OK")
           PY
 
       - name: Generate voice data header
