@@ -49,7 +49,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config git \
-            libsndfile1-dev portaudio19-dev libopenjtalk-dev swig \
+            libsndfile1-dev portaudio19-dev swig \
             libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 \
             libxcb-cursor0 libxrender1 libxi6 libsm6 libxext6 \
             libfontconfig1 libdbus-1-3 libglib2.0-0 libpulse0 \
