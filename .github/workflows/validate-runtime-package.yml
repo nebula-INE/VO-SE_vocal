@@ -1,0 +1,181 @@
+name: Validate Linux runtime package
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/validate-runtime-package.yml"
+      - "requirements-runtime.txt"
+      - "requirements-training.txt"
+      - "main.py"
+      - "modules/**"
+      - "assets/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "build/**"
+      - "bin/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-linux-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-linux-runtime:
+    name: Build and inspect Linux runtime bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_MEDIA_BACKEND: ffmpeg
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config git \
+            libsndfile1-dev portaudio19-dev libopenjtalk-dev swig \
+            libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxrender1 libxi6 libsm6 libxext6 \
+            libfontconfig1 libdbus-1-3 libglib2.0-0 libpulse0 \
+            libasound2t64 libportaudio2
+
+      - name: Install runtime dependencies only
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip wheel "setuptools<82"
+          python -m pip install --upgrade pyopenjtalk-prebuilt
+          python -m pip install -r requirements-runtime.txt
+          python -m pip install Pillow PySide6 sounddevice soundfile pytest pyinstaller ruff pyright python-rtmidi mido
+          python - <<'PY'
+          import importlib.util
+          forbidden = ("torch", "torchaudio", "triton", "transformers", "peft")
+          found = [name for name in forbidden if importlib.util.find_spec(name) is not None]
+          print("Training-only modules installed:", found)
+          if found:
+              raise SystemExit(f"Unexpected training modules in runtime environment: {found}")
+          from PySide6 import QtCore, QtGui, QtWidgets
+          import soundfile, sounddevice, pyopenjtalk
+          print("Qt:", QtCore.qVersion())
+          print("Runtime import smoke: OK")
+          PY
+
+      - name: Generate voice data header
+        run: python modules/tools/pack_all_voices.py
+
+      - name: Build native WORLD core
+        run: |
+          set -euo pipefail
+          mkdir -p bin build/linux-world
+          cp include/world/*.h src/world/
+          for f in src/world/*.cpp; do
+            [ -e "$f" ] || continue
+            obj="build/linux-world/$(basename "${f%.cpp}").o"
+            g++ -O3 -fPIC -c -std=c++17 -D_USE_MATH_DEFINES \
+              -I./src -I./include -I./src/world "$f" -o "$obj"
+          done
+          g++ -O3 -fPIC -shared -std=c++17 -Wl,-soname,libvose_core.so \
+            -I./src -I./include -I./src/world -o bin/libvose_core.so \
+            src/vose_core.cpp src/vose_streaming_final.cpp build/linux-world/*.o
+          test -s bin/libvose_core.so
+
+      - name: Build PyInstaller desktop bundle
+        run: |
+          set -euo pipefail
+          python -m PyInstaller --noconsole --clean --onefile \
+            --paths . --paths modules \
+            --collect-all=PySide6 \
+            --exclude-module=PySide6.QtQml \
+            --exclude-module=PySide6.QtQuick \
+            --exclude-module=PySide6.Qt3DAnimation \
+            --exclude-module=PySide6.Qt3DCore \
+            --exclude-module=PySide6.Qt3DRender \
+            --hidden-import=modules.gui.main_window \
+            --hidden-import=rtmidi \
+            --hidden-import=mido.backends.rtmidi \
+            --hidden-import=backports \
+            --hidden-import=backports.tarfile \
+            --collect-all=sounddevice \
+            --collect-all=soundfile \
+            --collect-all=pyopenjtalk \
+            --add-data "bin/libvose_core.so:bin" \
+            --add-data "assets:assets" \
+            --add-data "modules:modules" \
+            --name VO-SE_vocal_Linux main.py
+          test -s dist/VO-SE_vocal_Linux
+          chmod +x dist/VO-SE_vocal_Linux
+          stat -c 'Linux executable bytes=%s' dist/VO-SE_vocal_Linux
+          du -h dist/VO-SE_vocal_Linux
+
+      - name: Inspect packaged dependency archive
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from PyInstaller.archive.readers import CArchiveReader
+          path = "dist/VO-SE_vocal_Linux"
+          archive = CArchiveReader(path)
+          rows = []
+          for name, entry in archive.toc.items():
+              try:
+                  offset, compressed_size, uncompressed_size, *_ = entry
+                  rows.append((name.lower(), int(uncompressed_size), int(compressed_size)))
+              except (TypeError, ValueError):
+                  continue
+          forbidden = ("torch/", "torch.", "torchaudio", "triton", "nvidia/", "transformers", "peft")
+          hits = [(name, unpacked, packed) for name, unpacked, packed in rows
+                  if any(token in name for token in forbidden)]
+          print("Archive entries inspected:", len(rows))
+          print("Largest embedded entries (unpacked bytes):")
+          for name, unpacked, packed in sorted(rows, key=lambda row: row[1], reverse=True)[:30]:
+              print(f"{unpacked:>12} unpacked | {packed:>12} packed | {name}")
+          print("Forbidden training/CUDA entries:", hits[:30])
+          if hits:
+              raise SystemExit("Training/CUDA libraries unexpectedly present in runtime bundle")
+          PY
+
+      - name: Pack and report downloadable artifact size
+        run: |
+          set -euo pipefail
+          mkdir -p dist_out
+          tar -C dist -czf dist_out/VO-SE_vocal_Linux_x86_64.tar.gz VO-SE_vocal_Linux
+          stat -c 'Executable bytes=%s' dist/VO-SE_vocal_Linux
+          stat -c 'Tarball bytes=%s' dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
+          du -h dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
+
+      - name: Desktop startup smoke test
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          timeout --signal=TERM --kill-after=10s 45s ./dist/VO-SE_vocal_Linux
+          rc=$?
+          set -e
+          echo "GUI startup smoke exit code: $rc"
+          # A GUI app that remains open until the timeout is expected to return 124.
+          # Other non-zero exits indicate a startup failure.
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] && [ "$rc" -ne 143 ]; then
+            exit "$rc"
+          fi
+
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VO-SE-vocal-Linux-runtime-validation
+          path: dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
