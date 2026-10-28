@@ -373,7 +373,7 @@ class PhonemeCNN(_PhonemeCNNBase):  # type: ignore[misc]
         x = F.relu(self.fc1(x))
         return F.softmax(self.fc2(x), dim=1)
 
-def _select_torch_device() -> Optional[torch.device]:
+def _select_torch_device() -> Optional["torch.device"]:
     """
     利用可能な最速デバイスを自動選択する。
     優先順位: CUDA (NVIDIA GPU) > MPS (Apple Silicon GPU/NPU) > CPU
