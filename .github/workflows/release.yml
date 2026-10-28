@@ -720,31 +720,44 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           QT_MEDIA_BACKEND: ffmpeg
         run: |
-            # 1. テスト用依存パッケージをインストール
-            # Build artifact was already packaged with requirements-runtime.txt.
-            # Install optional training deps only in the test environment so existing
-            # adaptation tests can still exercise the training code without bundling it.
+            set -euo pipefail
+
+            # CI診断: Windowsで時間がかかる区間を切り分ける。
+            # 依存関係やテスト対象の削除は行わず、まず実測値を取得する。
+            report_duration() {
+              local label="$1"
+              local started="$2"
+              local finished
+              finished=$(date +%s)
+              echo "⏱️ TIMING ${label}: $((finished - started)) seconds"
+            }
+
+            # 1. テスト用依存パッケージのインストール時間
+            phase_start=$(date +%s)
             python -m pip install --upgrade pip
             python -m pip install -r requirements-training.txt
             python -m pip install pytest pytest-xdist pytest-cov pytest-qt
+            report_duration "test_dependency_install" "$phase_start"
 
             # 2. ビルド成果物の確認（デバッグ用）
             echo "Checking dist/ contents:"
             ls -la dist/ || true
 
-            # 3. スモークテスト（アプリ起動テスト）を実行
-            #    失敗したら即座に停止（--maxfail=1）
+            # 3. スモークテストの所要時間
             echo "--- Running Smoke Tests ---"
+            phase_start=$(date +%s)
             python -m pytest tests/ -v -m smoke --maxfail=1
+            report_duration "pytest_smoke" "$phase_start"
 
-            # 4. 単体テスト（パーサー・データモデル・GUIコンポーネント）を実行
-            #    カバレッジレポート（XML + ターミナル）を生成し、並列実行（-n auto）
+            # 4. 単体テスト（カバレッジあり・並列実行）の所要時間
             echo "--- Running Unit Tests with Coverage ---"
+            phase_start=$(date +%s)
             python -m pytest tests/ -v -m "not smoke" \
                 --cov=modules \
                 --cov-report=xml:coverage.xml \
                 --cov-report=term \
                 -n auto
+            report_duration "pytest_unit_with_coverage" "$phase_start"
 
             # 5. カバレッジ結果をファイルとして出力（後続ステップでアップロード可能）
             echo "✅ Coverage report saved to coverage.xml"
