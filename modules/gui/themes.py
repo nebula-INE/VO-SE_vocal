@@ -2,12 +2,13 @@ import os
 from PySide6.QtCore import QFile, QTextStream, QIODevice, QStringConverter
 from PySide6.QtWidgets import QApplication
 
-# プロジェクト構造に応じたQSSファイルの相対パス
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# QSSはリポジトリ直下の themes/ にある（このファイルは modules/gui/ なので2階層上）。
+# PyInstaller配布版では vose_pro.spec の datas で themes/ を同名で同梱する。
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 THEME_FILES = {
-    "dark": os.path.join(BASE_DIR, "themes", "dark.qss"),
-    "light": os.path.join(BASE_DIR, "themes", "light.qss")
+    "dark": os.path.join(_REPO_ROOT, "themes", "dark.qss"),
+    "light": os.path.join(_REPO_ROOT, "themes", "light.qss"),
 }
 
 def apply_theme(theme_name: str) -> bool:
@@ -57,6 +58,9 @@ def apply_theme(theme_name: str) -> bool:
             
             # アプリケーション全体にスタイルシートを適用
             app.setStyleSheet(qss)
+            # アイコン配色(dark/light)もテーマに連動させる
+            from modules.gui.icons import set_icon_theme
+            set_icon_theme("light" if "light" in os.path.basename(file_path) else "dark")
             return True
         except Exception as e:
             print(f"[Theme Error] Failed to read or apply QSS: {e}")
