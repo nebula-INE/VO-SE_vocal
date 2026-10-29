@@ -189,8 +189,13 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
-          mkdir -p bin
+          # PR #35 moved native sources from src/ to assets/src/.
+          # Stage them into the legacy build layout before compiling WORLD.
+          mkdir -p bin src/world
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
           cp include/world/*.h src/world/
+          cp include/*.h src/
           cd src/world
 
           echo "🔨 Compiling WORLD source files..."
