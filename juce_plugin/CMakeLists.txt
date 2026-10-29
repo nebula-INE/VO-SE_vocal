@@ -89,22 +89,24 @@ juce_add_plugin(VoseVocal
 
 # ========================
 # ソースファイル定義
+# PR #35 で native source が assets/src/ に移動したため、
+# JUCE プラグインに必要なソースだけを明示的に指定する。
+# DSP engine / streaming engine は別ビルド成果物として扱う。
 # ========================
-file(GLOB VOSE_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../include/*.h"
+set(VOSE_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+set(VOSE_PLUGIN_SOURCES
+    "${VOSE_REPO_ROOT}/assets/src/PluginProcessor.cpp"
+    "${VOSE_REPO_ROOT}/assets/src/PianoRollComponent.cpp"
+    "${VOSE_REPO_ROOT}/assets/src/GraphEditorComponent.cpp"
 )
 
-# ★ プラグインでは不要なファイルを除外 ★
-list(REMOVE_ITEM VOSE_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src/vose_streaming_final.cpp"
-)
+foreach(source_file IN LISTS VOSE_PLUGIN_SOURCES)
+    if(NOT EXISTS "${source_file}")
+        message(FATAL_ERROR "[VO-SE] Required plugin source not found: ${source_file}")
+    endif()
+endforeach()
 
-if(NOT VOSE_SOURCES)
-    message(FATAL_ERROR "[VO-SE] No source files found in src/ !")
-endif()
-
-target_sources(VoseVocal PRIVATE ${VOSE_SOURCES})
+target_sources(VoseVocal PRIVATE ${VOSE_PLUGIN_SOURCES})
 
 # ========================
 # インクルードディレクトリ
@@ -112,8 +114,9 @@ target_sources(VoseVocal PRIVATE ${VOSE_SOURCES})
 target_include_directories(VoseVocal
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        ${VOSE_REPO_ROOT}/assets/src
+        ${VOSE_REPO_ROOT}/assets/src/world
+        ${VOSE_REPO_ROOT}/include
 )
 
 # ========================
