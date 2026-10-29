@@ -2554,7 +2554,7 @@ class MainWindow(
         from modules.gui.icons import icon
         from PySide6.QtCore import QSize
         self.lyrics_button = QPushButton(" 歌詞一括入力")
-        self.lyrics_button.setIcon(icon("pencil"))
+        self.lyrics_button.setIcon(icon("pen"))
         self.lyrics_button.setIconSize(QSize(18, 18))
         self.lyrics_button.setObjectName("PrimaryButton")
         self.lyrics_button.setFixedHeight(36)
