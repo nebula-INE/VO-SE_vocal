@@ -21,7 +21,11 @@ jobs:
           version: latest
       - name: Build WebAssembly Module
         run: |
-          mkdir -p build/wasm
+          # PR #35 moved native engine sources from src/ to assets/src/.
+          # Stage the same sources into the legacy build layout used below.
+          mkdir -p build/wasm src/world
+          cp assets/src/vose_core.cpp src/
+          cp assets/src/world/*.cpp src/world/
           cp include/world/*.h src/world/
           em++ src/vose_core.cpp \
                src/world/audioio.cpp \
