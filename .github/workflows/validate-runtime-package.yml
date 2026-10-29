@@ -88,8 +88,13 @@ jobs:
       - name: Build native WORLD core
         run: |
           set -euo pipefail
-          mkdir -p bin build/linux-world
+          # PR #35 moved native sources from src/ to assets/src/.
+          # Stage them into the legacy build layout before compiling.
+          mkdir -p bin build/linux-world src/world
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
           cp include/world/*.h src/world/
+          cp include/*.h src/
           for f in src/world/*.cpp; do
             [ -e "$f" ] || continue
             obj="build/linux-world/$(basename "${f%.cpp}").o"
