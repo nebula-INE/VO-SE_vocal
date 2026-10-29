@@ -239,8 +239,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p bin build/linux-world
+          # PR #35 moved native engine sources from src/ to assets/src/.
+          # Stage the sources and headers before compiling, matching the macOS build.
+          mkdir -p bin build/linux-world src/world
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
           cp include/world/*.h src/world/
+          cp include/*.h src/
 
           echo "🔨 Compiling WORLD source files for Linux..."
           for f in src/world/*.cpp; do
