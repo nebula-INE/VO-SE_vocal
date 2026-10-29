@@ -433,6 +433,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("VO-SE Pro")
+    app.setStyle("Fusion")  # OSネイティブスタイルとQSSの混在による崩れを防ぐ
 
     # CI Smoke Test でも通常起動と同じ C++ エンジン / MainWindow 初期化を実行する。
     # 「importできた」だけではなく、実バイナリがGUI起動処理まで到達できることを検証する。
