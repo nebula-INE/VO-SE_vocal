@@ -31,6 +31,11 @@ if os.path.exists(dll_path):
     added_files.append((dll_path, 'bin'))
     print(f"DEBUG: Added Engine Binary from {dll_path}")
 
+# テーマQSSとアイコンSVGを同梱（themes.py / icons.py が実行時に参照）
+for _src, _dst in (('themes', 'themes'), ('assets/icons', 'assets/icons')):
+    if os.path.isdir(_src):
+        added_files.append((_src, _dst))
+
 # --- 2. ビルド設定 ---
 a = Analysis(
     ['main.py'],
@@ -54,8 +59,6 @@ a = Analysis(
             'collect_submodules': ['mido.backends']
         }
     },
-    hookspath=[],
-    hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     win_no_prefer_redirects=False,
