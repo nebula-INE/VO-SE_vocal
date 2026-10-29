@@ -34,95 +34,10 @@ def main():
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
 
-    # --- 2. スタイルシート（ダークモード・モダンUI） ---
-    app.setStyleSheet("""
-        QMainWindow {
-            background-color: #171a20;
-            color: #e8ecf2;
-        }
-
-        QWidget {
-            font-family: 'Segoe UI', 'Hiragino Kaku Gothic ProN', sans-serif;
-            font-size: 10pt;
-        }
-        QLabel {
-            color: #d8dee9;
-        }
-
-        QScrollArea, QListView, QTreeView, QTableView {
-            border: 1px solid #2f3542;
-            background-color: #1f2430;
-            border-radius: 6px;
-        }
-
-        QPushButton {
-            background-color: #2f81f7;
-            border: 1px solid #2f81f7;
-            color: #ffffff;
-            padding: 8px 14px;
-            border-radius: 6px;
-            font-weight: 600;
-        }
-        QPushButton:hover { background-color: #3b8cff; }
-        QPushButton:pressed { background-color: #2166cc; }
-        QPushButton:disabled {
-            background-color: #30363d;
-            border-color: #30363d;
-            color: #8b949e;
-        }
-
-        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
-            background-color: #222833;
-            border: 1px solid #3a4353;
-            color: #f0f4fa;
-            padding: 6px;
-            border-radius: 6px;
-            selection-background-color: #2f81f7;
-        }
-        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus, QPlainTextEdit:focus {
-            border: 1px solid #5aa2ff;
-        }
-
-        QGroupBox {
-            border: 1px solid #313845;
-            border-radius: 8px;
-            margin-top: 12px;
-            padding-top: 12px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 4px;
-            color: #9fb7d3;
-        }
-
-        QSplitter::handle { background-color: #2a3040; }
-        QSplitter::handle:horizontal { width: 5px; }
-        QSplitter::handle:vertical { height: 5px; }
-
-        QScrollBar:vertical {
-            background: #151922;
-            width: 10px;
-            margin: 0;
-            border-radius: 5px;
-        }
-        QScrollBar::handle:vertical {
-            background: #3a4458;
-            min-height: 24px;
-            border-radius: 5px;
-        }
-        QScrollBar::handle:vertical:hover { background: #4a5670; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-
-        QToolTip {
-            background-color: #11151c;
-            color: #e8ecf2;
-            border: 1px solid #3a4353;
-            padding: 6px;
-        }
-        
-
-    """)
+    # --- 2. スタイルシート（themes/*.qss に一本化） ---
+    from modules.gui.themes import apply_theme
+    from PySide6.QtCore import QSettings
+    apply_theme(str(QSettings("VO-SE", "vocal").value("theme", "dark")))
 
     # --- 3. バックエンドの初期化（スプラッシュ表示中に実行） ---
     try:
