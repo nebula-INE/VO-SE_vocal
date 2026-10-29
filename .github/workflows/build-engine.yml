@@ -88,7 +88,7 @@ jobs:
 
       - name: "📂 [Step 5] Prepare Directory"
         shell: bash
-        run: mkdir -p bin src assets dist_out
+        run: mkdir -p bin src/world assets dist_out build
 
       - name: "🎙️ [Step 6] Pack Official Voice Data"
         run: python modules/tools/pack_all_voices.py
@@ -106,6 +106,11 @@ jobs:
       - name: "🏗️ [Step 7] Compile Engine"
         shell: bash
         run: |
+          # PR #35 moved the native engine sources from src/ to assets/src/.
+          # Stage them into src/ so the existing per-OS compiler commands and
+          # include layout remain consistent without modifying DSP source files.
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
           cp include/world/*.h src/world/
           cp include/*.h src/
 
