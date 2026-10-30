@@ -38,7 +38,7 @@ jobs:
           python -m pip install -r requirements-runtime.txt
           python -m pip install -r requirements-training.txt
           python -m pip install Pillow PySide6 sounddevice soundfile
-          python -m pip install pytest pytest-xdist pytest-cov pytest-qt
+          python -m pip install pytest pytest-xdist pytest-cov pytest-qt pytest-timeout
 
       - name: Run smoke tests
         shell: bash
@@ -49,7 +49,7 @@ jobs:
           PYTHONFAULTHANDLER: "1"
         run: |
           set -euo pipefail
-          python -m pytest tests/ -v -m smoke --maxfail=1 -o faulthandler_timeout=180
+          python -m pytest tests/ -v -m smoke --maxfail=1 --timeout=300 --timeout-method=thread --durations=20 -o faulthandler_timeout=180
 
       - name: Run unit tests with coverage
         shell: bash
