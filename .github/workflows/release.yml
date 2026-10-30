@@ -168,22 +168,39 @@ jobs:
 
       - name: 🛠️ Build VOSE Core (Windows)
         if: matrix.os == 'windows-latest'
-        shell: cmd
+        shell: bash
         run: |
-          if not exist bin mkdir bin
-          copy include\world\*.h src\world\
+          set -euo pipefail
 
-          :: WORLDのソースを先にコンパイルしてオブジェクトファイルを作る
-          cl.exe /std:c++17 /EHsc /O2 /D_USE_MATH_DEFINES ^
-            /I src /I include /I src\world ^
-            /c src\world\*.cpp
+          # PR #35 moved native sources from src/ to assets/src/.
+          # Stage the same source/header layout used by the macOS/Linux builders.
+          mkdir -p bin src/world build/windows-world
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
+          cp include/world/*.h src/world/
+          cp include/*.h src/
 
-          :: vose_core.cpp と WORLDのオブジェクトをまとめてDLLにリンク
-          cl.exe /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES ^
-            /Fe:bin\vose_core.dll ^
-            src\vose_core.cpp src\vose_streaming_final.cpp *.obj ^
-            /I src /I include /I src\world ^
-            /link
+          # Fail early with a useful message instead of passing missing paths to MSVC.
+          test -s src/vose_core.cpp
+          test -s src/vose_streaming_final.cpp
+          compgen -G 'src/world/*.cpp' > /dev/null
+          compgen -G 'src/world/*.h' > /dev/null
+
+          echo "Compiling WORLD sources..."
+          world_objects=()
+          for f in src/world/*.cpp; do
+            obj="build/windows-world/$(basename "${f%.cpp}").obj"
+            cl.exe /nologo /std:c++17 /EHsc /O2 /D_USE_MATH_DEFINES \
+              /I src /I include /I src/world /c "$f" "/Fo$obj"
+            world_objects+=("$obj")
+          done
+
+          echo "Linking VO-SE core DLL..."
+          cl.exe /nologo /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES \
+            /Fe:bin/vose_core.dll \
+            src/vose_core.cpp src/vose_streaming_final.cpp "${world_objects[@]}" \
+            /I src /I include /I src/world /link
+          test -s bin/vose_core.dll
 
       - name: 🛠️ Build VOSE Core (macOS)
         if: startsWith(matrix.os, 'macos')
