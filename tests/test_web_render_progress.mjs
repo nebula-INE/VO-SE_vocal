@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const client = fs.readFileSync('src/voseCoreClient.ts', 'utf8');
-const worker = fs.readFileSync('src/voseCoreWorker.ts', 'utf8');
-const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
+const client = fs.readFileSync('assets/src/voseCoreClient.ts', 'utf8');
+const worker = fs.readFileSync('assets/src/voseCoreWorker.ts', 'utf8');
+const engine = fs.readFileSync('assets/src/wasmEngine.ts', 'utf8');
 
 test('Web render client does not use the old 25s core timeout', () => {
   assert.match(client, /const timeoutMs = 180000;/);
@@ -45,7 +45,7 @@ test('Web render rejects a completely silent WAV instead of reporting success', 
 });
 
 test('Web Audio fallback never synthesizes unresolved notes with a sawtooth oscillator', () => {
-  const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
+  const engine = fs.readFileSync('assets/src/wasmEngine.ts', 'utf8');
   assert.doesNotMatch(engine, /osc\.type\s*=\s*['"]sawtooth['"]/);
   assert.doesNotMatch(engine, /offlineCtx\.createOscillator\(\)/);
   assert.doesNotMatch(engine, /psolaPitchAndTimeShiftBuffer\(/);
@@ -56,8 +56,8 @@ test('Web Audio fallback never synthesizes unresolved notes with a sawtooth osci
 });
 
 test('Web pitch bends use PSOLA semitone curves and keep playback-rate fallback relative to the base pitch', () => {
-  const engine = fs.readFileSync('src/wasmEngine.ts', 'utf8');
-  const curve = fs.readFileSync('src/utils/pitchCurve.ts', 'utf8');
+  const engine = fs.readFileSync('assets/src/wasmEngine.ts', 'utf8');
+  const curve = fs.readFileSync('assets/src/utils/pitchCurve.ts', 'utf8');
 
   // When PSOLA succeeds, pitch bends are applied inside the pitch shifter,
   // not a second time through playbackRate.
@@ -67,7 +67,7 @@ test('Web pitch bends use PSOLA semitone curves and keep playback-rate fallback 
   assert.match(engine, /if \(bendPoints && !bendAppliedInPsola\)/);
   assert.match(curve, /export function makeSemitoneCurve\(/);
   assert.match(curve, /p\.offsetMs \/ 1000/);
-  const psola = fs.readFileSync('src/psolaPitchShift.ts', 'utf8');
+  const psola = fs.readFileSync('assets/src/psolaPitchShift.ts', 'utf8');
   assert.match(psola, /onPitchCurveApplied\?: \(applied: boolean\) => void/);
   assert.match(psola, /opts\.onPitchCurveApplied\?\.\(false\)/);
   assert.match(psola, /opts\.onPitchCurveApplied\?\.\(!!curve\)/);
