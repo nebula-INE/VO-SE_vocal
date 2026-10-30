@@ -1,0 +1,76 @@
+name: "Windows pytest validation"
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "tests/**"
+      - "modules/**"
+      - "requirements-runtime.txt"
+      - "requirements-training.txt"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/windows-pytest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-pytest:
+    name: Windows smoke and unit tests
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install -r requirements-runtime.txt
+          python -m pip install -r requirements-training.txt
+          python -m pip install Pillow PySide6 sounddevice soundfile
+          python -m pip install pytest pytest-xdist pytest-cov pytest-qt
+
+      - name: Run smoke tests
+        shell: bash
+        timeout-minutes: 45
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_MEDIA_BACKEND: ffmpeg
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          set -euo pipefail
+          python -m pytest tests/ -v -m smoke --maxfail=1 -o faulthandler_timeout=180
+
+      - name: Run unit tests with coverage
+        shell: bash
+        timeout-minutes: 90
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_MEDIA_BACKEND: ffmpeg
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          set -euo pipefail
+          python -m pytest tests/ -v -m "not smoke" \
+            --cov=modules \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term \
+            -n 2 \
+            -o faulthandler_timeout=180
+
+      - name: Upload coverage report
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pytest-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
