@@ -1,0 +1,57 @@
+name: Windows Core DLL Build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "assets/src/**"
+      - "include/**"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/windows-core-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-core:
+    name: Build VO-SE Core DLL (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Stage and build core DLL
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p bin src/world build/windows-world
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
+          cp include/world/*.h src/world/
+          cp include/*.h src/
+
+          test -s src/vose_core.cpp
+          test -s src/vose_streaming_final.cpp
+          compgen -G 'src/world/*.cpp' > /dev/null
+          compgen -G 'src/world/*.h' > /dev/null
+
+          world_objects=()
+          for f in src/world/*.cpp; do
+            obj="build/windows-world/$(basename "${f%.cpp}").obj"
+            cl.exe /nologo /std:c++17 /EHsc /O2 /D_USE_MATH_DEFINES \
+              /I src /I include /I src/world /c "$f" "/Fo$obj"
+            world_objects+=("$obj")
+          done
+
+          cl.exe /nologo /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES \
+            /Fe:bin/vose_core.dll \
+            src/vose_core.cpp src/vose_streaming_final.cpp "${world_objects[@]}" \
+            /I src /I include /I src/world /link
+
+          test -s bin/vose_core.dll
+          echo "Windows Core DLL build succeeded."
