@@ -169,6 +169,10 @@ jobs:
       - name: 🛠️ Build VOSE Core (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
+        # Keep MSYS/Git Bash from rewriting MSVC options such as /nologo and /I.
+        env:
+          MSYS_NO_PATHCONV: '1'
+          MSYS2_ARG_CONV_EXCL: '*'
         run: |
           set -euo pipefail
 
