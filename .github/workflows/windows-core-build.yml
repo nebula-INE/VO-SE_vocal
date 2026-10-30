@@ -26,6 +26,9 @@ jobs:
 
       - name: Stage and build core DLL
         shell: bash
+        env:
+          MSYS_NO_PATHCONV: "1"
+          MSYS2_ARG_CONV_EXCL: "*"
         run: |
           set -euo pipefail
 
