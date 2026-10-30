@@ -320,32 +320,43 @@ class TimelineWidget(QWidget):
 
         # キャッシュミス: グリッドを QPixmap に描画して保存
         pixmap = QPixmap(self.width(), self.height())
-        pixmap.fill(QColor(18, 18, 18))
+        pixmap.fill(QColor(31, 32, 40))   # 白鍵行
 
         p = QPainter(pixmap)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # グリッドはAAなし
 
-        # --- 横線（ノート行・黒鍵強調） ---
-        pen_dark = QPen(QColor(35, 35, 35), 1)
+        # --- 横線（黒鍵行を沈め、Cの境界を強調） ---
+        pen_row = QPen(QColor(46, 48, 60), 1)
+        pen_c = QPen(QColor(104, 110, 132), 1)
         for n in range(128):
             y = (127 - n) * self.key_height_pixels - self.scroll_y_offset
             if y + self.key_height_pixels < 0:
                 continue
             if y > self.height():
-                break
+                continue   # nが増えるほどyは減る。ここでbreakすると最初の行で終わってしまう
             if (n % 12) in (1, 3, 6, 8, 10):
                 p.fillRect(QRectF(0, y, self.width(), self.key_height_pixels),
-                           QColor(22, 22, 22))
-            p.setPen(pen_dark)
-            p.drawLine(0, int(y), self.width(), int(y))
+                           QColor(20, 21, 26))
+            p.setPen(pen_c if n % 12 == 0 else pen_row)
+            # 線は音の下端（=Cの下端）に引く
+            yl = int(y + self.key_height_pixels)
+            p.drawLine(0, yl, self.width(), yl)
 
-        # --- 縦線（可視範囲のみ）[OPT-2] ---
-        # scroll_x_offset を考慮して最初の拍インデックスを計算
+        # --- 縦線（小節 > 拍 > 16分）[OPT-2] ---
         first_beat = int(self.scroll_x_offset / self.pixels_per_beat)
         last_beat  = int((self.scroll_x_offset + self.width()) / self.pixels_per_beat) + 2
+        show_sub = self.pixels_per_beat >= 90
+        pen_sub = QPen(QColor(38, 40, 50), 1)
+        pen_beat = QPen(QColor(58, 61, 75), 1)
+        pen_bar = QPen(QColor(118, 125, 150), 1)
         for i in range(first_beat, last_beat):
             x = i * self.pixels_per_beat - self.scroll_x_offset
-            p.setPen(QPen(QColor(58, 58, 60) if i % 4 == 0 else QColor(36, 36, 36), 1))
+            if show_sub:
+                p.setPen(pen_sub)
+                for k in (1, 2, 3):
+                    xs = int(x + k * self.pixels_per_beat / 4)
+                    p.drawLine(xs, 0, xs, self.height())
+            p.setPen(pen_bar if i % 4 == 0 else pen_beat)
             p.drawLine(int(x), 0, int(x), self.height())
 
         p.end()

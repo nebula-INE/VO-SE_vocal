@@ -4,7 +4,7 @@ from typing import Dict, List, Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
-    QPushButton, QGroupBox, QScrollArea, QComboBox, QGridLayout
+    QPushButton, QGroupBox, QScrollArea, QComboBox, QGridLayout, QFrame
 )
 
 
@@ -24,8 +24,18 @@ class EffectsPanel(QWidget):
         # スクロールエリア
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
         self.container = QWidget()
+        self.container.setStyleSheet("background: transparent;")
         self.container_layout = QVBoxLayout(self.container)
+        self.container_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # 空状態の案内（エフェクト追加で非表示）
+        self.empty_label = QLabel("エフェクトはまだありません\\n下のメニューから追加できます")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setStyleSheet("color: #6b6b73; padding: 32px 8px;")
+        self.container_layout.addWidget(self.empty_label)
         scroll.setWidget(self.container)
         layout.addWidget(scroll)
 
@@ -54,6 +64,7 @@ class EffectsPanel(QWidget):
             "params": params,
         }
         self.effects.append(data)
+        self.empty_label.hide()
         widget = self._create_effect_widget(data)
         self.container_layout.addWidget(widget)
         self.effect_widgets[effect_id] = widget

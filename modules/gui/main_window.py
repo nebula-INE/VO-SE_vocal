@@ -1259,16 +1259,16 @@ class VoiceCardWidget(QFrame):
         self._search_key = display_name.lower()
 
         # --- 2. UIの基本設定 ---
-        self.setFixedSize(140, 180)
+        self.setFixedSize(124, 122)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.card_layout = QVBoxLayout(self)
-        self.card_layout.setContentsMargins(10, 10, 10, 10)
-        self.card_layout.setSpacing(8)
+        self.card_layout.setContentsMargins(8, 8, 8, 8)
+        self.card_layout.setSpacing(6)
 
         # --- 3. アイコンエリアの構築 ---
         self.icon_label = QLabel()
-        self.icon_label.setFixedSize(110, 110)
+        self.icon_label.setFixedSize(62, 62)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_label.setStyleSheet("background-color: rgba(0, 0, 0, 40); border-radius: 8px;")
 
@@ -1289,7 +1289,7 @@ class VoiceCardWidget(QFrame):
             self.recruit_text = QLabel("UNDER\nRECRUITMENT")
             self.recruit_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.recruit_text.setStyleSheet("""
-                color: #00FFCC; font-weight: bold; font-size: 10px;
+                color: #00FFCC; font-weight: bold; font-size: 8px;
                 background-color: rgba(0, 20, 20, 180); border-radius: 4px;
             """)
             overlay_layout.addWidget(self.recruit_text)
@@ -1381,12 +1381,17 @@ class VoiceCardGallery(QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setObjectName("GalleryScrollArea")
-        self.scroll_area.setStyleSheet("QScrollArea#GalleryScrollArea { border: none; }")
+        self.scroll_area.setStyleSheet(
+            "QScrollArea#GalleryScrollArea { border: none; background: transparent; }"
+            "QWidget#GalleryContainer { background: transparent; }"
+        )
+        self.scroll_area.viewport().setAutoFillBackground(False)
 
         self.container = QWidget()
+        self.container.setObjectName("GalleryContainer")
         self.grid = QGridLayout(self.container)
-        self.grid.setSpacing(20)
-        self.grid.setContentsMargins(20, 20, 20, 20)
+        self.grid.setSpacing(14)
+        self.grid.setContentsMargins(16, 8, 16, 8)
         for i in range(4):
             self.grid.setColumnStretch(i, 1)
 
@@ -2120,7 +2125,11 @@ class MainWindow(
         self.voice_gallery.voice_selected.connect(self.on_voice_changed)
         # ギャラリーウィジェットのインスタンス化（MainWindowが保持）
         if hasattr(self, 'main_layout') and self.main_layout:
-            self.main_layout.addWidget(self.voice_gallery)
+            self.voice_gallery_dock = QDockWidget("音源", self)
+            self.voice_gallery_dock.setObjectName("VoiceGalleryDock")
+            self.voice_gallery_dock.setWidget(self.voice_gallery)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.voice_gallery_dock)
+            self.resizeDocks([self.voice_gallery_dock], [245], Qt.Orientation.Vertical)
             # ギャラリーに対して「募集枠の情報」を渡して更新をかける
             # 内部で先ほどの refresh_gallery(self.confirmed_partners) が呼ばれる
             self.voice_gallery.set_partner_data(self.confirmed_partners)
@@ -2226,7 +2235,8 @@ class MainWindow(
         
         # 1. ウィンドウ基本設定
         self.setWindowTitle("VO-SE Engine DAW Pro")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(60, 40, 1560, 940)
+        self.setMinimumSize(1100, 680)
         
         # 2. セントラルウィジェットとメインレイアウトの確定
         central_widget = QWidget()
@@ -2235,8 +2245,8 @@ class MainWindow(
         
         self.setCentralWidget(central_widget)
         self.main_layout = QVBoxLayout(central_widget)
-        self.main_layout.setContentsMargins(5, 5, 5, 5)
-        self.main_layout.setSpacing(2)
+        self.main_layout.setContentsMargins(8, 6, 8, 6)
+        self.main_layout.setSpacing(6)
 
         # エフェクトパネルを右側にドッキング
         self.effects_dock = QDockWidget("エフェクトチェーン", self)
@@ -2258,6 +2268,7 @@ class MainWindow(
         self.setup_status_bar()
         self._set_transport_time(0.0)
         self.setup_voice_gallery()
+        QTimer.singleShot(0, self._init_piano_roll_view)
 
         # 4. 新しいスタイル（外部QSSテーマ）と初期状態の適用
         # 🔄 古い self.apply_apple_refined_style() を廃止し、永続化されたテーマをロード
@@ -2495,8 +2506,9 @@ class MainWindow(
     
         # ↓ ここで初期化（setup_timeline_area から移植）
         self.v_scrollbar = QSlider(Qt.Orientation.Vertical, self)
-        self.v_scrollbar.setRange(0, 1000)
-        self.v_scrollbar.setValue(10)
+        self.v_scrollbar.setRange(0, int(128 * self.timeline_widget.key_height_pixels))
+        self.v_scrollbar.setInvertedAppearance(True)   # つまみを上に動かす＝高い音域へ
+        self.v_scrollbar.setValue(0)
         self.v_scrollbar.valueChanged.connect(self.timeline_widget.set_vertical_offset)
 
         timeline_row.addWidget(self.keyboard_sidebar)
@@ -2520,13 +2532,22 @@ class MainWindow(
         self.graph_editor_widget = GraphEditorWidget()
         self.graph_editor_widget.pixels_per_beat = self.timeline_widget.pixels_per_beat
         self.graph_editor_widget.parameters_changed.connect(self.on_graph_parameters_changed)
-        timeline_splitter.addWidget(self.graph_editor_widget)
+        graph_container = QWidget()
+        self._graph_container_layout = QVBoxLayout(graph_container)
+        self._graph_container_layout.setContentsMargins(0, 4, 0, 0)
+        self._graph_container_layout.setSpacing(4)
+        self._graph_container_layout.addWidget(self.graph_editor_widget, 1)
+        timeline_splitter.addWidget(graph_container)
 
         # ピアノロール側にGraphEditorWidgetの実データを見せる
         self.timeline_widget.set_parameter_source(self.graph_editor_widget)
 
         # 初期比率（タイムライン7：グラフ3）
-        timeline_splitter.setSizes([700, 300])
+        timeline_splitter.setStretchFactor(0, 4)   # ピアノロール優先
+        timeline_splitter.setStretchFactor(1, 1)
+        timeline_splitter.setChildrenCollapsible(False)
+        self.graph_editor_widget.setMinimumHeight(100)
+        timeline_splitter.setSizes([780, 130])
 
         right_layout.addWidget(timeline_splitter)
         right_layout.addWidget(self.h_scrollbar)
@@ -2537,13 +2558,28 @@ class MainWindow(
 
         # --- メインレイアウトに追加（一度だけ） ---
         if self.main_layout is not None:
-            self.main_layout.addWidget(self.editor_splitter)
+            self.main_layout.addWidget(self.editor_splitter, 1)  # 余白は全部ピアノロールへ
+            self.editor_splitter.setStretchFactor(0, 0)
+            self.editor_splitter.setStretchFactor(1, 1)
+            self.editor_splitter.setSizes([260, 1200])
 
         # --- 初期リスト更新 ---
         self.refresh_track_list_ui()
 
         # ★ ここでエイリアスを設定（ウィジェットが実体化された後）
         self.timeline = self.timeline_widget
+
+    def _init_piano_roll_view(self) -> None:
+        """起動直後のピアノロール表示位置を C5 付近に合わせ、スクロール範囲を実サイズに合わせる。"""
+        tl = getattr(self, "timeline_widget", None)
+        sb = getattr(self, "v_scrollbar", None)
+        if tl is None or sb is None:
+            return
+        kh = float(tl.key_height_pixels)
+        max_off = max(0, int(128 * kh - tl.height()))
+        sb.setRange(0, max_off)
+        target = int((127 - 72) * kh - tl.height() / 2)   # ノート72(C5)を中央に
+        sb.setValue(max(0, min(max_off, target)))
 
     def setup_bottom_panel(self):
         """下部：歌詞入力などのツール"""
@@ -2559,10 +2595,15 @@ class MainWindow(
         self.lyrics_button.setObjectName("PrimaryButton")
         self.lyrics_button.setFixedHeight(36)
         self.lyrics_button.clicked.connect(self.on_click_apply_lyrics_bulk)
-        bottom_box.addWidget(self.lyrics_button)
-
-        bottom_box.addStretch()
-        self.main_layout.addLayout(bottom_box)
+        cp = getattr(self, "_control_panel_layout", None)
+        if cp is not None:
+            # 専用の1行を使わず、コントロールバーの末尾（stretchの手前）に入れる
+            self.lyrics_button.setFixedHeight(30)
+            cp.insertWidget(max(0, cp.count() - 1), self.lyrics_button)
+        else:
+            bottom_box.addWidget(self.lyrics_button)
+            bottom_box.addStretch()
+            self.main_layout.addLayout(bottom_box)
 
 
     
@@ -2621,8 +2662,10 @@ class MainWindow(
         panel_layout.addWidget(self.auto_lyrics_button)
 
         # --- パラメーター切り替えボタン ---
-        panel_layout.addSpacing(20)
-        panel_layout.addWidget(QLabel("Edit Mode:"))
+        param_row = QHBoxLayout()
+        param_row.setContentsMargins(8, 0, 8, 0)
+        param_row.setSpacing(6)
+        param_row.addWidget(QLabel("Edit Mode:"))
         
         # ボタングループで「どれか1つが選択されている状態」を作る
         self.param_group = QButtonGroup(self)
@@ -2651,15 +2694,22 @@ class MainWindow(
             if name == "Pitch":
                 btn.setChecked(True)
             
-            panel_layout.addWidget(btn)
+            param_row.addWidget(btn)
             self.param_group.addButton(btn)
             self.param_buttons[name] = btn
 
         # ボタンがクリックされたらグラフエディタのモードを切り替える
         self.param_group.buttonClicked.connect(self.on_param_mode_changed)
 
+        param_row.addStretch()
+        gcl = getattr(self, "_graph_container_layout", None)
+        if gcl is not None:
+            gcl.insertLayout(0, param_row)      # グラフエディタの真上
+        else:
+            panel_layout.addLayout(param_row)   # フォールバック
         panel_layout.addStretch()
-        self.main_layout.addLayout(panel_layout)
+        self._control_panel_layout = panel_layout
+        self.main_layout.insertLayout(0, panel_layout)   # エディタの上に配置
 
 
 
@@ -3120,6 +3170,25 @@ class MainWindow(
         monitor = PerformanceMonitorWidget(self)
         dock.setWidget(monitor)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+        gal = getattr(self, "voice_gallery_dock", None)
+        if gal is not None:
+            self.tabifyDockWidget(gal, dock)   # 音源タブの裏に格納（縦幅を食わない）
+            gal.raise_()
+
+        # ステータスバーに常時表示する1行サマリー
+        try:
+            import psutil as _ps
+            self._perf_summary = QLabel("CPU --% · MEM --%")
+            self._perf_summary.setObjectName("PerfSummary")
+            self.statusBar().addPermanentWidget(self._perf_summary)
+            def _tick(_ps=_ps, lbl=self._perf_summary):
+                lbl.setText(f"CPU {_ps.cpu_percent():.0f}% · MEM {_ps.virtual_memory().percent:.0f}%")
+            self._perf_summary_timer = QTimer(self)
+            self._perf_summary_timer.setInterval(1000)
+            self._perf_summary_timer.timeout.connect(_tick)
+            self._perf_summary_timer.start()
+        except Exception:
+            pass
 
         # ツールバーに表示/非表示トグルを追加
         view_menu = self.menuBar().addMenu("表示(&V)")
@@ -3147,9 +3216,12 @@ class MainWindow(
         self.buffer_label = QLabel("256 samples")
         perf_layout.addWidget(self.buffer_label)
 
-        # メインレイアウトに追加（適宜調整）
-        if hasattr(self, 'main_layout'):
-            self.main_layout.insertLayout(1, perf_layout)  # 上部に挿入
+        # 専用の1行を使わずステータスバー右側へ
+        from PySide6.QtWidgets import QWidget as _QW
+        holder = _QW()
+        perf_layout.setContentsMargins(0, 0, 0, 0)
+        holder.setLayout(perf_layout)
+        self.statusBar().addPermanentWidget(holder)
 
     @Slot(int)
     def on_buffer_size_changed(self, value: int) -> None:
