@@ -745,40 +745,54 @@ jobs:
 
 
 
-      - name: "🧪 Run pytest (smoke + unit)"
+      - name: Install test dependencies
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
           QT_MEDIA_BACKEND: ffmpeg
         run: |
-            # 1. テスト用依存パッケージをインストール
-            # Build artifact was already packaged with requirements-runtime.txt.
-            # Install optional training deps only in the test environment so existing
-            # adaptation tests can still exercise the training code without bundling it.
+            set -euo pipefail
+            # Keep optional training dependencies in the test environment only.
             python -m pip install --upgrade pip
             python -m pip install -r requirements-training.txt
             python -m pip install pytest pytest-xdist pytest-cov pytest-qt
 
-            # 2. ビルド成果物の確認（デバッグ用）
-            echo "Checking dist/ contents:"
-            ls -la dist/ || true
-
-            # 3. スモークテスト（アプリ起動テスト）を実行
-            #    失敗したら即座に停止（--maxfail=1）
+      - name: "🧪 Run pytest (smoke)"
+        shell: bash
+        timeout-minutes: 45
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_MEDIA_BACKEND: ffmpeg
+          PYTHONFAULTHANDLER: "1"
+        run: |
+            set -euo pipefail
             echo "--- Running Smoke Tests ---"
-            python -m pytest tests/ -v -m smoke --maxfail=1
+            python -m pytest tests/ -v -m smoke --maxfail=1 -o faulthandler_timeout=180
 
-            # 4. 単体テスト（パーサー・データモデル・GUIコンポーネント）を実行
-            #    カバレッジレポート（XML + ターミナル）を生成し、並列実行（-n auto）
+      - name: "🧪 Run pytest (unit + coverage)"
+        shell: bash
+        timeout-minutes: 90
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_MEDIA_BACKEND: ffmpeg
+          PYTHONFAULTHANDLER: "1"
+        run: |
+            set -euo pipefail
             echo "--- Running Unit Tests with Coverage ---"
+            # Windows process startup and Qt test isolation are expensive with
+            # auto-detected CPU counts. Cap Windows workers; preserve auto on Unix.
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              PYTEST_WORKERS=2
+            else
+              PYTEST_WORKERS=auto
+            fi
             python -m pytest tests/ -v -m "not smoke" \
                 --cov=modules \
                 --cov-report=xml:coverage.xml \
                 --cov-report=term \
-                -n auto
-
-            # 5. カバレッジ結果をファイルとして出力（後続ステップでアップロード可能）
-            echo "✅ Coverage report saved to coverage.xml"
+                -n "$PYTEST_WORKERS" \
+                -o faulthandler_timeout=180
+            echo "Coverage report saved to coverage.xml"
 
       - name: 🍎 Optional notarize macOS app (recommended)
         if: startsWith(matrix.os, 'macos')
