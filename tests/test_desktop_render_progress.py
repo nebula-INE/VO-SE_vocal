@@ -44,7 +44,7 @@ def test_desktop_v2_render_retries_direct_oto_alias_before_silence():
 
 
 def test_desktop_native_note_failure_cannot_be_converted_to_silence_success():
-    source = (ROOT / "src" / "vose_core.cpp").read_text(encoding="utf-8")
+    source = (ROOT / "assets" / "src" / "vose_core.cpp").read_text(encoding="utf-8")
 
     assert "worker_failed.store(true" in source
     assert "cancel_flag.store(true" in source
