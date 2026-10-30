@@ -48,11 +48,7 @@ class TestSmoke(unittest.TestCase):
                 # 一定時間クラッシュせずイベントループが生存したことを
                 # 起動成功とみなし、テスト側から終了させる。
                 proc.terminate()
-                try:
-                    stdout, stderr = proc.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    stdout, stderr = proc.communicate()
+                stdout, stderr = _bounded_communicate(proc)
 
                 print(
                     f"Startup check: process remained alive for {startup_window:.0f}s.\n"
@@ -75,7 +71,28 @@ class TestSmoke(unittest.TestCase):
         finally:
             if proc.poll() is None:
                 proc.kill()
-                proc.communicate()
+                _bounded_communicate(proc)
+
+
+def _bounded_communicate(proc, timeout=5):
+    """Never let inherited child-process pipe handles hang the smoke suite."""
+    try:
+        return proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        try:
+            return proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as final_exc:
+            # A descendant may still hold the inherited pipe handles open.
+            # Close our ends and let the test runner continue instead of
+            # waiting forever for EOF from an unrelated child process.
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+            return (
+                final_exc.output or exc.output or "",
+                final_exc.stderr or exc.stderr or "",
+            )
 
 
 if __name__ == "__main__":
