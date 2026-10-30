@@ -102,19 +102,18 @@ class KeyboardSidebarWidget(QWidget):
             
             # 質感を出すためのグラデーション
             grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-            grad.setColorAt(0, QColor(255, 255, 255))
-            grad.setColorAt(0.9, QColor(245, 245, 245))
-            grad.setColorAt(1, QColor(225, 225, 225))
+            grad.setColorAt(0, QColor(222, 225, 232))
+            grad.setColorAt(1, QColor(204, 208, 217))
             
             painter.setBrush(grad)
-            painter.setPen(QPen(QColor(180, 180, 180), 1))
+            painter.setPen(QPen(QColor(120, 126, 142), 1))
             painter.drawRect(rect)
             
             # C音のラベル描画（オクターブ位置の把握用）
             if n % 12 == 0:
                 octave = (n // 12) - 1
                 painter.setFont(self.label_font)
-                painter.setPen(QColor(120, 120, 120))
+                painter.setPen(QColor(70, 76, 92))
                 painter.drawText(
                     rect.adjusted(0, 0, -8, 0), 
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, 
@@ -132,8 +131,8 @@ class KeyboardSidebarWidget(QWidget):
             
             # 黒鍵の高級感を出す深みのあるグラデーション
             grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
-            grad.setColorAt(0, QColor(60, 60, 60))
-            grad.setColorAt(1, QColor(10, 10, 10))
+            grad.setColorAt(0, QColor(52, 55, 64))
+            grad.setColorAt(1, QColor(20, 21, 26))
             
             painter.setBrush(grad)
             painter.setPen(QPen(Qt.GlobalColor.black, 1))
