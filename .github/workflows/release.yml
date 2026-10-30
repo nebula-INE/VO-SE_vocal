@@ -755,7 +755,7 @@ jobs:
             # Keep optional training dependencies in the test environment only.
             python -m pip install --upgrade pip
             python -m pip install -r requirements-training.txt
-            python -m pip install pytest pytest-xdist pytest-cov pytest-qt
+            python -m pip install pytest pytest-xdist pytest-cov pytest-qt pytest-timeout
 
       - name: "🧪 Run pytest (smoke)"
         shell: bash
@@ -767,7 +767,7 @@ jobs:
         run: |
             set -euo pipefail
             echo "--- Running Smoke Tests ---"
-            python -m pytest tests/ -v -m smoke --maxfail=1 -o faulthandler_timeout=180
+            python -m pytest tests/ -v -m smoke --maxfail=1 --timeout=300 --timeout-method=thread --durations=20 -o faulthandler_timeout=180
 
       - name: "🧪 Run pytest (unit + coverage)"
         shell: bash
