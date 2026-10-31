@@ -26,12 +26,15 @@ class TestSmoke(unittest.TestCase):
 
         cmd = [app_path] if os.path.exists(app_path) else [sys.executable, "main.py"]
 
+        # Do not use PIPE for a GUI process. On Windows, descendants can inherit
+        # pipe handles, leaving communicate()'s reader threads blocked forever
+        # even after the parent process has exited.
         proc = subprocess.Popen(
             cmd,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         startup_window = 8.0
@@ -42,57 +45,62 @@ class TestSmoke(unittest.TestCase):
                 time.sleep(0.25)
 
             returncode = proc.poll()
-
             if returncode is None:
                 # GUIアプリは通常の終了を待つものではない。
                 # 一定時間クラッシュせずイベントループが生存したことを
                 # 起動成功とみなし、テスト側から終了させる。
-                proc.terminate()
-                stdout, stderr = _bounded_communicate(proc)
-
                 print(
-                    f"Startup check: process remained alive for {startup_window:.0f}s.\n"
-                    f"STDOUT:{stdout}\nSTDERR:{stderr}"
+                    f"Startup check: process remained alive for {startup_window:.0f}s."
                 )
                 return
 
-            stdout, stderr = proc.communicate()
             if returncode == 0:
                 print(
-                    "Startup check: application exited normally during the smoke-test window.\n"
-                    f"STDOUT:{stdout}\nSTDERR:{stderr}"
+                    "Startup check: application exited normally during the smoke-test window."
                 )
                 return
 
             self.fail(
-                f"Application exited unexpectedly with code {returncode}.\n"
-                f"STDOUT:{stdout}\nSTDERR:{stderr}"
+                f"Application exited unexpectedly with code {returncode}."
             )
         finally:
-            if proc.poll() is None:
-                proc.kill()
-                _bounded_communicate(proc)
+            _stop_process_tree(proc)
 
 
-def _bounded_communicate(proc, timeout=5):
-    """Never let inherited child-process pipe handles hang the smoke suite."""
-    try:
-        return proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        proc.kill()
+def _stop_process_tree(proc, timeout=5):
+    """Stop the smoke-test app without waiting for inherited pipe handles."""
+    if proc.poll() is not None:
+        return
+
+    if sys.platform == "win32":
+        # The packaged Windows app may create child processes. Stop the whole
+        # tree so the smoke test does not leave background processes behind.
         try:
-            return proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as final_exc:
-            # A descendant may still hold the inherited pipe handles open.
-            # Close our ends and let the test runner continue instead of
-            # waiting forever for EOF from an unrelated child process.
-            for stream in (proc.stdout, proc.stderr):
-                if stream is not None:
-                    stream.close()
-            return (
-                final_exc.output or exc.output or "",
-                final_exc.stderr or exc.stderr or "",
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+                check=False,
             )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        proc.wait(timeout=timeout)
 
 
 if __name__ == "__main__":
