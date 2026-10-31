@@ -4791,15 +4791,17 @@ class MainWindow(
         self.is_looping_selection = not self.is_looping_selection
         self.is_looping = self.is_looping_selection
 
-        if hasattr(self, 'loop_button'):
-            self.loop_button.setText("ループ: ON" if self.is_looping else "ループ: OFF")
+        loop_button = getattr(self, 'loop_button', None)
+        if loop_button is not None:
+            loop_button.setText("ループ: ON" if self.is_looping else "ループ: OFF")
 
         self._refresh_transport_button_states()
-        if hasattr(self, 'status_label'):
-            if self.is_looping:
-                self.status_label.setText("ループ再生を有効にしました")
-            else:
-                self.status_label.setText("ループ再生を無効にしました")
+        message = "ループ再生を有効にしました" if self.is_looping else "ループ再生を無効にしました"
+        status_label = getattr(self, 'status_label', None)
+        if status_label is not None:
+            status_label.setText(message)
+        else:
+            self.statusBar().showMessage(message, 3000)
 
 
     def stop_and_clear_playback(self) -> None:

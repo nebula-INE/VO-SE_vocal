@@ -34,7 +34,7 @@ def main():
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
 
-    # --- 2. スタイルシート（themes/*.qss に一本化） ---
+    # --- 2. スタイルシート（assets/themes/*.qss に一本化） ---
     from modules.gui.themes import apply_theme
     from PySide6.QtCore import QSettings
     apply_theme(str(QSettings("VO-SE", "vocal").value("theme", "dark")))
