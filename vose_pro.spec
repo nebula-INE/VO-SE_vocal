@@ -32,7 +32,7 @@ if os.path.exists(dll_path):
     print(f"DEBUG: Added Engine Binary from {dll_path}")
 
 # テーマQSSとアイコンSVGを同梱（themes.py / icons.py が実行時に参照）
-for _src, _dst in (('themes', 'themes'), ('assets/icons', 'assets/icons')):
+for _src, _dst in (('assets/themes', 'assets/themes'), ('assets/icons', 'assets/icons')):
     if os.path.isdir(_src):
         added_files.append((_src, _dst))
 
