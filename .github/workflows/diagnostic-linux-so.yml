@@ -1,0 +1,73 @@
+name: "Diagnostic - Export Linux VO-SE core library"
+
+on:
+  push:
+    branches:
+      - diagnostic/export-linux-so-20261031
+    paths:
+      - ".github/workflows/diagnostic-linux-so.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-so:
+    name: Build and export libvose_core.so only
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Build native engine using the existing Linux compile recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin src/world build/linux-world
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
+          cp include/world/*.h src/world/
+          cp include/*.h src/
+
+          for f in src/world/*.cpp; do
+            [ -e "$f" ] || continue
+            obj="build/linux-world/$(basename "${f%.cpp}").o"
+            g++ -O3 -fPIC -ffast-math -c -std=c++17 \
+              -D_USE_MATH_DEFINES \
+              -I./src -I./include -I./src/world \
+              "$f" -o "$obj"
+          done
+
+          g++ -O3 -fPIC -shared -std=c++17 \
+            -Wl,-soname,libvose_core.so \
+            -I./src -I./include -I./src/world \
+            -o bin/libvose_core.so \
+            src/vose_core.cpp \
+            src/vose_streaming_final.cpp \
+            build/linux-world/*.o
+
+      - name: Verify exported library
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s bin/libvose_core.so
+          file bin/libvose_core.so
+          stat -c 'size=%s bytes' bin/libvose_core.so
+          sha256sum bin/libvose_core.so
+          echo "=== Requested exports ==="
+          nm -D --defined-only bin/libvose_core.so | c++filt | grep -E 'execute_render|set_oto_data|init_official_engine|execute_render_cancelable|set_vocal_timeline|get_engine_version|clear_engine_cache' || true
+          echo "=== Dependencies ==="
+          ldd bin/libvose_core.so
+
+      - name: Upload only the native shared library
+        uses: actions/upload-artifact@v4
+        with:
+          name: VO-SE-Linux-Core-Diagnostic
+          path: bin/libvose_core.so
+          if-no-files-found: error
+          retention-days: 7
