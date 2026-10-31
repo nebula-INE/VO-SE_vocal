@@ -32,8 +32,7 @@ class EffectsPanel(QWidget):
         self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         # 空状態の案内（エフェクト追加で非表示）
-        self.empty_label = QLabel("エフェクトはまだありません
-下のメニューから追加できます")
+        self.empty_label = QLabel("エフェクトはまだありません\n下のメニューから追加できます")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet("color: #6b6b73; padding: 32px 8px;")
         self.container_layout.addWidget(self.empty_label)
