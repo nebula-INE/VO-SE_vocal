@@ -47,7 +47,12 @@ def test_flow_layout_insert_widget(app):
     lay.addWidget(a)
     lay.addWidget(c)
     lay.insertWidget(1, b)
-    assert [lay.itemAt(i).widget() for i in range(lay.count())] == [a, b, c]
+    items = []
+    for i in range(lay.count()):
+        item = lay.itemAt(i)
+        assert item is not None
+        items.append(item.widget())
+    assert items == [a, b, c]
 
 
 @pytest.fixture(scope="module")
