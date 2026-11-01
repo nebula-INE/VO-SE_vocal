@@ -8832,9 +8832,9 @@ class MainWindow(
 
         # 上段：タイムライン本体
         timeline_container = QWidget()
-        # ピアノロールの操作領域を確保し、グラフエディタに押しつぶされないようにする。
+        # ピアノロール本体に最低高さを設定し、グラフエディタに押しつぶされないようにする。
         # グラフ側の最低高さ(100px)とは別に、タイムライン本体を最低400px確保する。
-        timeline_container.setMinimumHeight(400)
+        self.timeline_widget.setMinimumHeight(400)
         timeline_container_layout = QHBoxLayout(timeline_container)
         timeline_container_layout.setContentsMargins(0, 0, 0, 0)
         timeline_container_layout.addLayout(timeline_row)
