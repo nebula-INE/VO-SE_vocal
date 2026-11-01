@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+# Optional AI-training dependencies (torch/torchaudio/peft) are excluded from runtime CI.
 import torch
 import os
 import numpy as np
