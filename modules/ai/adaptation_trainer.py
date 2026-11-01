@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+# Optional AI-training dependencies (torch/torchaudio/peft) are excluded from runtime CI.
 # modules/ai/adaptation_trainer.py
 import torch
 import torch.nn as nn
