@@ -156,6 +156,7 @@ class VoiceManager:
         import zipfile
         import tempfile
         import shutil
+        import ntpath
 
         if not os.path.exists(zip_path):
             raise FileNotFoundError(f"ZIP not found: {zip_path}")
@@ -164,8 +165,16 @@ class VoiceManager:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 root = os.path.realpath(tmp_dir)
                 for member in zf.infolist():
-                    member_name = member.filename.replace("\\\\", "/")
-                    if os.path.isabs(member_name) or member_name.startswith("/"):
+                    # ZIP内の区切りはPOSIX形式だが、Windows形式の区切りも正規化する。
+                    # ドライブ付き・ドライブ相対・絶対パスはOSに関係なく拒否する。
+                    member_name = member.filename.replace("\\", "/")
+                    drive, _ = ntpath.splitdrive(member_name)
+                    if (
+                        drive
+                        or ntpath.isabs(member_name)
+                        or os.path.isabs(member_name)
+                        or member_name.startswith("/")
+                    ):
                         raise ValueError(f"不正なZIPパスです: {member.filename}")
                     destination = os.path.realpath(os.path.join(tmp_dir, member_name))
                     if os.path.commonpath([root, destination]) != root:
