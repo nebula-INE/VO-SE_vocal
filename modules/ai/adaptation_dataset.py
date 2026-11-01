@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+# Optional AI-training dependencies (torch/torchaudio) are excluded from runtime CI.
 # modules/ai/adaptation_dataset.py
 import torch
 import torchaudio
