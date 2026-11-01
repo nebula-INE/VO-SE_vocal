@@ -8921,7 +8921,10 @@ class MainWindow(
         上部コントロールパネル(セカンドツールバー)の構築（PATCH_GUIDE 4番準拠）
         """
         from modules.gui.icons import icon
-        panel_layout = QHBoxLayout()
+        from modules.gui.flow_layout import FlowLayout
+        # 幅が足りないときは重ならずに次の行へ折り返す（QHBoxLayout だと
+        # 最小幅を下回ったとき、ボタン同士が重なって見えていた）
+        panel_layout = FlowLayout(margin=0, h_spacing=8, v_spacing=6)
 
         # 録音コントロール（危険色はQSS側の #RecordButton が担当）
         self.record_button = QPushButton(icon("record"), " 録音")
@@ -8930,19 +8933,32 @@ class MainWindow(
         self.record_button.clicked.connect(self.on_record_toggled)
         panel_layout.addWidget(self.record_button)
 
-        panel_layout.addSpacing(12)
-
-        # キャラクター選択
-        panel_layout.addWidget(QLabel("Voice:"))
+        # キャラクター選択（ラベルと対で折り返されるよう 1 つのまとまりにする）
+        voice_group = QWidget()
+        voice_row = QHBoxLayout(voice_group)
+        voice_row.setContentsMargins(0, 0, 0, 0)
+        voice_row.setSpacing(6)
+        voice_row.addWidget(QLabel("Voice:"))
         self.character_selector = QComboBox()
-        panel_layout.addWidget(self.character_selector)
-        
+        self.character_selector.setMinimumWidth(170)
+        self.character_selector.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.character_selector.setToolTip("使用する音源。音源の追加は右の「音源」パネルから行えます")
+        voice_row.addWidget(self.character_selector)
+        panel_layout.addWidget(voice_group)
+
         # MIDIポート選択
-        panel_layout.addWidget(QLabel("MIDI:"))
+        midi_group = QWidget()
+        midi_row = QHBoxLayout(midi_group)
+        midi_row.setContentsMargins(0, 0, 0, 0)
+        midi_row.setSpacing(6)
+        midi_row.addWidget(QLabel("MIDI:"))
         self.midi_port_selector = QComboBox()
+        self.midi_port_selector.setMinimumWidth(130)
+        midi_row.addWidget(self.midi_port_selector)
+        panel_layout.addWidget(midi_group)
         self.midi_port_selector.addItem("ポートなし", None)
         self.midi_port_selector.currentIndexChanged.connect(self.on_midi_port_changed)
-        panel_layout.addWidget(self.midi_port_selector)
         
         # ファイルを開く(MIDI/UST等)
         self.open_button = QPushButton(icon("open_folder"), " 開く")
@@ -8955,8 +8971,6 @@ class MainWindow(
         self.rescan_voices_button.setObjectName("SecondaryButton")
         self.rescan_voices_button.clicked.connect(self.refresh_voice_list)
         panel_layout.addWidget(self.rescan_voices_button)
-
-        panel_layout.addSpacing(12)
 
         # AI解析ボタン（インライン直書き廃止 → PrimaryButton）
         self.ai_analyze_button = QPushButton(icon("ai_wand"), " AI Auto Setup")
@@ -9015,8 +9029,7 @@ class MainWindow(
         if gcl is not None:
             gcl.insertLayout(0, param_row)      # グラフエディタの真上
         else:
-            panel_layout.addLayout(param_row)   # フォールバック
-        panel_layout.addStretch()
+            self.main_layout.addLayout(param_row)   # フォールバック
         self._control_panel_layout = panel_layout
         self.main_layout.insertLayout(0, panel_layout)   # エディタの上に配置
 
