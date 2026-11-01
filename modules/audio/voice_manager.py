@@ -45,6 +45,23 @@ class VoiceManager:
         self.internal_voice_dir = os.path.join(self.base_path, "voice_banks")
         self.voices = {}  # { "キャラ名": "絶対パス" }
 
+    @property
+    def user_voice_dir(self) -> str:
+        """「音源を追加」で取り込んだ音源の保存先（書き込み可能な場所）。
+
+        通常実行では <プロジェクト>/voice_banks。PyInstaller 等で固めた場合は
+        展開先(_MEIPASS)が読み取り専用の一時フォルダになるため、ユーザーデータ領域を使う。
+        """
+        if not getattr(sys, 'frozen', False):
+            return self.internal_voice_dir
+        if self.system == "Windows":
+            root = os.getenv("APPDATA") or os.path.expanduser("~")
+        elif self.system == "Darwin":
+            root = os.path.expanduser("~/Library/Application Support")
+        else:
+            root = os.getenv("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        return os.path.join(root, "VO-SE", "voices")
+
     def scan_voices(self):
         """標準的なUTAU音源パスと内部フォルダをスキャン"""
         search_paths = []
@@ -52,15 +69,23 @@ class VoiceManager:
         # 1. OSごとの標準パスを追加
         if self.system == "Darwin": # macOS
             search_paths.append(os.path.expanduser("~/Library/Application Support/OpenUTAU/Content/Voices/"))
+            search_paths.append(os.path.expanduser("~/Library/Application Support/OpenUTAU/Singers"))
             search_paths.append(os.path.expanduser("~/Library/Application Support/Vocaloid/Voices/")) # 互換用
         elif self.system == "Windows":
             search_paths.append(r"C:\Program Files (x86)\UTAU\voice")
             appdata_roaming = os.getenv('APPDATA')
             if appdata_roaming:
                 search_paths.append(os.path.join(appdata_roaming, "OpenUTAU", "Content", "Voices"))
+                search_paths.append(os.path.join(appdata_roaming, "OpenUTAU", "Singers"))
+        else: # Linux ほか
+            data_home = os.getenv("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+            search_paths.append(os.path.join(data_home, "OpenUTAU", "Singers"))
+            search_paths.append(os.path.join(data_home, "OpenUTAU", "Content", "Voices"))
 
-        # 2. プロジェクト内部の voice_banks フォルダを追加
+        # 2. プロジェクト内部の voice_banks フォルダ、および「音源を追加」の保存先を追加
         search_paths.append(self.internal_voice_dir)
+        if os.path.normpath(self.user_voice_dir) != os.path.normpath(self.internal_voice_dir):
+            search_paths.append(self.user_voice_dir)
 
         self.voices.clear()
         for path in search_paths:
@@ -161,21 +186,79 @@ class VoiceManager:
                 raise ValueError('oto.ini が見つからないため、UTAU音源として認識できません。')
 
             src_dir = min(candidates, key=lambda p: len(p))
-            voice_name = os.path.basename(src_dir.rstrip(os.sep)) or 'ImportedVoice'
-            safe_name = ''.join(ch for ch in voice_name if ch not in '<>:"/\\|?*').strip() or 'ImportedVoice'
-
-            os.makedirs(self.internal_voice_dir, exist_ok=True)
-            dest_dir = os.path.join(self.internal_voice_dir, safe_name)
-            base = dest_dir
-            idx = 1
-            while os.path.exists(dest_dir):
-                dest_dir = f"{base}_{idx}"
-                idx += 1
-
-            shutil.copytree(src_dir, dest_dir)
+            dest_dir = self._copy_voice_dir(src_dir)
 
         self.scan_voices()
         return os.path.basename(dest_dir)
+
+    # ------------------------------------------------------------------
+    # フォルダからの取り込み
+    # ------------------------------------------------------------------
+    @staticmethod
+    def find_oto_dirs(root_dir, max_depth=4):
+        """root_dir 以下（max_depth 階層まで）で oto.ini を含むフォルダを浅い順に返す。"""
+        found = []
+        root_dir = os.path.normpath(root_dir)
+        base_depth = root_dir.count(os.sep)
+        for cur, dirs, files in os.walk(root_dir):
+            if cur.count(os.sep) - base_depth >= max_depth:
+                dirs[:] = []
+            if any(f.lower() == 'oto.ini' for f in files):
+                found.append(cur)
+        return sorted(found, key=lambda p: (p.count(os.sep), p))
+
+    def install_voice_from_folder(self, folder_path):
+        """UTAU音源フォルダを保存先(user_voice_dir)へコピーして追加する。
+
+        選んだフォルダ自体、またはその下の浅い階層に oto.ini があればよい
+        （「音源フォルダの1つ上」を選んでしまった場合にも対応）。
+        すでに保存先の中にある音源を選んだ場合はコピーせず、そのまま使う。
+        戻り値: 追加された音源の表示名（フォルダ名）
+        """
+        if not folder_path or not os.path.isdir(folder_path):
+            raise FileNotFoundError(f"フォルダが見つかりません: {folder_path}")
+
+        candidates = self.find_oto_dirs(folder_path)
+        if not candidates:
+            raise ValueError('oto.ini が見つからないため、UTAU音源として認識できません。')
+        src_dir = candidates[0]
+
+        root = os.path.realpath(self.user_voice_dir)
+        real_src = os.path.realpath(src_dir)
+        try:
+            inside = os.path.commonpath([root, real_src]) == root
+        except ValueError:      # 別ドライブなど
+            inside = False
+        if inside:
+            self.scan_voices()
+            return os.path.basename(real_src)
+
+        dest_dir = self._copy_voice_dir(src_dir)
+        self.scan_voices()
+        return os.path.basename(dest_dir)
+
+    def _copy_voice_dir(self, src_dir):
+        """src_dir を user_voice_dir 配下へ重複しない名前でコピーし、コピー先パスを返す。"""
+        import shutil
+
+        voice_name = os.path.basename(src_dir.rstrip(os.sep)) or 'ImportedVoice'
+        safe_name = ''.join(ch for ch in voice_name if ch not in '<>:"/\\|?*').strip() or 'ImportedVoice'
+
+        os.makedirs(self.user_voice_dir, exist_ok=True)
+        dest_dir = os.path.join(self.user_voice_dir, safe_name)
+        base = dest_dir
+        idx = 1
+        while os.path.exists(dest_dir):
+            dest_dir = f"{base}_{idx}"
+            idx += 1
+
+        try:
+            shutil.copytree(src_dir, dest_dir)
+        except Exception:
+            # 途中まで作られたコピーを残さない（次回スキャンで壊れた音源として出るため）
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            raise
+        return dest_dir
 
     def get_voice_path(self, name):
         return self.voices.get(name)
