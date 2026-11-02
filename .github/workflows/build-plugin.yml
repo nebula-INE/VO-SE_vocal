@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14, ubuntu-latest]
+        os: [windows-latest, macos-15, ubuntu-latest]
 
     steps:
       - name: Checkout repository
@@ -124,7 +124,7 @@ jobs:
 
           COMMON_OPTS="-DCMAKE_BUILD_TYPE=Release -DPROJECT_VERSION=1.0.0"
 
-          if [ "${{ matrix.os }}" == "macos-14" ]; then
+          if [ "${{ matrix.os }}" == "macos-15" ]; then
             cmake -B juce_plugin/build -S juce_plugin \
               $COMMON_OPTS \
               -DCMAKE_MODULE_LINKER_FLAGS="-liconv" \

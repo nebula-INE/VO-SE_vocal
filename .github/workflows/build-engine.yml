@@ -27,7 +27,7 @@ jobs:
       matrix:
         # [FIX-CI-ACTIONS] actions/checkout@v6 / setup-python@v6 は存在しない。
         # 2026年6月現在の最新安定版 v4 に統一。
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest, macos-15, ubuntu-latest]
 
     steps:
       - name: "📂 [Step 1] Checkout Repository"
@@ -132,7 +132,7 @@ jobs:
               /I src /I include /I src\\world \
               /link"
 
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+          elif [ "${{ matrix.os }}" = "macos-15" ]; then
             mkdir -p build/macos-world
             for f in src/world/*.cpp; do
               [ -e "$f" ] || continue
@@ -215,7 +215,7 @@ jobs:
               --add-data "bin/vose_core.dll;bin" \
               --add-data "assets;assets" \
               --distpath ./dist_out --name "VO-SE_PRO_Win" main.py
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+          elif [ "${{ matrix.os }}" = "macos-15" ]; then
             pyinstaller --noconsole --windowed \
               --add-data "bin/libvose_core.dylib:bin" \
               --add-data "assets:assets" \
@@ -240,7 +240,7 @@ jobs:
             windows-latest)
               EXE="./dist_out/VO-SE_PRO_Win.exe"
               ;;
-            macos-latest)
+            macos-15)
               EXE="./dist_out/VO-SE_PRO_Mac.app/Contents/MacOS/VO-SE_PRO_Mac"
               ;;
             ubuntu-latest)
