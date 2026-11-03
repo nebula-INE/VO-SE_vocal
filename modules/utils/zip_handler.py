@@ -5,6 +5,8 @@ import zipfile
 import os
 import shutil
 
+from modules.utils.text_encoding import safe_extract_zip
+
 class ZipHandler:
     @staticmethod
     def extract_voice_bank(zip_path, target_root="voice_banks"):
@@ -22,20 +24,8 @@ class ZipHandler:
                 if os.path.exists(extract_path):
                     shutil.rmtree(extract_path)
                 
-                root = os.path.realpath(extract_path)
-                for member in zip_ref.infolist():
-                    member_name = member.filename.replace("\\\\", "/")
-                    if os.path.isabs(member_name) or member_name.startswith("/"):
-                        raise ValueError(f"不正なZIPパスです: {member.filename}")
-                    destination = os.path.realpath(os.path.join(extract_path, member_name))
-                    if os.path.commonpath([root, destination]) != root:
-                        raise ValueError(f"ZIP展開先が対象フォルダ外です: {member.filename}")
-                    if member.is_dir():
-                        os.makedirs(destination, exist_ok=True)
-                        continue
-                    os.makedirs(os.path.dirname(destination), exist_ok=True)
-                    with zip_ref.open(member) as source, open(destination, "wb") as target:
-                        shutil.copyfileobj(source, target)
+                # 日本語名(CP932・UTF-8フラグ無し)のZIPでも名前が化けないよう共通処理で展開する
+                safe_extract_zip(zip_ref, extract_path)
                 return True, bank_name
         except Exception as e:
             return False, str(e)
