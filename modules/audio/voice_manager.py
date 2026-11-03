@@ -45,6 +45,21 @@ class VoiceManager:
         self.internal_voice_dir = os.path.join(self.base_path, "voice_banks")
         self.voices = {}  # { "キャラ名": "絶対パス" }
 
+    def _repair_garbled_names(self) -> None:
+        """アプリの保存先(voice_banks 等)内の、文字化けしたフォルダ名・ファイル名を直す。"""
+        from modules.utils.text_encoding import repair_mojibake_tree
+        seen = set()
+        for root in (self.internal_voice_dir, self.user_voice_dir):
+            key = os.path.normpath(root)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                for old, new in repair_mojibake_tree(root):
+                    print(f"[VoiceManager] 文字化けを修復: {os.path.basename(old)} -> {os.path.basename(new)}")
+            except OSError as e:
+                print(f"[VoiceManager] 文字化けの修復をスキップ: {e}")
+
     @property
     def user_voice_dir(self) -> str:
         """「音源を追加」で取り込んだ音源の保存先（書き込み可能な場所）。
@@ -64,6 +79,10 @@ class VoiceManager:
 
     def scan_voices(self):
         """標準的なUTAU音源パスと内部フォルダをスキャン"""
+        # 以前のバージョンで文字化けしたまま取り込まれた音源（このアプリが作った
+        # 保存先の中だけ）を、正しい名前へ直してからスキャンする。
+        self._repair_garbled_names()
+
         search_paths = []
         
         # 1. OSごとの標準パスを追加
@@ -155,37 +174,23 @@ class VoiceManager:
         """ZIP音源を voice_banks に展開して追加する。"""
         import zipfile
         import tempfile
-        import shutil
+        from modules.utils.text_encoding import safe_extract_zip
 
         if not os.path.exists(zip_path):
             raise FileNotFoundError(f"ZIP not found: {zip_path}")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with zipfile.ZipFile(zip_path, 'r') as zf:
-                root = os.path.realpath(tmp_dir)
-                for member in zf.infolist():
-                    member_name = member.filename.replace("\\\\", "/")
-                    if os.path.isabs(member_name) or member_name.startswith("/"):
-                        raise ValueError(f"不正なZIPパスです: {member.filename}")
-                    destination = os.path.realpath(os.path.join(tmp_dir, member_name))
-                    if os.path.commonpath([root, destination]) != root:
-                        raise ValueError(f"ZIP展開先が対象フォルダ外です: {member.filename}")
-                    if member.is_dir():
-                        os.makedirs(destination, exist_ok=True)
-                        continue
-                    os.makedirs(os.path.dirname(destination), exist_ok=True)
-                    with zf.open(member) as source, open(destination, "wb") as target:
-                        shutil.copyfileobj(source, target)
+                # Windows 等で作られた ZIP は日本語名を CP932 で保存し UTF-8 フラグを立てない。
+                # そのまま展開するとフォルダ名・wav 名が化けて oto.ini と一致しなくなるため、
+                # 名前を正しく読み直しながら安全に展開する。
+                safe_extract_zip(zf, tmp_dir)
 
-            candidates = []
-            for root, _, files in os.walk(tmp_dir):
-                if 'oto.ini' in files:
-                    candidates.append(root)
-
+            candidates = self.find_oto_dirs(tmp_dir)
             if not candidates:
                 raise ValueError('oto.ini が見つからないため、UTAU音源として認識できません。')
 
-            src_dir = min(candidates, key=lambda p: len(p))
+            src_dir = candidates[0]
             dest_dir = self._copy_voice_dir(src_dir)
 
         self.scan_voices()
