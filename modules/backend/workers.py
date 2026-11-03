@@ -58,20 +58,10 @@ class VoiceImportWorker(QObject):
             if not os.path.exists(self.zip_path):
                 raise FileNotFoundError(f"音源ZIPファイルが見つかりません: {self.zip_path}")
 
+            from modules.utils.text_encoding import safe_extract_zip
             with zipfile.ZipFile(self.zip_path, 'r') as zip_ref:
-                infolist = zip_ref.infolist()
-                uncompress_size = sum((file.file_size for file in infolist))
-                extracted_size = 0
-                
-                os.makedirs(self.target_dir, exist_ok=True)
-
-                for file in infolist:
-                    zip_ref.extract(file, self.target_dir)
-                    extracted_size += file.file_size
-                    
-                    if uncompress_size > 0:
-                        pct = int((extracted_size / uncompress_size) * 100)
-                        self.progress.emit(pct)
+                # 日本語名(CP932)のZIPでも名前が化けないよう、共通処理で展開する
+                safe_extract_zip(zip_ref, self.target_dir, progress=self.progress.emit)
 
             voice_name = os.path.basename(self.target_dir)
             self.finished.emit(voice_name)
