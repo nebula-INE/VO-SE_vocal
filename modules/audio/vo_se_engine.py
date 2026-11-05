@@ -220,17 +220,66 @@ class VO_SE_Engine:
         self._tempo = float(tempo)
 
     def _load_core_library(self):
-        """VO-SE Coreを共通FFIローダー経由で読み込む。"""
-        from modules.ffi.vose_api import load_engine
+        """VO-SE Coreを共通FFIローダー経由で読み込む。
+
+        VOSE_CORE_LIBRARY が設定されている場合は、そのファイルを
+        最優先かつ厳密に指定する。誤った古いバイナリへの暗黙 fallback
+        を防ぐため、指定ファイルを読み込めなければ明示的に失敗させる。
+        """
+        from modules.ffi.vose_api import load_engine, get_last_load_error
 
         base_dir = os.path.dirname(__file__)
-        search_dirs = [
-            base_dir,
-            os.path.join(base_dir, "bin"),
-            os.path.join(os.getcwd(), "bin"),
-            os.getcwd(),
-        ]
-        lib = load_engine(search_dirs=search_dirs)
+        override_path = os.environ.get("VOSE_CORE_LIBRARY")
+
+        if override_path:
+            override_path = os.path.abspath(os.path.expanduser(
+                os.path.expandvars(override_path)
+            ))
+            if not os.path.isfile(override_path):
+                raise FileNotFoundError(
+                    "VOSE_CORE_LIBRARY does not point to a file: "
+                    + override_path
+                )
+
+            if os.name == "nt":
+                supported_names = ("vose_core.dll",)
+            elif os.sys.platform == "darwin":
+                supported_names = ("libvose_core.dylib", "vose_core.dylib")
+            else:
+                supported_names = ("libvose_core.so", "vose_core.so")
+
+            if os.path.basename(override_path) not in supported_names:
+                raise ValueError(
+                    "VOSE_CORE_LIBRARY must name a supported VO-SE Core "
+                    "library (" + ", ".join(supported_names) + "): "
+                    + override_path
+                )
+
+            lib = load_engine(search_dirs=[os.path.dirname(override_path)])
+            if lib is None:
+                detail = get_last_load_error()
+                raise RuntimeError(
+                    "Failed to load VOSE_CORE_LIBRARY: "
+                    + override_path
+                    + ((" (" + detail + ")") if detail else "")
+                )
+
+            loaded_path = os.path.realpath(getattr(lib, "_name", ""))
+            expected_path = os.path.realpath(override_path)
+            if loaded_path != expected_path:
+                raise RuntimeError(
+                    "VO-SE Core loader selected a different library. "
+                    "Expected: " + expected_path + "; loaded: " + loaded_path
+                )
+        else:
+            search_dirs = [
+                base_dir,
+                os.path.join(base_dir, "bin"),
+                os.path.join(os.getcwd(), "bin"),
+                os.getcwd(),
+            ]
+            lib = load_engine(search_dirs=search_dirs)
+
         if lib is not None:
             print("○ Engine Core Connected via unified FFI loader")
         return lib
