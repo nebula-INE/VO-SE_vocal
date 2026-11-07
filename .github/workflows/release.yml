@@ -1029,6 +1029,19 @@ jobs:
 
           dpkg-deb --root-owner-group --build "$PKG_ROOT" "dist_out/vo-se-vocal_amd64.deb"
           dpkg-deb --info "dist_out/vo-se-vocal_amd64.deb"
+
+          # Install the generated package in CI so Depends metadata is exercised,
+          # then verify the packaged executable has no unresolved shared libraries.
+          sudo apt-get install -y "./dist_out/vo-se-vocal_amd64.deb"
+          test -x "/opt/vo-se-vocal/$APP"
+          MISSING="$(ldd "/opt/vo-se-vocal/$APP" 2>&1 | grep 'not found' || true)"
+          if [ -n "$MISSING" ]; then
+            echo "Unresolved runtime libraries:"
+            echo "$MISSING"
+            exit 1
+          fi
+          echo "Debian package install + runtime dependency check: OK"
+
           ls -lh "dist_out/VO-SE_vocal_Linux_x86_64.tar.gz" "dist_out/vo-se-vocal_amd64.deb"
 
       - name: 📦 Save Artifacts
