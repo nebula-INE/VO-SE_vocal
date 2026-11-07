@@ -976,20 +976,60 @@ jobs:
           print(f"Entries inspected: {len(rows)}")
           PY
 
-      - name: 🐧 Package Linux artifact (CUDA-enabled)
+      - name: 🐧 Package Linux artifacts (portable + Debian package)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -euo pipefail
-          test -f dist/VO-SE_vocal_Linux
+          APP="VO-SE_vocal_Linux"
+          test -f "dist/$APP"
+          chmod +x "dist/$APP"
           mkdir -p dist_out
-          chmod +x dist/VO-SE_vocal_Linux
-          # Remove the raw binary copied by the earlier generic packaging step.
-          # Upload only the archive to avoid duplicating this ~3 GB executable.
-          rm -f dist_out/VO-SE_vocal_Linux_x86_64
-          # Keep the CUDA-enabled executable intact; do not modify the binary or audio code.
-          tar -C dist -czf dist_out/VO-SE_vocal_Linux_x86_64.tar.gz VO-SE_vocal_Linux
-          ls -lh dist/VO-SE_vocal_Linux dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
+
+          # Portable archive remains available; preserve the CUDA-enabled binary unchanged.
+          tar -C dist -czf "dist_out/VO-SE_vocal_Linux_x86_64.tar.gz" "$APP"
+
+          # Debian package installs system runtime dependencies automatically on Ubuntu/Mint.
+          PKG_ROOT="build/deb/vo-se-vocal"
+          install -d "$PKG_ROOT/DEBIAN" "$PKG_ROOT/opt/vo-se-vocal" \
+            "$PKG_ROOT/usr/share/applications" "$PKG_ROOT/usr/share/pixmaps"
+          install -m 0755 "dist/$APP" "$PKG_ROOT/opt/vo-se-vocal/$APP"
+          if [ -f assets/icon.png ]; then
+            install -m 0644 assets/icon.png "$PKG_ROOT/usr/share/pixmaps/vo-se-vocal.png"
+          fi
+          cat > "$PKG_ROOT/DEBIAN/control" <<'CONTROL'
+          Package: vo-se-vocal
+          Version: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '0.0.0' }}
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Axral <support@axral.dev>
+          Depends: libc6, libstdc++6, libgl1, libegl1, libopengl0, libxkbcommon0, libxkbcommon-x11-0, libdbus-1-3, libxcb-cursor0, libxrender1, libxi6, libsm6, libxext6, libfontconfig1, libpulse0, libasound2 | libasound2t64, libsndfile1, libportaudio2
+          Description: VO-SE vocal desktop application
+           VO-SE vocal for Linux (CUDA-enabled build).
+           Qt/XCB and audio runtime dependencies are declared for apt installation.
+          CONTROL
+          # Debian package versions must be numeric; convert v1.2.3 -> 1.2.3.
+          PKG_VERSION="${GITHUB_REF_NAME:-0.0.0}"
+          PKG_VERSION="${PKG_VERSION#v}"
+          sed -i "s/^Version: .*/Version: $PKG_VERSION/" "$PKG_ROOT/DEBIAN/control"
+
+          cat > "$PKG_ROOT/usr/share/applications/vo-se-vocal.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=VO-SE vocal
+          Comment=AI vocal synthesis
+          Exec=/opt/vo-se-vocal/VO-SE_vocal_Linux
+          Terminal=false
+          Categories=AudioVideo;Audio;Music;
+          DESKTOP
+          if [ -f "$PKG_ROOT/usr/share/pixmaps/vo-se-vocal.png" ]; then
+            echo 'Icon=vo-se-vocal' >> "$PKG_ROOT/usr/share/applications/vo-se-vocal.desktop"
+          fi
+
+          dpkg-deb --root-owner-group --build "$PKG_ROOT" "dist_out/vo-se-vocal_amd64.deb"
+          dpkg-deb --info "dist_out/vo-se-vocal_amd64.deb"
+          ls -lh "dist_out/VO-SE_vocal_Linux_x86_64.tar.gz" "dist_out/vo-se-vocal_amd64.deb"
 
       - name: 📦 Save Artifacts
         uses: actions/upload-artifact@v4
