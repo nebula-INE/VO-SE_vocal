@@ -999,7 +999,7 @@ jobs:
           fi
           cat > "$PKG_ROOT/DEBIAN/control" <<'CONTROL'
           Package: vo-se-vocal
-          Version: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '0.0.0' }}
+          Version: 0.0.0-dev
           Section: sound
           Priority: optional
           Architecture: amd64
