@@ -1738,6 +1738,92 @@ class AnalysisThread(QThread):
 # メインウィンドウクラス
 # ==============================================================================
 
+class _VocalPlaybackPreparationThread(QThread):
+    """Render playback WAVs off the GUI thread without touching Qt widgets."""
+
+    completed = Signal(object)
+    failed = Signal(object)
+    progress = Signal(str)
+
+    def __init__(self, engine: Any, jobs: List[Dict[str, Any]], parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.jobs = jobs
+
+    @Slot()
+    def run(self) -> None:
+        current_track = None
+        try:
+            export_v2 = getattr(self.engine, "export_to_wav_v2", None)
+            needs_render = any(job["notes"] for job in self.jobs)
+            if needs_render and not callable(export_v2):
+                raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
+
+            results = []
+            for job in self.jobs:
+                track = job["track"]
+                current_track = track
+                track_index = int(job["index"])
+                notes = job["notes"]
+                if not notes:
+                    results.append((track, "", ""))
+                    continue
+
+                note_state = []
+                for note in notes:
+                    to_dict = getattr(note, "to_dict", None)
+                    note_state.append(to_dict() if callable(to_dict)
+                                      else getattr(note, "__dict__", repr(note)))
+
+                signature = repr((
+                    note_state,
+                    job["parameters"],
+                    job["voice_id"],
+                    float(job["tempo"]),
+                ))
+                previous_path = str(job.get("previous_path") or "")
+                if (job.get("previous_signature") == signature
+                        and previous_path and os.path.isfile(previous_path)):
+                    results.append((track, previous_path, signature))
+                    self.progress.emit(f"Vocal {track_index + 1}: キャッシュを使用")
+                    continue
+
+                cache_dir = os.path.join(tempfile.gettempdir(), "vose_playback_cache")
+                os.makedirs(cache_dir, exist_ok=True)
+                import hashlib
+                cache_key = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:24]
+                cache_path = os.path.join(
+                    cache_dir, f"track_{track_index}_{cache_key}.wav"
+                )
+
+                self.progress.emit(
+                    f"Vocal {track_index + 1} をバックグラウンドでレンダリング中..."
+                )
+                result = export_v2(
+                    notes,
+                    job["parameters"],
+                    cache_path,
+                    mode_flag=0,
+                )
+                if not result:
+                    raise RuntimeError(
+                        f"Vocal {track_index + 1} のWAV生成に失敗しました。"
+                    )
+                result_path = os.path.abspath(str(result))
+                if not os.path.isfile(result_path):
+                    raise RuntimeError(
+                        f"Vocal {track_index + 1} のWAV生成に失敗しました。"
+                    )
+                results.append((track, result_path, signature))
+
+            self.completed.emit(results)
+        except Exception as exc:
+            self.failed.emit({
+                "message": str(exc),
+                "track": current_track,
+            })
+
+
 class MainWindow(
     ProjectIOMixin,
     AudioOutputMixin,
@@ -2015,6 +2101,10 @@ class MainWindow(
         # ロック
         import threading
         self._playback_lock = threading.Lock()
+        self._playback_prepare_thread = None
+        self._pending_playback_tracks = None
+        self._pending_playback_start_time = 0.0
+        self._playback_preparing = False
         
         # 外部マネージャー
         self.history = HistoryManager()
@@ -2368,18 +2458,22 @@ class MainWindow(
         # VoSeEngine側で __INTERNAL__ (公式) か フォルダパス (UTAU) かを判別
         if hasattr(self, 'vo_se_engine') and self.vo_se_engine:
             try:
-                self.vo_se_engine.set_active_character(internal_id)
-            
-                # 🔴 重要: oto.iniの読み込みを確認
+                # UTAU音源は表示名ではなく登録済みの実フォルダをエンジンへ渡す。
                 entry = self.voice_manager.voices.get(display_name, {})
                 voice_path = entry.get("path", "") if isinstance(entry, dict) else str(entry or "")
-                if voice_path:
+                if voice_path and os.path.isdir(voice_path):
+                    self.vo_se_engine.set_voice_library(voice_path)
                     oto_data = self.parse_oto_ini(voice_path)
                     if not oto_data:
-                        print(f"⚠️ Warning: oto.ini not found in {voice_path}")
-                    
+                        self.statusBar().showMessage(f"oto.ini を確認できません: {voice_path}", 5000)
+                else:
+                    # 内蔵音源など、フォルダ型でない音源は既存のライブラリを維持。
+                    refresh = getattr(self.vo_se_engine, "refresh_voice_library", None)
+                    if callable(refresh):
+                        refresh()
             except Exception as e:
-                print(f"❌ Engine character switch failed: {e}")
+                self.statusBar().showMessage(f"音源切替エラー: {e}", 5000)
+                print(f"Engine voice switch failed: {e}")
 
         # --- 3. UIへのフィードバック ---
         if self.status_label:
@@ -3659,9 +3753,8 @@ class MainWindow(
 
     def apply_state(self, state):
         """状態（ノートリストなど）を反映"""
-        self.timeline_widget.notes_list = deepcopy(state)
         assert self.timeline_widget is not None
-        self.timeline_widget.update()
+        self.timeline_widget.set_notes(deepcopy(state))
 
     @Slot(object, object, str)
     def on_timeline_edit_committed(self, before_state, after_state, description):
@@ -4869,32 +4962,25 @@ class MainWindow(
         """Render one Vocal track to a cached WAV for mixer playback."""
         notes = list(getattr(track, "notes", []) or [])
         if not notes:
-            # Never keep a previously rendered file when the track no longer
-            # contains notes; otherwise playback can silently use stale audio.
             track.playback_path = ""
             track._playback_signature = ""
             return ""
-
-        # Invalidate the old playback path before rendering. If rendering
-        # fails, the mixer must not fall back to stale audio from an earlier
-        # successful render.
-        track.playback_path = ""
-        track._playback_signature = ""
 
         export_v2 = getattr(self.vo_se_engine, "export_to_wav_v2", None)
         if not callable(export_v2):
             raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
 
+        parameters = self._build_render_parameters()
         signature_items = []
         for note in notes:
-            if hasattr(note, "to_dict"):
-                signature_items.append(note.to_dict())
-            else:
-                signature_items.append(getattr(note, "__dict__", repr(note)))
-
+            to_dict = getattr(note, "to_dict", None)
+            signature_items.append(
+                to_dict() if callable(to_dict)
+                else getattr(note, "__dict__", repr(note))
+            )
         signature = repr((
             signature_items,
-            self._build_render_parameters(),
+            parameters,
             self.current_voice_id,
             float(getattr(self.timeline_widget, "tempo", 120.0)),
         ))
@@ -4905,42 +4991,152 @@ class MainWindow(
         cache_key = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:24]
         cache_path = os.path.join(cache_dir, f"track_{track_index}_{cache_key}.wav")
 
-        if getattr(track, "_playback_signature", None) == signature and os.path.exists(cache_path):
-            track.playback_path = cache_path
-            return cache_path
+        # Check the existing signature before invalidating the previous path.
+        # Clearing it first made this cache-hit branch unreachable.
+        previous_path = str(getattr(track, "playback_path", "") or "")
+        if (getattr(track, "_playback_signature", None) == signature
+                and previous_path and os.path.isfile(previous_path)):
+            return previous_path
 
+        track.playback_path = ""
+        track._playback_signature = ""
         self.statusBar().showMessage(
             f"Vocal {track_index + 1} を再生用にレンダリング中..."
         )
         result = export_v2(
             notes,
-            self._build_render_parameters(),
+            parameters,
             cache_path,
             mode_flag=0,
         )
         if not result:
             raise RuntimeError(f"Vocal {track_index + 1} のWAV生成に失敗しました。")
 
-        # export_to_wav_v2 is dynamically resolved, so Pyright sees its
-        # return value as object. Normalize it to a concrete filesystem path
-        # before passing it to os.path helpers.
-        result_path = str(result)
-        if not os.path.exists(result_path):
+        result_path = os.path.abspath(str(result))
+        if not os.path.isfile(result_path):
             raise RuntimeError(f"Vocal {track_index + 1} のWAV生成に失敗しました。")
 
-        track.playback_path = os.path.abspath(result_path)
+        track.playback_path = result_path
         track._playback_signature = signature
-        return track.playback_path
+        return result_path
 
     def _prepare_all_vocal_playback(self) -> None:
-        """Render every Vocal track so the mixer can play all tracks together."""
+        """Synchronous compatibility helper; normal transport uses a worker thread."""
         for index, track in enumerate(getattr(self, "tracks", []) or []):
             if getattr(track, "track_type", "") != "vocal":
                 continue
             self._render_vocal_track_for_playback(track, index)
 
+    def _set_playback_preparation_ui(self, preparing: bool) -> None:
+        """Disable mutable editor controls while a render snapshot is being prepared."""
+        self._playback_preparing = bool(preparing)
+        for name in (
+            "timeline_widget",
+            "graph_editor_widget",
+            "voice_gallery",
+            "character_selector",
+            "track_list_widget",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setEnabled"):
+                widget.setEnabled(not preparing)
+
+        play_btn = getattr(self, "play_btn", None) or getattr(self, "play_button", None)
+        if play_btn is not None:
+            play_btn.setEnabled(not preparing)
+            if preparing:
+                play_btn.setText("レンダリング中…")
+            else:
+                play_btn.setText("▶ 再生")
+
+    @Slot(str)
+    def _on_vocal_playback_render_progress(self, message: str) -> None:
+        self.statusBar().showMessage(message)
+
+    @Slot(object)
+    def _on_vocal_playback_render_failed(self, failure: object) -> None:
+        details = failure if isinstance(failure, dict) else {}
+        failed_track = details.get("track")
+        if failed_track is not None:
+            failed_track.playback_path = ""
+            failed_track._playback_signature = ""
+        self._pending_playback_tracks = None
+        self._set_playback_preparation_ui(False)
+        message = str(details.get("message") or "再生用レンダリングに失敗しました。")
+        status_lbl = getattr(self, "status_label", None)
+        if status_lbl is not None:
+            status_lbl.setText(f"再生エラー: {message}")
+        self._refresh_transport_button_states()
+        self.statusBar().showMessage(f"再生エラー: {message}", 5000)
+
+    @Slot(object)
+    def _on_vocal_playback_render_prepared(self, results: object) -> None:
+        tracks = self._pending_playback_tracks
+        start_time = float(getattr(self, "_pending_playback_start_time", 0.0))
+        self._pending_playback_tracks = None
+        self._set_playback_preparation_ui(False)
+
+        if tracks is None:
+            return
+        current_tracks = list(getattr(self, "tracks", []) or [])
+        if (len(current_tracks) != len(tracks)
+                or any(current is not saved for current, saved in zip(current_tracks, tracks))):
+            self.statusBar().showMessage(
+                "レンダリング中にトラック構成が変わったため、再生を開始しませんでした。", 5000
+            )
+            return
+
+        for track, path, signature in (results if isinstance(results, list) else []):
+            track.playback_path = path
+            track._playback_signature = signature
+
+        playable = [
+            track for track in tracks
+            if str(getattr(track, "playback_path", "") or "")
+            or str(getattr(track, "audio_path", "") or "")
+        ]
+        if not playable:
+            self.statusBar().showMessage("再生する音声がありません。", 3000)
+            return
+
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+            return
+        try:
+            mixer.set_tracks(tracks)
+            mixer.play(start_time)
+            self.is_playing = True
+            self.current_playback_time = start_time
+            self.playback_start_time = start_time
+            self.playback_started_monotonic = time.monotonic()
+            self.playback_timer.start()
+            status_lbl = getattr(self, "status_label", None)
+            if status_lbl is not None:
+                status_lbl.setText(f"再生中: {start_time:.2f}s")
+            self._refresh_transport_button_states()
+        except Exception as exc:
+            self.is_playing = False
+            self.playback_timer.stop()
+            status_lbl = getattr(self, "status_label", None)
+            if status_lbl is not None:
+                status_lbl.setText(f"再生エラー: {exc}")
+            self._refresh_transport_button_states()
+            self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
+
+    @Slot()
+    def _on_vocal_playback_prepare_thread_finished(self) -> None:
+        worker = getattr(self, "_playback_prepare_thread", None)
+        if worker is not None and not worker.isRunning():
+            self._playback_prepare_thread = None
+
     def on_play_pause_toggled(self):
-        """Start/stop the unified desktop playback path for all tracks."""
+        """Prepare vocal WAVs in the background, then start the unified mixer."""
+        worker = getattr(self, "_playback_prepare_thread", None)
+        if worker is not None and worker.isRunning():
+            self.statusBar().showMessage("再生用レンダリングを準備中です。", 2000)
+            return
+
         mixer = getattr(self, "audio_mixer", None)
         if mixer is None:
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
@@ -4957,37 +5153,67 @@ class MainWindow(
                 status_lbl.setText("停止しました")
             self._refresh_transport_button_states()
             return
+
         tracks = list(getattr(self, "tracks", []) or [])
         try:
-            current_idx = int(getattr(self, "current_track_idx", 0))
-            if 0 <= current_idx < len(tracks):
-                current_track = tracks[current_idx]
-                if getattr(current_track, "track_type", "") == "vocal":
-                    current_track.notes = deepcopy(getattr(getattr(self, "timeline_widget", None), "notes_list", []))
-            self._prepare_all_vocal_playback()
             timeline = cast(Any, getattr(self, "timeline_widget", None))
-            start_time = float(getattr(timeline, "_current_playback_time", 0.0)) if timeline is not None else 0.0
-            playable = [t for t in tracks if str(getattr(t, "playback_path", "") or "") or str(getattr(t, "audio_path", "") or "")]
-            if not playable:
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            current_track = tracks[current_idx] if 0 <= current_idx < len(tracks) else None
+            if current_track is not None and getattr(current_track, "track_type", "") == "vocal":
+                current_track.notes = deepcopy(
+                    getattr(timeline, "notes_list", []) if timeline is not None else []
+                )
+
+            parameters = deepcopy(self._build_render_parameters())
+            voice_id = getattr(self, "current_voice_id", None)
+            tempo = float(getattr(timeline, "tempo", 120.0)) if timeline is not None else 120.0
+            jobs = []
+            for index, track in enumerate(tracks):
+                if getattr(track, "track_type", "") != "vocal":
+                    continue
+                # Reuse the current track's already-isolated snapshot to avoid
+                # copying a long UST twice on the GUI thread.
+                source_notes = getattr(track, "notes", []) or []
+                notes_snapshot = (
+                    source_notes if track is current_track else deepcopy(source_notes)
+                )
+                jobs.append({
+                    "index": index,
+                    "track": track,
+                    "notes": notes_snapshot,
+                    "parameters": parameters,
+                    "voice_id": voice_id,
+                    "tempo": tempo,
+                    "previous_signature": getattr(track, "_playback_signature", ""),
+                    "previous_path": getattr(track, "playback_path", ""),
+                })
+
+            if not any(
+                (job["notes"] for job in jobs)
+            ) and not any(str(getattr(track, "audio_path", "") or "") for track in tracks):
                 self.statusBar().showMessage("再生する音声がありません。", 3000)
                 return
-            mixer.set_tracks(tracks)
-            mixer.play(start_time)
-            self.is_playing = True
-            self.current_playback_time = start_time
-            self.playback_start_time = start_time
-            self.playback_started_monotonic = time.monotonic()
-            self.playback_timer.start()
-            if play_btn is not None:
-                play_btn.setText("■ 停止")
-            if status_lbl is not None:
-                status_lbl.setText(f"再生中: {start_time:.2f}s")
-            self._refresh_transport_button_states()
+
+            self._pending_playback_tracks = tracks
+            self._pending_playback_start_time = (
+                float(getattr(timeline, "_current_playback_time", 0.0))
+                if timeline is not None else 0.0
+            )
+            self._set_playback_preparation_ui(True)
+
+            worker = _VocalPlaybackPreparationThread(
+                getattr(self, "vo_se_engine", None), jobs, self
+            )
+            worker.completed.connect(self._on_vocal_playback_render_prepared)
+            worker.failed.connect(self._on_vocal_playback_render_failed)
+            worker.progress.connect(self._on_vocal_playback_render_progress)
+            worker.finished.connect(self._on_vocal_playback_prepare_thread_finished)
+            worker.finished.connect(worker.deleteLater)
+            self._playback_prepare_thread = worker
+            worker.start()
         except Exception as exc:
-            self.is_playing = False
-            self.playback_timer.stop()
-            if play_btn is not None:
-                play_btn.setText("▶ 再生")
+            self._pending_playback_tracks = None
+            self._set_playback_preparation_ui(False)
             if status_lbl is not None:
                 status_lbl.setText(f"再生エラー: {exc}")
             self._refresh_transport_button_states()
