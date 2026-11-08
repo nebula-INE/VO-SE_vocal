@@ -2368,18 +2368,22 @@ class MainWindow(
         # VoSeEngine側で __INTERNAL__ (公式) か フォルダパス (UTAU) かを判別
         if hasattr(self, 'vo_se_engine') and self.vo_se_engine:
             try:
-                self.vo_se_engine.set_active_character(internal_id)
-            
-                # 🔴 重要: oto.iniの読み込みを確認
+                # UTAU音源は表示名ではなく登録済みの実フォルダをエンジンへ渡す。
                 entry = self.voice_manager.voices.get(display_name, {})
                 voice_path = entry.get("path", "") if isinstance(entry, dict) else str(entry or "")
-                if voice_path:
+                if voice_path and os.path.isdir(voice_path):
+                    self.vo_se_engine.set_voice_library(voice_path)
                     oto_data = self.parse_oto_ini(voice_path)
                     if not oto_data:
-                        print(f"⚠️ Warning: oto.ini not found in {voice_path}")
-                    
+                        self.statusBar().showMessage(f"oto.ini を確認できません: {voice_path}", 5000)
+                else:
+                    # 内蔵音源など、フォルダ型でない音源は既存のライブラリを維持。
+                    refresh = getattr(self.vo_se_engine, "refresh_voice_library", None)
+                    if callable(refresh):
+                        refresh()
             except Exception as e:
-                print(f"❌ Engine character switch failed: {e}")
+                self.statusBar().showMessage(f"音源切替エラー: {e}", 5000)
+                print(f"Engine voice switch failed: {e}")
 
         # --- 3. UIへのフィードバック ---
         if self.status_label:
