@@ -1,6 +1,7 @@
 import ctypes
 from typing import Optional 
 import os
+import sys
 import numpy as np
 from typing import List, Dict, Any, Callable, cast
 try:
@@ -243,7 +244,7 @@ class VO_SE_Engine:
 
             if os.name == "nt":
                 supported_names = ("vose_core.dll",)
-            elif os.sys.platform == "darwin":
+            elif sys.platform == "darwin":
                 supported_names = ("libvose_core.dylib", "vose_core.dylib")
             else:
                 supported_names = ("libvose_core.so", "vose_core.so")

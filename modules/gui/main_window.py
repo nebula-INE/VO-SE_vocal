@@ -1799,6 +1799,9 @@ class _VocalPlaybackPreparationThread(QThread):
                 self.progress.emit(
                     f"Vocal {track_index + 1} をバックグラウンドでレンダリング中..."
                 )
+                # Narrow the optional engine method before calling it.
+                if not callable(export_v2):
+                    raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
                 result = export_v2(
                     notes,
                     job["parameters"],
