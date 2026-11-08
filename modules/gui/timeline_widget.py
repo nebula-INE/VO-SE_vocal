@@ -174,6 +174,7 @@ class TimelineWidget(QWidget):
         self._note_rects_scroll: tuple = ()             # (scroll_x, scroll_y, ppb, kh)
         self._sorted_notes_cache: List[Any] = []
         self._sorted_note_times: List[float] = []
+        self._sorted_note_prefix_max_end: List[float] = []
         self._notes_index_dirty: bool = True
 
         try:
@@ -281,6 +282,7 @@ class TimelineWidget(QWidget):
             self.notes_list = [n for n in self.notes_list if not getattr(n, "is_selected", False)]
             
             if len(self.notes_list) != before:
+                self._invalidate_note_rects()
                 self.notes_changed_signal.emit()
                 self._commit_edit(before_snapshot, "ノート削除")
                 self.update()
@@ -388,14 +390,26 @@ class TimelineWidget(QWidget):
             return
         self._sorted_notes_cache = sorted(self.notes_list, key=lambda n: n.start_time)
         self._sorted_note_times = [float(n.start_time) for n in self._sorted_notes_cache]
+        prefix_max_end: List[float] = []
+        max_end = float("-inf")
+        for note in self._sorted_notes_cache:
+            note_end = float(note.start_time) + max(0.0, float(note.duration))
+            max_end = max(max_end, note_end)
+            prefix_max_end.append(max_end)
+        self._sorted_note_prefix_max_end = prefix_max_end
         self._notes_index_dirty = False
 
     def _visible_notes(self) -> List[Any]:
-        """表示時間範囲に近いノートだけ返す。"""
+        """表示時間範囲と重なるノートだけを、長さに関係なく返す。"""
         self._ensure_notes_index()
-        left = self.beats_to_seconds(max(0.0, self.scroll_x_offset / self.pixels_per_beat))
-        right = self.beats_to_seconds((self.scroll_x_offset + self.width()) / self.pixels_per_beat)
-        start = bisect.bisect_left(self._sorted_note_times, left - 10.0)
+        pixels_per_beat = max(0.0001, float(self.pixels_per_beat))
+        left_beats = max(0.0, self.scroll_x_offset / pixels_per_beat)
+        right_beats = (self.scroll_x_offset + self.width()) / pixels_per_beat
+        left = self.beats_to_seconds(left_beats)
+        right = self.beats_to_seconds(right_beats)
+        # Prefix maximum end-time lets long notes that begin well before the
+        # viewport remain visible without an arbitrary fixed look-back window.
+        start = bisect.bisect_right(self._sorted_note_prefix_max_end, left)
         end = bisect.bisect_right(self._sorted_note_times, right)
         return self._sorted_notes_cache[start:end]
 
@@ -838,13 +852,8 @@ class TimelineWidget(QWidget):
         if not self.notes_list:
             return
 
-        import bisect
-
         # --- 1. 描画範囲の計算 ---
-        vw = self.width()
         vh = self.height()
-        visible_start_time = self.scroll_x_offset / self.pixels_per_beat
-        visible_end_time = (self.scroll_x_offset + vw) / self.pixels_per_beat
 
         # --- 2. 高速シーク（変更時だけ構築した索引を再利用） ---
         notes = self._visible_notes()
@@ -1120,7 +1129,8 @@ class TimelineWidget(QWidget):
                         src.is_selected = False  # 元の選択を外す
                         self.notes_list.append(clone)
                         self._drag_copy_notes.append(clone)
-                    
+
+                    self._invalidate_note_rects()
                     # オフセット計算（マウス位置を基点にドラッグ）
                     self._drag_copy_offset = pos_f.x() - self.time_to_x(clone.start_time)
                     self.edit_mode = "drag_copy"
