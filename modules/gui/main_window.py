@@ -1755,7 +1755,8 @@ class _VocalPlaybackPreparationThread(QThread):
         current_track = None
         try:
             export_v2 = getattr(self.engine, "export_to_wav_v2", None)
-            if not callable(export_v2):
+            needs_render = any(job["notes"] for job in self.jobs)
+            if needs_render and not callable(export_v2):
                 raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
 
             results = []
