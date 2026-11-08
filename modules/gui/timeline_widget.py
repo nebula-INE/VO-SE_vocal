@@ -172,6 +172,9 @@ class TimelineWidget(QWidget):
         # _invalidate_note_rects() で明示的に無効化する
         self._note_rects_cache: Dict[int, QRectF] = {}  # id(note) -> QRectF
         self._note_rects_scroll: tuple = ()             # (scroll_x, scroll_y, ppb, kh)
+        self._sorted_notes_cache: List[Any] = []
+        self._sorted_note_times: List[float] = []
+        self._notes_index_dirty: bool = True
 
         try:
             self.tokenizer: Any = _TOKENIZER_CLASS()
@@ -377,6 +380,24 @@ class TimelineWidget(QWidget):
         """ノートリスト変更時にキャッシュを全破棄する"""
         self._note_rects_cache.clear()
         self._note_rects_scroll = ()
+        self._notes_index_dirty = True
+
+    def _ensure_notes_index(self) -> None:
+        """ノート変更時だけ索引を再構築し、paintごとのsortを回避する。"""
+        if not self._notes_index_dirty:
+            return
+        self._sorted_notes_cache = sorted(self.notes_list, key=lambda n: n.start_time)
+        self._sorted_note_times = [float(n.start_time) for n in self._sorted_notes_cache]
+        self._notes_index_dirty = False
+
+    def _visible_notes(self) -> List[Any]:
+        """表示時間範囲に近いノートだけ返す。"""
+        self._ensure_notes_index()
+        left = self.beats_to_seconds(max(0.0, self.scroll_x_offset / self.pixels_per_beat))
+        right = self.beats_to_seconds((self.scroll_x_offset + self.width()) / self.pixels_per_beat)
+        start = bisect.bisect_left(self._sorted_note_times, left - 10.0)
+        end = bisect.bisect_right(self._sorted_note_times, right)
+        return self._sorted_notes_cache[start:end]
 
     def _rebuild_note_rects_if_needed(self) -> None:
         """
@@ -387,7 +408,7 @@ class TimelineWidget(QWidget):
         if self._note_rects_scroll == key and self._note_rects_cache:
             return
         self._note_rects_cache = {
-            id(n): self._calc_note_rect(n) for n in self.notes_list
+            id(n): self._calc_note_rect(n) for n in self._visible_notes()
         }
         self._note_rects_scroll = key
 
@@ -792,7 +813,7 @@ class TimelineWidget(QWidget):
     def _draw_ai_phoneme_ghosts(self, p: QPainter) -> None:
         """onset をノート左側にグラデーションで可視化 [OPT-2: 可視範囲クリッピング]"""
         vw = self.width()
-        for n in self.notes_list:
+        for n in self._visible_notes():
             rect = self.get_note_rect(n)
             # [OPT-2] 可視範囲外を早期スキップ
             if rect.right() < 0 or rect.left() > vw:
@@ -825,17 +846,11 @@ class TimelineWidget(QWidget):
         visible_start_time = self.scroll_x_offset / self.pixels_per_beat
         visible_end_time = (self.scroll_x_offset + vw) / self.pixels_per_beat
 
-        # --- 2. 高速シーク ---
-        # 描画前に一度だけソートを保証（データ量が多い場合は外部で管理するのがベスト）
-        self.notes_list.sort(key=lambda n: n.start_time)
-        start_times = [n.start_time for n in self.notes_list]
-        start_idx = bisect.bisect_left(start_times, visible_start_time - 1.0)
+        # --- 2. 高速シーク（変更時だけ構築した索引を再利用） ---
+        notes = self._visible_notes()
 
         # --- 3. 描画ループ ---
-        for i in range(start_idx, len(self.notes_list)):
-            n = self.notes_list[i]
-            if n.start_time > visible_end_time:
-                break
+        for n in notes:
 
             rect = self.get_note_rect(n)
             if rect.bottom() < 0 or rect.top() > vh:
