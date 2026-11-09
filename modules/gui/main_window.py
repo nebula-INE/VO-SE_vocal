@@ -1768,6 +1768,11 @@ class _VocalPlaybackPreparationThread(QThread):
         super().__init__(parent)
         self.engine = engine
         self.jobs = jobs
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        """Ask the preparation loop and native renderer to stop safely."""
+        self._cancel_event.set()
 
     @Slot()
     def run(self) -> None:
@@ -1780,6 +1785,8 @@ class _VocalPlaybackPreparationThread(QThread):
 
             results = []
             for job in self.jobs:
+                if self._cancel_event.is_set():
+                    raise RuntimeError("再生準備がキャンセルされました")
                 track = job["track"]
                 current_track = track
                 track_index = int(job["index"])
@@ -1826,6 +1833,7 @@ class _VocalPlaybackPreparationThread(QThread):
                     job["parameters"],
                     cache_path,
                     mode_flag=0,
+                    cancel_check=self._cancel_event.is_set,
                 )
                 if not result:
                     raise RuntimeError(
@@ -6479,7 +6487,9 @@ class MainWindow(
             "Tension": list(all_params.get("Tension", [])),
             "Breath": list(all_params.get("Breath", [])),
         }
-        output_wav = os.path.join(os.getcwd(), "output", "render_result.wav")
+        output_wav = os.path.join(
+            tempfile.gettempdir(), "vose_render_cache", "render_result.wav"
+        )
         self._start_async_render(
             raw_notes,
             parameters,
