@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install --upgrade pip "wheel<0.48" setuptools
           python -m pip install -r requirements-runtime.txt
           python -m pip install -r requirements-training.txt
           python -m pip install Pillow PySide6 sounddevice soundfile
