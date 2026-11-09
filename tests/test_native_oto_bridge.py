@@ -55,6 +55,30 @@ def test_set_oto_data_skips_wav_path_that_exceeds_native_abi_limit():
     assert count == 0
 
 
+def test_set_oto_data_compacts_valid_entries_after_skipping_overlong_one():
+    engine = VO_SE_Engine.__new__(VO_SE_Engine)
+    fake_lib = _FakeLib()
+    engine.lib = cast(Any, fake_lib)
+
+    too_long = OtoEntry(
+        alias="x" * 64,
+        filename="a.wav",
+        voice_dir="/tmp/voice",
+    )
+    valid = OtoEntry(
+        alias="あ",
+        filename="a.wav",
+        voice_dir="/tmp/voice",
+    )
+    engine.set_oto_data({"too-long": too_long, "valid": valid})
+
+    assert len(fake_lib.calls) == 1
+    entries, count = fake_lib.calls[0]
+    assert count == 1
+    assert entries[0].alias == "あ".encode("utf-8")
+    assert entries[0].wav_path == b"/tmp/voice/a.wav"
+
+
 def test_set_oto_data_syncs_alias_and_wav_path():
     engine = VO_SE_Engine.__new__(VO_SE_Engine)
     fake_lib = _FakeLib()
