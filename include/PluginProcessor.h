@@ -147,6 +147,7 @@ private:
 
     VoseCoreLibrary coreLib;
     std::array<VoiceTrack, kMaxTracks> tracks;
+    int activeOtoTrackIndex = -1; // global vose_core OTO table owner
     VowelClassifier vowelClassifier;
 
     std::deque<juce::String> midiLyricQueue;
