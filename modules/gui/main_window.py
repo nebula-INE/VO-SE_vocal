@@ -685,13 +685,22 @@ class SynthesisWorker(QRunnable):
     非同期レンダリングワーカー。
     ノートをチャンク分割し、進捗・ETA・キャンセルに対応する。
     """
-    def __init__(self, vose_core, raw_notes, output_path, is_pro=False, parameters=None):
+    def __init__(
+        self,
+        vose_core,
+        raw_notes,
+        output_path,
+        is_pro=False,
+        parameters=None,
+        tempo_bpm: Optional[float] = None,
+    ):
         super().__init__()
         self.vose_core = vose_core
         self.raw_notes = raw_notes
         self.output_path = output_path
         self.is_pro = is_pro
         self.parameters = parameters or {}
+        self.tempo_bpm = tempo_bpm
         self.signals = WorkerSignals()
         self._cancelled = False
         self._timer = QElapsedTimer()
@@ -720,6 +729,7 @@ class SynthesisWorker(QRunnable):
                     mode_flag=1 if self.is_pro else 0,
                     progress_callback=lambda percent: self.signals.progress.emit(int(percent), 0.0),
                     cancel_check=lambda: self._cancelled,
+                    tempo_bpm=self.tempo_bpm,
                 )
                 if self._cancelled:
                     self.signals.error.emit("ユーザーによりキャンセルされました")
@@ -6400,6 +6410,39 @@ class MainWindow(
     # レリタリング実行メゾット
     # ==============================================================================
 
+    def _set_render_controls_enabled(self, rendering: bool) -> None:
+        """Freeze mutable render inputs for the duration of an export."""
+        control_names = (
+            "timeline_widget",
+            "graph_editor_widget",
+            "voice_gallery",
+            "character_selector",
+            "track_list_widget",
+            "tempo_input",
+            "play_btn",
+            "play_button",
+            "record_button",
+            "loop_btn",
+            "undo_action",
+            "redo_action",
+        )
+        if rendering:
+            states = {}
+            for name in control_names:
+                widget = getattr(self, name, None)
+                if widget is not None and callable(getattr(widget, "setEnabled", None)):
+                    is_enabled = getattr(widget, "isEnabled", None)
+                    states[name] = bool(is_enabled()) if callable(is_enabled) else True
+                    widget.setEnabled(False)
+            self._render_control_enabled_states = states
+        else:
+            states = getattr(self, "_render_control_enabled_states", {}) or {}
+            for name, was_enabled in states.items():
+                widget = getattr(self, name, None)
+                if widget is not None and callable(getattr(widget, "setEnabled", None)):
+                    widget.setEnabled(bool(was_enabled))
+            self._render_control_enabled_states = {}
+
     def _start_async_render(
         self,
         notes: list,
@@ -6422,8 +6465,11 @@ class MainWindow(
         final_path = os.path.abspath(os.fspath(output_path))
         output_dir = os.path.dirname(final_path) or os.getcwd()
         temporary_path = ""
-
+        timeline = getattr(self, "timeline_widget", None)
         try:
+            render_tempo = float(getattr(timeline, "tempo", 120.0))
+            if not math.isfinite(render_tempo) or render_tempo <= 0.0:
+                raise ValueError("テンポが不正なためレンダリングを開始できません。")
             os.makedirs(output_dir, exist_ok=True)
             descriptor, temporary_path = tempfile.mkstemp(
                 prefix=f".{os.path.splitext(os.path.basename(final_path))[0]}.",
@@ -6441,6 +6487,7 @@ class MainWindow(
             self._render_temp_path = temporary_path
             self._render_play_after_success = bool(play_after_success)
             self._render_cancelled = False
+            self._set_render_controls_enabled(True)
 
             if hasattr(self, "progress_bar") and self.progress_bar is not None:
                 self.progress_bar.setRange(0, 100)
@@ -6461,6 +6508,7 @@ class MainWindow(
                 temporary_path,
                 is_pro=bool(is_pro),
                 parameters=deepcopy(parameters),
+                tempo_bpm=render_tempo,
             )
             self.current_worker = worker
             worker.signals.finished.connect(self.on_render_success)
@@ -6473,6 +6521,7 @@ class MainWindow(
             self._render_target_path = ""
             self._render_temp_path = ""
             self._render_play_after_success = False
+            self._set_render_controls_enabled(False)
             try:
                 if temporary_path and os.path.exists(temporary_path):
                     os.remove(temporary_path)
@@ -6553,6 +6602,7 @@ class MainWindow(
         self._render_target_path = ""
         self._render_temp_path = ""
         self._render_play_after_success = False
+        self._set_render_controls_enabled(False)
         if hasattr(self, "progress_bar") and self.progress_bar is not None:
             self.progress_bar.setVisible(False)
         if getattr(self, "render_btn", None) is not None:
@@ -6587,6 +6637,7 @@ class MainWindow(
         self._render_target_path = ""
         self._render_temp_path = ""
         self._render_play_after_success = False
+        self._set_render_controls_enabled(False)
         if hasattr(self, "progress_bar") and self.progress_bar is not None:
             self.progress_bar.setVisible(False)
         if getattr(self, "render_btn", None) is not None:
