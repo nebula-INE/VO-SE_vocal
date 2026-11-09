@@ -112,6 +112,40 @@ def test_zip_path_traversal_is_rejected(vm, tmp_path):
     assert not (tmp_path / "evil.txt").exists()
 
 
+@pytest.mark.smoke
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "member_name",
+    [
+        r"..\..\evil.txt",
+        r"C:\outside\evil.txt",
+        r"C:evil.txt",
+        r"\rooted\evil.txt",
+    ],
+)
+def test_zip_rejects_windows_absolute_and_traversal_paths(vm, tmp_path, member_name):
+    archive = tmp_path / "windows_evil.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(member_name, "x")
+
+    with pytest.raises(ValueError):
+        vm.install_voice_from_zip(str(archive))
+
+    assert not (tmp_path / "evil.txt").exists()
+
+
+@pytest.mark.smoke
+@pytest.mark.unit
+def test_zip_backslash_member_paths_are_normalized(vm, tmp_path):
+    archive = tmp_path / "windows_separators.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(r"Pack\oto.ini", "a.wav=a,0,0,0,0,0")
+        zf.writestr(r"Pack\a.wav", "x")
+
+    assert vm.install_voice_from_zip(str(archive)) == "Pack"
+    assert os.path.exists(os.path.join(vm.internal_voice_dir, "Pack", "oto.ini"))
+
+
 @pytest.mark.unit
 def test_find_oto_dirs_orders_shallow_first_and_limits_depth(tmp_path):
     _make_voice(str(tmp_path), "top")
