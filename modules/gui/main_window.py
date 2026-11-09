@@ -5090,6 +5090,7 @@ class MainWindow(
             "voice_gallery",
             "character_selector",
             "track_list_widget",
+            "render_btn",
         ):
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setEnabled"):
@@ -5206,6 +5207,12 @@ class MainWindow(
             if status_lbl is not None:
                 status_lbl.setText("停止しました")
             self._refresh_transport_button_states()
+            return
+
+        if getattr(self, "current_worker", None) is not None:
+            self.statusBar().showMessage(
+                "書き出し中です。完了またはキャンセル後に再生できます。", 3000
+            )
             return
 
         tracks = list(getattr(self, "tracks", []) or [])
@@ -6455,6 +6462,14 @@ class MainWindow(
         """Render to a temporary sibling WAV and publish only after success."""
         if getattr(self, "current_worker", None) is not None:
             self.statusBar().showMessage("別のレンダリングが実行中です。", 4000)
+            return False
+        if bool(getattr(self, "_playback_preparing", False)):
+            self.statusBar().showMessage("再生用の準備中は書き出しを開始できません。", 4000)
+            return False
+
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        if playback_worker is not None and playback_worker.isRunning():
+            self.statusBar().showMessage("再生用レンダリングの完了後に書き出してください。", 4000)
             return False
 
         engine = getattr(self, "vo_se_engine", None)
