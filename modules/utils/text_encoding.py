@@ -22,6 +22,7 @@ oto.ini（CP932 で書かれた日本語名）と一致しなくなり、音源�
 from __future__ import annotations
 
 import os
+import ntpath
 import shutil
 import zipfile
 from typing import Callable, List, Optional, Tuple
@@ -148,10 +149,18 @@ def safe_extract_zip(
     extracted: List[str] = []
 
     for info, decoded_name in zip(infos, names):
+        # ZIP名は通常POSIX形式だが、Windows形式の区切りも正規化する。
+        # ntpathで検査することで、Linux/macOS上でもWindowsドライブ指定を拒否する。
         name = decoded_name.replace("\\", "/")
         if "__MACOSX/" in name or name.endswith(".DS_Store"):
             continue
-        if os.path.isabs(name) or name.startswith("/"):
+        drive, _ = ntpath.splitdrive(name)
+        if (
+            drive
+            or ntpath.isabs(name)
+            or os.path.isabs(name)
+            or name.startswith("/")
+        ):
             raise ValueError(f"不正なZIPパスです: {info.filename}")
         destination = os.path.realpath(os.path.join(root, name))
         try:
