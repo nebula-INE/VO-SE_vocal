@@ -39,6 +39,13 @@ jobs:
           python -m pip install -r requirements-training.txt
           python -m pip install Pillow PySide6 sounddevice soundfile
           python -m pip install pytest pytest-xdist pytest-cov pytest-qt pytest-timeout
+          python -m pip install pyright
+
+      - name: Run Pyright
+        shell: bash
+        run: |
+          set -euo pipefail
+          pyright .
 
       - name: Run smoke tests
         shell: bash

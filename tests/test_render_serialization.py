@@ -1,6 +1,7 @@
 import threading
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 from modules.audio import vo_se_engine_patch
 
@@ -24,7 +25,8 @@ def test_apply_patch_serializes_atomic_v2_render_calls(monkeypatch, tmp_path):
     monkeypatch.setattr(vo_se_engine_patch, "_render_to_wav_v2", fake_render)
 
     class FakeEngine:
-        pass
+        _render_lock: Any
+        export_to_wav_v2: Callable[..., str]
 
     vo_se_engine_patch.apply_patch(FakeEngine)
     engine = FakeEngine()

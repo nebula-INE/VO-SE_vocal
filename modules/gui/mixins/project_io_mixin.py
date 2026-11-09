@@ -833,7 +833,7 @@ class ProjectIOMixin:
 
         manager = getattr(self, "voice_manager", None)
         install_from_zip = getattr(manager, "install_voice_from_zip", None)
-        if not callable(install_from_zip):
+        if manager is None or not callable(install_from_zip):
             QMessageBox.critical(
                 self,
                 "導入エラー",
@@ -882,7 +882,7 @@ class ProjectIOMixin:
 
             gallery = getattr(self, "voice_gallery", None)
             refresh_gallery = getattr(gallery, "setup_gallery", None)
-            if callable(refresh_gallery):
+            if gallery is not None and callable(refresh_gallery):
                 refresh_gallery()
                 gallery.update()
 
