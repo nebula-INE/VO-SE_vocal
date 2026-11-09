@@ -16,5 +16,6 @@ scipy
 chardet
 pykakasi
 packaging>=23.1,<24.0
+wheel>=0.43,<0.48
 python-rtmidi
 psutil>=5.9.0
