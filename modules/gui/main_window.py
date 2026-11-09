@@ -6211,46 +6211,139 @@ class MainWindow(
 
     def closeEvent(self, event):
         reply = QMessageBox.question(
-            self, 
-            '確認', 
+            self,
+            "確認",
             "作業内容が失われる可能性があります。終了してもよろしいですか？",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel, 
             QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
         )
 
         if reply == QMessageBox.StandardButton.Save:
             save_func = getattr(self, "on_save_project_clicked", None)
-            if callable(save_func):
-                # 保存ダイアログのキャンセルや保存失敗時は終了しない。
-                if not bool(save_func()):
-                    event.ignore()
-                    return
-            event.accept()
-        elif reply == QMessageBox.StandardButton.Discard:
-            event.accept()
-        else:
-            # ここで return する前に ignore する代表の設計は、
-            # 誤操作でウィンドウが閉じるのを防ぐ「神対応」です。
+            if callable(save_func) and not bool(save_func()):
+                event.ignore()
+                return
+        elif reply != QMessageBox.StandardButton.Discard:
             event.ignore()
             return
-        
+
+        # Stop accepting new transport work and ask any active render to cancel.
+        playback_timer = getattr(self, "playback_timer", None)
+        if playback_timer is not None:
+            playback_timer.stop()
+
+        worker = getattr(self, "current_worker", None)
+        if worker is not None:
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                cancel()
+            pool = QThreadPool.globalInstance()
+            if not pool.waitForDone(15000):
+                QMessageBox.warning(
+                    self,
+                    "レンダリング終了待ち",
+                    "レンダリング処理がまだ実行中です。処理の安全な終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+            self.current_worker = None
+            temporary_path = str(getattr(self, "_render_temp_path", "") or "")
+            if temporary_path:
+                try:
+                    if os.path.exists(temporary_path):
+                        os.remove(temporary_path)
+                except OSError as exc:
+                    print(f"[Render] Shutdown cleanup warning: {exc}")
+
+        # Playback preparation uses a QThread, so it must leave native code
+        # before the engine and the parent window are released.
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        if playback_worker is not None and playback_worker.isRunning():
+            request_cancel = getattr(playback_worker, "request_cancel", None)
+            if callable(request_cancel):
+                request_cancel()
+            if not playback_worker.wait(15000):
+                QMessageBox.warning(
+                    self,
+                    "再生準備終了待ち",
+                    "再生準備処理がまだ実行中です。安全な終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+        self._playback_prepare_thread = None
+        self._pending_playback_tracks = None
+
+        # Stop the legacy playback thread, if an older entry point started it.
+        self.is_playing = False
+        legacy_playback_thread = getattr(self, "playback_thread", None)
+        if legacy_playback_thread is not None and legacy_playback_thread.is_alive():
+            if legacy_playback_thread is not threading.current_thread():
+                legacy_playback_thread.join(timeout=2.0)
+            if legacy_playback_thread.is_alive():
+                QMessageBox.warning(
+                    self,
+                    "再生終了待ち",
+                    "再生スレッドが停止していません。再生停止後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+        self.playback_thread = None
+
+        mixer = getattr(self, "audio_mixer", None)
+        stop_mixer = getattr(mixer, "stop", None)
+        if callable(stop_mixer):
+            try:
+                stop_mixer()
+            except Exception as exc:
+                print(f"Audio mixer shutdown warning: {exc}")
+
         config = {
-            "default_voice": getattr(self, 'current_voice', None),
-            "volume": getattr(self, 'volume', 1.0)
+            "default_voice": getattr(self, "current_voice", None),
+            "volume": getattr(self, "volume", 1.0),
         }
-        save_config = None
-        if getattr(self, 'config_manager', None) is not None:
-            save_config = getattr(self.config_manager, "save_config", None)
+        config_manager = getattr(self, "config_manager", None)
+        save_config = getattr(config_manager, "save_config", None)
         if callable(save_config):
-            save_config(config)
-        
-        if hasattr(self, 'midi_manager') and self.midi_manager:
-            self.midi_manager.stop()
-        
-        if hasattr(self, 'vo_se_engine') and self.vo_se_engine:
-            if hasattr(self.vo_se_engine, 'close'):
-                self.vo_se_engine.close()
-        
+            try:
+                save_config(config)
+            except Exception as exc:
+                print(f"Config save warning: {exc}")
+
+        # The MIDI setup patch stores the live input manager under this name.
+        for manager_name in ("_midi_input_manager", "midi_manager"):
+            midi_manager = getattr(self, manager_name, None)
+            stop_midi = getattr(midi_manager, "stop", None)
+            if callable(stop_midi):
+                try:
+                    stop_midi()
+                except Exception as exc:
+                    print(f"MIDI shutdown warning: {exc}")
+
+        engine = getattr(self, "vo_se_engine", None)
+        stop_engine = getattr(engine, "stop", None)
+        if callable(stop_engine):
+            try:
+                stop_engine()
+            except Exception as exc:
+                print(f"Voice engine shutdown warning: {exc}")
+        close_engine = getattr(engine, "close", None)
+        if callable(close_engine):
+            try:
+                close_engine()
+            except Exception as exc:
+                print(f"Voice engine close warning: {exc}")
+
+        audio_output = getattr(self, "audio_output", None)
+        stop_audio_output = getattr(audio_output, "stop", None)
+        if callable(stop_audio_output):
+            try:
+                stop_audio_output()
+            except Exception as exc:
+                print(f"Audio output shutdown warning: {exc}")
+
+        event.accept()
         print("Application closing...")
 
     # ==============================================================================
