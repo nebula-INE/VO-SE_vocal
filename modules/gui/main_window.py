@@ -5160,6 +5160,14 @@ class MainWindow(
             return
         try:
             mixer.set_tracks(tracks)
+            load_errors = list(getattr(mixer, "last_load_errors", []) or [])
+            if load_errors:
+                # Partial playback is allowed, but skipped tracks must be visible.
+                self.statusBar().showMessage(
+                    f"警告: {len(load_errors)} トラックの音声を読み込めませんでした。詳細はログを確認してください。",
+                    8000,
+                )
+                print("[AudioMixer] Track load errors:\n" + "\n".join(load_errors))
             mixer.play(start_time)
             self.is_playing = True
             self.current_playback_time = start_time
