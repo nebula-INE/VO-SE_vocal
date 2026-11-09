@@ -93,18 +93,20 @@ def test_non_finite_track_mixer_values_are_rejected_before_commit(tmp_path, monk
     window = _ProjectWindow()
     project_path = tmp_path / "non-finite.vose"
     project_path.write_text(
-        json.dumps({
-            "tempo": 140.0,
-            "tracks": [{
-                "name": "Invalid mixer",
-                "type": "vocal",
-                "notes": [],
-                "volume": float("nan"),
-                "pan": 0.0,
-            }],
-        }),
+        json.dumps(
+            {
+                "tempo": 140.0,
+                "tracks": [{
+                    "name": "Invalid mixer",
+                    "type": "vocal",
+                    "notes": [],
+                    "volume": float("nan"),
+                    "pan": 0.0,
+                }],
+            },
+            allow_nan=True,
+        ),
         encoding="utf-8",
-        allow_nan=True,
     )
     monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
 
@@ -120,21 +122,23 @@ def test_non_finite_note_timing_is_rejected_before_commit(tmp_path, monkeypatch)
     window = _ProjectWindow()
     project_path = tmp_path / "invalid-note.vose"
     project_path.write_text(
-        json.dumps({
-            "tempo": 130.0,
-            "tracks": [{
-                "name": "Invalid note",
-                "type": "vocal",
-                "notes": [{
-                    "note_number": 60,
-                    "start_time": 0.0,
-                    "duration": float("nan"),
-                    "lyric": "あ",
+        json.dumps(
+            {
+                "tempo": 130.0,
+                "tracks": [{
+                    "name": "Invalid note",
+                    "type": "vocal",
+                    "notes": [{
+                        "note_number": 60,
+                        "start_time": 0.0,
+                        "duration": float("nan"),
+                        "lyric": "あ",
+                    }],
                 }],
-            }],
-        }),
+            },
+            allow_nan=True,
+        ),
         encoding="utf-8",
-        allow_nan=True,
     )
     monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
 
