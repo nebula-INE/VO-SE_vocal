@@ -19,6 +19,42 @@ def test_oto_entry_abi_layout():
     assert ctypes.sizeof(COtoEntry) == 632
 
 
+def test_set_oto_data_skips_alias_that_exceeds_native_abi_limit():
+    engine = VO_SE_Engine.__new__(VO_SE_Engine)
+    fake_lib = _FakeLib()
+    engine.lib = cast(Any, fake_lib)
+
+    entry = OtoEntry(
+        alias="a" * 64,
+        filename="a.wav",
+        voice_dir="/tmp/voice",
+    )
+    engine.set_oto_data({"long-alias": entry})
+
+    assert len(fake_lib.calls) == 1
+    entries, count = fake_lib.calls[0]
+    assert entries is None
+    assert count == 0
+
+
+def test_set_oto_data_skips_wav_path_that_exceeds_native_abi_limit():
+    engine = VO_SE_Engine.__new__(VO_SE_Engine)
+    fake_lib = _FakeLib()
+    engine.lib = cast(Any, fake_lib)
+
+    entry = OtoEntry(
+        alias="あ",
+        filename="a.wav",
+        voice_dir="/tmp/" + ("v" * 520),
+    )
+    engine.set_oto_data({"あ": entry})
+
+    assert len(fake_lib.calls) == 1
+    entries, count = fake_lib.calls[0]
+    assert entries is None
+    assert count == 0
+
+
 def test_set_oto_data_syncs_alias_and_wav_path():
     engine = VO_SE_Engine.__new__(VO_SE_Engine)
     fake_lib = _FakeLib()
