@@ -5476,116 +5476,8 @@ class MainWindow(
 
     @Slot()
     def on_render_button_clicked(self):
-        """合成ボタンの最終接続 — 新シグネチャ (notes, parameters, file_path) 対応版"""
-        from modules.data.licensing import LicenseManager
-
-        is_pro = LicenseManager.is_pro()
-        status_msg = (
-            "レンダリング中 (Pro Mode)..."
-            if is_pro
-            else "レンダリング中..."
-        )
-        self.statusBar().showMessage(status_msg)
-
-        # 1. データの準備
-        tw = getattr(self, "timeline_widget", None)
-        gw = getattr(self, "graph_editor_widget", None)
-        engine = getattr(self, "vo_se_engine", None)
-
-        if tw is None or gw is None or engine is None:
-            QMessageBox.warning(
-                self,
-                "エラー",
-                "書き出しに必要な初期化が完了していません。",
-            )
-            return
-
-        notes = list(getattr(tw, "notes_list", []) or [])
-        if not notes:
-            self.statusBar().showMessage("ノートがありません")
-            return
-
-        # 2. 保存先の決定
-        output_filename = "preview_render.wav"
-        output_path = os.path.abspath(output_filename)
-
-        # 3. パラメータ辞書の組み立て
-        all_params = getattr(gw, "all_parameters", {}) or {}
-        parameters = {
-            "Pitch":   list(all_params.get("Pitch",   [])),
-            "Gender":  list(all_params.get("Gender",  [])),
-            "Tension": list(all_params.get("Tension", [])),
-            "Breath":  list(all_params.get("Breath",  [])),
-        }
-
-        mode_flag = 1 if is_pro else 0
-
-        # 4. エンジン呼び出し（v2 優先、無ければ旧 export_to_wav にフォールバック）
-        v2_export_fn = getattr(engine, "export_to_wav_v2", None)
-        v1_export_fn = getattr(engine, "export_to_wav", None)
-
-        if v2_export_fn is None and v1_export_fn is None:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                "エンジンに export_to_wav が実装されていません。",
-            )
-            return
-
-        try:
-            # v2 を優先。属性が存在するだけでなく callable であることを確認し、
-            # 壊れた/未初期化の属性なら v1 に安全にフォールバックする。
-            if callable(v2_export_fn):
-                result_path = v2_export_fn(
-                    notes,
-                    parameters,
-                    output_path,
-                    mode_flag=mode_flag,
-                )
-            elif callable(v1_export_fn):
-                result_path = v1_export_fn(
-                    notes,
-                    parameters,
-                    output_path,
-                    mode_flag=mode_flag,
-                )
-            else:
-                raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
-
-            # 5. 再生
-            result_path_str: Optional[str] = None
-            if isinstance(result_path, str):
-                result_path_str = result_path
-            elif isinstance(result_path, os.PathLike):
-                path_value = os.fspath(result_path)
-                result_path_str = os.fsdecode(path_value)
-
-            if result_path_str is not None and os.path.exists(result_path_str):
-                self.statusBar().showMessage("再生中...")
-                self.play_rendered_audio(result_path_str)
-            else:
-                QMessageBox.critical(
-                    self,
-                    "エラー",
-                    "合成に失敗しました。\n"
-                    "DLLまたは音源パスを確認してください。",
-                )
-
-        except TypeError as exc:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                "export_to_wav のシグネチャが一致しません。\n"
-                "vo_se_engine_patch.apply_patch(VO_SE_Engine) "
-                "が適用済みか確認してください。\n"
-                f"詳細: {exc}",
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"書き出し失敗: {exc}",
-            )
+        """通常のRENDER操作は進捗・キャンセル対応の非同期経路へ統一する。"""
+        return self.request_render()
 
     @Slot()
     def on_ai_button_clicked(self):
@@ -6367,74 +6259,122 @@ class MainWindow(
     # レリタリング実行メゾット
     # ==============================================================================
 
+    def _start_async_render(
+        self,
+        notes: list,
+        parameters: dict,
+        output_path: str,
+        *,
+        play_after_success: bool,
+        is_pro: Optional[bool] = None,
+    ) -> bool:
+        """Render to a temporary sibling WAV and publish only after success."""
+        if getattr(self, "current_worker", None) is not None:
+            self.statusBar().showMessage("別のレンダリングが実行中です。", 4000)
+            return False
+
+        engine = getattr(self, "vo_se_engine", None)
+        if engine is None:
+            self.statusBar().showMessage("エンジンがロードされていません。", 5000)
+            return False
+
+        final_path = os.path.abspath(os.fspath(output_path))
+        output_dir = os.path.dirname(final_path) or os.getcwd()
+        os.makedirs(output_dir, exist_ok=True)
+
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{os.path.splitext(os.path.basename(final_path))[0]}.",
+            suffix=".tmp.wav",
+            dir=output_dir,
+        )
+        os.close(descriptor)
+        os.remove(temporary_path)
+
+        try:
+            if is_pro is None:
+                from modules.data.licensing import LicenseManager
+                is_pro = LicenseManager.is_pro()
+
+            self._render_target_path = final_path
+            self._render_temp_path = temporary_path
+            self._render_play_after_success = bool(play_after_success)
+            self._render_cancelled = False
+
+            if hasattr(self, "progress_bar") and self.progress_bar is not None:
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(0)
+                self.progress_bar.setVisible(True)
+            if getattr(self, "render_eta_label", None) is not None:
+                self.render_eta_label.setText("ETA: 計算中...")
+            if getattr(self, "render_btn", None) is not None:
+                self.render_btn.setEnabled(False)
+            if getattr(self, "cancel_render_btn", None) is not None:
+                self.cancel_render_btn.setVisible(True)
+                self.cancel_render_btn.setEnabled(True)
+
+            self.statusBar().showMessage("レンダリング準備中...")
+            worker = SynthesisWorker(
+                engine,
+                list(notes),
+                temporary_path,
+                is_pro=bool(is_pro),
+                parameters=parameters,
+            )
+            self.current_worker = worker
+            worker.signals.finished.connect(self.on_render_success)
+            worker.signals.error.connect(self.on_render_failed)
+            worker.signals.progress.connect(self.on_render_progress)
+            QThreadPool.globalInstance().start(worker)
+            return True
+        except Exception as exc:
+            self.current_worker = None
+            self._render_target_path = ""
+            self._render_temp_path = ""
+            self._render_play_after_success = False
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                pass
+            self.on_render_failed(str(exc))
+            return False
+
     @Slot()
     def request_render(self) -> None:
-        """
-        タイムライン上の全ノートをスキャンし、非同期でレンダリングを開始する。
-        """
-        from modules.data.licensing import LicenseManager
+        """RENDERボタン用の非同期プレビュー書き出し。"""
+        timeline = getattr(self, "timeline_widget", None)
+        graph = getattr(self, "graph_editor_widget", None)
+        if timeline is None or graph is None:
+            QMessageBox.warning(
+                self,
+                "エラー",
+                "書き出しに必要な画面が初期化されていません。",
+            )
+            return
 
-        # 1. 保存先の決定
-        output_wav = os.path.join(os.getcwd(), "output", "render_result.wav")
-        os.makedirs(os.path.dirname(output_wav), exist_ok=True)
-
-        # 2. データの取得
-        raw_notes = self.timeline_widget.get_all_notes_data()
+        try:
+            raw_notes = list(timeline.get_all_notes_data() or [])
+        except Exception as exc:
+            self.statusBar().showMessage(f"ノート取得エラー: {exc}", 5000)
+            return
         if not raw_notes:
             self.statusBar().showMessage("エラー: レンダリングするノートがありません。")
             return
 
-        if not (hasattr(self, "vose_core") and self.vose_core):
-            self.statusBar().showMessage("エラー: エンジンがロードされていません。")
-            return
-
-        # 3. 準備
-        try:
-            is_pro = LicenseManager.is_pro()
-            self.statusBar().showMessage("レンダリング準備中...")
-
-            # --- UI状態変更（レンダリング開始） ---
-            self._render_cancelled = False
-            if hasattr(self, "progress_bar"):
-                self.progress_bar.setRange(0, 100)
-                self.progress_bar.setValue(0)
-                self.progress_bar.setVisible(True)
-            self.render_eta_label.setText("ETA: 計算中...")
-            self.render_btn.setEnabled(False)
-
-            # キャンセルボタンを表示・有効化
-            self.cancel_render_btn.setVisible(True)
-            self.cancel_render_btn.setEnabled(True)
-
-            # ワーカーの作成
-            gw = getattr(self, "graph_editor_widget", None)
-            all_params = getattr(gw, "all_parameters", {}) or {}
-            parameters = {
-                "Pitch": list(all_params.get("Pitch", [])),
-                "Gender": list(all_params.get("Gender", [])),
-                "Tension": list(all_params.get("Tension", [])),
-                "Breath": list(all_params.get("Breath", [])),
-            }
-
-            worker = SynthesisWorker(
-                self.vo_se_engine,
-                raw_notes,
-                output_wav,
-                is_pro=is_pro,
-                parameters=parameters,
-            )
-            self.current_worker = worker
-
-            # シグナルの接続（progress を追加）
-            worker.signals.finished.connect(self.on_render_success)
-            worker.signals.error.connect(self.on_render_failed)
-            worker.signals.progress.connect(self.on_render_progress)
-
-            # スレッドプールで実行開始
-            QThreadPool.globalInstance().start(worker)
-
-        except Exception as e:
-            self.on_render_failed(str(e))
+        all_params = getattr(graph, "all_parameters", {}) or {}
+        parameters = {
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath": list(all_params.get("Breath", [])),
+        }
+        output_wav = os.path.join(os.getcwd(), "output", "render_result.wav")
+        self._start_async_render(
+            raw_notes,
+            parameters,
+            output_wav,
+            play_after_success=True,
+        )
 
     @Slot(int, float)
     def on_render_progress(self, percent: int, eta_sec: float):
