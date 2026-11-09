@@ -6313,10 +6313,10 @@ class MainWindow(
             self.statusBar().showMessage("レンダリング準備中...")
             worker = SynthesisWorker(
                 engine,
-                list(notes),
+                deepcopy(list(notes)),
                 temporary_path,
                 is_pro=bool(is_pro),
-                parameters=parameters,
+                parameters=deepcopy(parameters),
             )
             self.current_worker = worker
             worker.signals.finished.connect(self.on_render_success)
