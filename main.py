@@ -6,6 +6,7 @@ import platform
 import ctypes
 import ctypes.util
 import json
+import tempfile
 import threading
 
 import importlib
@@ -124,10 +125,27 @@ class ConfigHandler:
             return self.default_config
 
     def save_config(self, config_dict):
+        output_dir = os.path.dirname(os.path.abspath(self.config_path))
+        temporary_path = ""
         try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
+            os.makedirs(output_dir, exist_ok=True)
+            descriptor, temporary_path = tempfile.mkstemp(
+                prefix=".vose-config-",
+                suffix=".tmp",
+                dir=output_dir,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
                 json.dump(config_dict, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, self.config_path)
         except Exception as e:
+            if temporary_path:
+                try:
+                    if os.path.exists(temporary_path):
+                        os.remove(temporary_path)
+                except OSError:
+                    pass
             print(f"Config save error: {e}")
 
 
