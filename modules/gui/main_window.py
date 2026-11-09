@@ -1221,8 +1221,39 @@ except ImportError:
 class ConfigHandler:
     """設定ファイルの読み書き。保存時は一時ファイルから安全に置き換える。"""
 
-    def __init__(self, config_path="config.json"):
-        self.config_path = config_path
+    def __init__(self, config_path=None):
+        if config_path is None:
+            try:
+                from PySide6.QtCore import QStandardPaths
+                config_dir = QStandardPaths.writableLocation(
+                    QStandardPaths.StandardLocation.AppConfigLocation
+                )
+            except Exception:
+                config_dir = ""
+
+            if not config_dir:
+                if sys.platform == "win32":
+                    config_root = os.getenv("APPDATA") or os.path.expanduser("~")
+                    config_dir = os.path.join(config_root, "VO-SE")
+                elif sys.platform == "darwin":
+                    config_dir = os.path.expanduser("~/Library/Application Support/VO-SE")
+                else:
+                    config_root = os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+                    config_dir = os.path.join(config_root, "VO-SE")
+
+            self.config_path = os.path.join(config_dir, "config.json")
+
+            # Migrate the legacy working-directory config once, when present.
+            legacy_path = os.path.abspath("config.json")
+            if not os.path.exists(self.config_path) and os.path.isfile(legacy_path):
+                try:
+                    os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+                    import shutil
+                    shutil.copy2(legacy_path, self.config_path)
+                except OSError as exc:
+                    print(f"旧設定ファイルの移行をスキップしました: {exc}")
+        else:
+            self.config_path = os.fspath(config_path)
 
     def load_config(self) -> Dict[str, Any]:
         if os.path.exists(self.config_path):
