@@ -771,126 +771,79 @@ class ProjectIOMixin:
     # ======================================================================
 
     def import_voice_bank(self: Any, zip_path: str):
-        """[LIVE] ZIP音源インストール完全版"""
-        import shutil
-        import zipfile
+        """ドラッグ＆ドロップZIPもVoiceManagerの安全な永続保存経路へ統一する。"""
         from modules.gui.aural_engine import AuralAIEngine
-        from modules.gui.shared import get_resource_path, DynamicsAIEngine
+        from modules.gui.shared import DynamicsAIEngine
 
-        extract_base_dir = get_resource_path("voices")
-        os.makedirs(extract_base_dir, exist_ok=True)
-        
-        installed_name = None
-        valid_files = [] 
-        found_oto = False
+        manager = getattr(self, "voice_manager", None)
+        install_from_zip = getattr(manager, "install_voice_from_zip", None)
+        if not callable(install_from_zip):
+            QMessageBox.critical(
+                self,
+                "導入エラー",
+                "音源マネージャーが初期化されていません。",
+            )
+            return
 
         try:
-            with zipfile.ZipFile(zip_path, 'r') as z:
-                for info in z.infolist():
-                    try:
-                        filename = info.filename.encode('cp437').decode('cp932')
-                    except Exception:
-                        filename = info.filename
-                    
-                    if "__MACOSX" in filename or ".DS_Store" in filename:
-                        continue
-                    
-                    valid_files.append((info, filename))
-                    
-                    if "oto.ini" in filename.lower():
-                        found_oto = True
-                        parts = filename.replace('\\', '/').strip('/').split('/')
-                        if len(parts) > 1 and not installed_name:
-                            installed_name = parts[-2]
+            # VoiceManager は安全なZIP展開、oto.ini検出、ユーザーデータ領域への
+            # コピー、重複名回避、失敗時の部分フォルダ削除をまとめて処理する。
+            # PyInstaller の _MEIPASS へ直接展開したり、既存音源を削除したりしない。
+            installed_name = install_from_zip(zip_path)
+            if not installed_name:
+                raise RuntimeError("音源のインストール結果を取得できませんでした。")
 
-                if not installed_name:
-                    installed_name = os.path.splitext(os.path.basename(zip_path))[0]
+            voice_path = manager.voices.get(installed_name)
+            if isinstance(voice_path, dict):
+                voice_path = voice_path.get("path", "")
+            voice_path = str(voice_path or "")
+            if not voice_path or not os.path.isdir(voice_path):
+                raise RuntimeError(
+                    f"インストール済み音源の保存先が見つかりません: {installed_name}"
+                )
 
-                target_voice_dir = os.path.join(extract_base_dir, installed_name)
-                
-                if os.path.exists(target_voice_dir):
-                    shutil.rmtree(target_voice_dir)
-                os.makedirs(target_voice_dir, exist_ok=True)
-
-                top_dirs = set()
-                for _, fname in valid_files:
-                    parts = fname.replace('\\', '/').strip('/').split('/')
-                    if len(parts) > 1:
-                        top_dirs.add(parts[0])
-                    else:
-                        top_dirs.add("")
-
-                has_single_top_dir = len(top_dirs) == 1 and "" not in top_dirs
-                single_top_dir = list(top_dirs)[0] if has_single_top_dir else ""
-
-                for info, filename in valid_files:
-                    normalized_fname = filename.replace('\\', '/').strip('/')
-                    
-                    if has_single_top_dir:
-                        rel_path = normalized_fname[len(single_top_dir):].lstrip('/')
-                    else:
-                        rel_path = normalized_fname
-                        
-                    target_path = os.path.join(target_voice_dir, rel_path)
-                    root_path = os.path.realpath(target_voice_dir)
-                    target_real_path = os.path.realpath(target_path)
-                    if os.path.commonpath([root_path, target_real_path]) != root_path:
-                        raise ValueError(f"不正なZIPパスです: {filename}")
-                    
-                    if info.is_dir():
-                        os.makedirs(target_path, exist_ok=True)
-                        continue
-                        
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    with z.open(info) as source, open(target_path, "wb") as target:
-                        shutil.copyfileobj(source, target)
-
-            status_bar = self.statusBar()
-            if not found_oto:
-                if status_bar:
-                    status_bar.showMessage(f"AI解析中: {installed_name} の原音設定を自動生成しています...", 0)
-                if hasattr(self, 'generate_and_save_oto'):
-                    self.generate_and_save_oto(target_voice_dir)
-
-            aural_model = os.path.join(target_voice_dir, "aural_dynamics.onnx")
-            std_model = os.path.join(target_voice_dir, "model.onnx")
-
-            if os.path.exists(aural_model):
-                self.dynamics_ai = AuralAIEngine() 
-                if hasattr(self.dynamics_ai, 'load_model'):
-                    cast(Any, self.dynamics_ai).load_model(aural_model)
+            aural_model = os.path.join(voice_path, "aural_dynamics.onnx")
+            std_model = os.path.join(voice_path, "model.onnx")
+            if os.path.isfile(aural_model):
+                self.dynamics_ai = AuralAIEngine()
+                load_model = getattr(self.dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(aural_model)
                 engine_msg = "上位Auralモデル"
-            elif os.path.exists(std_model):
+            elif os.path.isfile(std_model):
                 self.dynamics_ai = DynamicsAIEngine()
-                if hasattr(self.dynamics_ai, 'load_model'):
-                    cast(Any, self.dynamics_ai).load_model(std_model)
+                load_model = getattr(self.dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(std_model)
                 engine_msg = "標準Dynamicsモデル"
             else:
-                self.dynamics_ai = AuralAIEngine() 
+                self.dynamics_ai = AuralAIEngine()
                 engine_msg = "汎用Auralエンジン"
 
-            v_manager = getattr(self, 'voice_manager', None)
-            if v_manager and hasattr(v_manager, 'scan_utau_voices'):
-                v_manager.scan_utau_voices()
-            
-            if hasattr(self, 'voice_gallery') and self.voice_gallery is not None:
-                refresh_fn = getattr(self.voice_gallery, 'setup_gallery', getattr(self.voice_gallery, 'refresh_gallery', None))
-                if refresh_fn:
-                    refresh_fn()
-                self.voice_gallery.update()
-            
-            msg = f"✅ '{installed_name}' インストール完了！ ({engine_msg})"
-            if status_bar:
-                status_bar.showMessage(msg, 5000)
-            
-            QMessageBox.information(
-                self, 
-                "導入成功", 
-                f"音源 '{installed_name}' をインストールしました。\nエンジン: {engine_msg}\n\nキャラクター選択パネルから選択できます。"
-            )
+            refresh_voices = getattr(manager, "scan_voices", None)
+            if callable(refresh_voices):
+                refresh_voices()
 
-        except Exception as e:
-            QMessageBox.critical(self, "導入エラー", f"インストール中にエラーが発生しました:\n{str(e)}")
+            gallery = getattr(self, "voice_gallery", None)
+            refresh_gallery = getattr(gallery, "setup_gallery", None)
+            if callable(refresh_gallery):
+                refresh_gallery()
+                gallery.update()
+
+            message = f"音源「{installed_name}」をインストールしました。\nエンジン: {engine_msg}"
+            self.statusBar().showMessage(
+                f"音源インストール完了: {installed_name} ({engine_msg})",
+                5000,
+            )
+            QMessageBox.information(self, "導入成功", message)
+
+        except Exception as exc:
+            logger.exception("ドラッグ＆ドロップ音源インストール失敗: %s", exc)
+            QMessageBox.critical(
+                self,
+                "導入エラー",
+                f"インストール中にエラーが発生しました:\n{exc}",
+            )
 
     def generate_and_save_oto(self: Any, target_voice_dir: str, force_redo: bool = False) -> None:
         """
