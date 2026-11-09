@@ -453,38 +453,67 @@ class ProjectIOMixin:
         return bool(self.on_save_project_clicked())
 
     def load_json_project(self: Any, file_path: str) -> bool:
-        """旧単一トラックJSONと新マルチトラックVOSE/JSONの両方を読み込む。"""
+        """旧単一トラックJSONと新マルチトラックVOSE/JSONを検証してから反映する。"""
+        import math
+
+        before_state = None
+        commit_started = False
         try:
-            before_state = self._capture_project_edit_state()
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("プロジェクトJSONのルートはオブジェクトである必要があります。")
 
             tempo = float(data.get("tempo", 120.0))
+            current_time = float(data.get("current_time", 0.0))
+            if not math.isfinite(tempo) or tempo <= 0.0:
+                raise ValueError("プロジェクトのテンポが不正です。")
+            if not math.isfinite(current_time) or current_time < 0.0:
+                raise ValueError("プロジェクトの再生位置が不正です。")
+
+            # すべてのトラック・ノート・オートメーションをUI変更前に構築する。
+            existing_tracks = list(getattr(self, "tracks", []) or [])
+            if not existing_tracks:
+                raise ValueError("読み込み先のトラックがありません。")
+            track_cls = type(existing_tracks[0])
             raw_tracks = data.get("tracks")
+            if raw_tracks is not None and not isinstance(raw_tracks, list):
+                raise ValueError("tracks は配列である必要があります。")
 
             if isinstance(raw_tracks, list) and raw_tracks:
-                existing_tracks = list(getattr(self, "tracks", []) or [])
-                track_cls = type(existing_tracks[0]) if existing_tracks else None
                 loaded_tracks = []
-
                 for index, raw in enumerate(raw_tracks):
-                    if not isinstance(raw, dict) or track_cls is None:
-                        continue
+                    if not isinstance(raw, dict):
+                        raise ValueError(f"Track {index + 1} の形式が不正です。")
+                    raw_notes = raw.get("notes", [])
+                    if not isinstance(raw_notes, list):
+                        raise ValueError(f"Track {index + 1} の notes は配列である必要があります。")
+                    notes = []
+                    for note_index, note_data in enumerate(raw_notes):
+                        if not isinstance(note_data, dict):
+                            raise ValueError(
+                                f"Track {index + 1} / Note {note_index + 1} の形式が不正です。"
+                            )
+                        notes.append(NoteEvent.from_dict(note_data))
+
+                    mixer = raw.get("mixer", {})
+                    if not isinstance(mixer, dict):
+                        raise ValueError(f"Track {index + 1} の mixer 設定が不正です。")
+                    volume = float(raw.get("volume", mixer.get("vol", 1.0)))
+                    pan = float(raw.get("pan", mixer.get("pan", 0.0)))
+                    if not math.isfinite(volume) or not math.isfinite(pan):
+                        raise ValueError(f"Track {index + 1} の音量・パン設定が不正です。")
+
                     track = track_cls(
                         str(raw.get("name", f"Track {index + 1}")),
                         str(raw.get("type", "vocal")),
                     )
-                    track.notes = [
-                        NoteEvent.from_dict(d)
-                        for d in raw.get("notes", [])
-                        if isinstance(d, dict)
-                    ]
+                    track.notes = notes
                     track.audio_path = str(
                         raw.get("audio_path", raw.get("audio", "")) or ""
                     )
-                    mixer = raw.get("mixer", {})
-                    track.volume = float(raw.get("volume", mixer.get("vol", 1.0)))
-                    track.pan = float(raw.get("pan", mixer.get("pan", 0.0)))
+                    track.volume = volume
+                    track.pan = pan
                     track.is_muted = bool(raw.get("is_muted", False))
                     track.is_solo = bool(raw.get("is_solo", False))
                     if "engine_type" in raw:
@@ -493,82 +522,101 @@ class ProjectIOMixin:
                         track.color_label = str(raw["color_label"])
                     loaded_tracks.append(track)
 
-                if not loaded_tracks:
-                    raise ValueError("有効なトラックが見つかりません。")
-
-                self.tracks = loaded_tracks
                 requested_idx = int(data.get("current_track_idx", 0))
-                self.current_track_idx = min(
-                    max(requested_idx, 0),
-                    len(self.tracks) - 1,
-                )
-
-                if hasattr(self, "refresh_track_list_ui"):
-                    self.refresh_track_list_ui()
-
-                # switch_track() は切替前のタイムラインを現在トラックへ退避する仕様なので、
-                # 新規プロジェクト読込直後には使わない。読込済みデータを直接表示する。
-                timeline = getattr(self, "timeline_widget", None)
-                if timeline is not None:
-                    timeline.set_notes(self.tracks[self.current_track_idx].notes)
-                    timeline.update()
-
+                new_current_idx = min(max(requested_idx, 0), len(loaded_tracks) - 1)
             else:
-                # 旧1.3系JSONは現在のトラックへ読み込む。
-                notes = [
-                    NoteEvent.from_dict(d)
-                    for d in data.get("notes", [])
-                    if isinstance(d, dict)
-                ]
-                tracks = list(getattr(self, "tracks", []) or [])
-                current_idx = int(getattr(self, "current_track_idx", 0))
-                if tracks and 0 <= current_idx < len(tracks):
-                    tracks[current_idx].notes = notes
-                if getattr(self, "timeline_widget", None) is not None:
-                    self.timeline_widget.set_notes(notes)
+                # 旧1.3系JSON、または tracks=[] のJSONは現在のトラックへ読み込む。
+                raw_notes = data.get("notes", [])
+                if not isinstance(raw_notes, list):
+                    raise ValueError("notes は配列である必要があります。")
+                notes = []
+                for note_index, note_data in enumerate(raw_notes):
+                    if not isinstance(note_data, dict):
+                        raise ValueError(f"Note {note_index + 1} の形式が不正です。")
+                    notes.append(NoteEvent.from_dict(note_data))
 
-            timeline = getattr(self, "timeline_widget", None)
-            if timeline is not None:
-                timeline.tempo = tempo
+                loaded_tracks = deepcopy(existing_tracks)
+                requested_idx = int(getattr(self, "current_track_idx", 0))
+                new_current_idx = min(max(requested_idx, 0), len(loaded_tracks) - 1)
+                loaded_tracks[new_current_idx].notes = notes
 
-            # Graph Editor のオートメーションもプロジェクトデータから復元する。
-            # これを保存しないと、Pitch/Gender/Tension/Breath の編集が
-            # ファイル保存→再読込で消えてしまう。
-            graph = getattr(self, "graph_editor_widget", None)
+            restored_parameters = None
             raw_parameters = data.get("parameters")
-            if graph is not None and isinstance(raw_parameters, dict):
+            if raw_parameters is not None:
+                if not isinstance(raw_parameters, dict):
+                    raise ValueError("parameters はオブジェクトである必要があります。")
                 restored_parameters = {}
                 for name in ("Pitch", "Gender", "Tension", "Breath"):
                     raw_events = raw_parameters.get(name, [])
-                    if isinstance(raw_events, list):
-                        restored_parameters[name] = [
-                            PitchEvent.from_dict(event)
-                            for event in raw_events
-                            if isinstance(event, dict)
-                            and "time" in event
-                            and "value" in event
-                        ]
-                for name in ("Pitch", "Gender", "Tension", "Breath"):
-                    restored_parameters.setdefault(name, [])
-                if hasattr(graph, "_restore_parameters_snapshot"):
-                    graph._restore_parameters_snapshot(restored_parameters)
+                    if not isinstance(raw_events, list):
+                        raise ValueError(f"{name} オートメーションは配列である必要があります。")
+                    events = []
+                    for event_index, event in enumerate(raw_events):
+                        if not isinstance(event, dict) or "time" not in event or "value" not in event:
+                            raise ValueError(
+                                f"{name} オートメーション {event_index + 1} の形式が不正です。"
+                            )
+                        event_time = float(event["time"])
+                        event_value = float(event["value"])
+                        if not math.isfinite(event_time) or not math.isfinite(event_value):
+                            raise ValueError(
+                                f"{name} オートメーション {event_index + 1} に不正な数値があります。"
+                            )
+                        events.append(PitchEvent.from_dict(event))
+                    restored_parameters[name] = events
+
+            # ここまで成功した場合のみ既存の状態を保存し、UI/プロジェクトを更新する。
+            before_state = self._capture_project_edit_state()
+            commit_started = True
+            self.tracks = loaded_tracks
+            self.current_track_idx = new_current_idx
+
+            timeline = getattr(self, "timeline_widget", None)
+            active_notes = self.tracks[self.current_track_idx].notes
+            if timeline is not None:
+                timeline.tempo = tempo
+                if hasattr(timeline, "set_notes"):
+                    timeline.set_notes(active_notes)
                 else:
-                    graph.all_parameters = restored_parameters
-                    if hasattr(graph, "parameters_changed"):
-                        graph.parameters_changed.emit(graph.all_parameters)
+                    timeline.notes_list = list(active_notes)
+                timeline.update()
+
+            graph = getattr(self, "graph_editor_widget", None)
+            if graph is not None:
                 graph.tempo = tempo
+                if restored_parameters is not None:
+                    if hasattr(graph, "_restore_parameters_snapshot"):
+                        graph._restore_parameters_snapshot(restored_parameters)
+                    else:
+                        graph.all_parameters = restored_parameters
+                        if hasattr(graph, "parameters_changed"):
+                            graph.parameters_changed.emit(graph.all_parameters)
                 graph.update()
 
             tempo_input = getattr(self, "tempo_input", None)
             if tempo_input is not None:
-                tempo_input.setText(str(int(round(tempo))))
+                tempo_input.blockSignals(True)
+                tempo_input.setText(str(tempo))
+                tempo_input.blockSignals(False)
 
-            self.current_playback_time = float(data.get("current_time", 0.0))
+            self.current_playback_time = current_time
             set_time = getattr(self, "_set_transport_time", None)
             if callable(set_time):
-                set_time(self.current_playback_time)
+                set_time(current_time)
 
-            note_count = len(getattr(timeline, "notes_list", []) or []) if timeline is not None else 0
+            engine = getattr(self, "vo_se_engine", None)
+            set_tempo = getattr(engine, "set_tempo", None)
+            if callable(set_tempo):
+                set_tempo(tempo)
+
+            refresh = getattr(self, "refresh_track_list_ui", None)
+            if callable(refresh):
+                refresh()
+            sync_strips = getattr(self, "_sync_track_strips", None)
+            if callable(sync_strips):
+                sync_strips()
+
+            note_count = len(active_notes)
             self.statusBar().showMessage(
                 f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})",
                 3000,
@@ -581,6 +629,11 @@ class ProjectIOMixin:
             return True
 
         except Exception as exc:
+            if commit_started and before_state is not None:
+                try:
+                    self._restore_project_edit_state(before_state)
+                except Exception:
+                    logger.exception("JSON読込失敗後のプロジェクト復元にも失敗しました")
             logger.exception("JSON/VOSE 読み込みエラー: %s", exc)
             QMessageBox.critical(
                 self,
