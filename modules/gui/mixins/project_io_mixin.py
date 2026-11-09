@@ -1229,14 +1229,13 @@ class ProjectIOMixin:
         return str(os.path.splitext(os.path.basename(zip_path))[0])
 
     def on_export_button_clicked(self: Any):
-        """[LIVE] WAV出力 — 新シグネチャ (notes, parameters, file_path) 対応版"""
+        """WAVを書き出す。長時間レンダリングはGUIを止めずにバックグラウンドで行う。"""
         from modules.data.licensing import LicenseManager
 
-        tw = getattr(self, "timeline_widget", None)
-        gw = getattr(self, "graph_editor_widget", None)
+        timeline = getattr(self, "timeline_widget", None)
+        graph = getattr(self, "graph_editor_widget", None)
         engine = getattr(self, "vo_se_engine", None)
-
-        if tw is None or gw is None or engine is None:
+        if timeline is None or graph is None or engine is None:
             QMessageBox.warning(
                 self,
                 "エラー",
@@ -1244,7 +1243,7 @@ class ProjectIOMixin:
             )
             return
 
-        notes = list(getattr(tw, "notes_list", []) or [])
+        notes = list(getattr(timeline, "notes_list", []) or [])
         if not notes:
             QMessageBox.warning(
                 self,
@@ -1262,92 +1261,36 @@ class ProjectIOMixin:
         if not file_path:
             return
 
-        is_pro = LicenseManager.is_pro()
-        mode_flag = 1 if is_pro else 0
-
-        # graph_editor_widget からパラメータ辞書を組み立てる
-        all_params = getattr(gw, "all_parameters", {}) or {}
+        all_params = getattr(graph, "all_parameters", {}) or {}
         parameters: Dict[str, Any] = {
-            "Pitch":   list(all_params.get("Pitch",   [])),
-            "Gender":  list(all_params.get("Gender",  [])),
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
             "Tension": list(all_params.get("Tension", [])),
-            "Breath":  list(all_params.get("Breath",  [])),
+            "Breath": list(all_params.get("Breath", [])),
         }
 
-        self.stop_and_clear_playback()
-        status_bar = self.statusBar()
-        if status_bar:
-            status_bar.showMessage("レンダリング中...")
+        stop_playback = getattr(self, "stop_and_clear_playback", None)
+        if callable(stop_playback):
+            stop_playback()
 
-        # パッチ適用環境では v2 を優先 (VCV + Vibrato + Portamento 対応)
-        v2_export_fn = getattr(engine, "export_to_wav_v2", None)
-        v1_export_fn = getattr(engine, "export_to_wav", None)
-
-        if v2_export_fn is None and v1_export_fn is None:
+        start_render = getattr(self, "_start_async_render", None)
+        if not callable(start_render):
             QMessageBox.critical(
                 self,
                 "エラー",
-                "エンジンに export_to_wav が実装されていません。",
+                "非同期レンダリング機能が初期化されていません。",
             )
             return
 
-        try:
-            # v2 を優先。v2 は mode_flag を受け取れるため、Pro/Free の
-            # レンダリングモードをファイル書き出しにも確実に渡す。
-            if callable(v2_export_fn):
-                result = v2_export_fn(
-                    notes,
-                    parameters,
-                    file_path,
-                    mode_flag=mode_flag,
-                )
-            elif callable(v1_export_fn):
-                result = v1_export_fn(
-                    notes,
-                    parameters,
-                    file_path,
-                    mode_flag=mode_flag,
-                )
-            else:
-                raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
-
-            if result is None:
-                QMessageBox.warning(
-                    self,
-                    "書き出し",
-                    "レンダリング結果が空でした。",
-                )
-                return
-
-            if status_bar:
-                status_bar.showMessage(
-                    f"エクスポート完了: {os.path.basename(file_path)}"
-                )
-            QMessageBox.information(
-                self,
-                "完了",
-                f"レンダリングが完了しました！\nファイル: {file_path}",
-            )
-
-        except TypeError as exc:
-            logger.exception("export_to_wav 呼び出し失敗: %s", exc)
-            QMessageBox.critical(
-                self,
-                "エラー",
-                "export_to_wav のシグネチャが一致しません。\n"
-                "vo_se_engine_patch.apply_patch(VO_SE_Engine) "
-                "が適用済みか確認してください。\n"
-                f"詳細: {exc}",
-            )
-        except Exception as exc:
-            logger.exception("書き出しエラー: %s", exc)
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"書き出し失敗: {exc}",
-            )
-            if status_bar:
-                status_bar.showMessage("エラー発生")
+        started = start_render(
+            notes,
+            parameters,
+            file_path,
+            is_pro=LicenseManager.is_pro(),
+            play_after_success=False,
+        )
+        if not started:
+            logger.warning("WAV書き出しを開始できませんでした: %s", file_path)
 
     def parse_ust_dict_to_note(self: Any, d: Dict[str, Any], current_time_sec: float = 0.0, tempo: float = 120.0) -> Any:
         """[LIVE] UST辞書 → NoteEvent変換"""
