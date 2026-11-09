@@ -72,17 +72,32 @@ void VoseAudioProcessor::loadVoiceDirectory (const juce::File& dir, int trackInd
     trackIndex = juce::jlimit (0, kMaxTracks - 1, trackIndex);
     auto& track = tracks[(size_t) trackIndex];
 
+    // The native OTO table is global. Clear it when a replacement bank is
+    // empty as well, otherwise metadata from the previously selected bank
+    // can survive a failed/empty import and be applied to later renders.
     track.otoDb.clear();
+    track.voiceDirPath = {};
+
     const int entryCount = track.otoDb.loadVoiceDir (dir);
 
     if (entryCount == 0)
     {
+        if (coreLib.set_oto_data != nullptr)
+            coreLib.set_oto_data (nullptr, 0);
         juce::Logger::writeToLog ("VO-SE: oto.ini が見つからないか0エントリでした: "
                                    + dir.getFullPathName());
         return;
     }
 
     const int loaded = track.otoDb.pushAllToCore (coreLib);
+    if (loaded <= 0)
+    {
+        track.voiceDirPath = {};
+        juce::Logger::writeToLog ("VO-SE: 有効なWAVを読み込めなかったため音源を未設定に戻しました: "
+                                   + dir.getFullPathName());
+        return;
+    }
+
     track.voiceDirPath = dir.getFullPathName();
 
     juce::Logger::writeToLog ("VO-SE: [track" + juce::String (trackIndex) + "] oto.ini "
