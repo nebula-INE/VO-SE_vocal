@@ -1218,26 +1218,45 @@ except ImportError:
 # 設定管理クラス（モック実装）
 # ==============================================================================
 
-class ConfigHandler:  #愛なんてシャボン玉！
-    """設定ファイルの読み書き"""
+class ConfigHandler:
+    """設定ファイルの読み書き。保存時は一時ファイルから安全に置き換える。"""
+
     def __init__(self, config_path="config.json"):
         self.config_path = config_path
-    
+
     def load_config(self) -> Dict[str, Any]:
         if os.path.exists(self.config_path):
             try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                if not isinstance(config, dict):
+                    raise ValueError("設定ファイルのルートはオブジェクトである必要があります。")
+                return config
+            except Exception as exc:
+                print(f"設定読み込みエラー: {exc}")
         return {"default_voice": "標準ボイス", "volume": 0.8}
-    
-    def save_config(self, config: Dict[str, Any]):
+
+    def save_config(self, config: Dict[str, Any]) -> None:
+        output_dir = os.path.dirname(os.path.abspath(self.config_path))
+        os.makedirs(output_dir, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=".vose-config-",
+            suffix=".tmp",
+            dir=output_dir,
+        )
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"設定保存エラー: {e}")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, self.config_path)
+        except Exception as exc:
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                pass
+            print(f"設定保存エラー: {exc}")
 
 # ==============================================================================
 # ボイスカードウェイジェイト
@@ -2111,8 +2130,9 @@ class MainWindow(
         
         # 外部マネージャー
         self.history = HistoryManager()
-        self.config_manager = cast(Any, None)
-        self.config = config if config else {}
+        self.config_manager = cast(Any, ConfigHandler())
+        loaded_config = self.config_manager.load_config()
+        self.config = dict(config) if isinstance(config, dict) else loaded_config
         self.all_parameters = {}
         self.sync_notes = True
         self.input_fields = []
