@@ -79,10 +79,8 @@ def test_all_muted_tracks_keep_timeline_running_until_audio_ends(monkeypatch):
     class CallbackStop(Exception):
         pass
 
-    class FakeSoundDevice:
-        CallbackStop = CallbackStop
-
-    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    fake_sound_device = SimpleNamespace(CallbackStop=CallbackStop)
+    monkeypatch.setattr(audio_mixer_module, "sd", fake_sound_device)
 
     mixer = AudioMixer(sample_rate=4, block_size=2)
     muted = _track(is_muted=True)
