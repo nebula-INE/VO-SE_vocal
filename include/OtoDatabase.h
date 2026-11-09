@@ -312,7 +312,7 @@ public:
     // vose_core への一括転送: WAV先読み込み(load_embedded_resource) +
     // oto情報転送(set_oto_data)。戻り値は正常に登録できたエントリ数。
     // --------------------------------------------------------------
-    int pushAllToCore (VoseCoreLibrary& core) const
+    int pushAllToCore (VoseCoreLibrary& core, bool clearOtoWhenEmpty = true) const
     {
         if (! core.isLoaded() || core.load_embedded_resource == nullptr)
             return 0;
@@ -373,8 +373,12 @@ public:
         }
 
         if (core.set_oto_data != nullptr)
-            core.set_oto_data (cEntries.empty() ? nullptr : cEntries.data(),
-                               (int) cEntries.size());
+        {
+            if (! cEntries.empty())
+                core.set_oto_data (cEntries.data(), (int) cEntries.size());
+            else if (clearOtoWhenEmpty)
+                core.set_oto_data (nullptr, 0);
+        }
 
         return loadedCount;
     }
