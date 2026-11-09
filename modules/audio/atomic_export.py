@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import Callable, TypeVar
-
-_PathResult = TypeVar("_PathResult", str, bytes, os.PathLike[str], os.PathLike[bytes])
+from typing import Callable
 
 
 def render_wav_atomically(
