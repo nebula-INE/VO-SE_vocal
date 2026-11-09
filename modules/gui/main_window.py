@@ -6430,17 +6430,18 @@ class MainWindow(
 
         final_path = os.path.abspath(os.fspath(output_path))
         output_dir = os.path.dirname(final_path) or os.getcwd()
-        os.makedirs(output_dir, exist_ok=True)
-
-        descriptor, temporary_path = tempfile.mkstemp(
-            prefix=f".{os.path.splitext(os.path.basename(final_path))[0]}.",
-            suffix=".tmp.wav",
-            dir=output_dir,
-        )
-        os.close(descriptor)
-        os.remove(temporary_path)
+        temporary_path = ""
 
         try:
+            os.makedirs(output_dir, exist_ok=True)
+            descriptor, temporary_path = tempfile.mkstemp(
+                prefix=f".{os.path.splitext(os.path.basename(final_path))[0]}.",
+                suffix=".tmp.wav",
+                dir=output_dir,
+            )
+            os.close(descriptor)
+            os.remove(temporary_path)
+
             if is_pro is None:
                 from modules.data.licensing import LicenseManager
                 is_pro = LicenseManager.is_pro()
@@ -6482,7 +6483,7 @@ class MainWindow(
             self._render_temp_path = ""
             self._render_play_after_success = False
             try:
-                if os.path.exists(temporary_path):
+                if temporary_path and os.path.exists(temporary_path):
                     os.remove(temporary_path)
             except OSError:
                 pass
