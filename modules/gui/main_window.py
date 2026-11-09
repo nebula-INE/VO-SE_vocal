@@ -1747,8 +1747,14 @@ class _VocalPlaybackPreparationThread(QThread):
 
     def __init__(self, engine: Any, jobs: List[Dict[str, Any]], parent=None):
         super().__init__(parent)
+        import threading
         self.engine = engine
         self.jobs = jobs
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        """Ask the render loop/native renderer to stop at its next safe point."""
+        self._cancel_event.set()
 
     @Slot()
     def run(self) -> None:
@@ -1761,6 +1767,8 @@ class _VocalPlaybackPreparationThread(QThread):
 
             results = []
             for job in self.jobs:
+                if self._cancel_event.is_set():
+                    raise RuntimeError("再生準備がキャンセルされました")
                 track = job["track"]
                 current_track = track
                 track_index = int(job["index"])
@@ -1807,6 +1815,7 @@ class _VocalPlaybackPreparationThread(QThread):
                     job["parameters"],
                     cache_path,
                     mode_flag=0,
+                    cancel_check=self._cancel_event.is_set,
                 )
                 if not result:
                     raise RuntimeError(
@@ -5039,6 +5048,7 @@ class MainWindow(
             "voice_gallery",
             "character_selector",
             "track_list_widget",
+            "render_btn",
         ):
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setEnabled"):
@@ -6344,6 +6354,37 @@ class MainWindow(
             event.ignore()
             return
         
+        # Stop realtime audio before releasing the renderer. If a playback
+        # render is still in flight, request cancellation and wait until the
+        # worker has left the native code before Qt destroys its parent window.
+        playback_timer = getattr(self, "playback_timer", None)
+        if playback_timer is not None:
+            playback_timer.stop()
+
+        mixer = getattr(self, "audio_mixer", None)
+        stop_mixer = getattr(mixer, "stop", None)
+        if callable(stop_mixer):
+            try:
+                stop_mixer()
+            except Exception as exc:
+                print(f"Audio mixer shutdown warning: {exc}")
+
+        worker = getattr(self, "_playback_prepare_thread", None)
+        if worker is not None:
+            try:
+                if worker.isRunning():
+                    request_cancel = getattr(worker, "request_cancel", None)
+                    if callable(request_cancel):
+                        request_cancel()
+                    # Older native libraries may not expose the cancelable ABI;
+                    # waiting is still required to avoid destroying a live QThread
+                    # or FFI buffer while C++ is using it.
+                    worker.wait()
+            except Exception as exc:
+                print(f"Playback worker shutdown warning: {exc}")
+            self._playback_prepare_thread = None
+        self._pending_playback_tracks = None
+
         config = {
             "default_voice": getattr(self, 'current_voice', None),
             "volume": getattr(self, 'volume', 1.0)
