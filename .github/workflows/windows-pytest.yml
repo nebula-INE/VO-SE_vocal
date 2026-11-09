@@ -38,7 +38,7 @@ jobs:
           python -m pip install -r requirements-runtime.txt
           python -m pip install -r requirements-training.txt
           python -m pip install Pillow PySide6 sounddevice soundfile
-          python -m pip install pytest pytest-xdist pytest-cov pytest-qt pytest-timeout
+          python -m pip install "pytest>=8.0,<9" pytest-xdist pytest-cov pytest-qt pytest-timeout
           python -m pip install pyright
 
       - name: Run Pyright
