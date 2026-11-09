@@ -25,6 +25,7 @@ import math
 import os
 import ctypes
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 import re
 
@@ -705,6 +706,22 @@ def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
 def apply_patch(engine_class) -> None:
     """VO_SE_Engine クラスに新メソッドをバインドする。"""
     engine_class.refresh_voice_library_v2 = _refresh_voice_library_v2
-    engine_class.export_to_wav_v2 = _export_to_wav_v2
+
+    # Keep the entire v2 render transaction exclusive. _export_to_wav_v2
+    # replaces self._temp_refs while retaining ctypes-backed NumPy buffers,
+    # and the native core also owns mutable OTO/timeline state.
+    current_export = getattr(engine_class, "export_to_wav_v2", None)
+    if not getattr(current_export, "_vose_serialized_render", False):
+        def _serialized_export_to_wav_v2(self, *args, **kwargs):
+            lock = getattr(self, "_render_lock", None)
+            if lock is None:
+                lock = threading.RLock()
+                self._render_lock = lock
+            with lock:
+                return _export_to_wav_v2(self, *args, **kwargs)
+
+        _serialized_export_to_wav_v2._vose_serialized_render = True
+        engine_class.export_to_wav_v2 = _serialized_export_to_wav_v2
+
     engine_class.load_ust_project = _load_ust_project
     logger.info("VO_SE_Engine パッチ適用完了 (VCV + UST + Vibrato + Portamento)")
