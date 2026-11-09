@@ -114,3 +114,33 @@ def test_non_finite_track_mixer_values_are_rejected_before_commit(tmp_path, monk
     assert len(window.tracks) == 1
     assert window.tracks[0].name == "Current"
     assert window.timeline_widget.tempo == 120.0
+
+
+def test_non_finite_note_timing_is_rejected_before_commit(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    project_path = tmp_path / "invalid-note.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 130.0,
+            "tracks": [{
+                "name": "Invalid note",
+                "type": "vocal",
+                "notes": [{
+                    "note_number": 60,
+                    "start_time": 0.0,
+                    "duration": float("nan"),
+                    "lyric": "あ",
+                }],
+            }],
+        }),
+        encoding="utf-8",
+        allow_nan=True,
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    result = ProjectIOMixin.load_json_project(window, str(project_path))
+
+    assert result is False
+    assert len(window.tracks) == 1
+    assert window.tracks[0].name == "Current"
+    assert window.timeline_widget.tempo == 120.0
