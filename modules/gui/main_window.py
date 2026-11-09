@@ -6434,21 +6434,28 @@ class MainWindow(
             "redo_action",
         )
         if rendering:
-            states = {}
+            states = []
+            seen_widgets = set()
             for name in control_names:
                 widget = getattr(self, name, None)
-                if widget is not None and callable(getattr(widget, "setEnabled", None)):
-                    is_enabled = getattr(widget, "isEnabled", None)
-                    states[name] = bool(is_enabled()) if callable(is_enabled) else True
-                    widget.setEnabled(False)
+                if widget is None or id(widget) in seen_widgets:
+                    continue
+                set_enabled = getattr(widget, "setEnabled", None)
+                if not callable(set_enabled):
+                    continue
+                is_enabled = getattr(widget, "isEnabled", None)
+                was_enabled = bool(is_enabled()) if callable(is_enabled) else True
+                seen_widgets.add(id(widget))
+                states.append((widget, was_enabled))
+                set_enabled(False)
             self._render_control_enabled_states = states
         else:
-            states = getattr(self, "_render_control_enabled_states", {}) or {}
-            for name, was_enabled in states.items():
-                widget = getattr(self, name, None)
-                if widget is not None and callable(getattr(widget, "setEnabled", None)):
-                    widget.setEnabled(bool(was_enabled))
-            self._render_control_enabled_states = {}
+            states = getattr(self, "_render_control_enabled_states", []) or []
+            for widget, was_enabled in states:
+                set_enabled = getattr(widget, "setEnabled", None)
+                if callable(set_enabled):
+                    set_enabled(bool(was_enabled))
+            self._render_control_enabled_states = []
 
     def _start_async_render(
         self,
