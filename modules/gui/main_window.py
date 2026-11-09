@@ -685,13 +685,22 @@ class SynthesisWorker(QRunnable):
     非同期レンダリングワーカー。
     ノートをチャンク分割し、進捗・ETA・キャンセルに対応する。
     """
-    def __init__(self, vose_core, raw_notes, output_path, is_pro=False, parameters=None):
+    def __init__(
+        self,
+        vose_core,
+        raw_notes,
+        output_path,
+        is_pro=False,
+        parameters=None,
+        tempo_bpm: Optional[float] = None,
+    ):
         super().__init__()
         self.vose_core = vose_core
         self.raw_notes = raw_notes
         self.output_path = output_path
         self.is_pro = is_pro
         self.parameters = parameters or {}
+        self.tempo_bpm = tempo_bpm
         self.signals = WorkerSignals()
         self._cancelled = False
         self._timer = QElapsedTimer()
@@ -720,6 +729,7 @@ class SynthesisWorker(QRunnable):
                     mode_flag=1 if self.is_pro else 0,
                     progress_callback=lambda percent: self.signals.progress.emit(int(percent), 0.0),
                     cancel_check=lambda: self._cancelled,
+                    tempo_bpm=self.tempo_bpm,
                 )
                 if self._cancelled:
                     self.signals.error.emit("ユーザーによりキャンセルされました")
@@ -1218,26 +1228,60 @@ except ImportError:
 # 設定管理クラス（モック実装）
 # ==============================================================================
 
-class ConfigHandler:  #愛なんてシャボン玉！
-    """設定ファイルの読み書き"""
-    def __init__(self, config_path="config.json"):
-        self.config_path = config_path
-    
+class ConfigHandler:
+    """設定ファイルの読み書き。保存時は一時ファイルから安全に置き換える。"""
+
+    def __init__(self, config_path=None):
+        if config_path is None:
+            # Keep the GUI's settings path identical to main.py's ConfigHandler.
+            # This matters because main.py also saves window.config after app.exec().
+            if sys.platform == "win32":
+                config_root = os.getenv("APPDATA") or os.path.expanduser("~")
+                config_dir = os.path.join(config_root, "VO-SE Pro")
+            elif sys.platform == "darwin":
+                config_dir = os.path.expanduser(
+                    "~/Library/Application Support/VO-SE Pro"
+                )
+            else:
+                config_root = os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+                config_dir = os.path.join(config_root, "vo-se-pro")
+            self.config_path = os.path.join(config_dir, "config.json")
+        else:
+            self.config_path = os.fspath(config_path)
+
     def load_config(self) -> Dict[str, Any]:
         if os.path.exists(self.config_path):
             try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                if not isinstance(config, dict):
+                    raise ValueError("設定ファイルのルートはオブジェクトである必要があります。")
+                return config
+            except Exception as exc:
+                print(f"設定読み込みエラー: {exc}")
         return {"default_voice": "標準ボイス", "volume": 0.8}
-    
-    def save_config(self, config: Dict[str, Any]):
+
+    def save_config(self, config: Dict[str, Any]) -> None:
+        output_dir = os.path.dirname(os.path.abspath(self.config_path))
+        os.makedirs(output_dir, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=".vose-config-",
+            suffix=".tmp",
+            dir=output_dir,
+        )
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"設定保存エラー: {e}")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, self.config_path)
+        except Exception as exc:
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                pass
+            print(f"設定保存エラー: {exc}")
 
 # ==============================================================================
 # ボイスカードウェイジェイト
@@ -1749,6 +1793,11 @@ class _VocalPlaybackPreparationThread(QThread):
         super().__init__(parent)
         self.engine = engine
         self.jobs = jobs
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        """Ask the preparation loop and native renderer to stop safely."""
+        self._cancel_event.set()
 
     @Slot()
     def run(self) -> None:
@@ -1761,6 +1810,8 @@ class _VocalPlaybackPreparationThread(QThread):
 
             results = []
             for job in self.jobs:
+                if self._cancel_event.is_set():
+                    raise RuntimeError("再生準備がキャンセルされました")
                 track = job["track"]
                 current_track = track
                 track_index = int(job["index"])
@@ -1807,6 +1858,7 @@ class _VocalPlaybackPreparationThread(QThread):
                     job["parameters"],
                     cache_path,
                     mode_flag=0,
+                    cancel_check=self._cancel_event.is_set,
                 )
                 if not result:
                     raise RuntimeError(
@@ -2111,8 +2163,9 @@ class MainWindow(
         
         # 外部マネージャー
         self.history = HistoryManager()
-        self.config_manager = cast(Any, None)
-        self.config = config if config else {}
+        self.config_manager = cast(Any, ConfigHandler())
+        loaded_config = self.config_manager.load_config()
+        self.config = dict(config) if isinstance(config, dict) else loaded_config
         self.all_parameters = {}
         self.sync_notes = True
         self.input_fields = []
@@ -3210,10 +3263,8 @@ class MainWindow(
                 self.on_effect_parameters_changed
             )
 
-        # --- 7. ボイスギャラリーとの接続（キャラクター切り替え） ---
-        # VoiceCardGalleryが MainWindow の属性 (self.voice_gallery) として存在すると仮定
-        if hasattr(self, 'voice_gallery') and self.voice_gallery:
-            self.voice_gallery.voice_selected.connect(self.on_voice_changed)
+        # 音源選択シグナルは setup_voice_gallery() 側で一度だけ接続する。
+        # ここで再接続すると1回の選択で音源再ロードとキャッシュ更新が二重実行される。
 
         # --- 8.再生・停止・録音ボタンの制御 ---
         if self.play_button:
@@ -5039,6 +5090,7 @@ class MainWindow(
             "voice_gallery",
             "character_selector",
             "track_list_widget",
+            "render_btn",
         ):
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setEnabled"):
@@ -5155,6 +5207,12 @@ class MainWindow(
             if status_lbl is not None:
                 status_lbl.setText("停止しました")
             self._refresh_transport_button_states()
+            return
+
+        if getattr(self, "current_worker", None) is not None:
+            self.statusBar().showMessage(
+                "書き出し中です。完了またはキャンセル後に再生できます。", 3000
+            )
             return
 
         tracks = list(getattr(self, "tracks", []) or [])
@@ -5476,116 +5534,8 @@ class MainWindow(
 
     @Slot()
     def on_render_button_clicked(self):
-        """合成ボタンの最終接続 — 新シグネチャ (notes, parameters, file_path) 対応版"""
-        from modules.data.licensing import LicenseManager
-
-        is_pro = LicenseManager.is_pro()
-        status_msg = (
-            "レンダリング中 (Pro Mode)..."
-            if is_pro
-            else "レンダリング中..."
-        )
-        self.statusBar().showMessage(status_msg)
-
-        # 1. データの準備
-        tw = getattr(self, "timeline_widget", None)
-        gw = getattr(self, "graph_editor_widget", None)
-        engine = getattr(self, "vo_se_engine", None)
-
-        if tw is None or gw is None or engine is None:
-            QMessageBox.warning(
-                self,
-                "エラー",
-                "書き出しに必要な初期化が完了していません。",
-            )
-            return
-
-        notes = list(getattr(tw, "notes_list", []) or [])
-        if not notes:
-            self.statusBar().showMessage("ノートがありません")
-            return
-
-        # 2. 保存先の決定
-        output_filename = "preview_render.wav"
-        output_path = os.path.abspath(output_filename)
-
-        # 3. パラメータ辞書の組み立て
-        all_params = getattr(gw, "all_parameters", {}) or {}
-        parameters = {
-            "Pitch":   list(all_params.get("Pitch",   [])),
-            "Gender":  list(all_params.get("Gender",  [])),
-            "Tension": list(all_params.get("Tension", [])),
-            "Breath":  list(all_params.get("Breath",  [])),
-        }
-
-        mode_flag = 1 if is_pro else 0
-
-        # 4. エンジン呼び出し（v2 優先、無ければ旧 export_to_wav にフォールバック）
-        v2_export_fn = getattr(engine, "export_to_wav_v2", None)
-        v1_export_fn = getattr(engine, "export_to_wav", None)
-
-        if v2_export_fn is None and v1_export_fn is None:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                "エンジンに export_to_wav が実装されていません。",
-            )
-            return
-
-        try:
-            # v2 を優先。属性が存在するだけでなく callable であることを確認し、
-            # 壊れた/未初期化の属性なら v1 に安全にフォールバックする。
-            if callable(v2_export_fn):
-                result_path = v2_export_fn(
-                    notes,
-                    parameters,
-                    output_path,
-                    mode_flag=mode_flag,
-                )
-            elif callable(v1_export_fn):
-                result_path = v1_export_fn(
-                    notes,
-                    parameters,
-                    output_path,
-                    mode_flag=mode_flag,
-                )
-            else:
-                raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
-
-            # 5. 再生
-            result_path_str: Optional[str] = None
-            if isinstance(result_path, str):
-                result_path_str = result_path
-            elif isinstance(result_path, os.PathLike):
-                path_value = os.fspath(result_path)
-                result_path_str = os.fsdecode(path_value)
-
-            if result_path_str is not None and os.path.exists(result_path_str):
-                self.statusBar().showMessage("再生中...")
-                self.play_rendered_audio(result_path_str)
-            else:
-                QMessageBox.critical(
-                    self,
-                    "エラー",
-                    "合成に失敗しました。\n"
-                    "DLLまたは音源パスを確認してください。",
-                )
-
-        except TypeError as exc:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                "export_to_wav のシグネチャが一致しません。\n"
-                "vo_se_engine_patch.apply_patch(VO_SE_Engine) "
-                "が適用済みか確認してください。\n"
-                f"詳細: {exc}",
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"書き出し失敗: {exc}",
-            )
+        """通常のRENDER操作は進捗・キャンセル対応の非同期経路へ統一する。"""
+        return self.request_render()
 
     @Slot()
     def on_ai_button_clicked(self):
@@ -6321,120 +6271,325 @@ class MainWindow(
 
     def closeEvent(self, event):
         reply = QMessageBox.question(
-            self, 
-            '確認', 
+            self,
+            "確認",
             "作業内容が失われる可能性があります。終了してもよろしいですか？",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel, 
             QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
         )
 
         if reply == QMessageBox.StandardButton.Save:
             save_func = getattr(self, "on_save_project_clicked", None)
-            if callable(save_func):
-                # 保存ダイアログのキャンセルや保存失敗時は終了しない。
-                if not bool(save_func()):
-                    event.ignore()
-                    return
-            event.accept()
-        elif reply == QMessageBox.StandardButton.Discard:
-            event.accept()
-        else:
-            # ここで return する前に ignore する代表の設計は、
-            # 誤操作でウィンドウが閉じるのを防ぐ「神対応」です。
+            if callable(save_func) and not bool(save_func()):
+                event.ignore()
+                return
+        elif reply != QMessageBox.StandardButton.Discard:
             event.ignore()
             return
-        
+
+        # Stop accepting new transport work and ask any active render to cancel.
+        playback_timer = getattr(self, "playback_timer", None)
+        if playback_timer is not None:
+            playback_timer.stop()
+
+        worker = getattr(self, "current_worker", None)
+        if worker is not None:
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                cancel()
+            pool = QThreadPool.globalInstance()
+            if not pool.waitForDone(15000):
+                QMessageBox.warning(
+                    self,
+                    "レンダリング終了待ち",
+                    "レンダリング処理がまだ実行中です。処理の安全な終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+            self.current_worker = None
+            temporary_path = str(getattr(self, "_render_temp_path", "") or "")
+            if temporary_path:
+                try:
+                    if os.path.exists(temporary_path):
+                        os.remove(temporary_path)
+                except OSError as exc:
+                    print(f"[Render] Shutdown cleanup warning: {exc}")
+
+        # Playback preparation uses a QThread, so it must leave native code
+        # before the engine and the parent window are released.
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        if playback_worker is not None and playback_worker.isRunning():
+            request_cancel = getattr(playback_worker, "request_cancel", None)
+            if callable(request_cancel):
+                request_cancel()
+            if not playback_worker.wait(15000):
+                QMessageBox.warning(
+                    self,
+                    "再生準備終了待ち",
+                    "再生準備処理がまだ実行中です。安全な終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+        self._playback_prepare_thread = None
+        self._pending_playback_tracks = None
+
+        # Stop the legacy playback thread, if an older entry point started it.
+        self.is_playing = False
+        legacy_playback_thread = getattr(self, "playback_thread", None)
+        if legacy_playback_thread is not None and legacy_playback_thread.is_alive():
+            if legacy_playback_thread is not threading.current_thread():
+                legacy_playback_thread.join(timeout=2.0)
+            if legacy_playback_thread.is_alive():
+                QMessageBox.warning(
+                    self,
+                    "再生終了待ち",
+                    "再生スレッドが停止していません。再生停止後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+        self.playback_thread = None
+
+        mixer = getattr(self, "audio_mixer", None)
+        stop_mixer = getattr(mixer, "stop", None)
+        if callable(stop_mixer):
+            try:
+                stop_mixer()
+            except Exception as exc:
+                print(f"Audio mixer shutdown warning: {exc}")
+
         config = {
-            "default_voice": getattr(self, 'current_voice', None),
-            "volume": getattr(self, 'volume', 1.0)
+            "default_voice": getattr(self, "current_voice", None),
+            "volume": getattr(self, "volume", 1.0),
         }
-        save_config = None
-        if getattr(self, 'config_manager', None) is not None:
-            save_config = getattr(self.config_manager, "save_config", None)
+        # main.py holds a reference to this same dictionary and writes it once
+        # more after app.exec(); update it before returning from closeEvent.
+        current_config = getattr(self, "config", None)
+        if isinstance(current_config, dict):
+            current_config.update(config)
+        else:
+            self.config = dict(config)
+        config_manager = getattr(self, "config_manager", None)
+        save_config = getattr(config_manager, "save_config", None)
         if callable(save_config):
-            save_config(config)
-        
-        if hasattr(self, 'midi_manager') and self.midi_manager:
-            self.midi_manager.stop()
-        
-        if hasattr(self, 'vo_se_engine') and self.vo_se_engine:
-            if hasattr(self.vo_se_engine, 'close'):
-                self.vo_se_engine.close()
-        
+            try:
+                save_config(config)
+            except Exception as exc:
+                print(f"Config save warning: {exc}")
+
+        # The MIDI setup patch stores the live input manager under this name.
+        for manager_name in ("_midi_input_manager", "midi_manager"):
+            midi_manager = getattr(self, manager_name, None)
+            stop_midi = getattr(midi_manager, "stop", None)
+            if callable(stop_midi):
+                try:
+                    stop_midi()
+                except Exception as exc:
+                    print(f"MIDI shutdown warning: {exc}")
+
+        engine = getattr(self, "vo_se_engine", None)
+        stop_engine = getattr(engine, "stop", None)
+        if callable(stop_engine):
+            try:
+                stop_engine()
+            except Exception as exc:
+                print(f"Voice engine shutdown warning: {exc}")
+        close_engine = getattr(engine, "close", None)
+        if callable(close_engine):
+            try:
+                close_engine()
+            except Exception as exc:
+                print(f"Voice engine close warning: {exc}")
+
+        audio_output = getattr(self, "audio_output", None)
+        stop_audio_output = getattr(audio_output, "stop", None)
+        if callable(stop_audio_output):
+            try:
+                stop_audio_output()
+            except Exception as exc:
+                print(f"Audio output shutdown warning: {exc}")
+
+        event.accept()
         print("Application closing...")
 
     # ==============================================================================
     # レリタリング実行メゾット
     # ==============================================================================
 
+    def _set_render_controls_enabled(self, rendering: bool) -> None:
+        """Freeze mutable render inputs for the duration of an export."""
+        control_names = (
+            "timeline_widget",
+            "graph_editor_widget",
+            "voice_gallery",
+            "character_selector",
+            "track_list_widget",
+            "tempo_input",
+            "play_btn",
+            "play_button",
+            "record_button",
+            "loop_btn",
+            "undo_action",
+            "redo_action",
+        )
+        if rendering:
+            states = []
+            seen_widgets = set()
+            for name in control_names:
+                widget = getattr(self, name, None)
+                if widget is None or id(widget) in seen_widgets:
+                    continue
+                set_enabled = getattr(widget, "setEnabled", None)
+                if not callable(set_enabled):
+                    continue
+                is_enabled = getattr(widget, "isEnabled", None)
+                was_enabled = bool(is_enabled()) if callable(is_enabled) else True
+                seen_widgets.add(id(widget))
+                states.append((widget, was_enabled))
+                set_enabled(False)
+            self._render_control_enabled_states = states
+        else:
+            states = getattr(self, "_render_control_enabled_states", []) or []
+            for widget, was_enabled in states:
+                set_enabled = getattr(widget, "setEnabled", None)
+                if callable(set_enabled):
+                    set_enabled(bool(was_enabled))
+            self._render_control_enabled_states = []
+
+    def _start_async_render(
+        self,
+        notes: list,
+        parameters: dict,
+        output_path: str,
+        *,
+        play_after_success: bool,
+        is_pro: Optional[bool] = None,
+    ) -> bool:
+        """Render to a temporary sibling WAV and publish only after success."""
+        if getattr(self, "current_worker", None) is not None:
+            self.statusBar().showMessage("別のレンダリングが実行中です。", 4000)
+            return False
+        if bool(getattr(self, "_playback_preparing", False)):
+            self.statusBar().showMessage("再生用の準備中は書き出しを開始できません。", 4000)
+            return False
+
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        if playback_worker is not None and playback_worker.isRunning():
+            self.statusBar().showMessage("再生用レンダリングの完了後に書き出してください。", 4000)
+            return False
+
+        engine = getattr(self, "vo_se_engine", None)
+        if engine is None:
+            self.statusBar().showMessage("エンジンがロードされていません。", 5000)
+            return False
+
+        final_path = os.path.abspath(os.fspath(output_path))
+        output_dir = os.path.dirname(final_path) or os.getcwd()
+        temporary_path = ""
+        timeline = getattr(self, "timeline_widget", None)
+        try:
+            render_tempo = float(getattr(timeline, "tempo", 120.0))
+            if not math.isfinite(render_tempo) or render_tempo <= 0.0:
+                raise ValueError("テンポが不正なためレンダリングを開始できません。")
+            os.makedirs(output_dir, exist_ok=True)
+            descriptor, temporary_path = tempfile.mkstemp(
+                prefix=f".{os.path.splitext(os.path.basename(final_path))[0]}.",
+                suffix=".tmp.wav",
+                dir=output_dir,
+            )
+            os.close(descriptor)
+            os.remove(temporary_path)
+
+            if is_pro is None:
+                from modules.data.licensing import LicenseManager
+                is_pro = LicenseManager.is_pro()
+
+            self._render_target_path = final_path
+            self._render_temp_path = temporary_path
+            self._render_play_after_success = bool(play_after_success)
+            self._render_cancelled = False
+            self._set_render_controls_enabled(True)
+
+            if hasattr(self, "progress_bar") and self.progress_bar is not None:
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(0)
+                self.progress_bar.setVisible(True)
+            if getattr(self, "render_eta_label", None) is not None:
+                self.render_eta_label.setText("ETA: 計算中...")
+            if getattr(self, "render_btn", None) is not None:
+                self.render_btn.setEnabled(False)
+            if getattr(self, "cancel_render_btn", None) is not None:
+                self.cancel_render_btn.setVisible(True)
+                self.cancel_render_btn.setEnabled(True)
+
+            self.statusBar().showMessage("レンダリング準備中...")
+            worker = SynthesisWorker(
+                engine,
+                deepcopy(list(notes)),
+                temporary_path,
+                is_pro=bool(is_pro),
+                parameters=deepcopy(parameters),
+                tempo_bpm=render_tempo,
+            )
+            self.current_worker = worker
+            worker.signals.finished.connect(self.on_render_success)
+            worker.signals.error.connect(self.on_render_failed)
+            worker.signals.progress.connect(self.on_render_progress)
+            QThreadPool.globalInstance().start(worker)
+            return True
+        except Exception as exc:
+            self.current_worker = None
+            self._render_target_path = ""
+            self._render_temp_path = ""
+            self._render_play_after_success = False
+            self._set_render_controls_enabled(False)
+            try:
+                if temporary_path and os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                pass
+            self.on_render_failed(str(exc))
+            return False
+
     @Slot()
     def request_render(self) -> None:
-        """
-        タイムライン上の全ノートをスキャンし、非同期でレンダリングを開始する。
-        """
-        from modules.data.licensing import LicenseManager
+        """RENDERボタン用の非同期プレビュー書き出し。"""
+        timeline = getattr(self, "timeline_widget", None)
+        graph = getattr(self, "graph_editor_widget", None)
+        if timeline is None or graph is None:
+            QMessageBox.warning(
+                self,
+                "エラー",
+                "書き出しに必要な画面が初期化されていません。",
+            )
+            return
 
-        # 1. 保存先の決定
-        output_wav = os.path.join(os.getcwd(), "output", "render_result.wav")
-        os.makedirs(os.path.dirname(output_wav), exist_ok=True)
-
-        # 2. データの取得
-        raw_notes = self.timeline_widget.get_all_notes_data()
+        try:
+            raw_notes = list(timeline.get_all_notes_data() or [])
+        except Exception as exc:
+            self.statusBar().showMessage(f"ノート取得エラー: {exc}", 5000)
+            return
         if not raw_notes:
             self.statusBar().showMessage("エラー: レンダリングするノートがありません。")
             return
 
-        if not (hasattr(self, "vose_core") and self.vose_core):
-            self.statusBar().showMessage("エラー: エンジンがロードされていません。")
-            return
-
-        # 3. 準備
-        try:
-            is_pro = LicenseManager.is_pro()
-            self.statusBar().showMessage("レンダリング準備中...")
-
-            # --- UI状態変更（レンダリング開始） ---
-            self._render_cancelled = False
-            if hasattr(self, "progress_bar"):
-                self.progress_bar.setRange(0, 100)
-                self.progress_bar.setValue(0)
-                self.progress_bar.setVisible(True)
-            self.render_eta_label.setText("ETA: 計算中...")
-            self.render_btn.setEnabled(False)
-
-            # キャンセルボタンを表示・有効化
-            self.cancel_render_btn.setVisible(True)
-            self.cancel_render_btn.setEnabled(True)
-
-            # ワーカーの作成
-            gw = getattr(self, "graph_editor_widget", None)
-            all_params = getattr(gw, "all_parameters", {}) or {}
-            parameters = {
-                "Pitch": list(all_params.get("Pitch", [])),
-                "Gender": list(all_params.get("Gender", [])),
-                "Tension": list(all_params.get("Tension", [])),
-                "Breath": list(all_params.get("Breath", [])),
-            }
-
-            worker = SynthesisWorker(
-                self.vo_se_engine,
-                raw_notes,
-                output_wav,
-                is_pro=is_pro,
-                parameters=parameters,
-            )
-            self.current_worker = worker
-
-            # シグナルの接続（progress を追加）
-            worker.signals.finished.connect(self.on_render_success)
-            worker.signals.error.connect(self.on_render_failed)
-            worker.signals.progress.connect(self.on_render_progress)
-
-            # スレッドプールで実行開始
-            QThreadPool.globalInstance().start(worker)
-
-        except Exception as e:
-            self.on_render_failed(str(e))
+        all_params = getattr(graph, "all_parameters", {}) or {}
+        parameters = {
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath": list(all_params.get("Breath", [])),
+        }
+        output_wav = os.path.join(
+            tempfile.gettempdir(), "vose_render_cache", "render_result.wav"
+        )
+        self._start_async_render(
+            raw_notes,
+            parameters,
+            output_wav,
+            play_after_success=True,
+        )
 
     @Slot(int, float)
     def on_render_progress(self, percent: int, eta_sec: float):
@@ -6449,40 +6604,87 @@ class MainWindow(
             self.render_eta_label.setText("ETA: 計算中...")
 
     def on_render_success(self, output_wav):
-        """レンダリング成功時の処理"""
-        if hasattr(self, "progress_bar"):
-            self.progress_bar.setVisible(False)
-        self.render_btn.setEnabled(True)
-        self.render_eta_label.setText("完了")
+        """レンダリング成功時に一時WAVを正式な保存先へ公開する。"""
+        produced_path = os.path.abspath(os.fsdecode(os.fspath(output_wav)))
+        final_path = str(getattr(self, "_render_target_path", "") or "")
+        play_after_success = bool(getattr(self, "_render_play_after_success", True))
 
-        self.cancel_render_btn.setVisible(False)
-        self.cancel_render_btn.setEnabled(False)
+        try:
+            if final_path:
+                if not os.path.isfile(produced_path):
+                    raise RuntimeError("レンダリング結果の一時WAVが見つかりません。")
+                # 同じ保存先ディレクトリ内の一時ファイルから置換するため、
+                # 失敗時は既存の正常なWAVを残せる。
+                os.replace(produced_path, final_path)
+                produced_path = final_path
+        except Exception as exc:
+            self.on_render_failed(f"書き出しファイルの確定に失敗しました: {exc}")
+            return
+
+        self._render_target_path = ""
+        self._render_temp_path = ""
+        self._render_play_after_success = False
+        self._set_render_controls_enabled(False)
+        if hasattr(self, "progress_bar") and self.progress_bar is not None:
+            self.progress_bar.setVisible(False)
+        if getattr(self, "render_btn", None) is not None:
+            self.render_btn.setEnabled(True)
+        if getattr(self, "render_eta_label", None) is not None:
+            self.render_eta_label.setText("完了")
+        if getattr(self, "cancel_render_btn", None) is not None:
+            self.cancel_render_btn.setVisible(False)
+            self.cancel_render_btn.setEnabled(False)
         self.current_worker = None
 
-        self.statusBar().showMessage(f"レンダリング完了: {output_wav}")
-        self.play_rendered_audio(output_wav)
+        self.statusBar().showMessage(f"WAV書き出し完了: {produced_path}", 5000)
+        if play_after_success:
+            self.play_rendered_audio(produced_path)
+        else:
+            QMessageBox.information(
+                self,
+                "書き出し完了",
+                f"WAVを書き出しました。\n{produced_path}",
+            )
 
     def on_render_failed(self, error_msg):
-        """レンダリング失敗時の処理（キャンセルも含む）"""
-        if hasattr(self, "progress_bar"):
-            self.progress_bar.setVisible(False)
-        self.render_btn.setEnabled(True)
+        """レンダリング失敗・キャンセル時に一時ファイルとUI状態を整理する。"""
+        temporary_path = str(getattr(self, "_render_temp_path", "") or "")
+        if temporary_path:
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError as cleanup_error:
+                print(f"[Render] Temporary WAV cleanup failed: {cleanup_error}")
 
-        self.cancel_render_btn.setVisible(False)
-        self.cancel_render_btn.setEnabled(False)
+        self._render_target_path = ""
+        self._render_temp_path = ""
+        self._render_play_after_success = False
+        self._set_render_controls_enabled(False)
+        if hasattr(self, "progress_bar") and self.progress_bar is not None:
+            self.progress_bar.setVisible(False)
+        if getattr(self, "render_btn", None) is not None:
+            self.render_btn.setEnabled(True)
+        if getattr(self, "cancel_render_btn", None) is not None:
+            self.cancel_render_btn.setVisible(False)
+            self.cancel_render_btn.setEnabled(False)
         self.current_worker = None
 
         was_cancelled = self._render_cancelled
         self._render_cancelled = False
-
         if was_cancelled:
-            self.render_eta_label.setText("キャンセル済み")
+            if getattr(self, "render_eta_label", None) is not None:
+                self.render_eta_label.setText("キャンセル済み")
             self.statusBar().showMessage("レンダリングをキャンセルしました。")
             return
 
-        self.render_eta_label.setText("エラー")
+        if getattr(self, "render_eta_label", None) is not None:
+            self.render_eta_label.setText("エラー")
         self.statusBar().showMessage(f"失敗: {error_msg}")
-        QMessageBox.critical(self, "Render Error", f"レンダリング中にエラーが発生しました:\n{error_msg}")
+        QMessageBox.critical(
+            self,
+            "Render Error",
+            f"レンダリング中にエラーが発生しました:\n{error_msg}",
+        )
 
     @Slot()
     def cancel_current_render(self):

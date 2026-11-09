@@ -303,7 +303,7 @@ def _validate_rendered_wav(file_path: str, expected_duration_sec: float) -> None
         )
 
 
-def _export_to_wav_v2(
+def _render_to_wav_v2(
     self,
     notes,
     parameters,
@@ -668,6 +668,44 @@ def _export_to_wav_v2(
 
     report_progress(100)
     return output_path_abs
+
+
+
+def _export_to_wav_v2(
+    self,
+    notes,
+    parameters,
+    file_path,
+    mode_flag: int = 0,
+    progress_callback=None,
+    cancel_check=None,
+    **kwargs,
+) -> str:
+    """Write a validated render to a sibling temp file before replacing output."""
+    import threading
+    from modules.audio.atomic_export import render_wav_atomically
+
+    # Native rendering owns mutable FFI buffers, OTO state and timeline data.
+    # Serialize every v2 render transaction even when a caller bypasses the
+    # desktop playback preparation lock.
+    lock = getattr(self, "_render_lock", None)
+    if lock is None:
+        lock = self.__dict__.setdefault("_render_lock", threading.RLock())
+
+    with lock:
+        return render_wav_atomically(
+            file_path,
+            lambda temporary_path: _render_to_wav_v2(
+                self,
+                notes,
+                parameters,
+                temporary_path,
+                mode_flag=mode_flag,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+                **kwargs,
+            ),
+        )
 
 
 def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:

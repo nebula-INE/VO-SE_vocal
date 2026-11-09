@@ -453,38 +453,121 @@ class ProjectIOMixin:
         return bool(self.on_save_project_clicked())
 
     def load_json_project(self: Any, file_path: str) -> bool:
-        """旧単一トラックJSONと新マルチトラックVOSE/JSONの両方を読み込む。"""
+        """旧単一トラックJSONと新マルチトラックVOSE/JSONを検証してから反映する。"""
+        import math
+
+        before_state = None
+        commit_started = False
         try:
-            before_state = self._capture_project_edit_state()
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("プロジェクトJSONのルートはオブジェクトである必要があります。")
 
             tempo = float(data.get("tempo", 120.0))
+            current_time = float(data.get("current_time", 0.0))
+            if not math.isfinite(tempo) or tempo <= 0.0:
+                raise ValueError("プロジェクトのテンポが不正です。")
+            if not math.isfinite(current_time) or current_time < 0.0:
+                raise ValueError("プロジェクトの再生位置が不正です。")
+
+            # すべてのトラック・ノート・オートメーションをUI変更前に構築する。
+            def parse_project_note(note_data: Dict[str, Any], description: str) -> NoteEvent:
+                note = NoteEvent.from_dict(note_data)
+                try:
+                    raw_note_number = float(note.note_number)
+                    note_number = int(raw_note_number)
+                    start_time = float(note.start_time)
+                    duration = float(note.duration)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"{description} の音程・開始位置・長さが不正です。") from exc
+
+                if (
+                    not math.isfinite(raw_note_number)
+                    or not raw_note_number.is_integer()
+                    or not 0 <= note_number <= 127
+                    or not math.isfinite(start_time)
+                    or start_time < 0.0
+                    or not math.isfinite(duration)
+                    or duration < 0.0
+                ):
+                    raise ValueError(f"{description} の音程・開始位置・長さが範囲外です。")
+
+                note.note_number = note_number
+                note.start_time = start_time
+                note.duration = duration
+                for field_name in (
+                    "velocity",
+                    "vibrato_depth",
+                    "vibrato_rate",
+                    "formant_shift",
+                    "onset",
+                    "pre_utterance",
+                    "overlap",
+                ):
+                    value = getattr(note, field_name, None)
+                    if value is None:
+                        continue
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        raise ValueError(
+                            f"{description} の {field_name} が数値ではありません。"
+                        ) from exc
+                    if not math.isfinite(number):
+                        raise ValueError(
+                            f"{description} の {field_name} に無効な数値があります。"
+                        )
+
+                return note
+
+            existing_tracks = list(getattr(self, "tracks", []) or [])
+            if not existing_tracks:
+                raise ValueError("読み込み先のトラックがありません。")
+            track_cls = type(existing_tracks[0])
             raw_tracks = data.get("tracks")
+            if raw_tracks is not None and not isinstance(raw_tracks, list):
+                raise ValueError("tracks は配列である必要があります。")
 
             if isinstance(raw_tracks, list) and raw_tracks:
-                existing_tracks = list(getattr(self, "tracks", []) or [])
-                track_cls = type(existing_tracks[0]) if existing_tracks else None
                 loaded_tracks = []
-
                 for index, raw in enumerate(raw_tracks):
-                    if not isinstance(raw, dict) or track_cls is None:
-                        continue
+                    if not isinstance(raw, dict):
+                        raise ValueError(f"Track {index + 1} の形式が不正です。")
+                    raw_notes = raw.get("notes", [])
+                    if not isinstance(raw_notes, list):
+                        raise ValueError(f"Track {index + 1} の notes は配列である必要があります。")
+                    notes = []
+                    for note_index, note_data in enumerate(raw_notes):
+                        if not isinstance(note_data, dict):
+                            raise ValueError(
+                                f"Track {index + 1} / Note {note_index + 1} の形式が不正です。"
+                            )
+                        notes.append(
+                            parse_project_note(
+                                note_data,
+                                f"Track {index + 1} / Note {note_index + 1}",
+                            )
+                        )
+
+                    mixer = raw.get("mixer", {})
+                    if not isinstance(mixer, dict):
+                        raise ValueError(f"Track {index + 1} の mixer 設定が不正です。")
+                    volume = float(raw.get("volume", mixer.get("vol", 1.0)))
+                    pan = float(raw.get("pan", mixer.get("pan", 0.0)))
+                    if not math.isfinite(volume) or not math.isfinite(pan):
+                        raise ValueError(f"Track {index + 1} の音量・パン設定が不正です。")
+
                     track = track_cls(
                         str(raw.get("name", f"Track {index + 1}")),
                         str(raw.get("type", "vocal")),
                     )
-                    track.notes = [
-                        NoteEvent.from_dict(d)
-                        for d in raw.get("notes", [])
-                        if isinstance(d, dict)
-                    ]
+                    track.notes = notes
                     track.audio_path = str(
                         raw.get("audio_path", raw.get("audio", "")) or ""
                     )
-                    mixer = raw.get("mixer", {})
-                    track.volume = float(raw.get("volume", mixer.get("vol", 1.0)))
-                    track.pan = float(raw.get("pan", mixer.get("pan", 0.0)))
+                    track.volume = volume
+                    track.pan = pan
                     track.is_muted = bool(raw.get("is_muted", False))
                     track.is_solo = bool(raw.get("is_solo", False))
                     if "engine_type" in raw:
@@ -493,82 +576,103 @@ class ProjectIOMixin:
                         track.color_label = str(raw["color_label"])
                     loaded_tracks.append(track)
 
-                if not loaded_tracks:
-                    raise ValueError("有効なトラックが見つかりません。")
-
-                self.tracks = loaded_tracks
                 requested_idx = int(data.get("current_track_idx", 0))
-                self.current_track_idx = min(
-                    max(requested_idx, 0),
-                    len(self.tracks) - 1,
-                )
-
-                if hasattr(self, "refresh_track_list_ui"):
-                    self.refresh_track_list_ui()
-
-                # switch_track() は切替前のタイムラインを現在トラックへ退避する仕様なので、
-                # 新規プロジェクト読込直後には使わない。読込済みデータを直接表示する。
-                timeline = getattr(self, "timeline_widget", None)
-                if timeline is not None:
-                    timeline.set_notes(self.tracks[self.current_track_idx].notes)
-                    timeline.update()
-
+                new_current_idx = min(max(requested_idx, 0), len(loaded_tracks) - 1)
             else:
-                # 旧1.3系JSONは現在のトラックへ読み込む。
-                notes = [
-                    NoteEvent.from_dict(d)
-                    for d in data.get("notes", [])
-                    if isinstance(d, dict)
-                ]
-                tracks = list(getattr(self, "tracks", []) or [])
-                current_idx = int(getattr(self, "current_track_idx", 0))
-                if tracks and 0 <= current_idx < len(tracks):
-                    tracks[current_idx].notes = notes
-                if getattr(self, "timeline_widget", None) is not None:
-                    self.timeline_widget.set_notes(notes)
+                # 旧1.3系JSON、または tracks=[] のJSONは現在のトラックへ読み込む。
+                raw_notes = data.get("notes", [])
+                if not isinstance(raw_notes, list):
+                    raise ValueError("notes は配列である必要があります。")
+                notes = []
+                for note_index, note_data in enumerate(raw_notes):
+                    if not isinstance(note_data, dict):
+                        raise ValueError(f"Note {note_index + 1} の形式が不正です。")
+                    notes.append(
+                        parse_project_note(note_data, f"Note {note_index + 1}")
+                    )
 
-            timeline = getattr(self, "timeline_widget", None)
-            if timeline is not None:
-                timeline.tempo = tempo
+                loaded_tracks = deepcopy(existing_tracks)
+                requested_idx = int(getattr(self, "current_track_idx", 0))
+                new_current_idx = min(max(requested_idx, 0), len(loaded_tracks) - 1)
+                loaded_tracks[new_current_idx].notes = notes
 
-            # Graph Editor のオートメーションもプロジェクトデータから復元する。
-            # これを保存しないと、Pitch/Gender/Tension/Breath の編集が
-            # ファイル保存→再読込で消えてしまう。
-            graph = getattr(self, "graph_editor_widget", None)
+            restored_parameters = None
             raw_parameters = data.get("parameters")
-            if graph is not None and isinstance(raw_parameters, dict):
+            if raw_parameters is not None:
+                if not isinstance(raw_parameters, dict):
+                    raise ValueError("parameters はオブジェクトである必要があります。")
                 restored_parameters = {}
                 for name in ("Pitch", "Gender", "Tension", "Breath"):
                     raw_events = raw_parameters.get(name, [])
-                    if isinstance(raw_events, list):
-                        restored_parameters[name] = [
-                            PitchEvent.from_dict(event)
-                            for event in raw_events
-                            if isinstance(event, dict)
-                            and "time" in event
-                            and "value" in event
-                        ]
-                for name in ("Pitch", "Gender", "Tension", "Breath"):
-                    restored_parameters.setdefault(name, [])
-                if hasattr(graph, "_restore_parameters_snapshot"):
-                    graph._restore_parameters_snapshot(restored_parameters)
+                    if not isinstance(raw_events, list):
+                        raise ValueError(f"{name} オートメーションは配列である必要があります。")
+                    events = []
+                    for event_index, event in enumerate(raw_events):
+                        if not isinstance(event, dict) or "time" not in event or "value" not in event:
+                            raise ValueError(
+                                f"{name} オートメーション {event_index + 1} の形式が不正です。"
+                            )
+                        event_time = float(event["time"])
+                        event_value = float(event["value"])
+                        if not math.isfinite(event_time) or not math.isfinite(event_value):
+                            raise ValueError(
+                                f"{name} オートメーション {event_index + 1} に不正な数値があります。"
+                            )
+                        events.append(PitchEvent.from_dict(event))
+                    restored_parameters[name] = events
+
+            # ここまで成功した場合のみ既存の状態を保存し、UI/プロジェクトを更新する。
+            before_state = self._capture_project_edit_state()
+            commit_started = True
+            self.tracks = loaded_tracks
+            self.current_track_idx = new_current_idx
+
+            timeline = getattr(self, "timeline_widget", None)
+            active_notes = self.tracks[self.current_track_idx].notes
+            if timeline is not None:
+                timeline.tempo = tempo
+                if hasattr(timeline, "set_notes"):
+                    timeline.set_notes(active_notes)
                 else:
-                    graph.all_parameters = restored_parameters
-                    if hasattr(graph, "parameters_changed"):
-                        graph.parameters_changed.emit(graph.all_parameters)
+                    timeline.notes_list = list(active_notes)
+                timeline.update()
+
+            graph = getattr(self, "graph_editor_widget", None)
+            if graph is not None:
                 graph.tempo = tempo
+                if restored_parameters is not None:
+                    if hasattr(graph, "_restore_parameters_snapshot"):
+                        graph._restore_parameters_snapshot(restored_parameters)
+                    else:
+                        graph.all_parameters = restored_parameters
+                        if hasattr(graph, "parameters_changed"):
+                            graph.parameters_changed.emit(graph.all_parameters)
                 graph.update()
 
             tempo_input = getattr(self, "tempo_input", None)
             if tempo_input is not None:
-                tempo_input.setText(str(int(round(tempo))))
+                tempo_input.blockSignals(True)
+                tempo_input.setText(str(tempo))
+                tempo_input.blockSignals(False)
 
-            self.current_playback_time = float(data.get("current_time", 0.0))
+            self.current_playback_time = current_time
             set_time = getattr(self, "_set_transport_time", None)
             if callable(set_time):
-                set_time(self.current_playback_time)
+                set_time(current_time)
 
-            note_count = len(getattr(timeline, "notes_list", []) or []) if timeline is not None else 0
+            engine = getattr(self, "vo_se_engine", None)
+            set_tempo = getattr(engine, "set_tempo", None)
+            if callable(set_tempo):
+                set_tempo(tempo)
+
+            refresh = getattr(self, "refresh_track_list_ui", None)
+            if callable(refresh):
+                refresh()
+            sync_strips = getattr(self, "_sync_track_strips", None)
+            if callable(sync_strips):
+                sync_strips()
+
+            note_count = len(active_notes)
             self.statusBar().showMessage(
                 f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})",
                 3000,
@@ -581,6 +685,11 @@ class ProjectIOMixin:
             return True
 
         except Exception as exc:
+            if commit_started and before_state is not None:
+                try:
+                    self._restore_project_edit_state(before_state)
+                except Exception:
+                    logger.exception("JSON読込失敗後のプロジェクト復元にも失敗しました")
             logger.exception("JSON/VOSE 読み込みエラー: %s", exc)
             QMessageBox.critical(
                 self,
@@ -718,126 +827,79 @@ class ProjectIOMixin:
     # ======================================================================
 
     def import_voice_bank(self: Any, zip_path: str):
-        """[LIVE] ZIP音源インストール完全版"""
-        import shutil
-        import zipfile
+        """ドラッグ＆ドロップZIPもVoiceManagerの安全な永続保存経路へ統一する。"""
         from modules.gui.aural_engine import AuralAIEngine
-        from modules.gui.shared import get_resource_path, DynamicsAIEngine
+        from modules.gui.shared import DynamicsAIEngine
 
-        extract_base_dir = get_resource_path("voices")
-        os.makedirs(extract_base_dir, exist_ok=True)
-        
-        installed_name = None
-        valid_files = [] 
-        found_oto = False
+        manager = getattr(self, "voice_manager", None)
+        install_from_zip = getattr(manager, "install_voice_from_zip", None)
+        if not callable(install_from_zip):
+            QMessageBox.critical(
+                self,
+                "導入エラー",
+                "音源マネージャーが初期化されていません。",
+            )
+            return
 
         try:
-            with zipfile.ZipFile(zip_path, 'r') as z:
-                for info in z.infolist():
-                    try:
-                        filename = info.filename.encode('cp437').decode('cp932')
-                    except Exception:
-                        filename = info.filename
-                    
-                    if "__MACOSX" in filename or ".DS_Store" in filename:
-                        continue
-                    
-                    valid_files.append((info, filename))
-                    
-                    if "oto.ini" in filename.lower():
-                        found_oto = True
-                        parts = filename.replace('\\', '/').strip('/').split('/')
-                        if len(parts) > 1 and not installed_name:
-                            installed_name = parts[-2]
+            # VoiceManager は安全なZIP展開、oto.ini検出、ユーザーデータ領域への
+            # コピー、重複名回避、失敗時の部分フォルダ削除をまとめて処理する。
+            # PyInstaller の _MEIPASS へ直接展開したり、既存音源を削除したりしない。
+            installed_name = install_from_zip(zip_path)
+            if not installed_name:
+                raise RuntimeError("音源のインストール結果を取得できませんでした。")
 
-                if not installed_name:
-                    installed_name = os.path.splitext(os.path.basename(zip_path))[0]
+            voice_path = manager.voices.get(installed_name)
+            if isinstance(voice_path, dict):
+                voice_path = voice_path.get("path", "")
+            voice_path = str(voice_path or "")
+            if not voice_path or not os.path.isdir(voice_path):
+                raise RuntimeError(
+                    f"インストール済み音源の保存先が見つかりません: {installed_name}"
+                )
 
-                target_voice_dir = os.path.join(extract_base_dir, installed_name)
-                
-                if os.path.exists(target_voice_dir):
-                    shutil.rmtree(target_voice_dir)
-                os.makedirs(target_voice_dir, exist_ok=True)
-
-                top_dirs = set()
-                for _, fname in valid_files:
-                    parts = fname.replace('\\', '/').strip('/').split('/')
-                    if len(parts) > 1:
-                        top_dirs.add(parts[0])
-                    else:
-                        top_dirs.add("")
-
-                has_single_top_dir = len(top_dirs) == 1 and "" not in top_dirs
-                single_top_dir = list(top_dirs)[0] if has_single_top_dir else ""
-
-                for info, filename in valid_files:
-                    normalized_fname = filename.replace('\\', '/').strip('/')
-                    
-                    if has_single_top_dir:
-                        rel_path = normalized_fname[len(single_top_dir):].lstrip('/')
-                    else:
-                        rel_path = normalized_fname
-                        
-                    target_path = os.path.join(target_voice_dir, rel_path)
-                    root_path = os.path.realpath(target_voice_dir)
-                    target_real_path = os.path.realpath(target_path)
-                    if os.path.commonpath([root_path, target_real_path]) != root_path:
-                        raise ValueError(f"不正なZIPパスです: {filename}")
-                    
-                    if info.is_dir():
-                        os.makedirs(target_path, exist_ok=True)
-                        continue
-                        
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    with z.open(info) as source, open(target_path, "wb") as target:
-                        shutil.copyfileobj(source, target)
-
-            status_bar = self.statusBar()
-            if not found_oto:
-                if status_bar:
-                    status_bar.showMessage(f"AI解析中: {installed_name} の原音設定を自動生成しています...", 0)
-                if hasattr(self, 'generate_and_save_oto'):
-                    self.generate_and_save_oto(target_voice_dir)
-
-            aural_model = os.path.join(target_voice_dir, "aural_dynamics.onnx")
-            std_model = os.path.join(target_voice_dir, "model.onnx")
-
-            if os.path.exists(aural_model):
-                self.dynamics_ai = AuralAIEngine() 
-                if hasattr(self.dynamics_ai, 'load_model'):
-                    cast(Any, self.dynamics_ai).load_model(aural_model)
+            aural_model = os.path.join(voice_path, "aural_dynamics.onnx")
+            std_model = os.path.join(voice_path, "model.onnx")
+            if os.path.isfile(aural_model):
+                self.dynamics_ai = AuralAIEngine()
+                load_model = getattr(self.dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(aural_model)
                 engine_msg = "上位Auralモデル"
-            elif os.path.exists(std_model):
+            elif os.path.isfile(std_model):
                 self.dynamics_ai = DynamicsAIEngine()
-                if hasattr(self.dynamics_ai, 'load_model'):
-                    cast(Any, self.dynamics_ai).load_model(std_model)
+                load_model = getattr(self.dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(std_model)
                 engine_msg = "標準Dynamicsモデル"
             else:
-                self.dynamics_ai = AuralAIEngine() 
+                self.dynamics_ai = AuralAIEngine()
                 engine_msg = "汎用Auralエンジン"
 
-            v_manager = getattr(self, 'voice_manager', None)
-            if v_manager and hasattr(v_manager, 'scan_utau_voices'):
-                v_manager.scan_utau_voices()
-            
-            if hasattr(self, 'voice_gallery') and self.voice_gallery is not None:
-                refresh_fn = getattr(self.voice_gallery, 'setup_gallery', getattr(self.voice_gallery, 'refresh_gallery', None))
-                if refresh_fn:
-                    refresh_fn()
-                self.voice_gallery.update()
-            
-            msg = f"✅ '{installed_name}' インストール完了！ ({engine_msg})"
-            if status_bar:
-                status_bar.showMessage(msg, 5000)
-            
-            QMessageBox.information(
-                self, 
-                "導入成功", 
-                f"音源 '{installed_name}' をインストールしました。\nエンジン: {engine_msg}\n\nキャラクター選択パネルから選択できます。"
-            )
+            refresh_voices = getattr(manager, "scan_voices", None)
+            if callable(refresh_voices):
+                refresh_voices()
 
-        except Exception as e:
-            QMessageBox.critical(self, "導入エラー", f"インストール中にエラーが発生しました:\n{str(e)}")
+            gallery = getattr(self, "voice_gallery", None)
+            refresh_gallery = getattr(gallery, "setup_gallery", None)
+            if callable(refresh_gallery):
+                refresh_gallery()
+                gallery.update()
+
+            message = f"音源「{installed_name}」をインストールしました。\nエンジン: {engine_msg}"
+            self.statusBar().showMessage(
+                f"音源インストール完了: {installed_name} ({engine_msg})",
+                5000,
+            )
+            QMessageBox.information(self, "導入成功", message)
+
+        except Exception as exc:
+            logger.exception("ドラッグ＆ドロップ音源インストール失敗: %s", exc)
+            QMessageBox.critical(
+                self,
+                "導入エラー",
+                f"インストール中にエラーが発生しました:\n{exc}",
+            )
 
     def generate_and_save_oto(self: Any, target_voice_dir: str, force_redo: bool = False) -> None:
         """
@@ -1229,14 +1291,13 @@ class ProjectIOMixin:
         return str(os.path.splitext(os.path.basename(zip_path))[0])
 
     def on_export_button_clicked(self: Any):
-        """[LIVE] WAV出力 — 新シグネチャ (notes, parameters, file_path) 対応版"""
+        """WAVを書き出す。長時間レンダリングはGUIを止めずにバックグラウンドで行う。"""
         from modules.data.licensing import LicenseManager
 
-        tw = getattr(self, "timeline_widget", None)
-        gw = getattr(self, "graph_editor_widget", None)
+        timeline = getattr(self, "timeline_widget", None)
+        graph = getattr(self, "graph_editor_widget", None)
         engine = getattr(self, "vo_se_engine", None)
-
-        if tw is None or gw is None or engine is None:
+        if timeline is None or graph is None or engine is None:
             QMessageBox.warning(
                 self,
                 "エラー",
@@ -1244,7 +1305,7 @@ class ProjectIOMixin:
             )
             return
 
-        notes = list(getattr(tw, "notes_list", []) or [])
+        notes = list(getattr(timeline, "notes_list", []) or [])
         if not notes:
             QMessageBox.warning(
                 self,
@@ -1262,92 +1323,36 @@ class ProjectIOMixin:
         if not file_path:
             return
 
-        is_pro = LicenseManager.is_pro()
-        mode_flag = 1 if is_pro else 0
-
-        # graph_editor_widget からパラメータ辞書を組み立てる
-        all_params = getattr(gw, "all_parameters", {}) or {}
+        all_params = getattr(graph, "all_parameters", {}) or {}
         parameters: Dict[str, Any] = {
-            "Pitch":   list(all_params.get("Pitch",   [])),
-            "Gender":  list(all_params.get("Gender",  [])),
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
             "Tension": list(all_params.get("Tension", [])),
-            "Breath":  list(all_params.get("Breath",  [])),
+            "Breath": list(all_params.get("Breath", [])),
         }
 
-        self.stop_and_clear_playback()
-        status_bar = self.statusBar()
-        if status_bar:
-            status_bar.showMessage("レンダリング中...")
+        stop_playback = getattr(self, "stop_and_clear_playback", None)
+        if callable(stop_playback):
+            stop_playback()
 
-        # パッチ適用環境では v2 を優先 (VCV + Vibrato + Portamento 対応)
-        v2_export_fn = getattr(engine, "export_to_wav_v2", None)
-        v1_export_fn = getattr(engine, "export_to_wav", None)
-
-        if v2_export_fn is None and v1_export_fn is None:
+        start_render = getattr(self, "_start_async_render", None)
+        if not callable(start_render):
             QMessageBox.critical(
                 self,
                 "エラー",
-                "エンジンに export_to_wav が実装されていません。",
+                "非同期レンダリング機能が初期化されていません。",
             )
             return
 
-        try:
-            # v2 を優先。v2 は mode_flag を受け取れるため、Pro/Free の
-            # レンダリングモードをファイル書き出しにも確実に渡す。
-            if callable(v2_export_fn):
-                result = v2_export_fn(
-                    notes,
-                    parameters,
-                    file_path,
-                    mode_flag=mode_flag,
-                )
-            elif callable(v1_export_fn):
-                result = v1_export_fn(
-                    notes,
-                    parameters,
-                    file_path,
-                    mode_flag=mode_flag,
-                )
-            else:
-                raise RuntimeError("エンジンのレンダリング関数を呼び出せません。")
-
-            if result is None:
-                QMessageBox.warning(
-                    self,
-                    "書き出し",
-                    "レンダリング結果が空でした。",
-                )
-                return
-
-            if status_bar:
-                status_bar.showMessage(
-                    f"エクスポート完了: {os.path.basename(file_path)}"
-                )
-            QMessageBox.information(
-                self,
-                "完了",
-                f"レンダリングが完了しました！\nファイル: {file_path}",
-            )
-
-        except TypeError as exc:
-            logger.exception("export_to_wav 呼び出し失敗: %s", exc)
-            QMessageBox.critical(
-                self,
-                "エラー",
-                "export_to_wav のシグネチャが一致しません。\n"
-                "vo_se_engine_patch.apply_patch(VO_SE_Engine) "
-                "が適用済みか確認してください。\n"
-                f"詳細: {exc}",
-            )
-        except Exception as exc:
-            logger.exception("書き出しエラー: %s", exc)
-            QMessageBox.critical(
-                self,
-                "エラー",
-                f"書き出し失敗: {exc}",
-            )
-            if status_bar:
-                status_bar.showMessage("エラー発生")
+        started = start_render(
+            notes,
+            parameters,
+            file_path,
+            is_pro=LicenseManager.is_pro(),
+            play_after_success=False,
+        )
+        if not started:
+            logger.warning("WAV書き出しを開始できませんでした: %s", file_path)
 
     def parse_ust_dict_to_note(self: Any, d: Dict[str, Any], current_time_sec: float = 0.0, tempo: float = 120.0) -> Any:
         """[LIVE] UST辞書 → NoteEvent変換"""

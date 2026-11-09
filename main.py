@@ -6,6 +6,7 @@ import platform
 import ctypes
 import ctypes.util
 import json
+import tempfile
 import threading
 
 import importlib
@@ -124,10 +125,27 @@ class ConfigHandler:
             return self.default_config
 
     def save_config(self, config_dict):
+        output_dir = os.path.dirname(os.path.abspath(self.config_path))
+        temporary_path = ""
         try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
+            os.makedirs(output_dir, exist_ok=True)
+            descriptor, temporary_path = tempfile.mkstemp(
+                prefix=".vose-config-",
+                suffix=".tmp",
+                dir=output_dir,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
                 json.dump(config_dict, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, self.config_path)
         except Exception as e:
+            if temporary_path:
+                try:
+                    if os.path.exists(temporary_path):
+                        os.remove(temporary_path)
+                except OSError:
+                    pass
             print(f"Config save error: {e}")
 
 
@@ -443,7 +461,17 @@ def main():
             app.setWindowIcon(QIcon(icon_path))
             break
 
-    dll_path = get_engine_library_path()
+    configured_core = os.environ.get("VOSE_CORE_LIBRARY")
+    dll_path = (
+        os.path.abspath(os.path.expanduser(os.path.expandvars(configured_core)))
+        if configured_core
+        else get_engine_library_path()
+    )
+    if os.path.isfile(dll_path) and not configured_core:
+        # PyInstaller stores the native core under _MEIPASS/bin. Pin the
+        # verified bundled binary so the engine loader searches that directory.
+        os.environ["VOSE_CORE_LIBRARY"] = dll_path
+
     if not os.path.exists(dll_path):
         if is_smoke_test:
             print(f"[SmokeTest] Core Engine が見つかりません: {dll_path}")
@@ -458,11 +486,17 @@ def main():
 
     config_handler = ConfigHandler()
     config = config_handler.load_config()
-    engine = VoSeEngine()
 
     try:
-        window = MainWindow()
-        # app_main.py の MainWindow 生成直後
+        # The desktop GUI uses VO_SE_Engine's VCV/UST-aware renderer.
+        # VoSeEngine is a separate legacy process_voice bridge and does not
+        # implement the desktop export_to_wav_v2 interface.
+        from modules.audio.vo_se_engine import VO_SE_Engine
+        engine = VO_SE_Engine()
+        window = MainWindow(engine=engine)
+
+        # Apply compatibility patches only after the actual desktop engine
+        # has been injected into MainWindow.
         from modules.gui.main_window_patch import patch_main_window
         patch_main_window(window)
     except Exception as e:
@@ -475,7 +509,7 @@ def main():
     window.vo_se_engine = engine
     window.config = config
 
-    if engine.c_engine:
+    if getattr(engine, "lib", None):
         window.statusBar().showMessage("VO-SE Core Engine: Ready")
     else:
         window.statusBar().showMessage("VO-SE Core Engine: Not Found (Offline Mode)")
