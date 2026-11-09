@@ -6389,40 +6389,85 @@ class MainWindow(
             self.render_eta_label.setText("ETA: 計算中...")
 
     def on_render_success(self, output_wav):
-        """レンダリング成功時の処理"""
-        if hasattr(self, "progress_bar"):
-            self.progress_bar.setVisible(False)
-        self.render_btn.setEnabled(True)
-        self.render_eta_label.setText("完了")
+        """レンダリング成功時に一時WAVを正式な保存先へ公開する。"""
+        produced_path = os.path.abspath(os.fsdecode(os.fspath(output_wav)))
+        final_path = str(getattr(self, "_render_target_path", "") or "")
+        play_after_success = bool(getattr(self, "_render_play_after_success", True))
 
-        self.cancel_render_btn.setVisible(False)
-        self.cancel_render_btn.setEnabled(False)
+        try:
+            if final_path:
+                if not os.path.isfile(produced_path):
+                    raise RuntimeError("レンダリング結果の一時WAVが見つかりません。")
+                # 同じ保存先ディレクトリ内の一時ファイルから置換するため、
+                # 失敗時は既存の正常なWAVを残せる。
+                os.replace(produced_path, final_path)
+                produced_path = final_path
+        except Exception as exc:
+            self.on_render_failed(f"書き出しファイルの確定に失敗しました: {exc}")
+            return
+
+        self._render_target_path = ""
+        self._render_temp_path = ""
+        self._render_play_after_success = False
+        if hasattr(self, "progress_bar") and self.progress_bar is not None:
+            self.progress_bar.setVisible(False)
+        if getattr(self, "render_btn", None) is not None:
+            self.render_btn.setEnabled(True)
+        if getattr(self, "render_eta_label", None) is not None:
+            self.render_eta_label.setText("完了")
+        if getattr(self, "cancel_render_btn", None) is not None:
+            self.cancel_render_btn.setVisible(False)
+            self.cancel_render_btn.setEnabled(False)
         self.current_worker = None
 
-        self.statusBar().showMessage(f"レンダリング完了: {output_wav}")
-        self.play_rendered_audio(output_wav)
+        self.statusBar().showMessage(f"WAV書き出し完了: {produced_path}", 5000)
+        if play_after_success:
+            self.play_rendered_audio(produced_path)
+        else:
+            QMessageBox.information(
+                self,
+                "書き出し完了",
+                f"WAVを書き出しました。\n{produced_path}",
+            )
 
     def on_render_failed(self, error_msg):
-        """レンダリング失敗時の処理（キャンセルも含む）"""
-        if hasattr(self, "progress_bar"):
-            self.progress_bar.setVisible(False)
-        self.render_btn.setEnabled(True)
+        """レンダリング失敗・キャンセル時に一時ファイルとUI状態を整理する。"""
+        temporary_path = str(getattr(self, "_render_temp_path", "") or "")
+        if temporary_path:
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError as cleanup_error:
+                print(f"[Render] Temporary WAV cleanup failed: {cleanup_error}")
 
-        self.cancel_render_btn.setVisible(False)
-        self.cancel_render_btn.setEnabled(False)
+        self._render_target_path = ""
+        self._render_temp_path = ""
+        self._render_play_after_success = False
+        if hasattr(self, "progress_bar") and self.progress_bar is not None:
+            self.progress_bar.setVisible(False)
+        if getattr(self, "render_btn", None) is not None:
+            self.render_btn.setEnabled(True)
+        if getattr(self, "cancel_render_btn", None) is not None:
+            self.cancel_render_btn.setVisible(False)
+            self.cancel_render_btn.setEnabled(False)
         self.current_worker = None
 
         was_cancelled = self._render_cancelled
         self._render_cancelled = False
-
         if was_cancelled:
-            self.render_eta_label.setText("キャンセル済み")
+            if getattr(self, "render_eta_label", None) is not None:
+                self.render_eta_label.setText("キャンセル済み")
             self.statusBar().showMessage("レンダリングをキャンセルしました。")
             return
 
-        self.render_eta_label.setText("エラー")
+        if getattr(self, "render_eta_label", None) is not None:
+            self.render_eta_label.setText("エラー")
         self.statusBar().showMessage(f"失敗: {error_msg}")
-        QMessageBox.critical(self, "Render Error", f"レンダリング中にエラーが発生しました:\n{error_msg}")
+        QMessageBox.critical(
+            self,
+            "Render Error",
+            f"レンダリング中にエラーが発生しました:\n{error_msg}",
+        )
 
     @Slot()
     def cancel_current_render(self):
