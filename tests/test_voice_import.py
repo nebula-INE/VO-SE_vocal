@@ -112,6 +112,7 @@ def test_zip_path_traversal_is_rejected(vm, tmp_path):
     assert not (tmp_path / "evil.txt").exists()
 
 
+@pytest.mark.smoke
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "member_name",
@@ -133,6 +134,7 @@ def test_zip_rejects_windows_absolute_and_traversal_paths(vm, tmp_path, member_n
     assert not (tmp_path / "evil.txt").exists()
 
 
+@pytest.mark.smoke
 @pytest.mark.unit
 def test_zip_backslash_member_paths_are_normalized(vm, tmp_path):
     archive = tmp_path / "windows_separators.zip"
