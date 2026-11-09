@@ -472,6 +472,55 @@ class ProjectIOMixin:
                 raise ValueError("プロジェクトの再生位置が不正です。")
 
             # すべてのトラック・ノート・オートメーションをUI変更前に構築する。
+            def parse_project_note(note_data: Dict[str, Any], description: str) -> NoteEvent:
+                note = NoteEvent.from_dict(note_data)
+                try:
+                    raw_note_number = float(note.note_number)
+                    note_number = int(raw_note_number)
+                    start_time = float(note.start_time)
+                    duration = float(note.duration)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"{description} の音程・開始位置・長さが不正です。") from exc
+
+                if (
+                    not math.isfinite(raw_note_number)
+                    or not raw_note_number.is_integer()
+                    or not 0 <= note_number <= 127
+                    or not math.isfinite(start_time)
+                    or start_time < 0.0
+                    or not math.isfinite(duration)
+                    or duration < 0.0
+                ):
+                    raise ValueError(f"{description} の音程・開始位置・長さが範囲外です。")
+
+                note.note_number = note_number
+                note.start_time = start_time
+                note.duration = duration
+                for field_name in (
+                    "velocity",
+                    "vibrato_depth",
+                    "vibrato_rate",
+                    "formant_shift",
+                    "onset",
+                    "pre_utterance",
+                    "overlap",
+                ):
+                    value = getattr(note, field_name, None)
+                    if value is None:
+                        continue
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        raise ValueError(
+                            f"{description} の {field_name} が数値ではありません。"
+                        ) from exc
+                    if not math.isfinite(number):
+                        raise ValueError(
+                            f"{description} の {field_name} に無効な数値があります。"
+                        )
+
+                return note
+
             existing_tracks = list(getattr(self, "tracks", []) or [])
             if not existing_tracks:
                 raise ValueError("読み込み先のトラックがありません。")
@@ -494,7 +543,12 @@ class ProjectIOMixin:
                             raise ValueError(
                                 f"Track {index + 1} / Note {note_index + 1} の形式が不正です。"
                             )
-                        notes.append(NoteEvent.from_dict(note_data))
+                        notes.append(
+                            parse_project_note(
+                                note_data,
+                                f"Track {index + 1} / Note {note_index + 1}",
+                            )
+                        )
 
                     mixer = raw.get("mixer", {})
                     if not isinstance(mixer, dict):
@@ -533,7 +587,9 @@ class ProjectIOMixin:
                 for note_index, note_data in enumerate(raw_notes):
                     if not isinstance(note_data, dict):
                         raise ValueError(f"Note {note_index + 1} の形式が不正です。")
-                    notes.append(NoteEvent.from_dict(note_data))
+                    notes.append(
+                        parse_project_note(note_data, f"Note {note_index + 1}")
+                    )
 
                 loaded_tracks = deepcopy(existing_tracks)
                 requested_idx = int(getattr(self, "current_track_idx", 0))
