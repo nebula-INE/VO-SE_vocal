@@ -3210,10 +3210,8 @@ class MainWindow(
                 self.on_effect_parameters_changed
             )
 
-        # --- 7. ボイスギャラリーとの接続（キャラクター切り替え） ---
-        # VoiceCardGalleryが MainWindow の属性 (self.voice_gallery) として存在すると仮定
-        if hasattr(self, 'voice_gallery') and self.voice_gallery:
-            self.voice_gallery.voice_selected.connect(self.on_voice_changed)
+        # 音源選択シグナルは setup_voice_gallery() 側で一度だけ接続する。
+        # ここで再接続すると1回の選択で音源再ロードとキャッシュ更新が二重実行される。
 
         # --- 8.再生・停止・録音ボタンの制御 ---
         if self.play_button:
