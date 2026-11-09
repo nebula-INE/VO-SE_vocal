@@ -133,6 +133,10 @@ def safe_extract_zip(
     zf: zipfile.ZipFile,
     dest_dir: str,
     progress: Optional[Callable[[int], None]] = None,
+    *,
+    max_total_size: int = 8 * 1024**3,
+    max_member_size: int = 2 * 1024**3,
+    max_members: int = 100_000,
 ) -> List[str]:
     """文字化けを直しつつ、dest_dir の外へ書き出さないように ZIP を展開する。
 
@@ -142,9 +146,33 @@ def safe_extract_zip(
     root = os.path.realpath(dest_dir)
     os.makedirs(root, exist_ok=True)
 
+    if max_total_size <= 0 or max_member_size <= 0 or max_members <= 0:
+        raise ValueError("ZIP 展開上限は正の整数で指定してください。")
+
     infos = zf.infolist()
+    if len(infos) > max_members:
+        raise ValueError(
+            f"ZIP内のファイル数が上限を超えています: {len(infos)} > {max_members}"
+        )
+
+    # Validate the complete archive before creating any extracted files. This
+    # prevents a late oversized member from leaving a partially installed bank.
+    total_size = 0
+    for info in infos:
+        if info.file_size < 0 or info.file_size > max_member_size:
+            raise ValueError(
+                f"ZIP内のファイルサイズが上限を超えています: "
+                f"{info.filename} ({info.file_size} bytes)"
+            )
+        total_size += info.file_size
+        if total_size > max_total_size:
+            raise ValueError(
+                f"ZIP展開後の合計サイズが上限を超えています: "
+                f"{total_size} > {max_total_size} bytes"
+            )
+
     names = decode_zip_member_names(infos)
-    total = sum(i.file_size for i in infos) or 1
+    total = total_size or 1
     done = 0
     extracted: List[str] = []
 
