@@ -2,6 +2,7 @@ import ctypes
 from typing import Optional 
 import os
 import sys
+import threading
 import numpy as np
 from typing import List, Dict, Any, Callable, cast
 try:
@@ -38,6 +39,10 @@ class CVoseFrame(ctypes.Structure):
 class VO_SE_Engine:
     def __init__(self, voice_lib_dir="voices"):
         self.sample_rate = 44100
+        # Rendering mutates shared FFI buffers, OTO state and timeline state.
+        # Playback preparation and manual export must never enter the native
+        # renderer concurrently.
+        self._render_lock = threading.RLock()
         self.lib = self._load_core_library()
         self._temp_refs = []  # C++実行中のメモリ保護用
         self.is_playing = False
