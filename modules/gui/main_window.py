@@ -1223,35 +1223,19 @@ class ConfigHandler:
 
     def __init__(self, config_path=None):
         if config_path is None:
-            try:
-                from PySide6.QtCore import QStandardPaths
-                config_dir = QStandardPaths.writableLocation(
-                    QStandardPaths.StandardLocation.AppConfigLocation
+            # Keep the GUI's settings path identical to main.py's ConfigHandler.
+            # This matters because main.py also saves window.config after app.exec().
+            if sys.platform == "win32":
+                config_root = os.getenv("APPDATA") or os.path.expanduser("~")
+                config_dir = os.path.join(config_root, "VO-SE Pro")
+            elif sys.platform == "darwin":
+                config_dir = os.path.expanduser(
+                    "~/Library/Application Support/VO-SE Pro"
                 )
-            except Exception:
-                config_dir = ""
-
-            if not config_dir:
-                if sys.platform == "win32":
-                    config_root = os.getenv("APPDATA") or os.path.expanduser("~")
-                    config_dir = os.path.join(config_root, "VO-SE")
-                elif sys.platform == "darwin":
-                    config_dir = os.path.expanduser("~/Library/Application Support/VO-SE")
-                else:
-                    config_root = os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-                    config_dir = os.path.join(config_root, "VO-SE")
-
+            else:
+                config_root = os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+                config_dir = os.path.join(config_root, "vo-se-pro")
             self.config_path = os.path.join(config_dir, "config.json")
-
-            # Migrate the legacy working-directory config once, when present.
-            legacy_path = os.path.abspath("config.json")
-            if not os.path.exists(self.config_path) and os.path.isfile(legacy_path):
-                try:
-                    os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-                    import shutil
-                    shutil.copy2(legacy_path, self.config_path)
-                except OSError as exc:
-                    print(f"旧設定ファイルの移行をスキップしました: {exc}")
         else:
             self.config_path = os.fspath(config_path)
 
@@ -6362,6 +6346,13 @@ class MainWindow(
             "default_voice": getattr(self, "current_voice", None),
             "volume": getattr(self, "volume", 1.0),
         }
+        # main.py holds a reference to this same dictionary and writes it once
+        # more after app.exec(); update it before returning from closeEvent.
+        current_config = getattr(self, "config", None)
+        if isinstance(current_config, dict):
+            current_config.update(config)
+        else:
+            self.config = dict(config)
         config_manager = getattr(self, "config_manager", None)
         save_config = getattr(config_manager, "save_config", None)
         if callable(save_config):
