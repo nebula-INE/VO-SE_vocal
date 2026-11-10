@@ -33,6 +33,8 @@ def test_external_json_project_parsing_returns_neutral_payload(tmp_path):
 
     assert payload["format"] == "json"
     assert payload["data"] == expected
+    assert len(payload["prepared_note_tracks"]) == 1
+    assert payload["prepared_note_tracks"][0][0].lyric == "あ"
 
 
 def test_external_project_parser_rejects_invalid_json_root(tmp_path):
@@ -87,3 +89,46 @@ def test_external_project_dispatcher_uses_background_worker():
 
     assert "_ExternalProjectLoadWorker(file_path)" in dispatcher
     assert "QThreadPool.globalInstance().start" in dispatcher
+
+
+
+def test_external_json_worker_rejects_invalid_note_before_gui_application(tmp_path):
+    path = tmp_path / "invalid-note.json"
+    path.write_text(
+        json.dumps({
+            "tempo": 120.0,
+            "tracks": [{
+                "name": "Lead",
+                "type": "vocal",
+                "notes": [{
+                    "note_number": 60,
+                    "start_time": 0.0,
+                    "duration": float("nan"),
+                    "lyric": "あ",
+                }],
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="範囲外"):
+        _parse_external_project_file(str(path))
+
+
+def test_external_json_worker_prepares_legacy_single_track_notes(tmp_path):
+    path = tmp_path / "legacy.json"
+    expected = {
+        "tempo": 120.0,
+        "notes": [{
+            "note_number": 64,
+            "start_time": 0.5,
+            "duration": 0.25,
+            "lyric": "い",
+        }],
+    }
+    path.write_text(json.dumps(expected, ensure_ascii=False), encoding="utf-8")
+
+    payload = _parse_external_project_file(str(path))
+
+    assert payload["prepared_note_tracks"] is None
+    assert payload["prepared_legacy_notes"][0].note_number == 64
