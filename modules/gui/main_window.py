@@ -6117,7 +6117,12 @@ class MainWindow(
         selected_port = self.midi_port_selector.currentData()
 
         if self.midi_manager is not None:
-           self.midi_manager.stop()
+           try:
+               self.midi_manager.stop()
+           except Exception as exc:
+               if self.status_label is not None:
+                   self.status_label.setText(f"MIDIの切断に失敗: {exc}")
+               return
            self.midi_manager = None
 
         if selected_port and selected_port != "ポートなし":
