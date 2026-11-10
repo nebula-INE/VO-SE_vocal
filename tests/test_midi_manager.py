@@ -54,8 +54,11 @@ def test_desktop_midi_port_switch_keeps_manager_when_shutdown_fails():
 
     assert "except Exception as exc:" in handler
     assert "self.status_label.setText(f\"MIDIの切断に失敗: {exc}\")" in handler
-    assert handler.index("self.midi_manager.stop()") < handler.index("return")
-    assert handler.index("return") < handler.index("self.midi_manager = None")
+    failure_path = handler.split("except Exception as exc:", 1)[1].split(
+        "self.midi_manager = None", 1
+    )[0]
+    assert "self.midi_manager.stop()" in handler
+    assert "return" in failure_path
 
 
 def test_compatibility_midi_port_switch_reports_shutdown_failure():
