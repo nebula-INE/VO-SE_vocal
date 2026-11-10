@@ -5220,6 +5220,7 @@ class MainWindow(
             "character_selector",
             "track_list_widget",
             "render_btn",
+            "stop_btn",
         ):
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setEnabled"):
@@ -5291,7 +5292,10 @@ class MainWindow(
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
 
-        self._start_audio_mixer_command("start", tracks=tracks, start_sec=start_time)
+        if not self._start_audio_mixer_command(
+            "start", tracks=tracks, start_sec=start_time
+        ):
+            self._set_playback_preparation_ui(False)
 
     @Slot(str, object)
     def _on_audio_mixer_command_completed(self, operation: str, result: object) -> None:
@@ -5586,7 +5590,10 @@ class MainWindow(
         self.is_looping = False
         self.is_looping_selection = False
         self.playback_timer.stop()
-        self._start_audio_mixer_command("stop")
+        if not self._start_audio_mixer_command("stop"):
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is None:
+                self._complete_playback_stop_ui()
 
     @Slot(object)
     def on_single_note_modified(self, note):
