@@ -1392,7 +1392,9 @@ class ProjectIOMixin:
                 except Exception:
                     detected_encoding = None
 
-            if detected_encoding and confidence >= 0.80:
+            normalized_detected = (detected_encoding.lower().replace("_", "-") if detected_encoding else "")
+            known_text_encoding = normalized_detected.startswith("utf-") or normalized_detected in {"cp932", "shift-jis", "shift-jis-2004", "euc-jp", "iso-2022-jp"}
+            if detected_encoding and confidence >= 0.80 and known_text_encoding:
                 candidates.append(detected_encoding)
 
             candidates.extend([
