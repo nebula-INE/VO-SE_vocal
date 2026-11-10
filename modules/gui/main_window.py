@@ -5444,7 +5444,8 @@ class MainWindow(
         self.analysis_thread.completed.connect(self.on_analysis_complete)
         self.analysis_thread.error.connect(self.on_analysis_error)
         
-        # [爆弾5対策] 完了後のメモリ解放を予約
+        # Clear the MainWindow reference when Qt's native thread finishes.
+        self.analysis_thread.finished.connect(self._on_analysis_thread_finished)
         self.analysis_thread.finished.connect(self.analysis_thread.deleteLater)
         
         # 5. UIの戦闘態勢への切り替え
@@ -5460,6 +5461,17 @@ class MainWindow(
         
         # 6. 解析実行
         self.analysis_thread.start()
+
+    @Slot()
+    def _on_analysis_thread_finished(self) -> None:
+        """Release the completed QThread wrapper before another analysis starts."""
+        thread = getattr(self, "analysis_thread", None)
+        if thread is not None:
+            try:
+                if not thread.isRunning():
+                    self.analysis_thread = None
+            except RuntimeError:
+                self.analysis_thread = None
 
     def update_analysis_status(self, percent: int, filename: str):
         """解析進捗のリアルタイム表示（UXの質で海外勢に差をつける）"""
