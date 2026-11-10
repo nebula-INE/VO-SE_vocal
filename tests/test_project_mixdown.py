@@ -86,7 +86,8 @@ def test_project_mixdown_resamples_mono_source_and_preserves_duration(tmp_path):
     assert rate == 8000
     assert data.shape == (4, 2)
     assert np.allclose(data[:, 0], data[:, 1], atol=2e-5)
-    assert np.allclose(data[:, 0], [0.0, 0.5, 1.0, 1.0], atol=2e-5)
+    expected = np.asarray([0.0, 0.5, 1.0, 1.0], dtype=np.float32) * np.sqrt(0.5)
+    assert np.allclose(data[:, 0], expected, atol=2e-5)
 
 
 def test_project_mixdown_does_not_replace_existing_output_on_invalid_source(tmp_path):
@@ -197,7 +198,7 @@ def test_project_mixdown_protects_original_audio_path_behind_vocal_cache(tmp_pat
 
 def test_project_worker_renders_each_vocal_then_mixes_audio_tracks(tmp_path):
     audio_path = tmp_path / "instrument.wav"
-    _write(audio_path, np.full((16, 2), 0.3, dtype=np.float32))
+    _write(audio_path, np.full((16, 2), 0.3, dtype=np.float32), sample_rate=44100)
 
     vocal_a = _track("", track_type="vocal", audio_path="", notes=[object()], name="Vocal A")
     vocal_b = _track("", track_type="vocal", audio_path="", notes=[object()], name="Vocal B")
