@@ -93,3 +93,12 @@ def test_project_open_dialog_includes_native_vose_extension():
         "def import_external_project(self: Any) -> None:", 1
     )[1].split("def _on_external_project_loaded", 1)[0]
     assert "*.vose" in dispatcher
+
+
+def test_legacy_ust_menu_routes_to_async_project_loader():
+    source = (ROOT / "modules" / "gui" / "main_window_patch.py").read_text(encoding="utf-8")
+    callback = source.split("def _open_ust_project_async():", 1)[1].split(
+        "act_import_ust.triggered.connect", 1
+    )[0]
+    assert 'getattr(window, "load_external_project_async", None)' in callback
+    assert "window.load_ust_file(file_path)" in callback
