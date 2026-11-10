@@ -6626,6 +6626,9 @@ class MainWindow(
                 )
                 event.ignore()
                 return
+        # Deliver a queued playback-preparation result before checking whether
+        # it has launched the asynchronous mixer-start command.
+        QCoreApplication.processEvents()
         self._playback_prepare_thread = None
         self._pending_playback_tracks = None
 
