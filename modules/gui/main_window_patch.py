@@ -93,6 +93,11 @@ def _patch_file_io(window) -> None:
         "load_midi_file_from_path",
         "save_oto_ini",
         "_load_vsqx",
+        "export_project_mixdown",
+        "_on_project_mixdown_progress",
+        "_on_project_mixdown_completed",
+        "_on_project_mixdown_failed",
+        "_on_project_mixdown_thread_finished",
     ):
         method = getattr(ProjectIOMixin, method_name, None)
         if method is not None and not hasattr(window, method_name):
@@ -239,6 +244,24 @@ def _patch_menus(window) -> None:
         # セパレーター
         file_menu.addSeparator()
 
+        # 複数トラックを再生と同じミキサー規則でWAVへ書き出す。
+        existing_mixdown_action = next(
+            (
+                action for action in file_menu.actions()
+                if action.objectName() == "projectMixdownAction"
+            ),
+            None,
+        )
+        if existing_mixdown_action is None:
+            act_mixdown = QAction("プロジェクト全体をWAVにミックスダウン...", window)
+            act_mixdown.setObjectName("projectMixdownAction")
+            act_mixdown.triggered.connect(
+                lambda _checked=False: window.export_project_mixdown()
+                if callable(getattr(window, "export_project_mixdown", None))
+                else None
+            )
+            file_menu.addAction(act_mixdown)
+
         # UST 読み込み
         act_import_ust = QAction("UTAU プロジェクト (.ust) を開く...", window)
 
@@ -267,7 +290,7 @@ def _patch_menus(window) -> None:
         )
         file_menu.addAction(act_export_ust)
 
-        logger.info("メニューパッチ: UST 読み込み/書き出し 追加")
+        logger.info("メニューパッチ: UST入出力 + プロジェクトWAVミックスダウン 追加")
 
     except Exception as exc:
         logger.warning("メニューパッチ失敗: %s", exc)
