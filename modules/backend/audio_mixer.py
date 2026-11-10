@@ -299,7 +299,6 @@ class AudioMixer:
             with self._lock:
                 frame_position = self._position
 
-            self._producer_ready.set()
             end_frame = max(durations.values(), default=frame_position)
             while not self._producer_stop.is_set() and frame_position < end_frame:
                 count = min(self.block_size, end_frame - frame_position)
@@ -349,6 +348,7 @@ class AudioMixer:
                 while not self._producer_stop.is_set():
                     try:
                         self._queue.put(item, timeout=0.1)
+                        self._producer_ready.set()
                         break
                     except queue.Full:
                         continue
