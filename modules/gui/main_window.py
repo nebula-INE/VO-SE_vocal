@@ -6672,6 +6672,24 @@ class MainWindow(
                 except OSError as exc:
                     print(f"[Render] Shutdown cleanup warning: {exc}")
 
+        # A project-wide offline render can spend time in native synthesis and
+        # audio-file decoding. Request cooperative cancellation, then keep the
+        # window alive until the worker has left those code paths.
+        mixdown_worker = getattr(self, "_project_mixdown_worker", None)
+        if mixdown_worker is not None and mixdown_worker.isRunning():
+            request_cancel = getattr(mixdown_worker, "request_cancel", None)
+            if callable(request_cancel):
+                request_cancel()
+            if not mixdown_worker.wait(15000):
+                QMessageBox.warning(
+                    self,
+                    "ミックスダウン終了待ち",
+                    "プロジェクトのミックスダウンがまだ実行中です。安全な終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+            self._project_mixdown_worker = None
+
         # Playback preparation uses a QThread, so it must leave native code
         # before the engine and the parent window are released.
         playback_worker = getattr(self, "_playback_prepare_thread", None)
