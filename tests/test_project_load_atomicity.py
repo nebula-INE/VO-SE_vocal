@@ -33,8 +33,11 @@ class _Timeline:
 
 
 class _StatusBar:
-    def showMessage(self, *_args, **_kwargs):
-        pass
+    def __init__(self):
+        self.messages = []
+
+    def showMessage(self, *args, **_kwargs):
+        self.messages.append(args)
 
 
 class _ProjectWindow:
@@ -207,3 +210,64 @@ def test_project_undo_snapshot_restores_voice_identifier():
 
     assert window.current_voice_id == "voice-before"
     assert window.current_voice == "Before"
+
+
+
+def test_project_voice_restore_updates_selector_without_retriggering_selection():
+    window = _ProjectWindow()
+
+    class _Combo:
+        def __init__(self):
+            self.values = ["voice-a", "voice-b"]
+            self.current_index = 1
+            self.signals_blocked = False
+
+        def findData(self, value):
+            try:
+                return self.values.index(value)
+            except ValueError:
+                return -1
+
+        def setCurrentIndex(self, index):
+            self.current_index = index
+
+        def blockSignals(self, blocked):
+            self.signals_blocked = blocked
+
+    window.voice_gallery = SimpleNamespace(cards={
+        "voice-a": SimpleNamespace(display_name="Singer A"),
+    })
+    window.character_selector = _Combo()
+    calls = []
+    window.on_voice_changed = lambda name, voice_id: calls.append((name, voice_id))
+
+    ProjectIOMixin._restore_project_voice_selection(window, "voice-a")
+
+    assert calls == [("Singer A", "voice-a")]
+    assert window.character_selector.current_index == 0
+    assert window.character_selector.signals_blocked is False
+
+
+def test_project_voice_restore_clears_selector_for_no_singer():
+    window = _ProjectWindow()
+
+    class _Combo:
+        def __init__(self):
+            self.current_index = 0
+            self.signals_blocked = False
+
+        def setCurrentIndex(self, index):
+            self.current_index = index
+
+        def blockSignals(self, blocked):
+            self.signals_blocked = blocked
+
+    window.voice_gallery = SimpleNamespace(cards={})
+    window.character_selector = _Combo()
+
+    ProjectIOMixin._restore_project_voice_selection(window, "NONE", "未選択")
+
+    assert window.current_voice_id == "NONE"
+    assert window.character_selector.current_index == -1
+    assert window.character_selector.signals_blocked is False
+    assert window._status_bar.messages == []
