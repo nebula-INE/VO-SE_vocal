@@ -102,3 +102,32 @@ def test_legacy_ust_menu_routes_to_async_project_loader():
     )[0]
     assert 'getattr(window, "load_external_project_async", None)' in callback
     assert "window.load_ust_file(file_path)" in callback
+
+
+
+def test_voice_gallery_uses_worker_scanned_voice_index():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    worker = source.split("class _VoiceImportWorker", 1)[1].split(
+        "class VoiceCardGallery", 1
+    )[0]
+    assert 'voices = dict(getattr(self._manager, "voices", {}) or {})' in worker
+
+    gallery = source.split("class VoiceCardGallery", 1)[1]
+    import_done = gallery.split("def _on_import_done", 1)[1].split(
+        "def _on_import_failed", 1
+    )[0]
+    assert "self.setup_gallery(voices=voices)" in import_done
+
+    setup = gallery.split("def setup_gallery(self, voices=None):", 1)[1].split(
+        "def _register_card", 1
+    )[0]
+    assert "voices if isinstance(voices, dict) else self.manager.scan_voices()" in setup
+
+
+def test_window_waits_for_voicebank_zip_worker_before_close():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    close_handler = source.split("def closeEvent(self, event):", 1)[1].split(
+        "# レリタリング実行メゾット", 1
+    )[0]
+    assert 'getattr(self, "_voice_bank_import_worker", None)' in close_handler
+    assert "worker.wait(15000)" in close_handler
