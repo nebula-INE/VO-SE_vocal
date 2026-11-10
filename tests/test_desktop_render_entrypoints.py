@@ -172,3 +172,40 @@ def test_window_drains_audio_mixer_command_callbacks_before_shutdown():
         "stop_mixer()", process_position
     )
     assert wait_position < process_position < mixer_shutdown_position
+
+
+def test_project_mixdown_is_a_separate_async_export_path():
+    mixdown_source = (
+        ROOT / "modules" / "audio" / "project_mixdown.py"
+    ).read_text(encoding="utf-8")
+    project_io_source = (
+        ROOT / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+    patch_source = (
+        ROOT / "modules" / "gui" / "main_window_patch.py"
+    ).read_text(encoding="utf-8")
+    main_source = (ROOT / "modules" / "gui" / "main_window.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def mixdown_tracks_to_wav(" in mixdown_source
+    assert "mixer._mix_block(" in mixdown_source
+    assert "subtype=\"PCM_24\"" in mixdown_source
+    assert "render_wav_atomically(destination, _write_mix)" in mixdown_source
+    assert "class _ProjectMixdownWorker(QThread)" in project_io_source
+    assert "def export_project_mixdown(" in project_io_source
+    assert '"export_project_mixdown"' in patch_source
+    assert "projectMixdownAction" in patch_source
+    assert 'getattr(self, "_project_mixdown_worker", None)' in main_source
+
+
+def test_close_waits_for_project_mixdown_worker():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(
+        encoding="utf-8"
+    )
+    close_handler = source.split("def closeEvent(self, event):", 1)[1].split(
+        "# Playback preparation uses a QThread", 1
+    )[0]
+    assert 'getattr(self, "_project_mixdown_worker", None)' in close_handler
+    assert "request_cancel()" in close_handler
+    assert "mixdown_worker.wait(15000)" in close_handler
