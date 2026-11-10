@@ -2144,12 +2144,28 @@ class ProjectIOMixin:
         worker.finished.connect(worker.deleteLater)
         self._project_mixdown_worker = worker
         self._set_playback_preparation_ui(True)
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setText("✖ ミックスダウンをキャンセル")
+            cancel_button.setVisible(True)
+            cancel_button.setEnabled(True)
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("ミックスダウン準備中...")
         self.statusBar().showMessage("プロジェクト全体のWAVミックスダウンを開始しました。")
         try:
             worker.start()
         except Exception as exc:
             self._project_mixdown_worker = None
             self._set_playback_preparation_ui(False)
+            cancel_button = getattr(self, "cancel_render_btn", None)
+            if cancel_button is not None:
+                cancel_button.setVisible(False)
+                cancel_button.setEnabled(False)
+                cancel_button.setText("✖ キャンセル")
+            eta_label = getattr(self, "render_eta_label", None)
+            if eta_label is not None:
+                eta_label.setText("エラー")
             QMessageBox.critical(
                 self,
                 "ミックスダウン",
@@ -2165,6 +2181,14 @@ class ProjectIOMixin:
     @Slot(str)
     def _on_project_mixdown_completed(self: Any, output_path: str) -> None:
         self._set_playback_preparation_ui(False)
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setVisible(False)
+            cancel_button.setEnabled(False)
+            cancel_button.setText("✖ キャンセル")
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("完了")
         self.statusBar().showMessage(
             f"プロジェクト全体のWAV書き出しが完了しました: {os.path.basename(output_path)}",
             10000,
@@ -2173,6 +2197,17 @@ class ProjectIOMixin:
     @Slot(str)
     def _on_project_mixdown_failed(self: Any, message: str) -> None:
         self._set_playback_preparation_ui(False)
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setVisible(False)
+            cancel_button.setEnabled(False)
+            cancel_button.setText("✖ キャンセル")
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("キャンセル済み" if "キャンセル" in str(message) else "エラー")
+        if "キャンセル" in str(message):
+            self.statusBar().showMessage("プロジェクトのミックスダウンをキャンセルしました。", 5000)
+            return
         self.statusBar().showMessage("プロジェクトのミックスダウンに失敗しました。", 5000)
         QMessageBox.critical(
             self,
