@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from modules.gui.mixins.project_io_mixin import _ExternalProjectLoadWorker
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,3 +55,29 @@ def test_window_waits_for_analysis_and_voice_import_workers_before_close():
     assert 'getattr(gallery, "_import_worker", None)' in close_handler
     assert "worker.wait(15000)" in close_handler
     assert "event.ignore()" in close_handler
+
+
+def test_window_waits_for_external_project_parser_before_close():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    close_handler = source.split("def closeEvent(self, event):", 1)[1].split(
+        "# レリタリング実行メゾット", 1
+    )[0]
+    assert 'getattr(self, "_project_load_worker", None)' in close_handler
+    assert 'done.wait(15.0)' in close_handler
+    assert "QCoreApplication.processEvents()" in close_handler
+
+
+def test_external_project_worker_signals_failure_and_always_sets_done(tmp_path):
+    path = tmp_path / "broken.json"
+    path.write_text("{broken json", encoding="utf-8")
+    worker = _ExternalProjectLoadWorker(str(path))
+    failures = []
+    worker.signals.failed.connect(
+        lambda file_path, error: failures.append((file_path, error))
+    )
+
+    worker.run()
+
+    assert worker.done.is_set()
+    assert len(failures) == 1
+    assert failures[0][0] == str(path)
