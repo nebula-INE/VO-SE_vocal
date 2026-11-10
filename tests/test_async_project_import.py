@@ -209,3 +209,50 @@ def test_legacy_load_file_from_path_routes_to_async_project_loader():
         "def _parse_midi", 1
     )[0]
     assert "return self.load_external_project_async(filepath)" in loader
+
+
+
+def test_voicebank_drop_dispatches_to_background_installer():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+    drop_handler = source.split("def dropEvent(self: Any, event):", 1)[1].split(
+        "def load_file_from_path", 1
+    )[0]
+    assert "self.import_voice_bank(file_path, source_type=source_type)" in drop_handler
+    assert "urlretrieve(" not in drop_handler
+
+
+def test_voicebank_import_worker_downloads_installs_and_loads_models_off_ui_thread():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+    worker = source.split("class _VoiceBankImportWorker", 1)[1].split(
+        "class _ExternalProjectLoadSignals", 1
+    )[0]
+    assert "urlretrieve(self.source_path, temporary_path)" in worker
+    assert "self.manager.install_voice_from_zip(zip_path)" in worker
+    assert "load_model(aural_model)" in worker
+    assert "load_model(standard_model)" in worker
+    assert "self.completed.emit({" in worker
+
+
+def test_voicebank_import_entrypoint_starts_worker_and_reports_completion():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+    handler = source.split("def import_voice_bank(", 1)[1].split(
+        "def generate_and_save_oto", 1
+    )[0]
+    assert "_VoiceBankImportWorker(manager, zip_path, source_type, self)" in handler
+    assert "worker.start()" in handler
+    assert "self._on_voice_bank_import_completed" in handler
