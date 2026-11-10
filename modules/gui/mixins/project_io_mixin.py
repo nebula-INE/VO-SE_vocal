@@ -1324,7 +1324,7 @@ class ProjectIOMixin:
                 return ""
 
             candidates: List[str] = []
-            if raw_data.startswith(b"\\xef\\xbb\\xbf"):
+            if raw_data.startswith(bytes((0xEF, 0xBB, 0xBF)):
                 candidates.append("utf-8-sig")
 
             detected_encoding: Optional[str] = None
