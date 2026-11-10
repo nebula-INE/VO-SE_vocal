@@ -123,3 +123,19 @@ def test_rendered_wav_preview_uses_background_mixer_start():
     )[0]
     assert 'self._start_audio_mixer_command(' in play_handler
     assert 'play_file(' not in play_handler
+
+
+def test_rendered_preview_pause_resume_keeps_preview_track_snapshot():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    play_handler = source.split("def on_play_pause_toggled(self):", 1)[1].split(
+        "def on_record_toggled", 1
+    )[0]
+    preview_handler = source.split("def play_audio(self, path: str) -> None:", 1)[1].split(
+        "def _check_for_updates", 1
+    )[0]
+    assert 'getattr(self, "_playback_preview_mode", False)' in play_handler
+    assert 'getattr(self, "_playback_resume_tracks", [])' in play_handler
+    assert 'self._playback_resume_tracks = [track]' in preview_handler
+    assert "self._playback_preview_mode = False" in source.split(
+        "def _complete_playback_stop_ui", 1
+    )[1].split("def _on_vocal_playback_prepare_thread_finished", 1)[0]
