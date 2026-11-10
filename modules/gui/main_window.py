@@ -4747,9 +4747,13 @@ class MainWindow(
             return
 
         track = _RenderedAudioTrack(os.path.abspath(path))
+        self._playback_preview_mode = True
+        self._playback_resume_tracks = [track]
         if not self._start_audio_mixer_command(
             "start", tracks=[track], start_sec=0.0
         ):
+            self._playback_preview_mode = False
+            self._playback_resume_tracks = []
             self.statusBar().showMessage(
                 "別の音声デバイス処理が実行中のため、プレビュー再生を開始できません。",
                 4000,
@@ -5326,6 +5330,8 @@ class MainWindow(
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
 
+        self._playback_preview_mode = False
+        self._playback_resume_tracks = []
         if not self._start_audio_mixer_command(
             "start", tracks=tracks, start_sec=start_time
         ):
@@ -5465,6 +5471,8 @@ class MainWindow(
         self.playback_started_monotonic = 0.0
         self.is_looping = False
         self.is_looping_selection = False
+        self._playback_preview_mode = False
+        self._playback_resume_tracks = []
         self.playback_timer.stop()
         timeline = getattr(self, "timeline_widget", None)
         if timeline is not None:
@@ -5509,6 +5517,17 @@ class MainWindow(
         if mixer.is_playing:
             self._start_audio_mixer_command("pause")
             return
+
+        if bool(getattr(self, "_playback_preview_mode", False)):
+            preview_tracks = list(getattr(self, "_playback_resume_tracks", []) or [])
+            if preview_tracks:
+                self._start_audio_mixer_command(
+                    "start",
+                    tracks=preview_tracks,
+                    start_sec=max(0.0, float(getattr(self, "current_playback_time", 0.0))),
+                )
+                return
+            self._playback_preview_mode = False
 
         if getattr(self, "current_worker", None) is not None:
             self.statusBar().showMessage(
