@@ -5480,17 +5480,21 @@ class MainWindow(
             )
             return
 
+        self._set_playback_preparation_ui(True)
         tracks = list(getattr(self, "tracks", []) or [])
         try:
             timeline = cast(Any, getattr(self, "timeline_widget", None))
             current_idx = int(getattr(self, "current_track_idx", 0))
             current_track = tracks[current_idx] if 0 <= current_idx < len(tracks) else None
             if current_track is not None and getattr(current_track, "track_type", "") == "vocal":
-                current_track.notes = deepcopy(
+                current_track.notes = list(
                     getattr(timeline, "notes_list", []) if timeline is not None else []
                 )
 
-            parameters = deepcopy(self._build_render_parameters())
+            parameters = {
+                name: list(values)
+                for name, values in self._build_render_parameters().items()
+            }
             voice_id = getattr(self, "current_voice_id", None)
             tempo = float(getattr(timeline, "tempo", 120.0)) if timeline is not None else 120.0
             jobs = []
@@ -5500,9 +5504,7 @@ class MainWindow(
                 # Reuse the current track's already-isolated snapshot to avoid
                 # copying a long UST twice on the GUI thread.
                 source_notes = getattr(track, "notes", []) or []
-                notes_snapshot = (
-                    source_notes if track is current_track else deepcopy(source_notes)
-                )
+                notes_snapshot = list(source_notes)
                 jobs.append({
                     "index": index,
                     "track": track,
@@ -5517,6 +5519,7 @@ class MainWindow(
             if not any(
                 (job["notes"] for job in jobs)
             ) and not any(str(getattr(track, "audio_path", "") or "") for track in tracks):
+                self._set_playback_preparation_ui(False)
                 self.statusBar().showMessage("再生する音声がありません。", 3000)
                 return
 
@@ -5524,8 +5527,6 @@ class MainWindow(
             self._pending_playback_start_time = max(
                 0.0, float(getattr(self, "current_playback_time", 0.0))
             )
-            self._set_playback_preparation_ui(True)
-
             worker = _VocalPlaybackPreparationThread(
                 getattr(self, "vo_se_engine", None), jobs, self
             )
@@ -5539,6 +5540,7 @@ class MainWindow(
         except Exception as exc:
             self._pending_playback_tracks = None
             self._set_playback_preparation_ui(False)
+            status_lbl = getattr(self, "status_label", None)
             if status_lbl is not None:
                 status_lbl.setText(f"再生エラー: {exc}")
             self._refresh_transport_button_states()
