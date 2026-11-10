@@ -4726,24 +4726,36 @@ class MainWindow(
         pass
 
     def play_audio(self, path: str) -> None:
-        """Play a rendered WAV through the unified desktop AudioMixer."""
-        if not path or not os.path.exists(path):
-            print(f"エラー: ファイルが見つかりません: {path}")
+        """Play a rendered WAV through the non-blocking unified desktop transport."""
+        if not path or not os.path.isfile(path):
+            self.statusBar().showMessage(f"再生ファイルが見つかりません: {path}", 4000)
             return
+
+        class _RenderedAudioTrack:
+            def __init__(self, audio_path: str) -> None:
+                self.audio_path = audio_path
+                self.playback_path = ""
+                self.volume = 1.0
+                self.pan = 0.0
+                self.is_muted = False
+                self.is_solo = False
+                self.track_type = "wave"
+
         mixer = getattr(self, "audio_mixer", None)
-        play_file = getattr(mixer, "play_file", None)
-        if not callable(play_file):
-            print("警告: AudioMixer が初期化されていません")
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
-        try:
-            play_file(os.path.abspath(path))
-            self.is_playing = True
-            self.current_playback_time = 0.0
-            self.playback_timer.start()
-            print(f"再生開始: {path}")
-        except Exception as exc:
-            self.is_playing = False
-            print(f"再生エラー: {exc}")
+
+        track = _RenderedAudioTrack(os.path.abspath(path))
+        if not self._start_audio_mixer_command(
+            "start", tracks=[track], start_sec=0.0
+        ):
+            self.statusBar().showMessage(
+                "別の音声デバイス処理が実行中のため、プレビュー再生を開始できません。",
+                4000,
+            )
+
+
     def _check_for_updates(self):
         try:
             import importlib
