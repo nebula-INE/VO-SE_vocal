@@ -6331,8 +6331,6 @@ class MainWindow(
 
         # Stop accepting new transport work and ask any active render to cancel.
         playback_timer = getattr(self, "playback_timer", None)
-        if playback_timer is not None:
-            playback_timer.stop()
 
         worker = getattr(self, "current_worker", None)
         if worker is not None:
@@ -6395,12 +6393,14 @@ class MainWindow(
                 return
 
         # Stop the legacy playback thread, if an older entry point started it.
+        was_playing_before_shutdown = bool(getattr(self, "is_playing", False))
         self.is_playing = False
         legacy_playback_thread = getattr(self, "playback_thread", None)
         if legacy_playback_thread is not None and legacy_playback_thread.is_alive():
             if legacy_playback_thread is not threading.current_thread():
                 legacy_playback_thread.join(timeout=2.0)
             if legacy_playback_thread.is_alive():
+                self.is_playing = was_playing_before_shutdown
                 QMessageBox.warning(
                     self,
                     "再生終了待ち",
@@ -6416,6 +6416,9 @@ class MainWindow(
             try:
                 stop_mixer()
             except Exception as exc:
+                self.is_playing = bool(getattr(mixer, "is_playing", False))
+                if self.is_playing and playback_timer is not None:
+                    playback_timer.start()
                 QMessageBox.warning(
                     self,
                     "音声再生の終了待ち",
@@ -6424,6 +6427,9 @@ class MainWindow(
                 )
                 event.ignore()
                 return
+
+        if playback_timer is not None:
+            playback_timer.stop()
 
         config = {
             "default_voice": getattr(self, "current_voice", None),
