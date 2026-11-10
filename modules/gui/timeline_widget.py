@@ -184,6 +184,7 @@ class TimelineWidget(QWidget):
         self._wave_cache_path: str = ""
         self._waveform_cache: Dict[str, tuple[tuple[int, int], List[float]]] = {}
         self._waveform_pending: set[str] = set()
+        self._waveform_errors: Dict[str, tuple[tuple[int, int], str]] = {}
         self._waveform_workers: Dict[str, _WaveformWorker] = {}
         self._waveform_pool = QThreadPool(self)
         self._waveform_pool.setMaxThreadCount(2)
@@ -729,6 +730,10 @@ class TimelineWidget(QWidget):
         except OSError:
             return []
 
+        previous_error = self._waveform_errors.get(absolute_path)
+        if previous_error is not None and previous_error[0] == signature:
+            return []
+
         cached = self._waveform_cache.get(absolute_path)
         if cached is not None and cached[0] == signature:
             peaks = list(cached[1])
@@ -758,6 +763,7 @@ class TimelineWidget(QWidget):
             signature = self._waveform_file_signature(absolute_path)
         except OSError:
             return
+        self._waveform_errors.pop(absolute_path, None)
         self._waveform_cache[absolute_path] = (signature, peak_values)
 
         main_window = self.window()
@@ -777,6 +783,11 @@ class TimelineWidget(QWidget):
         absolute_path = os.path.abspath(file_path)
         self._waveform_pending.discard(absolute_path)
         self._waveform_workers.pop(absolute_path, None)
+        try:
+            signature = self._waveform_file_signature(absolute_path)
+            self._waveform_errors[absolute_path] = (signature, error_message)
+        except OSError:
+            pass
         active_path = self._active_waveform_path()
         if active_path and os.path.abspath(active_path) == absolute_path:
             main_window = self.window()
