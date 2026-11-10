@@ -437,6 +437,8 @@ class AudioMixer:
             except AttributeError:
                 # Keep a generic status count for backend-specific status types.
                 status_underflow = True
+            if status_underflow:
+                self._output_underflow_count += 1
 
         outdata.fill(0)
         written = 0
@@ -451,8 +453,6 @@ class AudioMixer:
                             raise sd.CallbackStop()
                         return
                     if not status_underflow:
-                        self._output_underflow_count += 1
-                    elif self._output_underflow_count == 0:
                         self._output_underflow_count += 1
                     with self._lock:
                         self._position += frames - written
