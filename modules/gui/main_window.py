@@ -2339,10 +2339,77 @@ class MainWindow(
         record_handler = cast(Callable[[], Any], self.on_record_toggled)
         return record_handler()
 
+    def _report_audio_mixer_diagnostics(self, mixer: Any) -> None:
+        """Poll audio-thread diagnostics on the GUI timer, never from PortAudio."""
+        get_diagnostics = getattr(mixer, "get_diagnostics", None)
+        if not callable(get_diagnostics):
+            return
+        try:
+            diagnostics = get_diagnostics()
+        except Exception as exc:
+            print(f"[AudioMixer] Diagnostic read failed: {exc}")
+            return
+        if not isinstance(diagnostics, dict):
+            return
+
+        previous = getattr(self, "_reported_audio_diagnostics", {})
+        if not isinstance(previous, dict):
+            previous = {}
+
+        def counter_delta(name: str) -> int:
+            try:
+                current = max(0, int(diagnostics.get(name, 0) or 0))
+                prior = max(0, int(previous.get(name, 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                return 0
+            previous[name] = current
+            return max(0, current - prior)
+
+        messages = []
+        underflows = counter_delta("output_underflow_count")
+        overflows = counter_delta("output_overflow_count")
+        queue_underruns = counter_delta("queue_underrun_count")
+        if underflows:
+            messages.append(f"デバイス出力アンダーラン {underflows} 回")
+        if overflows:
+            messages.append(f"デバイス出力オーバーフロー {overflows} 回")
+        if queue_underruns:
+            messages.append(f"音声供給バッファ不足 {queue_underruns} 回")
+
+        errors = diagnostics.get("last_playback_errors", [])
+        if not isinstance(errors, list):
+            errors = []
+        previous_errors = previous.get("last_playback_errors", [])
+        if (
+            not isinstance(previous_errors, list)
+            or errors[: len(previous_errors)] != previous_errors
+        ):
+            previous_errors = []
+        new_errors = errors[len(previous_errors):]
+        previous["last_playback_errors"] = list(errors)
+        if new_errors:
+            messages.append(f"音声ファイル読み込みエラー {len(new_errors)} 件")
+            for error in new_errors:
+                print(f"[AudioMixer] Playback source error: {error}")
+
+        device_name = str(diagnostics.get("output_device_name", "") or "")
+        if device_name and device_name != previous.get("output_device_name", ""):
+            previous["output_device_name"] = device_name
+            self.statusBar().showMessage(f"音声出力デバイス: {device_name}", 4000)
+
+        self._reported_audio_diagnostics = previous
+        if messages:
+            self.statusBar().showMessage(
+                "音声出力の診断: " + " / ".join(messages),
+                7000,
+            )
+
     def update_playback_ui(self):
         """再生位置・時間表示・タイムラインのプレイヘッドを同期する。"""
         if getattr(self, 'is_playing', False):
             mixer = getattr(self, "audio_mixer", None)
+            if mixer is not None:
+                self._report_audio_mixer_diagnostics(mixer)
 
             # AudioMixer は全バッファ終了時に CallbackStop で自然停止する。
             # ループ中はここで再スタートし、通常再生時だけ停止処理へ進む。
@@ -5164,6 +5231,25 @@ class MainWindow(
             return
         try:
             mixer.set_tracks(tracks)
+            # set_tracks() starts a fresh source set and clears previous per-file
+            # errors. Keep cumulative device counters as the baseline for this run.
+            get_diagnostics = getattr(mixer, "get_diagnostics", None)
+            if callable(get_diagnostics):
+                try:
+                    diagnostics = get_diagnostics()
+                    if isinstance(diagnostics, dict):
+                        previous = getattr(self, "_reported_audio_diagnostics", {})
+                        if not isinstance(previous, dict):
+                            previous = {}
+                        self._reported_audio_diagnostics = {
+                            "output_underflow_count": diagnostics.get("output_underflow_count", 0),
+                            "output_overflow_count": diagnostics.get("output_overflow_count", 0),
+                            "queue_underrun_count": diagnostics.get("queue_underrun_count", 0),
+                            "output_device_name": previous.get("output_device_name", ""),
+                            "last_playback_errors": [],
+                        }
+                except Exception as diagnostic_exc:
+                    print(f"[AudioMixer] Could not reset diagnostic baseline: {diagnostic_exc}")
             load_errors = list(getattr(mixer, "last_load_errors", []) or [])
             if load_errors:
                 # Partial playback is allowed, but skipped tracks must be visible.
