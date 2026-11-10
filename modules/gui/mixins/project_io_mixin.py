@@ -19,7 +19,7 @@ import multiprocessing
 import os
 import threading
 from typing import Any, Dict, List, Optional, cast
-from copy import deepcopy
+from copy import copy, deepcopy
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -220,14 +220,33 @@ class ProjectIOMixin:
         timeline = getattr(self, "timeline_widget", None)
         graph = getattr(self, "graph_editor_widget", None)
         tempo = float(getattr(timeline, "tempo", 120.0))
+        track_snapshots = []
+        for track in list(getattr(self, "tracks", []) or []):
+            try:
+                track_snapshot = copy(track)
+                # Importers replace the track's note list; a separate list is
+                # enough to retain the previous state without recursively
+                # copying every NoteEvent and its nested UST metadata.
+                notes = getattr(track, "notes", None)
+                if isinstance(notes, list):
+                    track_snapshot.notes = list(notes)
+                track_snapshots.append(track_snapshot)
+            except Exception:
+                logger.exception("トラックのUndoスナップショット作成に失敗。deepcopyへフォールバック")
+                track_snapshots.append(deepcopy(track))
+
+        raw_graph_parameters = getattr(graph, "all_parameters", {}) or {}
+        graph_parameter_snapshot = {
+            name: list(values) if isinstance(values, list) else copy(values)
+            for name, values in raw_graph_parameters.items()
+        } if isinstance(raw_graph_parameters, dict) else deepcopy(raw_graph_parameters)
+
         return {
-            "tracks": deepcopy(list(getattr(self, "tracks", []) or [])),
+            "tracks": track_snapshots,
             "current_track_idx": int(getattr(self, "current_track_idx", 0)),
             "tempo": tempo,
             "graph_tempo": float(getattr(graph, "tempo", tempo)),
-            "graph_parameters": deepcopy(
-                getattr(graph, "all_parameters", {}) or {}
-            ),
+            "graph_parameters": graph_parameter_snapshot,
             "current_playback_time": float(getattr(self, "current_playback_time", 0.0)),
             # Desktop currently uses one active singer for all vocal tracks.
             # Persist that identity so reopening a project restores the same voice.
