@@ -5430,7 +5430,8 @@ class MainWindow(
             return
 
         # 2. スレッド競合の防止（爆弾3・4対策）
-        if hasattr(self, 'analysis_thread') and self.analysis_thread.isRunning():
+        analysis_thread = getattr(self, "analysis_thread", None)
+        if analysis_thread is not None and analysis_thread.isRunning():
             QMessageBox.warning(self, "System Busy", "現在、別の解析プロセスが実行中です。")
             return
 
