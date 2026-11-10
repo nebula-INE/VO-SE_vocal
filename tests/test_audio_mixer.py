@@ -33,10 +33,9 @@ def _memory_source(mixer, track, data, sample_rate=None):
 
 def _collect_blocks(mixer):
     mixer._producer_loop()
-    blocks = []
-    while not mixer._queue.empty():
-        blocks.append(mixer._queue.get_nowait())
-    return blocks
+    # The synchronous producer has finished; inspect queued blocks without
+    # consuming them so callback tests can exercise the real delivery path.
+    return list(mixer._queue.queue)
 
 
 def _render_callback(mixer, frames, monkeypatch):
@@ -134,7 +133,11 @@ def test_callback_stops_only_after_last_valid_frame(monkeypatch):
     output, stopped = _render_callback(mixer, 4, monkeypatch)
 
     assert stopped
-    assert np.allclose(output[:3], [[0.25, 0.5], [0.5, 0.75], [0.75, 1.0]])
+    expected = np.asarray(
+        [[0.25, 0.5], [0.5, 0.75], [0.75, 1.0]],
+        dtype=np.float32,
+    ) * np.sqrt(0.5)
+    assert np.allclose(output[:3], expected)
     assert np.allclose(output[3], 0.0)
     assert mixer.position_sec == 0.75
 
@@ -357,5 +360,8 @@ def test_play_uses_background_file_reader_and_queued_callback(monkeypatch):
 
     assert read_threads
     assert set(read_threads) == {"VO-SE-AudioProducer"}
-    assert np.allclose(mixer._stream.first_output, source_data[:2])
+    assert np.allclose(
+        mixer._stream.first_output,
+        source_data[:2] * np.sqrt(0.5),
+    )
     mixer.stop()
