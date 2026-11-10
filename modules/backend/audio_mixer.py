@@ -243,8 +243,12 @@ class AudioMixer:
         if stream is not None:
             try:
                 stream.stop()
-            finally:
+            except Exception as exc:
+                print(f"[AudioMixer] Stream stop warning: {exc}")
+            try:
                 stream.close()
+            except Exception as exc:
+                print(f"[AudioMixer] Stream close warning: {exc}")
 
         producer = self._producer_thread
         if producer is not None and producer.is_alive():
@@ -398,20 +402,22 @@ class AudioMixer:
         )
         valid = positions <= (len(stereo) - 1)
         result = np.zeros((output_count, 2), dtype=np.float32)
-        if not np.any(valid):
-            return result[:0]
         if source_rate == self.sample_rate:
             indices = positions[valid].astype(np.int64)
             result[valid] = stereo[indices]
+            if np.any(~valid):
+                result[~valid] = stereo[-1]
         else:
             source_indices = np.arange(len(stereo), dtype=np.float64)
             for channel in range(2):
-                result[valid, channel] = np.interp(
-                    positions[valid],
+                # Match the previous whole-file np.interp behavior at the
+                # final partial resampling interval by holding the last sample.
+                result[:, channel] = np.interp(
+                    positions,
                     source_indices,
                     stereo[:, channel],
                     left=0.0,
-                    right=0.0,
+                    right=float(stereo[-1, channel]),
                 ).astype(np.float32)
         return result
 
@@ -423,14 +429,14 @@ class AudioMixer:
         status: Any,
     ) -> None:
         """Real-time callback: copy queued blocks only; never read files or mix."""
+        status_underflow = False
         if status:
             self._callback_status_count += 1
             try:
-                if bool(status.output_underflow):
-                    self._output_underflow_count += 1
+                status_underflow = bool(status.output_underflow)
             except AttributeError:
                 # Keep a generic status count for backend-specific status types.
-                pass
+                status_underflow = True
 
         outdata.fill(0)
         written = 0
@@ -444,7 +450,10 @@ class AudioMixer:
                         if sd is not None:
                             raise sd.CallbackStop()
                         return
-                    self._output_underflow_count += 1
+                    if not status_underflow:
+                        self._output_underflow_count += 1
+                    elif self._output_underflow_count == 0:
+                        self._output_underflow_count += 1
                     with self._lock:
                         self._position += frames - written
                     return
