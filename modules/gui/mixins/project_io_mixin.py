@@ -135,6 +135,11 @@ class ProjectIOMixin:
             self.current_voice_id = voice_id
             if voice_name:
                 self.current_voice = voice_name
+            combo = getattr(self, "character_selector", None)
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(-1)
+                combo.blockSignals(False)
             return
 
         gallery = getattr(self, "voice_gallery", None)
@@ -165,6 +170,12 @@ class ProjectIOMixin:
         else:
             self.current_voice_id = voice_id
             self.current_voice = display_name
+
+        combo = getattr(self, "character_selector", None)
+        if combo is not None:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(voice_id))
+            combo.blockSignals(False)
 
     def _record_project_state_edit(
         self: Any,
