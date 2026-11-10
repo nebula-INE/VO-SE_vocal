@@ -6214,26 +6214,49 @@ class MainWindow(
 
     @Slot()
     def on_midi_port_changed(self):
-        if self.midi_port_selector is None:
-           return
+        selector = self.midi_port_selector
+        if selector is None:
+            return
 
-        selected_port = self.midi_port_selector.currentData()
+        selected_port = selector.currentData()
 
-        if self.midi_manager is not None:
-           self.midi_manager.stop()
-           self.midi_manager = None
+        manager = self.midi_manager
+        if manager is not None:
+            previous_port_name = getattr(manager, "port_name", None)
+            try:
+                manager.stop()
+            except Exception as exc:
+                # Keep the live manager so the user can retry the disconnect.
+                if self.status_label is not None:
+                    self.status_label.setText(f"MIDIの切断に失敗: {exc}")
+                if previous_port_name:
+                    previous_index = selector.findData(previous_port_name)
+                    if previous_index >= 0:
+                        signals_were_blocked = selector.blockSignals(True)
+                        try:
+                            selector.setCurrentIndex(previous_index)
+                        finally:
+                            selector.blockSignals(signals_were_blocked)
+                return
+            self.midi_manager = None
 
         if selected_port and selected_port != "ポートなし":
             try:
-               from .midi_io import MidiInputManager  # type: ignore
-               self.midi_manager = MidiInputManager(selected_port)
-               self.midi_manager.start()
+                manager = MidiInputManager(selected_port)
+                self.midi_manager = manager
+                manager.start()
+            except Exception as exc:
+                if self.status_label is not None:
+                    self.status_label.setText(f"MIDI入力を開始できません: {exc}")
+                return
 
-               if self.status_label is not None:
-                   self.status_label.setText(f"MIDI: {selected_port}")
-
-            except ImportError:
-                pass
+            if self.status_label is not None:
+                if getattr(manager, "port", None) is None:
+                    self.status_label.setText(
+                        f"MIDI入力を開始できませんでした: {selected_port}"
+                    )
+                else:
+                    self.status_label.setText(f"MIDI: {selected_port}")
 
     @Slot(int, int, str)
     def update_gui_with_midi(self, note_number: int, velocity: int, event_type: str):
@@ -6523,6 +6546,7 @@ class MainWindow(
                 print(f"Config save warning: {exc}")
 
         # The MIDI setup patch stores the live input manager under this name.
+        # Do not destroy the window while a MIDI callback may still be active.
         for manager_name in ("_midi_input_manager", "midi_manager"):
             midi_manager = getattr(self, manager_name, None)
             stop_midi = getattr(midi_manager, "stop", None)
@@ -6530,7 +6554,15 @@ class MainWindow(
                 try:
                     stop_midi()
                 except Exception as exc:
-                    print(f"MIDI shutdown warning: {exc}")
+                    QMessageBox.warning(
+                        self,
+                        "MIDI入力終了待ち",
+                        "MIDI入力デバイスを安全に切断できませんでした。"
+                        "デバイスの接続状態を確認してから、もう一度終了してください。"
+                        f"\n詳細: {exc}",
+                    )
+                    event.ignore()
+                    return
 
         engine = getattr(self, "vo_se_engine", None)
         stop_engine = getattr(engine, "stop", None)
