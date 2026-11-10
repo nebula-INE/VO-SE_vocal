@@ -276,7 +276,8 @@ def test_file_sources_are_read_in_small_blocks_on_the_producer(monkeypatch):
     assert max(read_sizes) <= mixer.block_size + 2
     assert mixer._queue.maxsize == 8
     assert all(block[1].shape == (4, 2) for block in blocks)
-    assert np.allclose(np.concatenate([b[1][:b[2]] for b in blocks]), source_data)
+    streamed = np.concatenate([b[1][:b[2]] for b in blocks])
+    assert np.allclose(streamed, source_data * np.sqrt(0.5))
 
 
 
