@@ -239,8 +239,7 @@ def test_stream_queue_has_a_fixed_memory_bound():
 def test_play_probes_default_output_and_supports_mono_devices(monkeypatch):
     import modules.backend.audio_mixer as audio_mixer_module
 
-    class CallbackStop(Exception):
-        pass
+    CallbackStopForTest = type("CallbackStopForTest", (Exception,), {})
 
     created = {}
 
@@ -261,7 +260,7 @@ def test_play_probes_default_output_and_supports_mono_devices(monkeypatch):
             self.active = False
 
     class FakeSoundDevice:
-        CallbackStop = CallbackStop
+        CallbackStop = CallbackStopForTest
 
         @staticmethod
         def query_devices(kind=None):
