@@ -39,7 +39,7 @@ def test_project_mixdown_matches_live_mixer_gain_pan_mute_and_solo(tmp_path):
     tracks = [
         _track(left_input, volume=0.5, pan=-1.0),
         _track(muted_input, is_muted=True),
-        # Solo on a path-less track still follows AudioMixer's existing solo rule.
+        # A path-less track remains in the track-state list but adds no source audio.
         _track("", audio_path="", is_solo=False),
     ]
     output = tmp_path / "mix.wav"
@@ -130,3 +130,44 @@ def test_project_mixdown_cancel_keeps_previous_output(tmp_path):
         )
 
     assert output.read_bytes() == b"old-mix"
+
+
+def test_project_mixdown_clips_the_combined_signal_like_live_playback(tmp_path):
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+    _write(first, np.full((8, 2), 0.8, dtype=np.float32))
+    _write(second, np.full((8, 2), 0.8, dtype=np.float32))
+    output = tmp_path / "mix.wav"
+
+    mixdown_tracks_to_wav(
+        [_track(first), _track(second)],
+        output,
+        sample_rate=8000,
+        block_size=3,
+    )
+    data, _ = sf.read(output, dtype="float32", always_2d=True)
+
+    assert data.shape == (8, 2)
+    assert np.all(data <= 1.0)
+    assert np.all(data >= -1.0)
+    assert np.allclose(data, 1.0, atol=2e-5)
+
+
+def test_project_mixdown_uses_the_longest_track_as_project_duration(tmp_path):
+    short_track = tmp_path / "short.wav"
+    long_track = tmp_path / "long.wav"
+    _write(short_track, np.full((4, 2), 0.25, dtype=np.float32))
+    _write(long_track, np.full((9, 2), 0.25, dtype=np.float32))
+    output = tmp_path / "mix.wav"
+
+    mixdown_tracks_to_wav(
+        [_track(short_track), _track(long_track)],
+        output,
+        sample_rate=8000,
+        block_size=4,
+    )
+    data, _ = sf.read(output, dtype="float32", always_2d=True)
+
+    assert data.shape == (9, 2)
+    assert np.allclose(data[:4], 0.5 * np.sqrt(0.5), atol=2e-5)
+    assert np.allclose(data[4:], 0.25 * np.sqrt(0.5), atol=2e-5)
