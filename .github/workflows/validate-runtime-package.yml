@@ -106,12 +106,65 @@ jobs:
             src/vose_core.cpp src/vose_streaming_final.cpp build/linux-world/*.o
           test -s bin/libvose_core.so
 
+      - name: Audit optional Qt module references
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          # These optional modules are candidates for exclusion from the Linux
+          # validation artifact only. Qt Multimedia is deliberately retained.
+          pattern = re.compile(
+              r"PySide6\\s*\\.\\s*(?:QtWebEngine(?:Core|Widgets|Quick)?|QtDesigner)"
+              r"|\\bQ(?:WebEngine|Designer)",
+              re.IGNORECASE,
+          )
+          roots = (Path("main.py"), Path("modules"), Path("assets"))
+          allowed_suffixes = {".py", ".qml", ".ui", ".qrc", ".json", ".toml"}
+          ignored_parts = {".git", ".venv", "venv", "__pycache__", "build", "dist"}
+
+          scanned = 0
+          hits = []
+          for root in roots:
+              if not root.exists():
+                  continue
+              paths = [root] if root.is_file() else root.rglob("*")
+              for path in paths:
+                  if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
+                      continue
+                  if ignored_parts.intersection(path.parts):
+                      continue
+                  try:
+                      lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                  except OSError:
+                      continue
+                  scanned += 1
+                  for line_number, line in enumerate(lines, 1):
+                      if pattern.search(line):
+                          hits.append(f"{path}:{line_number}:{line.strip()}")
+
+          print(f"Optional Qt source audit scanned {scanned} files")
+          if hits:
+              print("\\n".join(hits))
+              raise SystemExit(
+                  "QtWebEngine/QtDesigner references found; review exclusions before packaging"
+              )
+          print("No QtWebEngine or QtDesigner references found.")
+          print("Qt Multimedia remains enabled and is not an exclusion candidate.")
+          PY
+
       - name: Build PyInstaller desktop bundle
         run: |
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
             --paths . --paths modules \
             --collect-all=PySide6 \
+            --exclude-module=PySide6.QtWebEngineCore \
+            --exclude-module=PySide6.QtWebEngineWidgets \
+            --exclude-module=PySide6.QtWebEngineQuick \
+            --exclude-module=PySide6.QtWebEngine \
+            --exclude-module=PySide6.QtDesigner \
             --exclude-module=PySide6.QtQml \
             --exclude-module=PySide6.QtQuick \
             --exclude-module=PySide6.Qt3DAnimation \
@@ -148,7 +201,10 @@ jobs:
                   rows.append((name.lower(), int(uncompressed_size), int(compressed_size)))
               except (TypeError, ValueError):
                   continue
-          forbidden = ("torch/", "torch.", "torchaudio", "triton", "nvidia/", "transformers", "peft")
+          forbidden = (
+              "torch/", "torch.", "torchaudio", "triton", "nvidia/", "transformers", "peft",
+              "qtwebengine", "qwebengine", "qtdesigner", "qdesigner",
+          )
           hits = [(name, unpacked, packed) for name, unpacked, packed in rows
                   if any(token in name for token in forbidden)]
           print("Archive entries inspected:", len(rows))
