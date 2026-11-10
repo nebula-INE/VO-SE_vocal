@@ -172,3 +172,27 @@ def test_external_midi_worker_converts_notes_and_preserves_track_identity(
     assert payload["notes_by_track"][0][0].lyric == "あ"
     assert payload["notes_by_track"][2][0].note_number == 67
     assert payload["names_by_track"] == {0: "Lead", 2: "Harmony"}
+
+
+def test_external_vose_project_is_loaded_as_native_json_project(tmp_path):
+    path = tmp_path / "saved-project.vose"
+    expected = {
+        "tempo": 124.0,
+        "tracks": [{
+            "name": "Lead",
+            "type": "vocal",
+            "notes": [{
+                "note_number": 60,
+                "start_time": 0.0,
+                "duration": 0.5,
+                "lyric": "あ",
+            }],
+        }],
+    }
+    path.write_text(json.dumps(expected, ensure_ascii=False), encoding="utf-8")
+
+    payload = _parse_external_project_file(str(path))
+
+    assert payload["format"] == "json"
+    assert payload["data"] == expected
+    assert payload["prepared_note_tracks"][0][0].lyric == "あ"
