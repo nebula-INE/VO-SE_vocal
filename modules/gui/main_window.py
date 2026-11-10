@@ -1391,21 +1391,25 @@ class VoiceCardWidget(QFrame):
 # ==============================================================================
 
 class _VoiceImportWorker(QThread):
-    """音源のコピー（数百MBになることがある）を UI を止めずに行うスレッド。"""
-    succeeded = Signal(str)
+    """Install a voicebank without blocking the UI; return the refreshed voice index."""
+
+    succeeded = Signal(str, object)
     failed = Signal(str)
 
-    def __init__(self, func, parent=None):
+    def __init__(self, func, manager=None, parent=None):
         super().__init__(parent)
         self._func = func
+        self._manager = manager
 
     def run(self):
         try:
             name = self._func()
-        except Exception as e:  # noqa: BLE001 - 利用者へメッセージを返すため広く捕捉する
-            self.failed.emit(str(e) or e.__class__.__name__)
+            # install_voice_from_zip/folder already refreshes VoiceManager.voices.
+            voices = dict(getattr(self._manager, "voices", {}) or {})
+        except Exception as exc:  # noqa: BLE001 - surface the failure to the user
+            self.failed.emit(str(exc) or exc.__class__.__name__)
             return
-        self.succeeded.emit(str(name))
+        self.succeeded.emit(str(name), voices)
 
 
 class VoiceCardGallery(QWidget):
@@ -1573,17 +1577,19 @@ class VoiceCardGallery(QWidget):
         dlg.setMinimumDuration(0)
         dlg.show()
 
-        worker = _VoiceImportWorker(func, self)
-        worker.succeeded.connect(lambda name, d=dlg: self._on_import_done(name, d))
+        worker = _VoiceImportWorker(func, self.manager, self)
+        worker.succeeded.connect(
+            lambda name, voices, d=dlg: self._on_import_done(name, d, voices)
+        )
         worker.failed.connect(lambda msg, d=dlg: self._on_import_failed(msg, d))
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect(lambda: setattr(self, "_import_worker", None))
         self._import_worker = worker
         worker.start()
 
-    def _on_import_done(self, name: str, dlg):
+    def _on_import_done(self, name: str, dlg, voices=None):
         dlg.close()
-        self.setup_gallery()
+        self.setup_gallery(voices=voices)
         self._select_category("utau")
         # 取り込んだ音源をそのまま選択状態にして、見える位置までスクロールする
         voice_path = self.manager.voices.get(name)
@@ -1601,8 +1607,8 @@ class VoiceCardGallery(QWidget):
     # ------------------------------------------------------------------
     # 一覧の構築
     # ------------------------------------------------------------------
-    def setup_gallery(self):
-        """全音源を再スキャンしてカードを作り直す（音源追加/削除があった時に呼ぶ）"""
+    def setup_gallery(self, voices=None):
+        """Build cards from a prepared voice index, scanning only when necessary."""
         selected_id = None
         for internal_id, card in self.cards.items():
             if getattr(card, "_selected", False):
@@ -1619,7 +1625,7 @@ class VoiceCardGallery(QWidget):
         self.cards.clear()
         self._entries.clear()
 
-        all_voices = self.manager.scan_voices()
+        all_voices = voices if isinstance(voices, dict) else self.manager.scan_voices()
 
         for display_name, internal_id in all_voices.items():
             if internal_id.startswith("__INTERNAL__"):
@@ -6655,6 +6661,7 @@ class MainWindow(
         analysis_worker = getattr(self, "analysis_thread", None)
         gallery = getattr(self, "voice_gallery", None)
         import_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
+        voice_bank_worker = getattr(self, "_voice_bank_import_worker", None)
         for worker, title, message in (
             (
                 analysis_worker,
@@ -6665,6 +6672,11 @@ class MainWindow(
                 import_worker,
                 "音源インポート終了待ち",
                 "音源のコピー・展開がまだ実行中です。処理の終了後に、もう一度終了してください。",
+            ),
+            (
+                voice_bank_worker,
+                "音源ZIPインストール終了待ち",
+                "音源ZIPの展開・モデル読み込みがまだ実行中です。処理の終了後に、もう一度終了してください。",
             ),
         ):
             if worker is None:
@@ -6682,6 +6694,7 @@ class MainWindow(
         self.analysis_thread = None
         if gallery is not None:
             gallery._import_worker = None
+        self._voice_bank_import_worker = None
 
         # Stop the legacy playback thread, if an older entry point started it.
         self.is_playing = False
