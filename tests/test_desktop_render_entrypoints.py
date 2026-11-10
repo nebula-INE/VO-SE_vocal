@@ -209,3 +209,22 @@ def test_close_waits_for_project_mixdown_worker():
     assert 'getattr(self, "_project_mixdown_worker", None)' in close_handler
     assert "request_cancel()" in close_handler
     assert "mixdown_worker.wait(15000)" in close_handler
+
+
+def test_project_mixdown_uses_the_existing_toolbar_cancel_action():
+    main_source = (ROOT / "modules" / "gui" / "main_window.py").read_text(
+        encoding="utf-8"
+    )
+    project_io_source = (
+        ROOT / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+
+    cancel_handler = main_source.split("def cancel_current_render(self):", 1)[1].split(
+        "def play_rendered_audio", 1
+    )[0]
+    assert 'getattr(self, "_project_mixdown_worker", None)' in cancel_handler
+    assert 'getattr(mixdown_worker, "request_cancel", None)' in cancel_handler
+    assert 'cancel_button.setText("✖ ミックスダウンをキャンセル")' in project_io_source
+    assert 'cancel_button.setVisible(True)' in project_io_source
+    assert 'cancel_button.setVisible(False)' in project_io_source
+    assert 'self.statusBar().showMessage("プロジェクトのミックスダウンをキャンセルしました。", 5000)' in project_io_source
