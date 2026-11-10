@@ -46,6 +46,8 @@ class _ProjectWindow:
         self.timeline_widget = _Timeline()
         self.graph_editor_widget = SimpleNamespace(tempo=120.0, all_parameters={})
         self.current_playback_time = 0.0
+        self.current_voice_id = "voice-before"
+        self.current_voice = "Before"
         self._status_bar = _StatusBar()
 
     def statusBar(self):
@@ -148,3 +150,60 @@ def test_non_finite_note_timing_is_rejected_before_commit(tmp_path, monkeypatch)
     assert len(window.tracks) == 1
     assert window.tracks[0].name == "Current"
     assert window.timeline_widget.tempo == 120.0
+
+
+
+def test_project_load_restores_saved_voice_identifier(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    project_path = tmp_path / "saved-voice.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 120.0,
+            "current_voice_id": "utau:voice-a",
+            "current_voice": "Singer A",
+            "tracks": [{
+                "name": "Vocal 1",
+                "type": "vocal",
+                "notes": [],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    result = ProjectIOMixin.load_json_project(window, str(project_path))
+
+    assert result is True
+    assert window.current_voice_id == "utau:voice-a"
+    assert window.current_voice == "Singer A"
+
+
+def test_project_save_persists_selected_voice_identifier(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    window.current_voice_id = "utau:voice-a"
+    window.current_voice = "Singer A"
+    project_path = tmp_path / "saved-voice.vose"
+    monkeypatch.setattr(
+        project_io_module.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(project_path), "VO-SE Project (*.vose)"),
+    )
+
+    result = ProjectIOMixin.on_save_project_clicked(window)
+
+    assert result is True
+    saved = json.loads(project_path.read_text(encoding="utf-8"))
+    assert saved["current_voice_id"] == "utau:voice-a"
+    assert saved["current_voice"] == "Singer A"
+
+
+def test_project_undo_snapshot_restores_voice_identifier():
+    window = _ProjectWindow()
+    state = ProjectIOMixin._capture_project_edit_state(window)
+    window.current_voice_id = "utau:voice-b"
+    window.current_voice = "Singer B"
+
+    ProjectIOMixin._restore_project_edit_state(window, state)
+
+    assert window.current_voice_id == "voice-before"
+    assert window.current_voice == "Before"
