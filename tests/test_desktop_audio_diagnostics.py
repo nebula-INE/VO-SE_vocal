@@ -92,3 +92,16 @@ def test_pause_completion_restores_exact_mixer_position_to_transport():
     )[0]
     assert 'getattr(mixer, "position_sec", None)' in pause
     assert "self._set_transport_time(self.current_playback_time)" in pause
+
+
+def test_playback_snapshot_locks_editor_before_shallow_note_copy():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    handler = source.split("def on_play_pause_toggled(self):", 1)[1].split(
+        "def on_record_toggled", 1
+    )[0]
+    lock_position = handler.index("self._set_playback_preparation_ui(True)")
+    copy_position = handler.index("notes_snapshot = list(source_notes)")
+    assert lock_position < copy_position
+    assert "current_track.notes = list(" in handler
+    assert "deepcopy(source_notes)" not in handler
+    assert "deepcopy(" not in handler
