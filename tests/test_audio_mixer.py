@@ -366,3 +366,20 @@ def test_play_uses_background_file_reader_and_queued_callback(monkeypatch):
         source_data[:2] * np.sqrt(0.5),
     )
     mixer.stop()
+
+
+
+def test_streamed_resampling_matches_legacy_whole_file_mapping():
+    mixer = AudioMixer(sample_rate=7, block_size=8, prefetch_blocks=8)
+    track = _track()
+    source = (
+        np.arange(50, dtype=np.float32).reshape(25, 2) * 0.01
+    )
+    _memory_source(mixer, track, source, sample_rate=5)
+
+    blocks = _collect_blocks(mixer)
+    streamed = np.concatenate([data[:valid] for _, data, valid in blocks])
+    expected = mixer._resample(source, source_rate=5) * np.sqrt(0.5)
+
+    assert streamed.shape == expected.shape
+    assert np.allclose(streamed, expected, atol=1e-7)
