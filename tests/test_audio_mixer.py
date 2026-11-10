@@ -292,7 +292,7 @@ def test_play_probes_default_output_and_supports_mono_devices(monkeypatch):
     out = np.zeros((2, 1), dtype=np.float32)
     try:
         stream.callback(out, 2, None, None)
-    except CallbackStop:
+    except CallbackStopForTest:
         pass
     assert np.allclose(out[:, 0], 0.0)
     mixer.stop()
