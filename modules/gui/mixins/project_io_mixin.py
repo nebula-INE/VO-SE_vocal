@@ -401,6 +401,8 @@ class _ProjectMixdownWorker(QThread):
                         cancel_check=self._cancel_event.is_set,
                         tempo_bpm=self.tempo,
                     )
+                    if not isinstance(result, (str, bytes, os.PathLike)):
+                        raise RuntimeError(f"「{track_name}」のWAV生成パスが不正です。")
                     if not result:
                         raise RuntimeError(f"「{track_name}」のWAV生成に失敗しました。")
                     rendered_path = os.path.abspath(os.fsdecode(os.fspath(result)))
