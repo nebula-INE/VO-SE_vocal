@@ -59,3 +59,36 @@ def test_pause_and_stop_commands_do_not_block_the_gui_thread():
     assert 'self._start_audio_mixer_command("stop")' in stop_handler
     assert "mixer.stop()" not in play_handler
     assert "stop_mixer()" not in stop_handler
+
+
+def test_loop_restart_uses_background_mixer_command_not_gui_call():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    update_handler = source.split("def update_playback_ui(self):", 1)[1].split(
+        "def _format_timecode", 1
+    )[0]
+    assert 'self._start_audio_mixer_command("start"' in update_handler
+    assert "mixer.play(0.0)" not in update_handler
+
+
+def test_background_mixer_start_stops_transport_timer_until_device_ready():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    command_start = source.split("def _start_audio_mixer_command(", 1)[1].split(
+        "def _complete_playback_stop_ui", 1
+    )[0]
+    start_branch = command_start.split('if operation == "start":', 1)[1].split(
+        "else:", 1
+    )[0]
+    assert "self.playback_timer.stop()" in start_branch
+    assert "self.is_playing = False" in start_branch
+
+
+def test_pause_completion_restores_exact_mixer_position_to_transport():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    completion = source.split("def _on_audio_mixer_command_completed", 1)[1].split(
+        "def _on_audio_mixer_command_failed", 1
+    )[0]
+    pause = completion.split('if operation == "pause":', 1)[1].split(
+        'if operation == "stop":', 1
+    )[0]
+    assert 'getattr(mixer, "position_sec", None)' in pause
+    assert "self._set_transport_time(self.current_playback_time)" in pause
