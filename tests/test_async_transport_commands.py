@@ -69,13 +69,13 @@ def test_audio_mixer_pause_and_stop_commands_call_the_matching_method():
         assert failed == []
 
 
-def test_audio_mixer_command_reports_device_errors_without_raising_in_worker():
-    mixer = _FakeMixer()
-
-    def fail_start(_start_sec):
+class _FailingMixer(_FakeMixer):
+    def play(self, start_sec):
         raise RuntimeError("device unavailable")
 
-    mixer.play = fail_start
+
+def test_audio_mixer_command_reports_device_errors_without_raising_in_worker():
+    mixer = _FailingMixer()
     worker = _AudioMixerCommandThread(
         "start", mixer, tracks=[SimpleNamespace(audio_path="test.wav")]
     )
