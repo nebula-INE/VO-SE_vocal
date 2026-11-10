@@ -156,7 +156,7 @@ def test_all_muted_tracks_keep_timeline_running_until_audio_ends(monkeypatch):
     assert mixer.position_sec == 1.0
 
 
-def test_callback_solo_excludes_non_solo_tracks():
+def test_callback_solo_excludes_non_solo_tracks(monkeypatch):
     mixer = AudioMixer(sample_rate=4, block_size=4)
     normal = _track(volume=1.0)
     solo = _track(volume=0.25, is_solo=True)
@@ -225,7 +225,7 @@ def test_callback_underflow_is_counted_and_does_not_block(monkeypatch):
 def test_file_sources_are_read_in_small_blocks_on_the_producer(monkeypatch):
     import modules.backend.audio_mixer as audio_mixer_module
 
-    source_data = np.arange(40, dtype=np.float32).reshape(20, 2)
+    source_data = (np.arange(40, dtype=np.float32) * 0.01).reshape(20, 2)
     read_sizes = []
 
     class FakeSoundFile:
