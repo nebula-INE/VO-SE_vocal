@@ -179,8 +179,7 @@ def test_callback_solo_excludes_non_solo_tracks():
     }
     _collect_blocks(mixer)
 
-    output = np.zeros((4, 2), dtype=np.float32)
-    mixer._audio_callback(output, 4, None, None)
+    output, _stopped = _render_callback(mixer, 4, monkeypatch)
     assert np.allclose(output, 0.25 * np.sqrt(0.5))
 
 
@@ -220,3 +219,58 @@ def test_callback_underflow_is_counted_and_does_not_block(monkeypatch):
     assert np.allclose(output, 0.0)
     assert mixer.output_underflow_count == 1
     assert mixer.position_sec == 0.5
+
+
+
+def test_file_sources_are_read_in_small_blocks_on_the_producer(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    source_data = np.arange(40, dtype=np.float32).reshape(20, 2)
+    read_sizes = []
+
+    class FakeSoundFile:
+        def __init__(self, _path, mode="r"):
+            assert mode == "r"
+            self.position = 0
+
+        def seek(self, frame):
+            self.position = frame
+
+        def read(self, frames, dtype, always_2d):
+            assert dtype == "float32"
+            assert always_2d
+            read_sizes.append(frames)
+            result = source_data[self.position:self.position + frames]
+            self.position += len(result)
+            return result.copy()
+
+        def close(self):
+            pass
+
+    class Info:
+        samplerate = 4
+        frames = len(source_data)
+
+    monkeypatch.setattr(
+        audio_mixer_module,
+        "sf",
+        SimpleNamespace(
+            info=lambda _path: Info(),
+            SoundFile=FakeSoundFile,
+        ),
+    )
+    mixer = AudioMixer(sample_rate=4, block_size=4, prefetch_blocks=8)
+    track = _track(audio_path="long-audio.wav")
+
+    mixer.set_tracks([track])
+    assert read_sizes == []
+    assert mixer._sources[id(track)]["array"] is None
+
+    blocks = _collect_blocks(mixer)
+
+    assert len(blocks) == 5
+    assert read_sizes
+    assert max(read_sizes) <= mixer.block_size + 2
+    assert mixer._queue.maxsize == 8
+    assert all(block[1].shape == (4, 2) for block in blocks)
+    assert np.allclose(np.concatenate([b[1][:b[2]] for b in blocks]), source_data)
