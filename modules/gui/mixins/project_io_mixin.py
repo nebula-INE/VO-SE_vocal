@@ -1626,6 +1626,18 @@ class ProjectIOMixin:
             "Breath": list(all_params.get("Breath", [])),
         }
 
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        mixer_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if (
+            playback_worker is not None and playback_worker.isRunning()
+        ) or (
+            mixer_worker is not None and mixer_worker.isRunning()
+        ):
+            self.statusBar().showMessage(
+                "再生準備・音声デバイス処理の完了後にWAVを書き出してください。", 5000
+            )
+            return
+
         stop_playback = getattr(self, "stop_and_clear_playback", None)
         if callable(stop_playback):
             stop_playback()
