@@ -1232,6 +1232,12 @@ class ProjectIOMixin:
                 for name in ("Pitch", "Gender", "Tension", "Breath")
             }
 
+            current_voice_id = str(
+                getattr(self, "current_voice_id", "NONE") or "NONE"
+            )
+            if current_voice_id == "NONE":
+                current_voice_id = ""
+
             project_data = {
                 "app_id": "VO_SE_Pro_2026",
                 "version": "1.5.0",
@@ -1241,11 +1247,7 @@ class ProjectIOMixin:
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
                 # Desktop currently has a single active singer shared by vocal tracks.
                 # Empty string represents the unselected "NONE" state.
-                "current_voice_id": (
-                    str(getattr(self, "current_voice_id", "NONE") or "NONE")
-                    if str(getattr(self, "current_voice_id", "NONE") or "NONE") != "NONE"
-                    else ""
-                ),
+                "current_voice_id": current_voice_id,
                 "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
                 "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
