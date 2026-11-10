@@ -47,7 +47,13 @@ def _extract_lyric(message: Any) -> str:
 def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
     """Load MIDI notes using the file-wide tempo map and preserve overlapping same-pitch notes."""
     try:
-        mid = mido.MidiFile(filepath)
+        try:
+            mid = mido.MidiFile(filepath, charset="utf-8")
+        except UnicodeDecodeError:
+            try:
+                mid = mido.MidiFile(filepath, charset="cp932")
+            except UnicodeDecodeError:
+                mid = mido.MidiFile(filepath, charset="latin1")
         ticks_per_beat = int(mid.ticks_per_beat)
         if ticks_per_beat <= 0:
             raise ValueError("MIDI ticks_per_beat must be positive")
@@ -64,7 +70,8 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
         events.sort(key=lambda item: (item[0], item[1], item[2]))
 
         notes: List[Dict[str, Any]] = []
-        active_notes: Dict[tuple[int, int], List[tuple[float, int, int]]] = {}
+        active_notes: Dict[tuple[int, int], List[tuple[float, int, int, str]]] = {}
+        pending_lyrics: Dict[tuple[int, int], List[str]] = {}
         previous_tick = 0
         current_seconds = 0.0
         current_tempo = 500000
@@ -85,6 +92,11 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
                         raise ValueError("MIDI contains an invalid tempo")
                 elif message.type == "track_name":
                     track_names[event_track_index] = str(getattr(message, "name", ""))
+                elif message.type == "lyrics":
+                    lyric_key = (event_track_index, absolute_tick)
+                    pending_lyrics.setdefault(lyric_key, []).append(
+                        str(getattr(message, "text", "") or "")
+                    )
                 continue
 
             message_type = str(message.type)
@@ -94,8 +106,13 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
             key = (channel, note_number)
 
             if message_type == "note_on" and velocity > 0:
+                lyric_key = (event_track_index, absolute_tick)
+                lyric_queue = pending_lyrics.get(lyric_key, [])
+                lyric = lyric_queue.pop(0) if lyric_queue else "a"
+                if not lyric_queue:
+                    pending_lyrics.pop(lyric_key, None)
                 active_notes.setdefault(key, []).append(
-                    (current_seconds, velocity, event_track_index)
+                    (current_seconds, velocity, event_track_index, lyric)
                 )
             elif message_type == "note_off" or (
                 message_type == "note_on" and velocity == 0
@@ -105,7 +122,7 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
                     continue
 
                 # FIFO pairing preserves both notes when the same pitch overlaps.
-                start_seconds, start_velocity, start_track_index = pending.pop(0)
+                start_seconds, start_velocity, start_track_index, start_lyric = pending.pop(0)
                 if not pending:
                     active_notes.pop(key, None)
                 duration = current_seconds - start_seconds
@@ -116,7 +133,7 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
                     note_number=note_number,
                     start_time=start_seconds,
                     duration=duration,
-                    lyric=_extract_lyric(message),
+                    lyric=start_lyric,
                 )
                 note.velocity = start_velocity
                 note_data = note.to_dict()
@@ -153,7 +170,7 @@ def save_midi_file(
     if ticks_per_beat <= 0:
         raise ValueError("ticks_per_beat must be positive")
 
-    midi_file = mido.MidiFile(type=1, ticks_per_beat=int(ticks_per_beat))
+    midi_file = mido.MidiFile(type=1, ticks_per_beat=int(ticks_per_beat), charset="utf-8")
     microseconds_per_beat = int(round(60_000_000.0 / tempo_bpm))
 
     for track_index, track_data in enumerate(tracks):
