@@ -132,3 +132,43 @@ def test_external_json_worker_prepares_legacy_single_track_notes(tmp_path):
 
     assert payload["prepared_note_tracks"] is None
     assert payload["prepared_legacy_notes"][0].note_number == 64
+
+
+def test_external_midi_worker_converts_notes_and_preserves_track_identity(
+    tmp_path, monkeypatch
+):
+    from modules.data.data_models import NoteEvent
+    import modules.data.midi_manager as midi_manager
+
+    path = tmp_path / "multitrack.mid"
+    path.write_bytes(b"test fixture")
+    monkeypatch.setattr(
+        midi_manager,
+        "load_midi_file",
+        lambda _path: [
+            {
+                "note_number": 60,
+                "start_time": 0.0,
+                "duration": 0.5,
+                "lyric": "あ",
+                "_midi_track_index": 0,
+                "_midi_track_name": "Lead",
+            },
+            {
+                "note_number": 67,
+                "start_time": 0.25,
+                "duration": 0.5,
+                "lyric": "い",
+                "_midi_track_index": 2,
+                "_midi_track_name": "Harmony",
+            },
+        ],
+    )
+
+    payload = _parse_external_project_file(str(path))
+
+    assert payload["format"] == "midi"
+    assert isinstance(payload["notes_by_track"][0][0], NoteEvent)
+    assert payload["notes_by_track"][0][0].lyric == "あ"
+    assert payload["notes_by_track"][2][0].note_number == 67
+    assert payload["names_by_track"] == {0: "Lead", 2: "Harmony"}
