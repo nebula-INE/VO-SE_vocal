@@ -392,8 +392,14 @@ class _ProjectMixdownWorker(QThread):
                             f"{track_name} を個別レンダリング中...",
                         )
 
+                    # Note objects can be numerous and may be modified by render
+                    # preparation. Snapshot them here so deepcopy never blocks
+                    # the GUI thread that requested the project export.
+                    notes_snapshot = deepcopy(
+                        list(getattr(track, "notes", []) or [])
+                    )
                     result = export_v2(
-                        list(getattr(track, "notes", []) or []),
+                        notes_snapshot,
                         self.parameters,
                         vocal_path,
                         mode_flag=self.mode_flag,
@@ -2063,7 +2069,9 @@ class ProjectIOMixin:
                 if index == current_index and track_type == "vocal"
                 else list(getattr(track, "notes", []) or [])
             )
-            snapshot.notes = deepcopy(source_notes)
+            # The editor is disabled until the background worker finishes.
+            # Keep this list snapshot shallow here; clone note objects in the worker.
+            snapshot.notes = list(source_notes)
             snapshot.audio_path = str(getattr(track, "audio_path", "") or "")
             # Do not reuse a stale playback cache from a previous transport session.
             snapshot.playback_path = ""
