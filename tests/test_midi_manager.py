@@ -168,3 +168,17 @@ def test_primary_midi_port_switch_keeps_manager_when_shutdown_fails() -> None:
     assert "self.status_label.setText(f\"MIDIの切断に失敗: {exc}\")" in failure_path
     assert "return" in failure_path
     assert "selector.setCurrentIndex(previous_index)" in failure_path
+
+
+def test_primary_midi_port_switch_uses_the_existing_manager_import() -> None:
+    source = (
+        ROOT / "modules" / "gui" / "main_window.py"
+    ).read_text(encoding="utf-8")
+    handler = source.split("def on_midi_port_changed(self):", 1)[1].split(
+        "def update_gui_with_midi", 1
+    )[0]
+
+    assert "manager = MidiInputManager(selected_port)" in handler
+    assert "from .midi_io import MidiInputManager" not in handler
+    assert "getattr(manager, \"port\", None) is None" in handler
+    assert "MIDI入力を開始できませんでした" in handler
