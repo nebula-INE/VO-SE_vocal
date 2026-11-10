@@ -6392,6 +6392,24 @@ class MainWindow(
                 event.ignore()
                 return
 
+        # Stop MIDI callbacks before tearing down audio engines or the UI.
+        # A failed port close must keep the window alive so the operation can be retried.
+        for manager_name in ("_midi_input_manager", "midi_manager"):
+            midi_manager = getattr(self, manager_name, None)
+            stop_midi = getattr(midi_manager, "stop", None)
+            if callable(stop_midi):
+                try:
+                    stop_midi()
+                except Exception as exc:
+                    QMessageBox.warning(
+                        self,
+                        "MIDI終了エラー",
+                        f"MIDI入力を安全に終了できませんでした。"
+                        f"デバイスを切断してから、もう一度終了してください。\\n{exc}",
+                    )
+                    event.ignore()
+                    return
+
         # Stop the legacy playback thread, if an older entry point started it.
         was_playing_before_shutdown = bool(getattr(self, "is_playing", False))
         self.is_playing = False
@@ -6449,16 +6467,6 @@ class MainWindow(
                 save_config(config)
             except Exception as exc:
                 print(f"Config save warning: {exc}")
-
-        # The MIDI setup patch stores the live input manager under this name.
-        for manager_name in ("_midi_input_manager", "midi_manager"):
-            midi_manager = getattr(self, manager_name, None)
-            stop_midi = getattr(midi_manager, "stop", None)
-            if callable(stop_midi):
-                try:
-                    stop_midi()
-                except Exception as exc:
-                    print(f"MIDI shutdown warning: {exc}")
 
         engine = getattr(self, "vo_se_engine", None)
         stop_engine = getattr(engine, "stop", None)
