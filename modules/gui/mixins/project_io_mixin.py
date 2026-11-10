@@ -719,7 +719,7 @@ class ProjectIOMixin:
         QMessageBox.critical(
             self,
             "読み込みエラー",
-            f"{os.path.basename(file_path)} を読み込めませんでした。\\n{error_message}",
+            f"{os.path.basename(file_path)} を読み込めませんでした。\n{error_message}",
         )
 
     # ------------------------------------------------------------------
@@ -1266,7 +1266,7 @@ class ProjectIOMixin:
             QMessageBox.critical(
                 self,
                 "読み込みエラー",
-                f"MIDI の読み込みに失敗しました:\\n{exc}",
+                f"MIDI の読み込みに失敗しました:\n{exc}",
             )
             return False
 
@@ -1321,7 +1321,7 @@ class ProjectIOMixin:
             return False
         except Exception as exc:
             logger.exception("VSQX 読み込みエラー: %s", exc)
-            QMessageBox.critical(self, "読み込みエラー", f"VSQX の読み込みに失敗しました:\\n{exc}")
+            QMessageBox.critical(self, "読み込みエラー", f"VSQX の読み込みに失敗しました:\n{exc}")
             return False
 
     # oto.ini 書き出し（AutoOtoEngine の結果を保存する用途）
@@ -1999,6 +1999,6 @@ class ProjectIOMixin:
             QMessageBox.critical(
                 self,
                 "MIDI書き出しエラー",
-                f"MIDIファイルの書き出しに失敗しました:\\n{exc}",
+                f"MIDIファイルの書き出しに失敗しました:\n{exc}",
             )
             return False
