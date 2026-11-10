@@ -69,8 +69,10 @@ jobs:
           print("Training-only modules installed:", found)
           if found:
               raise SystemExit(f"Unexpected training modules in runtime environment: {found}")
-          from PySide6 import QtCore, QtGui, QtWidgets
+          from PySide6 import QtCore, QtGui, QtWidgets, QtMultimedia, QtNetwork
           import soundfile, sounddevice, pyopenjtalk
+          assert QtMultimedia.QMediaPlayer is not None
+          assert QtMultimedia.QAudioOutput is not None
           from modules.tools import batch_voice_optimizer
           from modules.tools.batch_voice_optimizer import BatchVoiceOptimizer
           assert batch_voice_optimizer.TORCH_AVAILABLE is False, (
@@ -159,7 +161,7 @@ jobs:
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
             --paths . --paths modules \
-            --collect-all=PySide6 \
+            --collect-submodules=PySide6 \
             --exclude-module=PySide6.QtWebEngineCore \
             --exclude-module=PySide6.QtWebEngineWidgets \
             --exclude-module=PySide6.QtWebEngineQuick \
@@ -171,6 +173,8 @@ jobs:
             --exclude-module=PySide6.Qt3DCore \
             --exclude-module=PySide6.Qt3DRender \
             --hidden-import=modules.gui.main_window \
+            --hidden-import=PySide6.QtMultimedia \
+            --hidden-import=PySide6.QtNetwork \
             --hidden-import=rtmidi \
             --hidden-import=mido.backends.rtmidi \
             --hidden-import=backports \
