@@ -2050,7 +2050,6 @@ class ProjectIOMixin:
             return False
 
         current_index = int(getattr(self, "current_track_idx", 0))
-        current_track = tracks[current_index] if 0 <= current_index < len(tracks) else None
         current_notes = list(getattr(timeline, "notes_list", []) or [])
         track_snapshots = []
         has_renderable_content = False
