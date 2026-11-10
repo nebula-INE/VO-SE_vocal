@@ -267,7 +267,11 @@ def test_voicebank_import_entrypoint_starts_worker_and_reports_completion():
 
 
 def test_rendered_wav_preview_uses_background_mixer_start():
-    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "modules" / "gui" / "main_window.py"
+    ).read_text(encoding="utf-8")
     play_handler = source.split("def play_audio(self, path: str) -> None:", 1)[1].split(
         "def _check_for_updates", 1
     )[0]
