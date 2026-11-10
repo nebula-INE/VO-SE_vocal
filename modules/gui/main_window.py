@@ -1688,7 +1688,7 @@ class VoiceCardGallery(QWidget):
         self.cards.clear()
         self._entries.clear()
 
-        all_voices = voices if isinstance(voices, dict) else self.manager.scan_voices()
+        all_voices = voices
 
         for display_name, internal_id in all_voices.items():
             if internal_id.startswith("__INTERNAL__"):
