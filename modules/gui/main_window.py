@@ -2475,17 +2475,15 @@ class MainWindow(
             # 自然終了とユーザー操作による停止を明確に分ける。
             if mixer is not None and not bool(getattr(mixer, "is_playing", False)):
                 if getattr(self, "is_looping", False):
-                    try:
-                        mixer.play(0.0)
-                        self.current_playback_time = 0.0
-                        self.playback_start_time = 0.0
-                        self.playback_started_monotonic = time.monotonic()
-                        self._set_transport_time(0.0)
+                    tracks = list(getattr(self, "tracks", []) or [])
+                    self._set_transport_time(0.0)
+                    if self._start_audio_mixer_command(
+                        "start", tracks=tracks, start_sec=0.0
+                    ):
                         return
-                    except Exception as exc:
-                        self.statusBar().showMessage(
-                            f"ループ再生の再開に失敗しました: {exc}", 5000
-                        )
+                    # An in-flight command owns the device. Do not make a second
+                    # direct call from the GUI thread; keep the transport idle.
+                    return
                 self.stop_and_clear_playback()
                 return
 
@@ -5336,6 +5334,13 @@ class MainWindow(
             return
 
         if operation == "pause":
+            mixer = getattr(self, "audio_mixer", None)
+            position_sec = getattr(mixer, "position_sec", None)
+            if position_sec is not None:
+                self.current_playback_time = max(0.0, float(position_sec))
+                self._set_transport_time(self.current_playback_time)
+            self.playback_start_time = self.current_playback_time
+            self.playback_started_monotonic = time.monotonic()
             self.is_playing = False
             self.playback_timer.stop()
             self._set_mixer_transport_busy(False)
@@ -5404,6 +5409,8 @@ class MainWindow(
         self._audio_mixer_command_thread = worker
 
         if operation == "start":
+            self.playback_timer.stop()
+            self.is_playing = False
             self._set_playback_preparation_ui(True)
             self.statusBar().showMessage("音声出力デバイスを起動中...", 0)
         else:
@@ -5514,9 +5521,8 @@ class MainWindow(
                 return
 
             self._pending_playback_tracks = tracks
-            self._pending_playback_start_time = (
-                float(getattr(timeline, "_current_playback_time", 0.0))
-                if timeline is not None else 0.0
+            self._pending_playback_start_time = max(
+                0.0, float(getattr(self, "current_playback_time", 0.0))
             )
             self._set_playback_preparation_ui(True)
 
