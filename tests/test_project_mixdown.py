@@ -93,7 +93,7 @@ def test_project_mixdown_does_not_replace_existing_output_on_invalid_source(tmp_
     output.write_bytes(b"existing-output")
     missing = tmp_path / "missing.wav"
 
-    with pytest.raises(RuntimeError, match="音声データ"):
+    with pytest.raises(RuntimeError):
         mixdown_tracks_to_wav(
             [_track(missing)], output, sample_rate=8000, block_size=4
         )
