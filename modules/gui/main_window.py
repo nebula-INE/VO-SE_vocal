@@ -2376,7 +2376,10 @@ class MainWindow(
         if not isinstance(errors, list):
             errors = []
         previous_errors = previous.get("last_playback_errors", [])
-        if not isinstance(previous_errors, list) or len(errors) < len(previous_errors):
+        if (
+            not isinstance(previous_errors, list)
+            or errors[: len(previous_errors)] != previous_errors
+        ):
             previous_errors = []
         new_errors = errors[len(previous_errors):]
         previous["last_playback_errors"] = list(errors)
@@ -5224,6 +5227,25 @@ class MainWindow(
             return
         try:
             mixer.set_tracks(tracks)
+            # set_tracks() starts a fresh source set and clears previous per-file
+            # errors. Keep cumulative device counters as the baseline for this run.
+            get_diagnostics = getattr(mixer, "get_diagnostics", None)
+            if callable(get_diagnostics):
+                try:
+                    diagnostics = get_diagnostics()
+                    if isinstance(diagnostics, dict):
+                        previous = getattr(self, "_reported_audio_diagnostics", {})
+                        if not isinstance(previous, dict):
+                            previous = {}
+                        self._reported_audio_diagnostics = {
+                            "output_underflow_count": diagnostics.get("output_underflow_count", 0),
+                            "output_overflow_count": diagnostics.get("output_overflow_count", 0),
+                            "queue_underrun_count": diagnostics.get("queue_underrun_count", 0),
+                            "output_device_name": previous.get("output_device_name", ""),
+                            "last_playback_errors": [],
+                        }
+                except Exception as diagnostic_exc:
+                    print(f"[AudioMixer] Could not reset diagnostic baseline: {diagnostic_exc}")
             load_errors = list(getattr(mixer, "last_load_errors", []) or [])
             if load_errors:
                 # Partial playback is allowed, but skipped tracks must be visible.
