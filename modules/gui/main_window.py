@@ -33,7 +33,7 @@ ort = importlib.import_module("onnxruntime") if importlib.util.find_spec("onnxru
 # 3. GUIライブラリ (PySide6 )
 # ==========================================================================
 from PySide6.QtCore import (  # noqa: E402
-    Qt, Signal, QThread, QTimer,
+    Qt, Signal, QThread, QTimer, QCoreApplication,
     QObject, QRunnable, QThreadPool, Slot,
     QElapsedTimer
 )
@@ -6404,6 +6404,23 @@ class MainWindow(
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        # An external project parser emits its result back to this window.
+        # Wait for the parser and drain the queued result before asking whether
+        # to save/discard, so a just-finished load cannot race the exit dialog.
+        project_load_worker = getattr(self, "_project_load_worker", None)
+        if project_load_worker is not None:
+            done = getattr(project_load_worker, "done", None)
+            if done is not None and not done.wait(15.0):
+                QMessageBox.warning(
+                    self,
+                    "プロジェクト読み込み終了待ち",
+                    "ファイル解析がまだ実行中です。解析の終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+            QCoreApplication.processEvents()
+            self._project_load_worker = None
+
         reply = QMessageBox.question(
             self,
             "確認",
