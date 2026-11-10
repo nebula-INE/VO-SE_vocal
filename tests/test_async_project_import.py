@@ -237,7 +237,8 @@ def test_voicebank_import_worker_downloads_installs_and_loads_models_off_ui_thre
         "class _ExternalProjectLoadSignals", 1
     )[0]
     assert "urlretrieve(self.source_path, temporary_path)" in worker
-    assert "self.manager.install_voice_from_zip(zip_path)" in worker
+    assert "installed_name = install(zip_path)" in worker
+    assert 'getattr(self.manager, "install_voice_from_zip", None)' in worker
     assert "load_model(aural_model)" in worker
     assert "load_model(standard_model)" in worker
     assert "self.completed.emit({" in worker
