@@ -72,6 +72,9 @@ class AudioMixer:
         self.output_overflow_count = 0
         self.queue_underrun_count = 0
         self.last_callback_status = ""
+        self.output_device_name = ""
+        self.output_default_samplerate = 0.0
+        self._output_channels = 2
 
     @property
     def is_playing(self) -> bool:
@@ -91,10 +94,52 @@ class AudioMixer:
                 "output_overflow_count": self.output_overflow_count,
                 "queue_underrun_count": self.queue_underrun_count,
                 "last_callback_status": self.last_callback_status,
+                "output_device_name": self.output_device_name,
+                "output_default_samplerate": self.output_default_samplerate,
+                "output_channels": self._output_channels,
                 "last_load_errors": list(self.last_load_errors),
                 "last_playback_errors": list(self.last_playback_errors),
                 "queued_blocks": self._blocks.qsize(),
             }
+
+    def _probe_output_device(self) -> None:
+        """Resolve the OS default output device and validate its channel support."""
+        if sd is None:
+            raise RuntimeError("sounddevice is not available")
+        try:
+            info = sd.query_devices(kind="output")
+        except Exception as exc:
+            raise RuntimeError(
+                "既定の音声出力デバイスを取得できません。OSのサウンド設定で"
+                "出力先を選択し、デバイスが接続されていることを確認してください。 "
+                f"詳細: {exc}"
+            ) from exc
+
+        if not isinstance(info, dict):
+            try:
+                info = dict(info)
+            except Exception as exc:
+                raise RuntimeError(f"音声出力デバイス情報が不正です: {exc}") from exc
+
+        try:
+            max_channels = int(info.get("max_output_channels", 0))
+        except (TypeError, ValueError, OverflowError):
+            max_channels = 0
+        if max_channels <= 0:
+            name = str(info.get("name", "Unknown output device"))
+            raise RuntimeError(
+                f"音声出力デバイス「{name}」は出力に対応していません。"
+                "OSのサウンド設定で別の出力先を選択してください。"
+            )
+
+        self.output_device_name = str(info.get("name", "Default output device"))
+        try:
+            self.output_default_samplerate = float(info.get("default_samplerate", 0.0) or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            self.output_default_samplerate = 0.0
+        # Stereo is preferred. A mono-only device is supported by downmixing
+        # the prebuilt stereo block in the PortAudio callback.
+        self._output_channels = 1 if max_channels == 1 else 2
 
     def set_tracks(self, tracks: Iterable[Any]) -> None:
         """Validate track headers and prepare metadata without decoding whole files."""
@@ -165,6 +210,7 @@ class AudioMixer:
         """Start playback at start_sec, or resume from the current position."""
         if sd is None:
             raise RuntimeError("sounddevice is not available")
+        self._probe_output_device()
 
         self._shutdown_playback(reset_position=False)
         with self._lock:
@@ -194,16 +240,23 @@ class AudioMixer:
         try:
             stream = sd.OutputStream(
                 samplerate=self.sample_rate,
-                channels=2,
+                channels=self._output_channels,
                 dtype="float32",
                 blocksize=self.block_size,
                 callback=self._audio_callback,
             )
             self._stream = stream
             stream.start()
-        except Exception:
-            self._shutdown_playback(reset_position=False)
-            raise
+        except Exception as exc:
+            try:
+                self._shutdown_playback(reset_position=False)
+            except Exception:
+                # Preserve the original device/stream creation failure for the UI.
+                pass
+            raise RuntimeError(
+                f"音声出力デバイス「{self.output_device_name}」を"
+                f"{self.sample_rate} Hz / {self._output_channels}ch で開始できません: {exc}"
+            ) from exc
 
     def play_buffer(
         self,
@@ -511,7 +564,17 @@ class AudioMixer:
                 continue
 
             offset = self._callback_pending_offset
-            outdata[written : written + count] = pending[offset : offset + count]
+            segment = pending[offset : offset + count]
+            target = outdata[written : written + count]
+            output_channels = target.shape[1] if target.ndim == 2 else 1
+            if output_channels == 1:
+                # A mono-only output device receives a center downmix.
+                target[:, 0] = segment[:, 0]
+                target[:, 0] += segment[:, 1]
+                target[:, 0] *= 0.5
+            else:
+                copied_channels = min(output_channels, 2)
+                target[:, :copied_channels] = segment[:, :copied_channels]
             written += count
             self._callback_pending_offset += count
             if self._callback_pending_offset >= len(pending):
