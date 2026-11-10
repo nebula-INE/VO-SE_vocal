@@ -7135,7 +7135,7 @@ class MainWindow(
 
     @Slot()
     def cancel_current_render(self):
-        """現在実行中のレンダリングをキャンセルする（協調的キャンセル）"""
+        """現在の通常レンダーまたはプロジェクトミックスダウンを協調キャンセルする。"""
         if self.current_worker:
             self._render_cancelled = True
             self.current_worker.cancel()
@@ -7145,6 +7145,31 @@ class MainWindow(
             self.statusBar().showMessage(
                 "キャンセル要求を送信しました（現在のチャンク完了後に停止します）。"
             )
+            return
+
+        mixdown_worker = getattr(self, "_project_mixdown_worker", None)
+        if mixdown_worker is None:
+            return
+        try:
+            is_running = bool(mixdown_worker.isRunning())
+        except RuntimeError:
+            is_running = False
+        if not is_running:
+            return
+
+        request_cancel = getattr(mixdown_worker, "request_cancel", None)
+        if callable(request_cancel):
+            request_cancel()
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setVisible(False)
+            cancel_button.setEnabled(False)
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("ミックスダウンをキャンセル中...")
+        self.statusBar().showMessage(
+            "プロジェクトミックスダウンのキャンセルを要求しました。現在の音声ブロック完了後に停止します。"
+        )
 
     def play_rendered_audio(self, wav_path: str) -> None:
         """Play a rendered WAV through the unified desktop AudioMixer."""
