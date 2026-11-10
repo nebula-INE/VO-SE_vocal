@@ -72,6 +72,10 @@ def test_midi_export_writes_track_names_tempo_and_notes(tmp_path):
     assert any(msg.type == "set_tempo" and msg.tempo == 500_000 for msg in loaded.tracks[0])
     assert len([msg for msg in loaded.tracks[0] if msg.type == "note_on"]) == 2
 
+    imported = load_midi_file(str(midi_path))
+    assert imported is not None
+    assert [note["lyric"] for note in imported] == ["あ", "い"]
+
 
 def test_midi_export_rejects_invalid_tempo(tmp_path):
     with pytest.raises(ValueError, match="テンポ"):
@@ -149,3 +153,22 @@ def test_desktop_midi_import_restores_source_tracks(monkeypatch):
     assert [note.note_number for note in window.tracks[0].notes] == [60]
     assert [note.note_number for note in window.tracks[1].notes] == [64]
     assert [note.note_number for note in window.timeline_widget.notes_list] == [60]
+
+
+
+def test_midi_import_decodes_cp932_japanese_lyrics(tmp_path):
+    midi_path = tmp_path / "cp932-lyrics.mid"
+    midi_file = mido.MidiFile(type=0, ticks_per_beat=480, charset="cp932")
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("lyrics", text="波音リツ", time=0))
+    track.append(mido.Message("note_on", note=60, velocity=100, time=0))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    midi_file.tracks.append(track)
+    midi_file.save(midi_path)
+
+    imported = load_midi_file(str(midi_path))
+
+    assert imported is not None
+    assert len(imported) == 1
+    assert imported[0]["lyric"] == "波音リツ"
