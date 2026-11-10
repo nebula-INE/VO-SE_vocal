@@ -69,6 +69,7 @@ class AudioMixer:
         self.last_playback_errors: list[str] = []
         self.output_underflow_count = 0
         self.output_overflow_count = 0
+        self.queue_underrun_count = 0
         self.last_callback_status = ""
 
     @property
@@ -87,6 +88,7 @@ class AudioMixer:
             return {
                 "output_underflow_count": self.output_underflow_count,
                 "output_overflow_count": self.output_overflow_count,
+                "queue_underrun_count": self.queue_underrun_count,
                 "last_callback_status": self.last_callback_status,
                 "last_load_errors": list(self.last_load_errors),
                 "last_playback_errors": list(self.last_playback_errors),
@@ -379,7 +381,7 @@ class AudioMixer:
             tracks = list(self._tracks)
             active_sources = dict(self._sources) if sources is None else sources
         active_readers = readers or {}
-        failed = failed_sources or set()
+        failed = failed_sources if failed_sources is not None else set()
         mix = np.zeros((frames, 2), dtype=np.float32)
         solo_exists = any(
             bool(getattr(track, "is_solo", False)) for track in tracks
@@ -486,6 +488,9 @@ class AudioMixer:
                     self._callback_pending = self._blocks.get_nowait()
                     self._callback_pending_offset = 0
                 except queue.Empty:
+                    if not self._producer_done.is_set():
+                        with self._lock:
+                            self.queue_underrun_count += 1
                     break
 
             pending = self._callback_pending
