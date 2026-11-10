@@ -61,6 +61,7 @@ class AudioMixer:
         )
         self._producer_stop = threading.Event()
         self._producer_done = threading.Event()
+        self._producer_ready = threading.Event()
         self._producer_thread: threading.Thread | None = None
         self._callback_pending: np.ndarray | None = None
         self._callback_pending_offset = 0
@@ -177,6 +178,7 @@ class AudioMixer:
         self._reset_stream_buffers()
         self._producer_stop.clear()
         self._producer_done.clear()
+        self._producer_ready.clear()
         producer = threading.Thread(
             target=self._audio_producer_loop,
             args=(start_frame,),
@@ -185,6 +187,9 @@ class AudioMixer:
         )
         self._producer_thread = producer
         producer.start()
+        if not self._producer_ready.wait(timeout=5.0):
+            self._shutdown_playback(reset_position=False)
+            raise RuntimeError("Audio stream prebuffering did not complete")
 
         try:
             stream = sd.OutputStream(
@@ -354,6 +359,7 @@ class AudioMixer:
                 while not self._producer_stop.is_set():
                     try:
                         self._blocks.put(block, timeout=0.1)
+                        self._producer_ready.set()
                         break
                     except queue.Full:
                         continue
@@ -367,6 +373,7 @@ class AudioMixer:
                 except Exception as exc:
                     self._record_playback_error(f"Audio reader close failed: {exc}")
             self._producer_done.set()
+            self._producer_ready.set()
 
     def _mix_block(
         self,
