@@ -149,3 +149,21 @@ def test_main_window_cancels_close_when_midi_shutdown_fails() -> None:
     assert "QMessageBox.warning(" in midi_shutdown
     assert "event.ignore()" in midi_shutdown
     assert "return" in midi_shutdown
+
+
+def test_primary_midi_port_switch_keeps_manager_when_shutdown_fails() -> None:
+    source = (
+        ROOT / "modules" / "gui" / "main_window.py"
+    ).read_text(encoding="utf-8")
+    handler = source.split("def on_midi_port_changed(self):", 1)[1].split(
+        "def update_gui_with_midi", 1
+    )[0]
+
+    assert "self.midi_manager.stop()" in handler
+    assert "except Exception as exc:" in handler
+    failure_path = handler.split("except Exception as exc:", 1)[1].split(
+        "self.midi_manager = None", 1
+    )[0]
+    assert "self.status_label.setText(f\"MIDIの切断に失敗: {exc}\")" in failure_path
+    assert "return" in failure_path
+    assert "selector.setCurrentIndex(previous_index)" in failure_path
