@@ -131,3 +131,28 @@ def test_window_waits_for_voicebank_zip_worker_before_close():
     )[0]
     assert 'getattr(self, "_voice_bank_import_worker", None)' in close_handler
     assert "worker.wait(15000)" in close_handler
+
+
+def test_voice_library_initial_and_manual_scans_run_on_worker():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    worker = source.split("class _VoiceScanWorker", 1)[1].split(
+        "class VoiceCardGallery", 1
+    )[0]
+    assert "voices = self.manager.scan_voices()" in worker
+    assert "self.completed.emit(dict(voices or {}))" in worker
+
+    gallery = source.split("def setup_gallery(self, voices=None):", 1)[1].split(
+        "def _on_voice_scan_completed", 1
+    )[0]
+    assert "_VoiceScanWorker(self.manager, self)" in gallery
+    assert "worker.start()" in gallery
+    assert "self.manager.scan_voices()" not in gallery
+
+
+def test_voice_scan_worker_is_waited_for_during_window_shutdown():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    close_handler = source.split("def closeEvent(self, event):", 1)[1].split(
+        "# レリタリング実行メゾット", 1
+    )[0]
+    assert 'getattr(gallery, "_scan_worker", None)' in close_handler
+    assert "voice_scan_worker" in close_handler
