@@ -1729,6 +1729,9 @@ class VoiceCardGallery(QWidget):
         self._scan_worker = None
         if isinstance(voices, dict):
             self.setup_gallery(voices=voices)
+            status_bar = getattr(self.window(), "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage(f"音源一覧を更新しました: {len(voices)} 件", 3000)
 
     @Slot(str)
     def _on_voice_scan_failed(self, error_message: str) -> None:
