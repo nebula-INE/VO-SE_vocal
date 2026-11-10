@@ -134,14 +134,24 @@ class MidiInputManager:
             print(f"MIDIポートのオープンに失敗: {e}")
 
     def stop(self) -> None:
-        if self.port:
-            try:
-                close_func = getattr(self.port, 'close', None)
-                if close_func and callable(close_func):
-                    close_func()
-                print("MIDIポートを閉じました。")
-            except Exception as e:
-                print(f"MIDIポートの切断エラー: {e}")
+        port = self.port
+        if port is None:
+            return
+
+        close_func = getattr(port, "close", None)
+        if not callable(close_func):
+            raise RuntimeError("MIDI input port does not expose a close method")
+
+        try:
+            close_func()
+        except Exception as exc:
+            # Keep the port reference so shutdown can be retried. Silently
+            # discarding this error can leave an active RtMidi callback behind.
+            print(f"MIDIポートの切断エラー: {exc}")
+            raise RuntimeError(f"MIDI input port could not be closed: {exc}") from exc
+
+        self.port = None
+        print("MIDIポートを閉じました。")
 
     def midi_callback(self, message: Any) -> None:
         """外部MIDIメッセージ受信時の処理（型安全版・省略なし）"""
