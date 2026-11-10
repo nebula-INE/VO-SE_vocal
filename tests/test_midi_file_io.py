@@ -2,7 +2,11 @@ import pytest
 
 mido = pytest.importorskip("mido")
 
+from types import SimpleNamespace
+
 from modules.data.midi_manager import load_midi_file, save_midi_file
+from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+import modules.data.midi_manager as midi_manager
 
 
 def test_midi_import_applies_global_tempo_changes_and_keeps_overlaps(tmp_path):
@@ -76,3 +80,72 @@ def test_midi_export_rejects_invalid_tempo(tmp_path):
             [{"name": "Lead", "notes": []}],
             tempo=0.0,
         )
+
+
+
+def test_desktop_midi_import_restores_source_tracks(monkeypatch):
+    class Track:
+        def __init__(self, name, track_type="vocal"):
+            self.name = name
+            self.track_type = track_type
+            self.notes = []
+            self.audio_path = ""
+            self.volume = 1.0
+            self.pan = 0.0
+            self.is_muted = False
+            self.is_solo = False
+            self.engine_type = "Aural"
+            self.color_label = ""
+
+    class StatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    class Window(ProjectIOMixin):
+        def __init__(self):
+            self.tracks = [Track("Existing")]
+            self.current_track_idx = 0
+            self.timeline_widget = SimpleNamespace(
+                notes_list=[],
+                tempo=120.0,
+                set_notes=lambda notes: setattr(self.timeline_widget, "notes_list", list(notes)),
+            )
+            self.graph_editor_widget = None
+            self.current_playback_time = 0.0
+            self.current_voice_id = "NONE"
+            self.current_voice = "未選択"
+            self.history = None
+            self._status_bar = StatusBar()
+
+        def statusBar(self):
+            return self._status_bar
+
+    monkeypatch.setattr(
+        midi_manager,
+        "load_midi_file",
+        lambda _path: [
+            {
+                "note_number": 60,
+                "start_time": 0.0,
+                "duration": 0.5,
+                "lyric": "あ",
+                "_midi_track_index": 0,
+                "_midi_track_name": "Lead",
+            },
+            {
+                "note_number": 64,
+                "start_time": 0.25,
+                "duration": 0.5,
+                "lyric": "い",
+                "_midi_track_index": 2,
+                "_midi_track_name": "Harmony",
+            },
+        ],
+    )
+    window = Window()
+
+    assert window.load_midi_file_from_path("song.mid") is True
+    assert [track.name for track in window.tracks] == ["Lead", "Harmony"]
+    assert [note.note_number for note in window.tracks[0].notes] == [60]
+    assert [note.note_number for note in window.tracks[1].notes] == [64]
+    assert [note.note_number for note in window.timeline_widget.notes_list] == [60]
