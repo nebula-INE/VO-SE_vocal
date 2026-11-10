@@ -182,3 +182,31 @@ def test_primary_midi_port_switch_uses_the_existing_manager_import() -> None:
     assert "from .midi_io import MidiInputManager" not in handler
     assert "getattr(manager, \"port\", None) is None" in handler
     assert "MIDI入力を開始できませんでした" in handler
+
+
+def test_compatibility_midi_port_switch_reports_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        MidiInputManager,
+        "get_available_ports",
+        staticmethod(lambda: ["MIDI A"]),
+    )
+
+    def fail_start(manager: MidiInputManager) -> None:
+        manager.port = None
+
+    monkeypatch.setattr(MidiInputManager, "start", fail_start)
+    window = _Window()
+    _patch_midi_realtime(window)
+
+    callback = window.midi_port_selector.currentTextChanged.callback
+    assert callback is not None
+    callback("MIDI A")
+
+    assert window._midi_input_manager is not None
+    assert window._midi_input_manager.port is None
+    assert any(
+        "MIDI 入力を開始できませんでした" in message
+        for message, _ in window.status_bar.messages
+    )
