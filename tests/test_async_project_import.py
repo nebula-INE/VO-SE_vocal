@@ -84,11 +84,17 @@ def test_external_project_dispatcher_uses_background_worker():
     dispatcher = source.split(
         "def import_external_project(self: Any) -> None:", 1
     )[1].split(
+        "def load_external_project_async", 1
+    )[0]
+    async_loader = source.split(
+        "def load_external_project_async(self: Any, file_path: str) -> bool:", 1
+    )[1].split(
         "def _on_external_project_loaded", 1
     )[0]
 
-    assert "_ExternalProjectLoadWorker(file_path)" in dispatcher
-    assert "QThreadPool.globalInstance().start" in dispatcher
+    assert "self.load_external_project_async(file_path)" in dispatcher
+    assert "_ExternalProjectLoadWorker(file_path)" in async_loader
+    assert "QThreadPool.globalInstance().start" in async_loader
 
 
 
@@ -258,3 +264,12 @@ def test_voicebank_import_entrypoint_starts_worker_and_reports_completion():
     assert "worker.start()" in handler
     assert "self._on_voice_bank_import_completed" in handler
     assert 'getattr(gallery, "_scan_worker", None)' in handler
+
+
+def test_rendered_wav_preview_uses_background_mixer_start():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    play_handler = source.split("def play_audio(self, path: str) -> None:", 1)[1].split(
+        "def _check_for_updates", 1
+    )[0]
+    assert 'self._start_audio_mixer_command(' in play_handler
+    assert 'play_file(' not in play_handler
