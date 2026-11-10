@@ -1376,7 +1376,8 @@ class ProjectIOMixin:
         active = getattr(self, "_voice_bank_import_worker", None)
         gallery = getattr(self, "voice_gallery", None)
         gallery_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
-        for running_worker in (active, gallery_worker):
+        scan_worker = getattr(gallery, "_scan_worker", None) if gallery is not None else None
+        for running_worker in (active, gallery_worker, scan_worker):
             if running_worker is None:
                 continue
             try:
