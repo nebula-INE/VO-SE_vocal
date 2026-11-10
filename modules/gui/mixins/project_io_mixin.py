@@ -1536,11 +1536,7 @@ class ProjectIOMixin:
             event.ignore()
 
     def dropEvent(self: Any, event):
-        """[LIVE] ファイルドロップ処理"""
-        from urllib.parse import urlparse
-        from urllib.request import urlretrieve
-        import tempfile
-
+        """[LIVE] ファイルドロップ処理。重いファイル処理は専用ワーカーへ委譲する。"""
         mime_data = event.mimeData()
         if not mime_data.hasUrls():
             return
