@@ -21,7 +21,7 @@ import threading
 from typing import Any, Dict, List, Optional, cast
 from copy import copy, deepcopy
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from modules.data.data_models import NoteEvent, PitchEvent
@@ -189,6 +189,110 @@ def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
         prepared = _prepare_json_note_tracks(data)
         return {"format": "json", "data": data, **prepared}
     raise ValueError(f"対応していない形式です: {extension}")
+
+
+class _VoiceBankImportWorker(QThread):
+    """Download, safely install and inspect a voicebank without blocking the GUI."""
+
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, manager: Any, source_path: str, source_type: str = "local", parent=None):
+        super().__init__(parent)
+        self.manager = manager
+        self.source_path = source_path
+        self.source_type = source_type
+        self.done = threading.Event()
+
+    def run(self) -> None:
+        temporary_path = None
+        try:
+            zip_path = self.source_path
+            if self.source_type == "url":
+                from urllib.parse import urlparse
+                from urllib.request import urlretrieve
+                import tempfile
+
+                parsed = urlparse(self.source_path)
+                if parsed.scheme not in ("http", "https"):
+                    raise ValueError(f"未対応のURLスキームです: {parsed.scheme}")
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as handle:
+                    temporary_path = handle.name
+                urlretrieve(self.source_path, temporary_path)
+                zip_path = temporary_path
+
+            install = getattr(self.manager, "install_voice_from_zip", None)
+            if not callable(install):
+                raise RuntimeError("音源マネージャーにZIPインストール機能がありません。")
+            installed_name = install(zip_path)
+            if not installed_name:
+                raise RuntimeError("音源のインストール結果を取得できませんでした。")
+
+            # install_voice_from_zip() already refreshes VoiceManager.voices.
+            # Avoid running the full recursive scan a second time here.
+            voices = dict(getattr(self.manager, "voices", {}) or {})
+            voice_record = voices.get(str(installed_name))
+            if isinstance(voice_record, dict):
+                voice_path = str(voice_record.get("path", "") or "")
+            else:
+                voice_path = str(voice_record or "")
+            if not voice_path or not os.path.isdir(voice_path):
+                scan = getattr(self.manager, "scan_voices", None)
+                if callable(scan):
+                    scanned = scan()
+                    if isinstance(scanned, dict):
+                        voices = dict(scanned)
+                voice_record = voices.get(str(installed_name))
+                if isinstance(voice_record, dict):
+                    voice_path = str(voice_record.get("path", "") or "")
+                else:
+                    voice_path = str(voice_record or "")
+            if not voice_path or not os.path.isdir(voice_path):
+                raise RuntimeError(
+                    f"インストール済み音源の保存先が見つかりません: {installed_name}"
+                )
+
+            # Optional ONNX model initialization can also be expensive. Keep it
+            # off the GUI thread and only pass the prepared Python object back.
+            from modules.gui.aural_engine import AuralAIEngine
+            from modules.gui.shared import DynamicsAIEngine
+
+            aural_model = os.path.join(voice_path, "aural_dynamics.onnx")
+            standard_model = os.path.join(voice_path, "model.onnx")
+            if os.path.isfile(aural_model):
+                dynamics_ai = AuralAIEngine()
+                load_model = getattr(dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(aural_model)
+                engine_message = "上位Auralモデル"
+            elif os.path.isfile(standard_model):
+                dynamics_ai = DynamicsAIEngine()
+                load_model = getattr(dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(standard_model)
+                engine_message = "標準Dynamicsモデル"
+            else:
+                dynamics_ai = AuralAIEngine()
+                engine_message = "汎用Auralエンジン"
+
+            self.completed.emit({
+                "name": str(installed_name),
+                "voice_path": voice_path,
+                "voices": voices,
+                "dynamics_ai": dynamics_ai,
+                "engine_message": engine_message,
+            })
+        except Exception as exc:
+            logger.exception("音源ZIPのバックグラウンドインストールに失敗")
+            self.failed.emit(str(exc) or exc.__class__.__name__)
+        finally:
+            if temporary_path:
+                try:
+                    if os.path.exists(temporary_path):
+                        os.remove(temporary_path)
+                except OSError:
+                    logger.warning("一時ZIPを削除できません: %s", temporary_path)
+            self.done.set()
 
 
 class _ExternalProjectLoadSignals(QObject):
@@ -1254,80 +1358,95 @@ class ProjectIOMixin:
     # 【従来実装】音源インポート・oto.ini 生成
     # ======================================================================
 
-    def import_voice_bank(self: Any, zip_path: str):
-        """ドラッグ＆ドロップZIPもVoiceManagerの安全な永続保存経路へ統一する。"""
-        from modules.gui.aural_engine import AuralAIEngine
-        from modules.gui.shared import DynamicsAIEngine
-
+    def import_voice_bank(
+        self: Any,
+        zip_path: str,
+        source_type: str = "local",
+    ) -> bool:
+        """Start voicebank download/install/model inspection in a worker thread."""
         manager = getattr(self, "voice_manager", None)
-        install_from_zip = getattr(manager, "install_voice_from_zip", None)
-        if manager is None or not callable(install_from_zip):
+        if manager is None:
             QMessageBox.critical(
                 self,
                 "導入エラー",
                 "音源マネージャーが初期化されていません。",
             )
+            return False
+
+        active = getattr(self, "_voice_bank_import_worker", None)
+        if active is not None:
+            try:
+                if active.isRunning():
+                    self.statusBar().showMessage(
+                        "別の音源を導入中です。完了してから再試行してください。", 4000
+                    )
+                    return False
+            except RuntimeError:
+                pass
+
+        worker = _VoiceBankImportWorker(manager, zip_path, source_type, self)
+        worker.completed.connect(self._on_voice_bank_import_completed)
+        worker.failed.connect(self._on_voice_bank_import_failed)
+        worker.finished.connect(self._on_voice_bank_import_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._voice_bank_import_worker = worker
+        self.statusBar().showMessage(
+            f"音源をバックグラウンドで導入中: {os.path.basename(zip_path)}", 0
+        )
+        worker.start()
+        return True
+
+    @Slot(object)
+    def _on_voice_bank_import_completed(self: Any, result: object) -> None:
+        self._voice_bank_import_worker = None
+        if not isinstance(result, dict):
+            self._on_voice_bank_import_failed("音源インストール結果が不正です。")
             return
 
-        try:
-            # VoiceManager は安全なZIP展開、oto.ini検出、ユーザーデータ領域への
-            # コピー、重複名回避、失敗時の部分フォルダ削除をまとめて処理する。
-            # PyInstaller の _MEIPASS へ直接展開したり、既存音源を削除したりしない。
-            installed_name = install_from_zip(zip_path)
-            if not installed_name:
-                raise RuntimeError("音源のインストール結果を取得できませんでした。")
-
-            voice_path = manager.voices.get(installed_name)
-            if isinstance(voice_path, dict):
-                voice_path = voice_path.get("path", "")
-            voice_path = str(voice_path or "")
-            if not voice_path or not os.path.isdir(voice_path):
-                raise RuntimeError(
-                    f"インストール済み音源の保存先が見つかりません: {installed_name}"
-                )
-
-            aural_model = os.path.join(voice_path, "aural_dynamics.onnx")
-            std_model = os.path.join(voice_path, "model.onnx")
-            if os.path.isfile(aural_model):
-                self.dynamics_ai = AuralAIEngine()
-                load_model = getattr(self.dynamics_ai, "load_model", None)
-                if callable(load_model):
-                    load_model(aural_model)
-                engine_msg = "上位Auralモデル"
-            elif os.path.isfile(std_model):
-                self.dynamics_ai = DynamicsAIEngine()
-                load_model = getattr(self.dynamics_ai, "load_model", None)
-                if callable(load_model):
-                    load_model(std_model)
-                engine_msg = "標準Dynamicsモデル"
-            else:
-                self.dynamics_ai = AuralAIEngine()
-                engine_msg = "汎用Auralエンジン"
-
-            refresh_voices = getattr(manager, "scan_voices", None)
-            if callable(refresh_voices):
-                refresh_voices()
-
-            gallery = getattr(self, "voice_gallery", None)
+        self.dynamics_ai = result.get("dynamics_ai")
+        gallery = getattr(self, "voice_gallery", None)
+        if gallery is not None:
             refresh_gallery = getattr(gallery, "setup_gallery", None)
-            if gallery is not None and callable(refresh_gallery):
-                refresh_gallery()
+            if callable(refresh_gallery):
+                voices = result.get("voices")
+                try:
+                    refresh_gallery(voices=voices if isinstance(voices, dict) else None)
+                except TypeError:
+                    refresh_gallery()
                 gallery.update()
 
-            message = f"音源「{installed_name}」をインストールしました。\nエンジン: {engine_msg}"
-            self.statusBar().showMessage(
-                f"音源インストール完了: {installed_name} ({engine_msg})",
-                5000,
-            )
-            QMessageBox.information(self, "導入成功", message)
+        name = str(result.get("name", ""))
+        engine_message = str(result.get("engine_message", "汎用Auralエンジン"))
+        self.statusBar().showMessage(
+            f"音源インストール完了: {name} ({engine_message})", 5000
+        )
+        QMessageBox.information(
+            self,
+            "導入成功",
+            f"音源「{name}」をインストールしました。\nエンジン: {engine_message}",
+        )
 
-        except Exception as exc:
-            logger.exception("ドラッグ＆ドロップ音源インストール失敗: %s", exc)
-            QMessageBox.critical(
-                self,
-                "導入エラー",
-                f"インストール中にエラーが発生しました:\n{exc}",
-            )
+    @Slot(str)
+    def _on_voice_bank_import_failed(self: Any, error_message: str) -> None:
+        self._voice_bank_import_worker = None
+        logger.error("ドラッグ＆ドロップ音源インストール失敗: %s", error_message)
+        self.statusBar().showMessage("音源のインストールに失敗しました。", 6000)
+        QMessageBox.critical(
+            self,
+            "導入エラー",
+            f"インストール中にエラーが発生しました:\n{error_message}",
+        )
+
+    @Slot()
+    def _on_voice_bank_import_thread_finished(self: Any) -> None:
+        worker = getattr(self, "_voice_bank_import_worker", None)
+        if worker is not None:
+            try:
+                if not worker.isRunning():
+                    self._voice_bank_import_worker = None
+            except RuntimeError:
+                self._voice_bank_import_worker = None
+
 
     def generate_and_save_oto(self: Any, target_voice_dir: str, force_redo: bool = False) -> None:
         """
@@ -1442,32 +1561,7 @@ class ProjectIOMixin:
             file_lower = file_path.lower()
 
             if file_lower.endswith(".zip") or (source_type == "url" and ".zip" in file_lower):
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage(f"音源を処理中: {os.path.basename(file_path)}")
-
-                try:
-                    zip_input_path = file_path
-                    tmp_file_path = None
-
-                    if source_type == "url":
-                        parsed = urlparse(file_path)
-                        if parsed.scheme not in ("http", "https"):
-                            raise ValueError(f"未対応のURLスキームです: {parsed.scheme}")
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
-                            tmp_file_path = tmp.name
-                        urlretrieve(file_path, tmp_file_path)
-                        zip_input_path = tmp_file_path
-
-                    self.import_voice_bank(zip_input_path)
-
-                    if tmp_file_path and os.path.exists(tmp_file_path):
-                        os.remove(tmp_file_path)
-
-                except Exception as e:
-                    if 'tmp_file_path' in locals() and tmp_file_path and os.path.exists(tmp_file_path):
-                        os.remove(tmp_file_path)
-                    QMessageBox.critical(self, "導入失敗", f"インストール中にエラーが発生しました:\\n{str(e)}")
+                self.import_voice_bank(file_path, source_type=source_type)
 
             elif file_lower.endswith((".mid", ".midi", ".json", ".vose", ".ust", ".vsqx")):
                 if self.load_file_from_path(file_path):
