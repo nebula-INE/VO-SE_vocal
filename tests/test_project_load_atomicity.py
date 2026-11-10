@@ -40,14 +40,14 @@ class _StatusBar:
         self.messages.append(args)
 
 
-class _ProjectWindow:
+class _ProjectWindow(ProjectIOMixin):
     def __init__(self):
         track = _Track("Current")
         track.notes = [NoteEvent(note_number=60, start_time=0.0, duration=0.5)]
         self.tracks = [track]
         self.current_track_idx = 0
         self.timeline_widget = _Timeline()
-        self.graph_editor_widget = SimpleNamespace(tempo=120.0, all_parameters={})
+        self.graph_editor_widget = SimpleNamespace(tempo=120.0, all_parameters={}, update=lambda: None)
         self.current_playback_time = 0.0
         self.current_voice_id = "voice-before"
         self.current_voice = "Before"
