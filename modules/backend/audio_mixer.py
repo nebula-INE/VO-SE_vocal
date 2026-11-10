@@ -298,9 +298,10 @@ class AudioMixer:
                 sources = dict(self._sources)
 
             durations = {
-                track_id: int(math.ceil(
-                    source["frames"] * self.sample_rate / source["sample_rate"]
-                ))
+                track_id: max(
+                    1,
+                    int(round(source["frames"] * self.sample_rate / source["sample_rate"])),
+                )
                 for track_id, source in sources.items()
             }
             for track in tracks:
@@ -389,7 +390,14 @@ class AudioMixer:
     ) -> np.ndarray:
         """Read and resample only the requested output block."""
         source_rate = int(source["sample_rate"])
-        ratio = source_rate / float(self.sample_rate)
+        # Match the legacy whole-file resampler: its output frame count was
+        # round(source_frames * target_rate / source_rate), then linspace()
+        # mapped each output index across the full source-frame interval.
+        target_frames = max(
+            1,
+            int(round(int(source["frames"]) * self.sample_rate / source_rate)),
+        )
+        ratio = int(source["frames"]) / float(target_frames)
         first_source_frame = int(math.floor(output_start * ratio))
         last_source_position = (output_start + output_count - 1) * ratio
         required_frames = max(
@@ -566,8 +574,8 @@ class AudioMixer:
             1,
             int(round(len(data) * self.sample_rate / source_rate)),
         )
-        source_x = np.arange(len(data), dtype=np.float64)
-        target_x = np.arange(target_len, dtype=np.float64) * source_rate / self.sample_rate
+        source_x = np.linspace(0.0, 1.0, len(data), endpoint=False)
+        target_x = np.linspace(0.0, 1.0, target_len, endpoint=False)
         channels = [
             np.interp(target_x, source_x, data[:, channel])
             for channel in range(data.shape[1])
