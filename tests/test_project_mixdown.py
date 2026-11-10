@@ -200,8 +200,10 @@ def test_project_worker_renders_each_vocal_then_mixes_audio_tracks(tmp_path):
     audio_path = tmp_path / "instrument.wav"
     _write(audio_path, np.full((16, 2), 0.3, dtype=np.float32), sample_rate=44100)
 
-    vocal_a = _track("", track_type="vocal", audio_path="", notes=[object()], name="Vocal A")
-    vocal_b = _track("", track_type="vocal", audio_path="", notes=[object()], name="Vocal B")
+    original_note_a = SimpleNamespace(value="original-a")
+    original_note_b = SimpleNamespace(value="original-b")
+    vocal_a = _track("", track_type="vocal", audio_path="", notes=[original_note_a], name="Vocal A")
+    vocal_b = _track("", track_type="vocal", audio_path="", notes=[original_note_b], name="Vocal B")
     instrument = _track(audio_path, name="Instrument")
     output = tmp_path / "project.wav"
 
@@ -216,6 +218,8 @@ def test_project_worker_renders_each_vocal_then_mixes_audio_tracks(tmp_path):
                 "mode_flag": kwargs.get("mode_flag"),
                 "tempo_bpm": kwargs.get("tempo_bpm"),
             })
+            # Simulate a renderer that annotates/mutates NoteEvent objects.
+            notes[0].value = "mutated-by-renderer"
             value = 0.1 if len(self.calls) == 1 else 0.2
             sf.write(
                 file_path,
@@ -251,6 +255,8 @@ def test_project_worker_renders_each_vocal_then_mixes_audio_tracks(tmp_path):
     assert len(engine.calls) == 2
     assert [call["mode_flag"] for call in engine.calls] == [1, 1]
     assert [call["tempo_bpm"] for call in engine.calls] == [120.0, 120.0]
+    assert original_note_a.value == "original-a"
+    assert original_note_b.value == "original-b"
 
     data, rate = sf.read(output, dtype="float32", always_2d=True)
     assert rate == 44100
