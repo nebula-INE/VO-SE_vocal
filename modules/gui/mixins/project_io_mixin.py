@@ -515,14 +515,6 @@ class ProjectIOMixin:
 
     def import_external_project(self: Any) -> None:
         """ファイル選択後、解析をワーカースレッドで実行してからUIへ反映する。"""
-        worker = getattr(self, "_project_load_worker", None)
-        if worker is not None:
-            self.statusBar().showMessage(
-                "別のファイルを読み込み中です。完了してから次のファイルを開いてください。",
-                4000,
-            )
-            return
-
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "プロジェクトを開く",
@@ -534,8 +526,27 @@ class ProjectIOMixin:
             "VO-SE プロジェクト (*.vose *.json);;"
             "JSON ファイル (*.json)",
         )
+        if file_path:
+            self.load_external_project_async(file_path)
+
+    def load_external_project_async(self: Any, file_path: str) -> bool:
+        """Load a known project path asynchronously; suitable for menus and drag/drop."""
         if not file_path:
-            return
+            return False
+        extension = os.path.splitext(file_path)[1].lower()
+        if extension not in {".ust", ".vsqx", ".mid", ".midi", ".json", ".vose"}:
+            self.statusBar().showMessage(
+                f"未対応のファイル形式です: {extension}", 4000
+            )
+            return False
+
+        worker = getattr(self, "_project_load_worker", None)
+        if worker is not None:
+            self.statusBar().showMessage(
+                "別のファイルを読み込み中です。完了してから次のファイルを開いてください。",
+                4000,
+            )
+            return False
 
         self._project_load_worker = _ExternalProjectLoadWorker(file_path)
         self._project_load_worker.signals.completed.connect(
@@ -548,6 +559,7 @@ class ProjectIOMixin:
             f"ファイルを解析中: {os.path.basename(file_path)}", 0
         )
         QThreadPool.globalInstance().start(self._project_load_worker)
+        return True
 
     @Slot(str, object)
     def _on_external_project_loaded(self: Any, file_path: str, payload: object) -> None:
@@ -1428,16 +1440,16 @@ class ProjectIOMixin:
             file_path = item["path"]
             source_type = item["source"]
             file_lower = file_path.lower()
-            
+
             if file_lower.endswith(".zip") or (source_type == "url" and ".zip" in file_lower):
                 status_bar = self.statusBar()
                 if status_bar:
                     status_bar.showMessage(f"音源を処理中: {os.path.basename(file_path)}")
-                
+
                 try:
                     zip_input_path = file_path
                     tmp_file_path = None
-                    
+
                     if source_type == "url":
                         parsed = urlparse(file_path)
                         if parsed.scheme not in ("http", "https"):
@@ -1448,57 +1460,30 @@ class ProjectIOMixin:
                         zip_input_path = tmp_file_path
 
                     self.import_voice_bank(zip_input_path)
-                    
+
                     if tmp_file_path and os.path.exists(tmp_file_path):
                         os.remove(tmp_file_path)
 
                 except Exception as e:
                     if 'tmp_file_path' in locals() and tmp_file_path and os.path.exists(tmp_file_path):
                         os.remove(tmp_file_path)
-                    QMessageBox.critical(self, "導入失敗", f"インストール中にエラーが発生しました:\n{str(e)}")
+                    QMessageBox.critical(self, "導入失敗", f"インストール中にエラーが発生しました:\\n{str(e)}")
 
-            elif file_lower.endswith(('.mid', '.midi')):
-                if hasattr(self, 'load_file_from_path'):
-                    self.load_file_from_path(file_path)
-                
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage(f"MIDIファイルを読み込みました: {os.path.basename(file_path)}")
-
-            elif file_lower.endswith(('.json', '.ust')):
-                if hasattr(self, 'load_file_from_path'):
-                    self.load_file_from_path(file_path)
-                
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage(f"プロジェクトを読み込みました: {os.path.basename(file_path)}")
+            elif file_lower.endswith((".mid", ".midi", ".json", ".vose", ".ust", ".vsqx")):
+                if self.load_file_from_path(file_path):
+                    status_bar = self.statusBar()
+                    if status_bar:
+                        status_bar.showMessage(
+                            f"読み込みを開始しました: {os.path.basename(file_path)}", 3000
+                        )
 
     # ======================================================================
     # 【従来実装】その他メソッド
     # ======================================================================
 
     def load_file_from_path(self: Any, filepath: str) -> bool:
-        """ファイル拡張子に応じて、実際のプロジェクトローダーへ振り分ける。"""
-        ext = os.path.splitext(filepath)[1].lower()
-        try:
-            if ext in (".mid", ".midi"):
-                return bool(self.load_midi_file_from_path(filepath))
-            if ext == ".ust":
-                return bool(self.load_ust_file(filepath))
-            if ext in (".json", ".vose"):
-                return bool(self.load_json_project(filepath))
-            if ext == ".vsqx":
-                self._load_vsqx(filepath)
-                return False
-            if ext == ".ustx":
-                self._parse_ustx(filepath)
-                return False
-            self.statusBar().showMessage(f"未対応のファイル形式です: {ext}", 3000)
-            return False
-        except Exception as exc:
-            logger.exception("ファイル読み込みエラー: %s", exc)
-            QMessageBox.critical(self, "読み込みエラー", f"ファイルの読み込みに失敗しました:\n{exc}")
-            return False
+        """Compatibility entry point that routes every supported file through the async loader."""
+        return self.load_external_project_async(filepath)
 
     def _parse_midi(self: Any, filepath: str):
         """互換用MIDIローダー。正式経路は load_midi_file_from_path()."""
