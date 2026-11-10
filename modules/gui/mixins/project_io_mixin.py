@@ -30,15 +30,130 @@ from modules.data.vsqx_parser import parse_vsqx
 logger = logging.getLogger(__name__)
 
 
+def _prepare_project_note(note_data: Dict[str, Any], description: str) -> NoteEvent:
+    """Convert and validate a serialized note without accessing any GUI object."""
+    if not isinstance(note_data, dict):
+        raise ValueError(f"{description} の形式が不正です。")
+    note = NoteEvent.from_dict(note_data)
+    try:
+        raw_note_number = float(note.note_number)
+        note_number = int(raw_note_number)
+        start_time = float(note.start_time)
+        duration = float(note.duration)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{description} の音程・開始位置・長さが不正です。") from exc
+
+    if (
+        not math.isfinite(raw_note_number)
+        or not raw_note_number.is_integer()
+        or not 0 <= note_number <= 127
+        or not math.isfinite(start_time)
+        or start_time < 0.0
+        or not math.isfinite(duration)
+        or duration < 0.0
+    ):
+        raise ValueError(f"{description} の音程・開始位置・長さが範囲外です。")
+
+    note.note_number = note_number
+    note.start_time = start_time
+    note.duration = duration
+    for field_name in (
+        "velocity", "vibrato_depth", "vibrato_rate", "formant_shift",
+        "onset", "pre_utterance", "overlap",
+    ):
+        value = getattr(note, field_name, None)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"{description} の {field_name} が数値ではありません。"
+            ) from exc
+        if not math.isfinite(number):
+            raise ValueError(
+                f"{description} の {field_name} に無効な数値があります。"
+            )
+    return note
+
+
+def _prepare_ust_notes(note_dicts: List[Dict[str, Any]]) -> List[NoteEvent]:
+    """Convert UST note dictionaries into models before returning to the GUI thread."""
+    notes: List[NoteEvent] = []
+    for index, data in enumerate(note_dicts):
+        try:
+            note = NoteEvent.from_dict(data)
+            if data.get("pre_utterance") is not None:
+                note.pre_utterance = data["pre_utterance"]
+            if data.get("overlap") is not None:
+                note.overlap = data["overlap"]
+            for key, value in data.items():
+                if key.startswith("_ust_"):
+                    setattr(note, key, value)
+            notes.append(note)
+        except Exception as exc:
+            logger.warning("UST NoteEvent 変換失敗: %s / note=%d", exc, index + 1)
+    return notes
+
+
+def _prepare_midi_note_tracks(note_dicts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    notes_by_track: Dict[int, List[NoteEvent]] = {}
+    names_by_track: Dict[int, str] = {}
+    for note_data in note_dicts:
+        track_index = int(note_data.get("_midi_track_index", 0))
+        note = NoteEvent.from_dict(note_data)
+        notes_by_track.setdefault(track_index, []).append(note)
+        name = str(note_data.get("_midi_track_name", "") or "")
+        if name:
+            names_by_track[track_index] = name
+    return {
+        "notes_by_track": notes_by_track,
+        "names_by_track": names_by_track,
+        "note_count": len(note_dicts),
+    }
+
+
+def _prepare_json_note_tracks(data: Dict[str, Any]) -> Dict[str, Any]:
+    raw_tracks = data.get("tracks")
+    if raw_tracks is not None and not isinstance(raw_tracks, list):
+        raise ValueError("tracks は配列である必要があります。")
+    if isinstance(raw_tracks, list) and raw_tracks:
+        prepared_tracks: List[List[NoteEvent]] = []
+        for track_index, raw_track in enumerate(raw_tracks):
+            if not isinstance(raw_track, dict):
+                raise ValueError(f"Track {track_index + 1} の形式が不正です。")
+            raw_notes = raw_track.get("notes", [])
+            if not isinstance(raw_notes, list):
+                raise ValueError(
+                    f"Track {track_index + 1} の notes は配列である必要があります。"
+                )
+            prepared_tracks.append([
+                _prepare_project_note(note_data, f"Track {track_index + 1} / Note {note_index + 1}")
+                for note_index, note_data in enumerate(raw_notes)
+            ])
+        return {"prepared_note_tracks": prepared_tracks, "prepared_legacy_notes": None}
+
+    raw_notes = data.get("notes", [])
+    if not isinstance(raw_notes, list):
+        raise ValueError("notes は配列である必要があります。")
+    prepared_legacy = [
+        _prepare_project_note(note_data, f"Note {note_index + 1}")
+        for note_index, note_data in enumerate(raw_notes)
+    ]
+    return {"prepared_note_tracks": None, "prepared_legacy_notes": prepared_legacy}
+
+
 def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
     """Parse an external project file without touching GUI objects."""
     extension = os.path.splitext(file_path)[1].lower()
     if extension == ".ust":
         project = UstParser().load(file_path)
+        note_dicts = UstConverter.to_note_dicts(project)
         return {
             "format": "ust",
             "project": project,
-            "note_dicts": UstConverter.to_note_dicts(project),
+            "note_dicts": note_dicts,
+            "prepared_notes": _prepare_ust_notes(note_dicts),
         }
     if extension == ".vsqx":
         return {"format": "vsqx", "project": parse_vsqx(file_path)}
@@ -48,13 +163,14 @@ def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
         notes = load_midi_file(file_path)
         if notes is None:
             raise ValueError("MIDIファイルを解析できませんでした。")
-        return {"format": "midi", "notes": notes}
+        return {"format": "midi", "notes": notes, **_prepare_midi_note_tracks(notes)}
     if extension == ".json":
         with open(file_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         if not isinstance(data, dict):
             raise ValueError("プロジェクトJSONのルートはオブジェクトである必要があります。")
-        return {"format": "json", "data": data}
+        prepared = _prepare_json_note_tracks(data)
+        return {"format": "json", "data": data, **prepared}
     raise ValueError(f"対応していない形式です: {extension}")
 
 
@@ -271,6 +387,7 @@ class ProjectIOMixin:
         file_path: str,
         parsed_project: Any = None,
         parsed_note_dicts: Optional[List[Dict[str, Any]]] = None,
+        prepared_notes: Optional[List[NoteEvent]] = None,
     ) -> bool:
         """
         .ust ファイルをネイティブパーサーで読み込み、
@@ -318,28 +435,12 @@ class ProjectIOMixin:
                 self.statusBar().showMessage("UST: ノートが見つかりませんでした。")
                 return False
 
-            # NoteEvent に変換してタイムラインに設定
-            notes: List[NoteEvent] = []
-            for d in note_dicts:
-                try:
-                    # UST 拡張フィールドは NoteEvent.from_dict() では無視されるが
-                    # _ust_* キーを note 属性として後から設定する
-                    note = NoteEvent.from_dict(d)
+            # Worker で変換済みならそのまま使用し、旧呼び出しは互換変換する。
+            if prepared_notes is not None:
+                notes = list(prepared_notes)
+            else:
+                notes = _prepare_ust_notes(note_dicts)
 
-                    # 先行発声・オーバーラップが UST で明示されている場合のみ設定
-                    if d.get("pre_utterance") is not None:
-                        note.pre_utterance = d["pre_utterance"]
-                    if d.get("overlap") is not None:
-                        note.overlap = d["overlap"]
-
-                    # UST 拡張フィールドをそのまま属性として保持
-                    for k, v in d.items():
-                        if k.startswith("_ust_"):
-                            setattr(note, k, v)
-
-                    notes.append(note)
-                except Exception as exc:
-                    logger.warning("NoteEvent 変換失敗: %s / %s", exc, d)
 
             # 現在のトラックにも実データを同期する。
             tracks = list(getattr(self, "tracks", []) or [])
@@ -438,6 +539,7 @@ class ProjectIOMixin:
                     file_path,
                     parsed_project=payload.get("project"),
                     parsed_note_dicts=payload.get("note_dicts"),
+                    prepared_notes=payload.get("prepared_notes"),
                 )
             elif file_format == "vsqx":
                 self._load_vsqx(
@@ -448,11 +550,14 @@ class ProjectIOMixin:
                 self.load_midi_file_from_path(
                     file_path,
                     parsed_notes=payload.get("notes"),
+                    prepared_note_tracks=payload,
                 )
             elif file_format == "json":
                 self.load_json_project(
                     file_path,
                     parsed_data=payload.get("data"),
+                    prepared_note_tracks=payload.get("prepared_note_tracks"),
+                    prepared_legacy_notes=payload.get("prepared_legacy_notes"),
                 )
             else:
                 raise ValueError(f"不明なファイル形式です: {file_format}")
@@ -644,6 +749,8 @@ class ProjectIOMixin:
         self: Any,
         file_path: str,
         parsed_data: Optional[Dict[str, Any]] = None,
+        prepared_note_tracks: Optional[List[List[NoteEvent]]] = None,
+        prepared_legacy_notes: Optional[List[NoteEvent]] = None,
     ) -> bool:
         """旧単一トラックJSONと新マルチトラックVOSE/JSONを検証してから反映する。"""
         import math
@@ -738,18 +845,23 @@ class ProjectIOMixin:
                     raw_notes = raw.get("notes", [])
                     if not isinstance(raw_notes, list):
                         raise ValueError(f"Track {index + 1} の notes は配列である必要があります。")
-                    notes = []
-                    for note_index, note_data in enumerate(raw_notes):
-                        if not isinstance(note_data, dict):
-                            raise ValueError(
-                                f"Track {index + 1} / Note {note_index + 1} の形式が不正です。"
+                    if prepared_note_tracks is not None:
+                        if index >= len(prepared_note_tracks):
+                            raise ValueError("事前解析されたトラックノート数が一致しません。")
+                        notes = list(prepared_note_tracks[index])
+                    else:
+                        notes = []
+                        for note_index, note_data in enumerate(raw_notes):
+                            if not isinstance(note_data, dict):
+                                raise ValueError(
+                                    f"Track {index + 1} / Note {note_index + 1} の形式が不正です。"
+                                )
+                            notes.append(
+                                parse_project_note(
+                                    note_data,
+                                    f"Track {index + 1} / Note {note_index + 1}",
+                                )
                             )
-                        notes.append(
-                            parse_project_note(
-                                note_data,
-                                f"Track {index + 1} / Note {note_index + 1}",
-                            )
-                        )
 
                     mixer = raw.get("mixer", {})
                     if not isinstance(mixer, dict):
@@ -789,13 +901,16 @@ class ProjectIOMixin:
                 raw_notes = data.get("notes", [])
                 if not isinstance(raw_notes, list):
                     raise ValueError("notes は配列である必要があります。")
-                notes = []
-                for note_index, note_data in enumerate(raw_notes):
-                    if not isinstance(note_data, dict):
-                        raise ValueError(f"Note {note_index + 1} の形式が不正です。")
-                    notes.append(
-                        parse_project_note(note_data, f"Note {note_index + 1}")
-                    )
+                if prepared_legacy_notes is not None:
+                    notes = list(prepared_legacy_notes)
+                else:
+                    notes = []
+                    for note_index, note_data in enumerate(raw_notes):
+                        if not isinstance(note_data, dict):
+                            raise ValueError(f"Note {note_index + 1} の形式が不正です。")
+                        notes.append(
+                            parse_project_note(note_data, f"Note {note_index + 1}")
+                        )
 
                 loaded_tracks = deepcopy(existing_tracks)
                 requested_idx = int(getattr(self, "current_track_idx", 0))
@@ -914,6 +1029,7 @@ class ProjectIOMixin:
         self: Any,
         file_path: str,
         parsed_notes: Optional[List[Dict[str, Any]]] = None,
+        prepared_note_tracks: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """MIDIを読み込み、元ファイルのトラック分割をデスクトッププロジェクトへ復元する。"""
         from modules.data.midi_manager import load_midi_file
@@ -925,19 +1041,23 @@ class ProjectIOMixin:
                 if parsed_notes is not None
                 else load_midi_file(file_path)
             )
-            if not note_dicts:
+            if not note_dicts and prepared_note_tracks is None:
                 self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
                 return False
 
-            notes_by_track: Dict[int, List[NoteEvent]] = {}
-            names_by_track: Dict[int, str] = {}
-            for note_data in note_dicts:
-                track_index = int(note_data.get("_midi_track_index", 0))
-                note = NoteEvent.from_dict(note_data)
-                notes_by_track.setdefault(track_index, []).append(note)
-                track_name = str(note_data.get("_midi_track_name", "") or "")
-                if track_name:
-                    names_by_track[track_index] = track_name
+            if prepared_note_tracks is not None:
+                notes_by_track = prepared_note_tracks.get("notes_by_track", {})
+                names_by_track = prepared_note_tracks.get("names_by_track", {})
+            else:
+                notes_by_track: Dict[int, List[NoteEvent]] = {}
+                names_by_track: Dict[int, str] = {}
+                for note_data in note_dicts:
+                    track_index = int(note_data.get("_midi_track_index", 0))
+                    note = NoteEvent.from_dict(note_data)
+                    notes_by_track.setdefault(track_index, []).append(note)
+                    track_name = str(note_data.get("_midi_track_name", "") or "")
+                    if track_name:
+                        names_by_track[track_index] = track_name
 
             source_track_indices = sorted(notes_by_track)
             if not source_track_indices:
