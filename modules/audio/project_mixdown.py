@@ -37,7 +37,8 @@ def mixdown_tracks_to_wav(
     partial mix. The destination is replaced only after the complete WAV has
     been written and validated.
     """
-    if sf is None:
+    soundfile_module = sf
+    if soundfile_module is None:
         raise RuntimeError("プロジェクトのミックスダウンには soundfile が必要です。")
 
     try:
@@ -92,9 +93,9 @@ def mixdown_tracks_to_wav(
         failed_sources: set[int] = set()
         try:
             for track_id, source in sources.items():
-                readers[track_id] = sf.SoundFile(source.path, mode="r")
+                readers[track_id] = soundfile_module.SoundFile(source.path, mode="r")
 
-            with sf.SoundFile(
+            with soundfile_module.SoundFile(
                 temporary_path,
                 mode="w",
                 samplerate=output_rate,
@@ -131,7 +132,7 @@ def mixdown_tracks_to_wav(
             if callable(cancel_check) and cancel_check():
                 raise RuntimeError("プロジェクトのミックスダウンがキャンセルされました。")
 
-            info = sf.info(temporary_path)
+            info = soundfile_module.info(temporary_path)
             if int(info.samplerate) != output_rate or int(info.channels) != 2:
                 raise RuntimeError("ミックスダウンWAVの形式検証に失敗しました。")
             if int(info.frames) != total_frames:
