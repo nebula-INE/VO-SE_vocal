@@ -19,6 +19,7 @@ import os
 from typing import Any, Dict, List, Optional, cast
 from copy import deepcopy
 
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from modules.data.data_models import NoteEvent, PitchEvent
@@ -26,6 +27,57 @@ from modules.data.ust_parser import UstParser, UstConverter
 from modules.data.vsqx_parser import parse_vsqx
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
+    """Parse an external project file without touching GUI objects."""
+    extension = os.path.splitext(file_path)[1].lower()
+    if extension == ".ust":
+        project = UstParser().load(file_path)
+        return {
+            "format": "ust",
+            "project": project,
+            "note_dicts": UstConverter.to_note_dicts(project),
+        }
+    if extension == ".vsqx":
+        return {"format": "vsqx", "project": parse_vsqx(file_path)}
+    if extension in {".mid", ".midi"}:
+        from modules.data.midi_manager import load_midi_file
+
+        notes = load_midi_file(file_path)
+        if notes is None:
+            raise ValueError("MIDIファイルを解析できませんでした。")
+        return {"format": "midi", "notes": notes}
+    if extension == ".json":
+        with open(file_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            raise ValueError("プロジェクトJSONのルートはオブジェクトである必要があります。")
+        return {"format": "json", "data": data}
+    raise ValueError(f"対応していない形式です: {extension}")
+
+
+class _ExternalProjectLoadSignals(QObject):
+    completed = Signal(str, object)
+    failed = Signal(str, str)
+
+
+class _ExternalProjectLoadWorker(QRunnable):
+    """Run potentially expensive parsing outside the Qt GUI thread."""
+
+    def __init__(self, file_path: str) -> None:
+        super().__init__()
+        self.file_path = file_path
+        self.signals = _ExternalProjectLoadSignals()
+
+    def run(self) -> None:
+        try:
+            payload = _parse_external_project_file(self.file_path)
+            self.signals.completed.emit(self.file_path, payload)
+        except Exception as exc:
+            logger.exception("外部プロジェクトのバックグラウンド解析に失敗: %s", self.file_path)
+            self.signals.failed.emit(self.file_path, str(exc))
+
 
 # UST 書き出し時のデフォルト解像度 (ticks/beat)
 _TICKS_PER_BEAT = 480
@@ -210,7 +262,12 @@ class ProjectIOMixin:
     # UST 読み込み
     # ------------------------------------------------------------------
 
-    def load_ust_file(self: Any, file_path: str) -> bool:
+    def load_ust_file(
+        self: Any,
+        file_path: str,
+        parsed_project: Any = None,
+        parsed_note_dicts: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
         """
         .ust ファイルをネイティブパーサーで読み込み、
         タイムラインに反映する。
@@ -223,9 +280,12 @@ class ProjectIOMixin:
         """
         try:
             before_state = self._capture_project_edit_state()
-            parser = UstParser()
-            project = parser.load(file_path)
-            note_dicts = UstConverter.to_note_dicts(project)
+            project = parsed_project if parsed_project is not None else UstParser().load(file_path)
+            note_dicts = (
+                parsed_note_dicts
+                if parsed_note_dicts is not None
+                else UstConverter.to_note_dicts(project)
+            )
 
             # UST の VoiceDir を解決し、実在する音源なら読み込み時点で
             # エンジンの音源ライブラリを切り替える。%VOICE% のような
@@ -324,36 +384,92 @@ class ProjectIOMixin:
     # ------------------------------------------------------------------
 
     def import_external_project(self: Any) -> None:
-        """
-        ファイルダイアログを開き、拡張子に応じて適切なローダーを呼び出す。
-        対応形式: .ust, .vsqx, .mid, .json
-        """
+        """ファイル選択後、解析をワーカースレッドで実行してからUIへ反映する。"""
+        worker = getattr(self, "_project_load_worker", None)
+        if worker is not None:
+            self.statusBar().showMessage(
+                "別のファイルを読み込み中です。完了してから次のファイルを開いてください。",
+                4000,
+            )
+            return
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "プロジェクトを開く",
             "",
-            "対応ファイル (*.ust *.vsqx *.mid *.json);;"
+            "対応ファイル (*.ust *.vsqx *.mid *.midi *.json);;"
             "UTAU プロジェクト (*.ust);;"
             "Vocaloid プロジェクト (*.vsqx);;"
             "MIDI ファイル (*.mid *.midi);;"
             "VO-SE プロジェクト (*.json)",
         )
-
         if not file_path:
             return
 
-        ext = os.path.splitext(file_path)[1].lower()
+        self._project_load_worker = _ExternalProjectLoadWorker(file_path)
+        self._project_load_worker.signals.completed.connect(
+            self._on_external_project_loaded
+        )
+        self._project_load_worker.signals.failed.connect(
+            self._on_external_project_load_failed
+        )
+        self.statusBar().showMessage(
+            f"ファイルを解析中: {os.path.basename(file_path)}", 0
+        )
+        QThreadPool.globalInstance().start(self._project_load_worker)
 
-        if ext == ".ust":
-            self.load_ust_file(file_path)
-        elif ext == ".vsqx":
-            self._load_vsqx(file_path)
-        elif ext in (".mid", ".midi"):
-            self.load_midi_file_from_path(file_path)
-        elif ext == ".json":
-            self.load_json_project(file_path)
-        else:
-            QMessageBox.warning(self, "非対応形式", f"対応していない形式です: {ext}")
+    @Slot(str, object)
+    def _on_external_project_loaded(self: Any, file_path: str, payload: object) -> None:
+        self._project_load_worker = None
+        if not isinstance(payload, dict):
+            self._on_external_project_load_failed(
+                file_path, "ファイル解析結果が不正です。"
+            )
+            return
+
+        file_format = payload.get("format")
+        try:
+            if file_format == "ust":
+                self.load_ust_file(
+                    file_path,
+                    parsed_project=payload.get("project"),
+                    parsed_note_dicts=payload.get("note_dicts"),
+                )
+            elif file_format == "vsqx":
+                self._load_vsqx(
+                    file_path,
+                    parsed_project=payload.get("project"),
+                )
+            elif file_format == "midi":
+                self.load_midi_file_from_path(
+                    file_path,
+                    parsed_notes=payload.get("notes"),
+                )
+            elif file_format == "json":
+                self.load_json_project(
+                    file_path,
+                    parsed_data=payload.get("data"),
+                )
+            else:
+                raise ValueError(f"不明なファイル形式です: {file_format}")
+        except Exception as exc:
+            logger.exception("解析済みプロジェクトの反映に失敗: %s", file_path)
+            self._on_external_project_load_failed(file_path, str(exc))
+
+    @Slot(str, str)
+    def _on_external_project_load_failed(
+        self: Any, file_path: str, error_message: str
+    ) -> None:
+        self._project_load_worker = None
+        logger.error("プロジェクト読み込み失敗 (%s): %s", file_path, error_message)
+        self.statusBar().showMessage(
+            f"読み込み失敗: {os.path.basename(file_path)}", 6000
+        )
+        QMessageBox.critical(
+            self,
+            "読み込みエラー",
+            f"{os.path.basename(file_path)} を読み込めませんでした。\\n{error_message}",
+        )
 
     # ------------------------------------------------------------------
     # UST 書き出し
@@ -520,15 +636,22 @@ class ProjectIOMixin:
         """互換用保存エントリポイント。正式なマルチトラック保存へ委譲する。"""
         return bool(self.on_save_project_clicked())
 
-    def load_json_project(self: Any, file_path: str) -> bool:
+    def load_json_project(
+        self: Any,
+        file_path: str,
+        parsed_data: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """旧単一トラックJSONと新マルチトラックVOSE/JSONを検証してから反映する。"""
         import math
 
         before_state = None
         commit_started = False
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            if parsed_data is None:
+                with open(file_path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+            else:
+                data = parsed_data
             if not isinstance(data, dict):
                 raise ValueError("プロジェクトJSONのルートはオブジェクトである必要があります。")
 
@@ -783,13 +906,21 @@ class ProjectIOMixin:
             )
             return False
 
-    def load_midi_file_from_path(self: Any, file_path: str) -> bool:
+    def load_midi_file_from_path(
+        self: Any,
+        file_path: str,
+        parsed_notes: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
         """MIDIを読み込み、元ファイルのトラック分割をデスクトッププロジェクトへ復元する。"""
         from modules.data.midi_manager import load_midi_file
 
         try:
             before_state = self._capture_project_edit_state()
-            note_dicts = load_midi_file(file_path)
+            note_dicts = (
+                parsed_notes
+                if parsed_notes is not None
+                else load_midi_file(file_path)
+            )
             if not note_dicts:
                 self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
                 return False
@@ -872,11 +1003,11 @@ class ProjectIOMixin:
     # 内部: .vsqx 読み込み
     # ------------------------------------------------------------------
 
-    def _load_vsqx(self: Any, file_path: str) -> bool:
+    def _load_vsqx(self: Any, file_path: str, parsed_project: Any = None) -> bool:
         """VOCALOID 3/4 .vsqx を読み込み、現在のトラックへ反映する。"""
         try:
             before_state = self._capture_project_edit_state()
-            project = parse_vsqx(file_path)
+            project = parsed_project if parsed_project is not None else parse_vsqx(file_path)
             if not project.notes:
                 raise ValueError("VSQX に有効なノートがありません。")
             tracks = list(getattr(self, "tracks", []) or [])
