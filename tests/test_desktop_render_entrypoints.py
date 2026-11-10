@@ -65,6 +65,8 @@ def test_window_waits_for_external_project_parser_before_close():
     assert 'getattr(self, "_project_load_worker", None)' in close_handler
     assert 'done.wait(15.0)' in close_handler
     assert "QCoreApplication.processEvents()" in close_handler
+    assert 'getattr(self, "_audio_mixer_command_thread", None)' in close_handler
+    assert "audio_command_worker.wait(15000)" in close_handler
 
 
 def test_external_project_worker_signals_failure_and_always_sets_done(tmp_path):
