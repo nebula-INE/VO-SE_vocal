@@ -259,23 +259,23 @@ def test_play_probes_default_output_and_supports_mono_devices(monkeypatch):
         def close(self):
             self.active = False
 
-    class FakeSoundDevice:
-        CallbackStop = CallbackStopForTest
+    def query_output_device(kind=None):
+        assert kind == "output"
+        return {
+            "name": "Mono Output",
+            "max_output_channels": 1,
+            "default_samplerate": 48000.0,
+        }
 
-        @staticmethod
-        def query_devices(kind=None):
-            assert kind == "output"
-            return {
-                "name": "Mono Output",
-                "max_output_channels": 1,
-                "default_samplerate": 48000.0,
-            }
+    def create_output_stream(**kwargs):
+        return FakeStream(**kwargs)
 
-        @staticmethod
-        def OutputStream(**kwargs):
-            return FakeStream(**kwargs)
-
-    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    fake_sound_device = SimpleNamespace(
+        CallbackStop=CallbackStopForTest,
+        query_devices=query_output_device,
+        OutputStream=create_output_stream,
+    )
+    monkeypatch.setattr(audio_mixer_module, "sd", fake_sound_device)
     mixer = AudioMixer(sample_rate=4, block_size=2)
     track = _track()
     _install_memory_sources(
