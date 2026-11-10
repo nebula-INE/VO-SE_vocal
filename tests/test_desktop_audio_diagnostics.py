@@ -32,7 +32,8 @@ def test_audio_error_baseline_resets_for_each_new_playback():
         "def _on_vocal_playback_render_prepared(self, results: object) -> None:",
         1,
     )[1].split("def _on_vocal_playback_prepare_thread_finished", 1)[0]
-    assert 'self._start_audio_mixer_command("start"' in prepared_handler
+    assert 'self._start_audio_mixer_command(' in prepared_handler
+    assert '"start", tracks=tracks, start_sec=start_time' in prepared_handler
 
     command_worker = source.split("class _AudioMixerCommandThread", 1)[1].split(
         "class MainWindow", 1
@@ -66,7 +67,8 @@ def test_loop_restart_uses_background_mixer_command_not_gui_call():
     update_handler = source.split("def update_playback_ui(self):", 1)[1].split(
         "def _format_timecode", 1
     )[0]
-    assert 'self._start_audio_mixer_command("start"' in update_handler
+    assert 'self._start_audio_mixer_command(' in update_handler
+    assert '"start", tracks=tracks, start_sec=0.0' in update_handler
     assert "mixer.play(0.0)" not in update_handler
 
 
