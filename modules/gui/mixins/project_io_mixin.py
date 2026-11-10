@@ -1374,15 +1374,19 @@ class ProjectIOMixin:
             return False
 
         active = getattr(self, "_voice_bank_import_worker", None)
-        if active is not None:
+        gallery = getattr(self, "voice_gallery", None)
+        gallery_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
+        for running_worker in (active, gallery_worker):
+            if running_worker is None:
+                continue
             try:
-                if active.isRunning():
+                if running_worker.isRunning():
                     self.statusBar().showMessage(
                         "別の音源を導入中です。完了してから再試行してください。", 4000
                     )
                     return False
             except RuntimeError:
-                pass
+                continue
 
         worker = _VoiceBankImportWorker(manager, zip_path, source_type, self)
         worker.completed.connect(self._on_voice_bank_import_completed)
