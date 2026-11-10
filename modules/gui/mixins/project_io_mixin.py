@@ -31,6 +31,22 @@ from modules.data.vsqx_parser import parse_vsqx
 logger = logging.getLogger(__name__)
 
 
+def _clone_track_collection(tracks: List[Any]) -> List[Any]:
+    """Clone track containers and note lists without recursively copying note trees."""
+    snapshots = []
+    for track in tracks:
+        try:
+            track_snapshot = copy(track)
+            notes = getattr(track, "notes", None)
+            if isinstance(notes, list):
+                track_snapshot.notes = list(notes)
+            snapshots.append(track_snapshot)
+        except Exception:
+            logger.exception("トラックの軽量コピーに失敗。deepcopyへフォールバック")
+            snapshots.append(deepcopy(track))
+    return snapshots
+
+
 def _prepare_project_note(note_data: Dict[str, Any], description: str) -> NoteEvent:
     """Convert and validate a serialized note without accessing any GUI object."""
     if not isinstance(note_data, dict):
@@ -220,20 +236,9 @@ class ProjectIOMixin:
         timeline = getattr(self, "timeline_widget", None)
         graph = getattr(self, "graph_editor_widget", None)
         tempo = float(getattr(timeline, "tempo", 120.0))
-        track_snapshots = []
-        for track in list(getattr(self, "tracks", []) or []):
-            try:
-                track_snapshot = copy(track)
-                # Importers replace the track's note list; a separate list is
-                # enough to retain the previous state without recursively
-                # copying every NoteEvent and its nested UST metadata.
-                notes = getattr(track, "notes", None)
-                if isinstance(notes, list):
-                    track_snapshot.notes = list(notes)
-                track_snapshots.append(track_snapshot)
-            except Exception:
-                logger.exception("トラックのUndoスナップショット作成に失敗。deepcopyへフォールバック")
-                track_snapshots.append(deepcopy(track))
+        track_snapshots = _clone_track_collection(
+            list(getattr(self, "tracks", []) or [])
+        )
 
         raw_graph_parameters = getattr(graph, "all_parameters", {}) or {}
         graph_parameter_snapshot = {
@@ -932,7 +937,7 @@ class ProjectIOMixin:
                             parse_project_note(note_data, f"Note {note_index + 1}")
                         )
 
-                loaded_tracks = deepcopy(existing_tracks)
+                loaded_tracks = _clone_track_collection(existing_tracks)
                 requested_idx = int(getattr(self, "current_track_idx", 0))
                 new_current_idx = min(max(requested_idx, 0), len(loaded_tracks) - 1)
                 loaded_tracks[new_current_idx].notes = notes
