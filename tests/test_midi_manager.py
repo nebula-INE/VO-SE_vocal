@@ -159,7 +159,8 @@ def test_primary_midi_port_switch_keeps_manager_when_shutdown_fails() -> None:
         "def update_gui_with_midi", 1
     )[0]
 
-    assert "self.midi_manager.stop()" in handler
+    assert "manager = self.midi_manager" in handler
+    assert "manager.stop()" in handler
     assert "except Exception as exc:" in handler
     failure_path = handler.split("except Exception as exc:", 1)[1].split(
         "self.midi_manager = None", 1
