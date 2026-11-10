@@ -55,6 +55,7 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
         # Merge absolute-tick events from every track before converting time.
         # Tempo changes are global in MIDI files and must affect every note track.
         events = []
+        track_names: Dict[int, str] = {}
         for track_index, track in enumerate(mid.tracks):
             absolute_tick = 0
             for event_index, message in enumerate(track):
@@ -63,12 +64,12 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
         events.sort(key=lambda item: (item[0], item[1], item[2]))
 
         notes: List[Dict[str, Any]] = []
-        active_notes: Dict[tuple[int, int], List[tuple[float, int]]] = {}
+        active_notes: Dict[tuple[int, int], List[tuple[float, int, int]]] = {}
         previous_tick = 0
         current_seconds = 0.0
         current_tempo = 500000
 
-        for absolute_tick, _track_index, _event_index, message in events:
+        for absolute_tick, event_track_index, _event_index, message in events:
             delta_ticks = absolute_tick - previous_tick
             if delta_ticks < 0:
                 raise ValueError("MIDI events are not in chronological order")
@@ -82,6 +83,8 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
                     current_tempo = int(getattr(message, "tempo", 500000))
                     if current_tempo <= 0:
                         raise ValueError("MIDI contains an invalid tempo")
+                elif message.type == "track_name":
+                    track_names[event_track_index] = str(getattr(message, "name", ""))
                 continue
 
             message_type = str(message.type)
@@ -91,7 +94,9 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
             key = (channel, note_number)
 
             if message_type == "note_on" and velocity > 0:
-                active_notes.setdefault(key, []).append((current_seconds, velocity))
+                active_notes.setdefault(key, []).append(
+                    (current_seconds, velocity, event_track_index)
+                )
             elif message_type == "note_off" or (
                 message_type == "note_on" and velocity == 0
             ):
@@ -100,7 +105,7 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
                     continue
 
                 # FIFO pairing preserves both notes when the same pitch overlaps.
-                start_seconds, start_velocity = pending.pop(0)
+                start_seconds, start_velocity, start_track_index = pending.pop(0)
                 if not pending:
                     active_notes.pop(key, None)
                 duration = current_seconds - start_seconds
@@ -116,9 +121,17 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
                 note.velocity = start_velocity
                 note_data = note.to_dict()
                 note_data["velocity"] = start_velocity
+                note_data["_midi_track_index"] = start_track_index
+                note_data["_midi_track_name"] = track_names.get(
+                    start_track_index, f"MIDI Track {start_track_index + 1}"
+                )
                 notes.append(note_data)
 
-        notes.sort(key=lambda item: (float(item.get("start_time", 0.0)), int(item.get("note_number", 60))))
+        notes.sort(key=lambda item: (
+            int(item.get("_midi_track_index", 0)),
+            float(item.get("start_time", 0.0)),
+            int(item.get("note_number", 60)),
+        ))
         return notes
     except Exception as e:
         print(f"MIDIファイルの読み込みに失敗しました: {e}")
