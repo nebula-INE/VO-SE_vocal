@@ -270,6 +270,7 @@ def test_project_load_keeps_current_voice_when_saved_voice_is_missing(tmp_path, 
 
 def test_project_undo_snapshot_restores_voice_identity():
     window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
     before = ProjectIOMixin._capture_project_edit_state(window)
 
     window.current_voice_id = "voice-b"
