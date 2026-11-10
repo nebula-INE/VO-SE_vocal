@@ -2345,6 +2345,22 @@ class MainWindow(
             # 先に stop_and_clear_playback() を呼ぶとループ状態まで解除されるため、
             # 自然終了とユーザー操作による停止を明確に分ける。
             if mixer is not None and not bool(getattr(mixer, "is_playing", False)):
+                # The producer records frames actually consumed by PortAudio.
+                # Surface asynchronous decode/device failures instead of silently
+                # treating them as a normal end-of-file.
+                mixer_error = str(getattr(mixer, "last_error", "") or "")
+                underflows = int(getattr(mixer, "output_underflow_count", 0) or 0)
+                if mixer_error:
+                    self.statusBar().showMessage(
+                        f"音声ストリーミングエラー: {mixer_error}", 8000
+                    )
+                elif underflows:
+                    self.statusBar().showMessage(
+                        f"音声出力のアンダーランを {underflows} 回検出しました。"
+                        "オーディオデバイスやシステム負荷を確認してください。",
+                        6000,
+                    )
+
                 if getattr(self, "is_looping", False):
                     try:
                         mixer.play(0.0)
@@ -2360,8 +2376,11 @@ class MainWindow(
                 self.stop_and_clear_playback()
                 return
 
-            elapsed = max(0.0, time.monotonic() - float(getattr(self, 'playback_started_monotonic', 0.0)))
-            current_time = float(getattr(self, 'playback_start_time', 0.0)) + elapsed
+            if mixer is not None and hasattr(mixer, "position_sec"):
+                current_time = float(mixer.position_sec)
+            else:
+                elapsed = max(0.0, time.monotonic() - float(getattr(self, 'playback_started_monotonic', 0.0)))
+                current_time = float(getattr(self, 'playback_start_time', 0.0)) + elapsed
             end_time = max(float(getattr(self, 'playback_end_time', 0.0)), self._get_project_duration_seconds())
 
             if end_time > 0.0 and current_time >= end_time:
