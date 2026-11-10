@@ -114,3 +114,12 @@ def test_legacy_space_shortcut_uses_unified_async_transport():
     assert "self.on_play_pause_toggled()" in shortcut
     assert "play_file(" not in shortcut
     assert "pause()" not in shortcut
+
+
+def test_rendered_wav_preview_uses_background_mixer_start():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    play_handler = source.split("def play_audio(self, path: str) -> None:", 1)[1].split(
+        "def _check_for_updates", 1
+    )[0]
+    assert 'self._start_audio_mixer_command(' in play_handler
+    assert 'play_file(' not in play_handler
