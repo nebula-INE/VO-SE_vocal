@@ -83,3 +83,13 @@ def test_external_project_worker_signals_failure_and_always_sets_done(tmp_path):
     assert worker.done.is_set()
     assert len(failures) == 1
     assert failures[0][0] == str(path)
+
+
+def test_project_open_dialog_includes_native_vose_extension():
+    source = (ROOT / "modules" / "gui" / "mixins" / "project_io_mixin.py").read_text(
+        encoding="utf-8"
+    )
+    dispatcher = source.split(
+        "def import_external_project(self: Any) -> None:", 1
+    )[1].split("def _on_external_project_loaded", 1)[0]
+    assert "*.vose" in dispatcher
