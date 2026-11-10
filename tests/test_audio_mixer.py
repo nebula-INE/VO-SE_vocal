@@ -221,7 +221,8 @@ def test_callback_underflow_is_counted_and_does_not_block(monkeypatch):
 
     assert np.allclose(output, 0.0)
     assert mixer.output_underflow_count == 1
-    assert mixer.position_sec == 0.5
+    # An underflow outputs silence but must not skip unread source samples.
+    assert mixer.position_sec == 0.0
 
 
 
