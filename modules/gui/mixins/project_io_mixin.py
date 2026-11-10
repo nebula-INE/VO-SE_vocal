@@ -1999,6 +1999,188 @@ class ProjectIOMixin:
         if not started:
             logger.warning("WAV書き出しを開始できませんでした: %s", file_path)
 
+    def export_project_mixdown(self: Any) -> bool:
+        """Export every project track to one WAV without changing single-track export."""
+        from modules.data.licensing import LicenseManager
+
+        timeline = getattr(self, "timeline_widget", None)
+        graph = getattr(self, "graph_editor_widget", None)
+        if timeline is None or graph is None:
+            QMessageBox.warning(
+                self,
+                "ミックスダウン",
+                "プロジェクトのタイムラインまたはパラメーター画面が初期化されていません。",
+            )
+            return False
+
+        def is_running(worker: Any) -> bool:
+            if worker is None:
+                return False
+            try:
+                return bool(worker.isRunning())
+            except (AttributeError, RuntimeError):
+                return False
+
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        mixer_worker = getattr(self, "_audio_mixer_command_thread", None)
+        mixdown_worker = getattr(self, "_project_mixdown_worker", None)
+        if (
+            is_running(playback_worker)
+            or is_running(mixer_worker)
+            or is_running(mixdown_worker)
+            or getattr(self, "current_worker", None) is not None
+        ):
+            self.statusBar().showMessage(
+                "再生準備・レンダリング・別のミックスダウンが完了してから実行してください。",
+                5000,
+            )
+            return False
+
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is not None and bool(getattr(mixer, "is_playing", False)):
+            self.statusBar().showMessage(
+                "ミックスダウンの前に再生を停止してください。",
+                5000,
+            )
+            return False
+
+        tracks = list(getattr(self, "tracks", []) or [])
+        if not tracks:
+            QMessageBox.warning(self, "ミックスダウン", "プロジェクトにトラックがありません。")
+            return False
+
+        current_index = int(getattr(self, "current_track_idx", 0))
+        current_track = tracks[current_index] if 0 <= current_index < len(tracks) else None
+        current_notes = list(getattr(timeline, "notes_list", []) or [])
+        track_snapshots = []
+        has_renderable_content = False
+        for index, track in enumerate(tracks):
+            snapshot = copy(track)
+            track_type = str(getattr(track, "track_type", "vocal")).lower()
+            source_notes = (
+                current_notes
+                if index == current_index and track_type == "vocal"
+                else list(getattr(track, "notes", []) or [])
+            )
+            snapshot.notes = deepcopy(source_notes)
+            snapshot.audio_path = str(getattr(track, "audio_path", "") or "")
+            # Do not reuse a stale playback cache from a previous transport session.
+            snapshot.playback_path = ""
+            snapshot.volume = float(getattr(track, "volume", 1.0))
+            snapshot.pan = float(getattr(track, "pan", 0.0))
+            snapshot.is_muted = bool(getattr(track, "is_muted", False))
+            snapshot.is_solo = bool(getattr(track, "is_solo", False))
+            track_snapshots.append(snapshot)
+            if (track_type == "vocal" and snapshot.notes) or snapshot.audio_path:
+                has_renderable_content = True
+
+        if not has_renderable_content:
+            QMessageBox.warning(
+                self,
+                "ミックスダウン",
+                "書き出せるノートまたはオーディオトラックがありません。",
+            )
+            return False
+
+        if any(
+            str(getattr(track, "track_type", "vocal")).lower() == "vocal"
+            and bool(getattr(track, "notes", []) or [])
+            for track in track_snapshots
+        ) and getattr(self, "vo_se_engine", None) is None:
+            QMessageBox.warning(
+                self,
+                "ミックスダウン",
+                "ボーカルトラックの合成エンジンが初期化されていません。",
+            )
+            return False
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "プロジェクト全体をWAVにミックスダウン",
+            "project_mixdown.wav",
+            "WAV Files (*.wav)",
+        )
+        if not file_path:
+            return False
+        if not file_path.lower().endswith(".wav"):
+            file_path += ".wav"
+
+        all_params = getattr(graph, "all_parameters", {}) or {}
+        parameters: Dict[str, Any] = {
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath": list(all_params.get("Breath", [])),
+        }
+        try:
+            tempo = float(getattr(timeline, "tempo", 120.0))
+        except (TypeError, ValueError, OverflowError):
+            tempo = 120.0
+        if not math.isfinite(tempo) or tempo <= 0.0:
+            tempo = 120.0
+
+        worker = _ProjectMixdownWorker(
+            getattr(self, "vo_se_engine", None),
+            track_snapshots,
+            parameters,
+            tempo,
+            file_path,
+            mode_flag=1 if LicenseManager.is_pro() else 0,
+            parent=self,
+        )
+        worker.progress.connect(self._on_project_mixdown_progress)
+        worker.completed.connect(self._on_project_mixdown_completed)
+        worker.failed.connect(self._on_project_mixdown_failed)
+        worker.finished.connect(self._on_project_mixdown_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._project_mixdown_worker = worker
+        self._set_playback_preparation_ui(True)
+        self.statusBar().showMessage("プロジェクト全体のWAVミックスダウンを開始しました。")
+        try:
+            worker.start()
+        except Exception as exc:
+            self._project_mixdown_worker = None
+            self._set_playback_preparation_ui(False)
+            QMessageBox.critical(
+                self,
+                "ミックスダウン",
+                f"バックグラウンド処理を開始できませんでした: {exc}",
+            )
+            return False
+        return True
+
+    @Slot(int, str)
+    def _on_project_mixdown_progress(self: Any, percent: int, message: str) -> None:
+        self.statusBar().showMessage(f"ミックスダウン {int(percent)}% — {message}")
+
+    @Slot(str)
+    def _on_project_mixdown_completed(self: Any, output_path: str) -> None:
+        self._set_playback_preparation_ui(False)
+        self.statusBar().showMessage(
+            f"プロジェクト全体のWAV書き出しが完了しました: {os.path.basename(output_path)}",
+            10000,
+        )
+
+    @Slot(str)
+    def _on_project_mixdown_failed(self: Any, message: str) -> None:
+        self._set_playback_preparation_ui(False)
+        self.statusBar().showMessage("プロジェクトのミックスダウンに失敗しました。", 5000)
+        QMessageBox.critical(
+            self,
+            "ミックスダウンに失敗しました",
+            str(message),
+        )
+
+    @Slot()
+    def _on_project_mixdown_thread_finished(self: Any) -> None:
+        worker = getattr(self, "_project_mixdown_worker", None)
+        if worker is not None:
+            try:
+                if not worker.isRunning():
+                    self._project_mixdown_worker = None
+            except RuntimeError:
+                self._project_mixdown_worker = None
+
     def parse_ust_dict_to_note(self: Any, d: Dict[str, Any], current_time_sec: float = 0.0, tempo: float = 120.0) -> Any:
         """[LIVE] UST辞書 → NoteEvent変換"""
         from dataclasses import dataclass
