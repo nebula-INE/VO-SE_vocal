@@ -68,12 +68,22 @@ def mixdown_tracks_to_wav(
         raise RuntimeError("ミックスダウンできる音声データがありません。")
 
     target_path = os.path.realpath(os.path.abspath(os.fspath(destination)))
-    for source in sources.values():
-        source_path = os.path.realpath(os.path.abspath(source.path))
-        if source_path == target_path:
-            raise ValueError(
-                "入力音声ファイルと同じ場所には書き出せません。別のWAVファイル名を指定してください。"
-            )
+    # Protect original audio paths as well as resolved playback paths. Vocal
+    # tracks may temporarily resolve to a newly rendered cache WAV while their
+    # source audio_path still points to user-owned guide audio.
+    protected_paths = {
+        os.path.realpath(os.path.abspath(os.fspath(path)))
+        for track in track_list
+        for path in (
+            getattr(track, "audio_path", ""),
+            getattr(track, "playback_path", ""),
+        )
+        if path
+    }
+    if target_path in protected_paths:
+        raise ValueError(
+            "入力音声ファイルと同じ場所には書き出せません。別のWAVファイル名を指定してください。"
+        )
 
     total_frames = int(mixer._total_frames)
 
