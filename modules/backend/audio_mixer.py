@@ -135,6 +135,8 @@ class AudioMixer:
         self._producer_done = threading.Event()
         self._producer_ready = threading.Event()
         self._producer_error = ""
+        self._output_underflow_count = 0
+        self._callback_status_count = 0
         self._pending_block = None
         self._pending_offset = 0
         self._clear_queue()
@@ -488,6 +490,14 @@ class AudioMixer:
             if self._pending_offset >= valid_frames:
                 self._pending_block = None
                 self._pending_offset = 0
+
+        if (
+            self._producer_done.is_set()
+            and self._pending_block is None
+            and self._queue.empty()
+            and sd is not None
+        ):
+            raise sd.CallbackStop()
 
     def get_latency(self) -> float:
         """Return the output stream's reported latency in seconds."""
