@@ -6703,6 +6703,9 @@ class MainWindow(
                 )
                 event.ignore()
                 return
+        # Deliver queued completion/failure callbacks before the mixer and
+        # window are released; the worker has already left its native code.
+        QCoreApplication.processEvents()
         self._audio_mixer_command_thread = None
 
         # Background QThreads must finish before their owning widgets are destroyed.
