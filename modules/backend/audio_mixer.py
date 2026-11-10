@@ -1,11 +1,13 @@
 """Desktop callback-based multi-track audio mixer for VO-SE Vocal.
 
-This module is intentionally independent from Qt.  Track objects remain the
-source of truth for volume/pan/mute/solo, while the callback reads those values
-for the currently playing stream.
+Audio files are decoded on a bounded producer thread. The PortAudio callback
+only copies already prepared blocks, so long projects do not need to be fully
+resident in memory and disk I/O never runs in the real-time callback.
 """
 from __future__ import annotations
 
+import math
+import queue
 import threading
 from typing import Any, Dict, Iterable
 
@@ -23,17 +25,38 @@ except Exception:
 
 
 class AudioMixer:
-    """Callback-based stereo mixer using sounddevice."""
+    """Bounded-memory stereo mixer with a disk-reading producer thread."""
 
-    def __init__(self, sample_rate: int = 44100, block_size: int = 1024) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 44100,
+        block_size: int = 1024,
+        prefetch_blocks: int = 8,
+    ) -> None:
         self.sample_rate = int(sample_rate)
         self.block_size = int(block_size)
+        if self.sample_rate <= 0 or self.block_size <= 0:
+            raise ValueError("sample_rate and block_size must be positive")
+
         self._lock = threading.RLock()
         self._stream: Any = None
         self._tracks: list[Any] = []
-        self._buffers: Dict[int, np.ndarray] = {}
+        self._sources: Dict[int, Dict[str, Any]] = {}
         self._position = 0
         self.last_load_errors: list[str] = []
+
+        self._queue: queue.Queue[tuple[int, np.ndarray, int]] = queue.Queue(
+            maxsize=max(2, int(prefetch_blocks))
+        )
+        self._producer_thread: threading.Thread | None = None
+        self._producer_stop = threading.Event()
+        self._producer_done = threading.Event()
+        self._producer_ready = threading.Event()
+        self._producer_error = ""
+        self._pending_block: tuple[int, np.ndarray, int] | None = None
+        self._pending_offset = 0
+        self._output_underflow_count = 0
+        self._callback_status_count = 0
 
     @property
     def is_playing(self) -> bool:
@@ -45,12 +68,22 @@ class AudioMixer:
         with self._lock:
             return self._position / float(self.sample_rate)
 
+    @property
+    def output_underflow_count(self) -> int:
+        return self._output_underflow_count
+
+    @property
+    def last_error(self) -> str:
+        return self._producer_error
+
     def set_tracks(self, tracks: Iterable[Any]) -> None:
+        """Index track metadata only; do not decode full audio files here."""
         if sf is None:
             raise RuntimeError("soundfile is required for desktop audio mixing")
 
+        self._shutdown(reset_position=True)
         new_tracks = list(tracks)
-        buffers: Dict[int, np.ndarray] = {}
+        sources: Dict[int, Dict[str, Any]] = {}
         load_errors: list[str] = []
 
         for track in new_tracks:
@@ -58,53 +91,76 @@ class AudioMixer:
             if not path:
                 continue
             try:
-                data, source_rate = sf.read(path, dtype="float32", always_2d=True)
+                info = sf.info(path)
+                source_rate = int(info.samplerate)
+                source_frames = int(info.frames)
+                if source_rate <= 0 or source_frames <= 0:
+                    raise ValueError("empty audio or invalid sample rate")
+                sources[id(track)] = {
+                    "path": path,
+                    "sample_rate": source_rate,
+                    "frames": source_frames,
+                    "array": None,
+                }
             except Exception as exc:
                 load_errors.append(f"{path}: {exc}")
-                continue
 
-            try:
-                data = self._resample(data, int(source_rate))
-                stereo = self._to_stereo(data)
-            except Exception as exc:
-                load_errors.append(f"{path}: {exc}")
-                continue
-
-            if len(stereo) == 0:
-                load_errors.append(f"{path}: empty audio")
-                continue
-            buffers[id(track)] = stereo
-
-        if not buffers:
+        if not sources:
             details = "; ".join(load_errors) if load_errors else "no audio paths"
             raise RuntimeError(f"No playable audio tracks ({details})")
 
         with self._lock:
             self._tracks = new_tracks
-            self._buffers = buffers
+            self._sources = sources
             self.last_load_errors = load_errors
 
     def update_tracks(self, tracks: Iterable[Any]) -> None:
+        """Update live mute/solo/volume/pan values without reloading file data."""
         with self._lock:
             self._tracks = list(tracks)
 
     def play(self, start_sec: float = 0.0) -> None:
         if sd is None:
             raise RuntimeError("sounddevice is not available")
+        if not math.isfinite(float(start_sec)):
+            raise ValueError("start_sec must be finite")
 
-        self.stop()
-
+        self._shutdown(reset_position=False)
         with self._lock:
+            if not self._sources:
+                raise RuntimeError("No audio tracks have been loaded")
             self._position = max(0, int(float(start_sec) * self.sample_rate))
 
-        self._stream = sd.OutputStream(
-            samplerate=self.sample_rate,
-            channels=2,
-            dtype="float32",
-            blocksize=self.block_size,
-            callback=self._callback,
+        self._producer_stop = threading.Event()
+        self._producer_done = threading.Event()
+        self._producer_ready = threading.Event()
+        self._producer_error = ""
+        self._pending_block = None
+        self._pending_offset = 0
+        self._clear_queue()
+
+        self._producer_thread = threading.Thread(
+            target=self._producer_loop,
+            name="VO-SE-AudioProducer",
+            daemon=True,
         )
-        self._stream.start()
+        self._producer_thread.start()
+        # Give the worker a brief opportunity to prepare the first block. The
+        # callback remains non-blocking even when a slow disk misses this window.
+        self._producer_ready.wait(timeout=0.25)
+
+        try:
+            self._stream = sd.OutputStream(
+                samplerate=self.sample_rate,
+                channels=2,
+                dtype="float32",
+                blocksize=self.block_size,
+                callback=self._audio_callback,
+            )
+            self._stream.start()
+        except Exception:
+            self._shutdown(reset_position=False)
+            raise
 
     def play_buffer(
         self,
@@ -112,10 +168,7 @@ class AudioMixer:
         sample_rate: int | None = None,
         start_sec: float = 0.0,
     ) -> None:
-        """Play an in-memory rendered buffer through the same mixer path."""
-        if sd is None:
-            raise RuntimeError("sounddevice is not available")
-
+        """Play an in-memory buffer through the same bounded callback path."""
         data = np.asarray(audio, dtype=np.float32)
         if data.ndim == 1:
             data = data[:, None]
@@ -123,10 +176,9 @@ class AudioMixer:
             raise ValueError("audio buffer is empty or has an invalid shape")
 
         source_rate = int(sample_rate or self.sample_rate)
-        data = self._resample(data, source_rate)
+        if source_rate <= 0:
+            raise ValueError("sample_rate must be positive")
         stereo = self._to_stereo(data)
-        # Validate and prepare the replacement buffer before stopping current audio.
-        self.stop()
 
         class _BufferTrack:
             volume = 1.0
@@ -135,25 +187,21 @@ class AudioMixer:
             is_solo = False
 
         track = _BufferTrack()
+        self._shutdown(reset_position=True)
         with self._lock:
             self._tracks = [track]
-            self._buffers = {id(track): stereo}
-            self._position = max(
-                0,
-                min(int(float(start_sec) * self.sample_rate), len(stereo) - 1),
-            )
-
-        self._stream = sd.OutputStream(
-            samplerate=self.sample_rate,
-            channels=2,
-            dtype="float32",
-            blocksize=self.block_size,
-            callback=self._callback,
-        )
-        self._stream.start()
+            self._sources = {
+                id(track): {
+                    "path": "",
+                    "sample_rate": source_rate,
+                    "frames": len(stereo),
+                    "array": stereo,
+                }
+            }
+        self.play(start_sec)
 
     def play_file(self, file_path: str, start_sec: float = 0.0) -> None:
-        """Load and play one rendered file through the mixer."""
+        """Load one audio file by metadata and stream it from disk."""
         class _PlaybackTrack:
             def __init__(self, path: str) -> None:
                 self.audio_path = path
@@ -163,27 +211,31 @@ class AudioMixer:
                 self.is_muted = False
                 self.is_solo = False
 
-        track = _PlaybackTrack(file_path)
-        self.set_tracks([track])
+        self.set_tracks([_PlaybackTrack(file_path)])
         self.play(start_sec)
 
     def pause(self) -> None:
-        """Pause while preserving the current sample position."""
-        stream = self._stream
-        self._stream = None
-        if stream is not None:
-            try:
-                stream.stop()
-            finally:
-                stream.close()
+        """Pause playback while retaining the last consumed sample position."""
+        self._shutdown(reset_position=False)
 
     def set_position(self, position_ms: int) -> None:
+        """Seek safely by restarting the producer at the requested position."""
+        target = max(0, int(float(position_ms) * self.sample_rate / 1000.0))
+        was_playing = self.is_playing
+        if was_playing:
+            self.pause()
         with self._lock:
-            self._position = max(
-                0, int(float(position_ms) * self.sample_rate / 1000.0)
-            )
+            self._position = target
+        if was_playing:
+            self.play(target / float(self.sample_rate))
 
     def stop(self) -> None:
+        self._shutdown(reset_position=True)
+
+    def _shutdown(self, reset_position: bool) -> None:
+        stop_event = self._producer_stop
+        stop_event.set()
+
         stream = self._stream
         self._stream = None
         if stream is not None:
@@ -191,69 +243,257 @@ class AudioMixer:
                 stream.stop()
             finally:
                 stream.close()
-        with self._lock:
-            self._position = 0
 
-    def _callback(
+        producer = self._producer_thread
+        if producer is not None and producer.is_alive():
+            producer.join(timeout=5.0)
+            if producer.is_alive():
+                raise RuntimeError("Audio producer did not stop within 5 seconds")
+        self._producer_thread = None
+        self._producer_done.set()
+        self._clear_queue()
+        self._pending_block = None
+        self._pending_offset = 0
+        if reset_position:
+            with self._lock:
+                self._position = 0
+
+    def _clear_queue(self) -> None:
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def _producer_loop(self) -> None:
+        handles: Dict[int, Any] = {}
+        try:
+            with self._lock:
+                tracks = list(self._tracks)
+                sources = dict(self._sources)
+
+            durations = {
+                track_id: int(math.ceil(
+                    source["frames"] * self.sample_rate / source["sample_rate"]
+                ))
+                for track_id, source in sources.items()
+            }
+            for track in tracks:
+                source = sources.get(id(track))
+                if source is None or source.get("array") is not None:
+                    continue
+                if sf is None:
+                    raise RuntimeError("soundfile is not available")
+                handles[id(track)] = sf.SoundFile(source["path"], mode="r")
+
+            with self._lock:
+                frame_position = self._position
+
+            self._producer_ready.set()
+            end_frame = max(durations.values(), default=frame_position)
+            while not self._producer_stop.is_set() and frame_position < end_frame:
+                count = min(self.block_size, end_frame - frame_position)
+                mix = np.zeros((self.block_size, 2), dtype=np.float32)
+                valid_frames = 0
+
+                with self._lock:
+                    active_tracks = list(self._tracks)
+                solo_exists = any(
+                    bool(getattr(track, "is_solo", False))
+                    for track in active_tracks
+                )
+
+                for track in active_tracks:
+                    track_id = id(track)
+                    source = sources.get(track_id)
+                    if source is None:
+                        continue
+                    duration = durations[track_id]
+                    if frame_position >= duration:
+                        continue
+
+                    track_count = min(count, duration - frame_position)
+                    valid_frames = max(valid_frames, track_count)
+                    audio = self._read_source_block(
+                        source,
+                        handles.get(track_id),
+                        frame_position,
+                        track_count,
+                    )
+                    if not self._track_is_active(track, solo_exists):
+                        continue
+                    if len(audio) == 0:
+                        continue
+
+                    gain = float(np.clip(getattr(track, "volume", 1.0), 0.0, 1.0))
+                    pan = float(np.clip(getattr(track, "pan", 0.0), -1.0, 1.0))
+                    left_gain, right_gain = self._pan_gains(pan)
+                    audio_count = min(len(audio), track_count)
+                    mix[:audio_count, 0] += audio[:audio_count, 0] * gain * left_gain
+                    mix[:audio_count, 1] += audio[:audio_count, 1] * gain * right_gain
+
+                if valid_frames <= 0:
+                    break
+                np.clip(mix, -1.0, 1.0, out=mix)
+                item = (frame_position, mix, valid_frames)
+                while not self._producer_stop.is_set():
+                    try:
+                        self._queue.put(item, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+                frame_position += count
+
+        except Exception as exc:
+            self._producer_error = str(exc)
+        finally:
+            for handle in handles.values():
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+            self._producer_done.set()
+            self._producer_ready.set()
+
+    def _read_source_block(
+        self,
+        source: Dict[str, Any],
+        handle: Any,
+        output_start: int,
+        output_count: int,
+    ) -> np.ndarray:
+        """Read and resample only the requested output block."""
+        source_rate = int(source["sample_rate"])
+        ratio = source_rate / float(self.sample_rate)
+        first_source_frame = int(math.floor(output_start * ratio))
+        last_source_position = (output_start + output_count - 1) * ratio
+        required_frames = max(
+            1,
+            int(math.floor(last_source_position)) - first_source_frame + 2,
+        )
+
+        array = source.get("array")
+        if array is not None:
+            raw = array[
+                first_source_frame:first_source_frame + required_frames
+            ]
+        else:
+            if handle is None:
+                raise RuntimeError("audio file handle is not open")
+            handle.seek(first_source_frame)
+            raw = handle.read(
+                frames=required_frames,
+                dtype="float32",
+                always_2d=True,
+            )
+
+        if len(raw) == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+        stereo = self._to_stereo(np.asarray(raw, dtype=np.float32))
+        positions = (
+            (output_start + np.arange(output_count, dtype=np.float64)) * ratio
+            - first_source_frame
+        )
+        valid = positions <= (len(stereo) - 1)
+        result = np.zeros((output_count, 2), dtype=np.float32)
+        if not np.any(valid):
+            return result[:0]
+        if source_rate == self.sample_rate:
+            indices = positions[valid].astype(np.int64)
+            result[valid] = stereo[indices]
+        else:
+            source_indices = np.arange(len(stereo), dtype=np.float64)
+            for channel in range(2):
+                result[valid, channel] = np.interp(
+                    positions[valid],
+                    source_indices,
+                    stereo[:, channel],
+                    left=0.0,
+                    right=0.0,
+                ).astype(np.float32)
+        return result
+
+    def _audio_callback(
         self,
         outdata: np.ndarray,
         frames: int,
         _time: Any,
         status: Any,
     ) -> None:
+        """Real-time callback: copy queued blocks only; never read files or mix."""
         if status:
-            pass
+            self._callback_status_count += 1
+            try:
+                if bool(status.output_underflow):
+                    self._output_underflow_count += 1
+            except AttributeError:
+                # Keep a generic status count for backend-specific status types.
+                pass
 
-        with self._lock:
-            start = self._position
-            end = start + frames
-            tracks = list(self._tracks)
-            buffers = dict(self._buffers)
+        outdata.fill(0)
+        written = 0
+        while written < frames:
+            if self._pending_block is None:
+                try:
+                    self._pending_block = self._queue.get_nowait()
+                    self._pending_offset = 0
+                except queue.Empty:
+                    if self._producer_done.is_set():
+                        if sd is not None:
+                            raise sd.CallbackStop()
+                        return
+                    self._output_underflow_count += 1
+                    with self._lock:
+                        self._position += frames - written
+                    return
 
-            mix = np.zeros((frames, 2), dtype=np.float32)
-            solo_exists = any(
-                bool(getattr(track, "is_solo", False)) for track in tracks
-            )
-            has_audio = False
-            all_finished = bool(buffers)
+            block_start, block, valid_frames = self._pending_block
+            block_position = block_start + self._pending_offset
+            with self._lock:
+                current_position = self._position
 
-            for track in tracks:
-                data = buffers.get(id(track))
-                if data is None:
-                    continue
+            if self._pending_offset >= valid_frames:
+                self._pending_block = None
+                self._pending_offset = 0
+                continue
 
-                # Muted or solo-excluded tracks still own timeline duration.
-                # Only skip their contribution to the mix, not their completion
-                # accounting, so an all-muted session does not stop immediately.
-                if start < len(data):
-                    all_finished = False
-                if not self._track_is_active(track, solo_exists):
-                    continue
-                if start >= len(data):
-                    continue
-
-                chunk = data[start:min(end, len(data))]
-                if len(chunk) == 0:
-                    continue
-                has_audio = True
-
-                gain = float(
-                    np.clip(getattr(track, "volume", 1.0), 0.0, 1.0)
+            if block_position < current_position:
+                skipped = min(
+                    valid_frames - self._pending_offset,
+                    current_position - block_position,
                 )
-                pan = float(np.clip(getattr(track, "pan", 0.0), -1.0, 1.0))
-                left_gain, right_gain = self._pan_gains(pan)
+                self._pending_offset += skipped
+                if self._pending_offset >= valid_frames:
+                    self._pending_block = None
+                    self._pending_offset = 0
+                continue
 
-                count = min(len(chunk), frames)
-                mix[:count, 0] += chunk[:count, 0] * gain * left_gain
-                mix[:count, 1] += chunk[:count, 1] * gain * right_gain
+            if block_position > current_position:
+                silence = min(frames - written, block_position - current_position)
+                written += silence
+                with self._lock:
+                    self._position += silence
+                continue
 
-            self._position = end
-            should_stop = bool(buffers) and all_finished and not has_audio
+            available = valid_frames - self._pending_offset
+            count = min(frames - written, available)
+            outdata[written:written + count] = block[
+                self._pending_offset:self._pending_offset + count
+            ]
+            written += count
+            self._pending_offset += count
+            with self._lock:
+                self._position += count
 
-        np.clip(mix, -1.0, 1.0, out=mix)
-        outdata[:] = mix
-        if should_stop and sd is not None:
-            raise sd.CallbackStop()
+            if self._pending_offset >= valid_frames:
+                self._pending_block = None
+                self._pending_offset = 0
+
+    def get_latency(self) -> float:
+        """Return the output stream's reported latency in seconds."""
+        if self._stream is not None:
+            return float(self._stream.latency)
+        return 0.0
 
     @staticmethod
     def _track_is_active(track: Any, solo_exists: bool) -> bool:
@@ -276,17 +516,20 @@ class AudioMixer:
         return float(np.cos(angle)), float(np.sin(angle))
 
     def _resample(self, data: np.ndarray, source_rate: int) -> np.ndarray:
+        """Compatibility helper used by existing callers and tests."""
         if source_rate == self.sample_rate:
             return data
         if source_rate <= 0:
             raise ValueError("Invalid source sample rate")
+        if len(data) == 0:
+            return np.zeros((0, data.shape[1] if data.ndim > 1 else 1), dtype=np.float32)
 
         target_len = max(
             1,
             int(round(len(data) * self.sample_rate / source_rate)),
         )
-        source_x = np.linspace(0.0, 1.0, len(data), endpoint=False)
-        target_x = np.linspace(0.0, 1.0, target_len, endpoint=False)
+        source_x = np.arange(len(data), dtype=np.float64)
+        target_x = np.arange(target_len, dtype=np.float64) * source_rate / self.sample_rate
         channels = [
             np.interp(target_x, source_x, data[:, channel])
             for channel in range(data.shape[1])
