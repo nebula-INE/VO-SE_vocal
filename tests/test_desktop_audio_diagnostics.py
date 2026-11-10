@@ -20,8 +20,18 @@ def test_transport_timer_surfaces_audio_device_and_buffer_diagnostics():
 
 
 def test_audio_device_errors_are_reported_through_user_facing_playback_path():
-    source = (ROOT / "modules" / "main_window.py").read_text(encoding="utf-8") if (
-        ROOT / "modules" / "main_window.py"
-    ).exists() else (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
     assert "再生エラー:" in source
     assert "self.statusBar().showMessage(f\"再生エラー: {exc}\"" in source
+
+
+
+def test_audio_error_baseline_resets_for_each_new_playback():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    prepared_handler = source.split(
+        "def _on_vocal_playback_render_prepared(self, results: object) -> None:",
+        1,
+    )[1].split("def _on_vocal_playback_prepare_thread_finished", 1)[0]
+    assert 'mixer.set_tracks(tracks)' in prepared_handler
+    assert '"last_playback_errors": []' in prepared_handler
+    assert "output_underflow_count" in prepared_handler
