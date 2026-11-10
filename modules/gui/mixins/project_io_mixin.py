@@ -56,6 +56,8 @@ class ProjectIOMixin:
                 getattr(graph, "all_parameters", {}) or {}
             ),
             "current_playback_time": float(getattr(self, "current_playback_time", 0.0)),
+            "current_voice_id": str(getattr(self, "current_voice_id", "") or ""),
+            "current_voice": str(getattr(self, "current_voice", "") or ""),
         }
 
     def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
@@ -103,6 +105,10 @@ class ProjectIOMixin:
             set_tempo(tempo)
 
         self.current_playback_time = float(state.get("current_playback_time", 0.0))
+        self._restore_project_voice_selection(
+            str(state.get("current_voice_id", "") or ""),
+            str(state.get("current_voice", "") or ""),
+        )
         set_time = getattr(self, "_set_transport_time", None)
         if callable(set_time):
             set_time(self.current_playback_time)
@@ -116,6 +122,44 @@ class ProjectIOMixin:
         self.update_scrollbar_range() if callable(
             getattr(self, "update_scrollbar_range", None)
         ) else None
+
+    def _restore_project_voice_selection(
+        self: Any,
+        voice_id: str,
+        voice_name: str = "",
+    ) -> None:
+        """Restore a saved singer only when the referenced voice is installed."""
+        if not voice_id:
+            return
+
+        gallery = getattr(self, "voice_gallery", None)
+        cards = getattr(gallery, "cards", {}) if gallery is not None else {}
+        card = cards.get(voice_id) if isinstance(cards, dict) else None
+        if card is None:
+            # Lightweight/headless project handlers may not have a gallery.
+            # Keep the identifier for round-tripping; the live UI can resolve it
+            # when the voice gallery becomes available.
+            if gallery is None:
+                self.current_voice_id = voice_id
+                if voice_name:
+                    self.current_voice = voice_name
+            else:
+                status_bar = getattr(self, "statusBar", lambda: None)()
+                if status_bar is not None:
+                    status_bar.showMessage(
+                        f"保存時の音源「{voice_name or voice_id}」が見つかりません。"
+                        "音源を追加してから選択してください。",
+                        6000,
+                    )
+            return
+
+        display_name = str(getattr(card, "display_name", "") or voice_name or voice_id)
+        apply_selection = getattr(self, "on_voice_changed", None)
+        if callable(apply_selection):
+            apply_selection(display_name, voice_id)
+        else:
+            self.current_voice_id = voice_id
+            self.current_voice = display_name
 
     def _record_project_state_edit(
         self: Any,
@@ -466,6 +510,10 @@ class ProjectIOMixin:
 
             tempo = float(data.get("tempo", 120.0))
             current_time = float(data.get("current_time", 0.0))
+            restored_voice_id = data.get("current_voice_id", "")
+            restored_voice_name = data.get("current_voice", "")
+            if not isinstance(restored_voice_id, str) or not isinstance(restored_voice_name, str):
+                raise ValueError("プロジェクトの音源IDまたは音源名が不正です。")
             if not math.isfinite(tempo) or tempo <= 0.0:
                 raise ValueError("プロジェクトのテンポが不正です。")
             if not math.isfinite(current_time) or current_time < 0.0:
@@ -626,6 +674,11 @@ class ProjectIOMixin:
             commit_started = True
             self.tracks = loaded_tracks
             self.current_track_idx = new_current_idx
+            if restored_voice_id:
+                self._restore_project_voice_selection(
+                    restored_voice_id,
+                    restored_voice_name,
+                )
 
             timeline = getattr(self, "timeline_widget", None)
             active_notes = self.tracks[self.current_track_idx].notes
@@ -1159,6 +1212,8 @@ class ProjectIOMixin:
                 "tempo": tempo,
                 "current_track_idx": max(0, current_idx),
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
+                "current_voice_id": str(getattr(self, "current_voice_id", "") or ""),
+                "current_voice": str(getattr(self, "current_voice", "") or ""),
                 "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
             }
