@@ -1307,55 +1307,68 @@ class ProjectIOMixin:
             QMessageBox.critical(self, "Write Error", f"保存に失敗しました:\n{e}")
 
     def read_file_safely(self: Any, filepath: str) -> Optional[str]:
-        """[LIVE] 文字コード自動判別読み込み"""
-        import chardet
+        """文字コードを厳密に検証して読み込む。誤った文字コードでの文字化けを防ぐ。"""
+        try:
+            import chardet
+        except ImportError:
+            chardet = None
 
-        if not os.path.exists(filepath):
-            print(f"エラー: ファイルが見つかりません: {filepath}")
+        if not os.path.isfile(filepath):
+            logger.warning("ファイルが見つかりません: %s", filepath)
             return None
 
         try:
-            with open(filepath, 'rb') as f:
-                raw_data = f.read()
-        
+            with open(filepath, "rb") as handle:
+                raw_data = handle.read()
             if not raw_data:
                 return ""
-            
+
+            candidates: List[str] = []
+            if raw_data.startswith(b"\\xef\\xbb\\xbf"):
+                candidates.append("utf-8-sig")
+
             detected_encoding: Optional[str] = None
-            try:
-                detection_result = chardet.detect(raw_data)
-                detected_encoding = detection_result.get('encoding')
-                confidence = detection_result.get('confidence', 0)
-            
-                if confidence < 0.7:
-                    detected_encoding = None
-            except Exception as e:
-                print(f"文字コード検出エラー: {e}")
-                detected_encoding = None
-        
-            candidate_encodings = []
-        
-            if detected_encoding:
-                candidate_encodings.append(detected_encoding)
-        
-            for enc in ['shift_jis', 'utf-8', 'utf-8-sig', 'cp932', 'euc-jp', 'iso-2022-jp']:
-                if enc not in candidate_encodings:
-                    candidate_encodings.append(enc)
-
-            for encoding in candidate_encodings:
+            confidence = 0.0
+            if chardet is not None:
                 try:
-                    decoded_text = raw_data.decode(encoding, errors='replace')
-                    print(f"ファイル読み込み成功: {filepath} ({encoding})")
-                    return decoded_text
-                
-                except (UnicodeDecodeError, LookupError) :
-                    continue
+                    result = chardet.detect(raw_data)
+                    detected_encoding = result.get("encoding")
+                    confidence = float(result.get("confidence") or 0.0)
+                except Exception:
+                    detected_encoding = None
 
-            print(f"警告: すべてのエンコーディングで失敗。cp932で強制デコード: {filepath}")
-            return raw_data.decode('cp932', errors='replace')
-        
-        except Exception as e:
-            print(f"ファイル読み込みエラー: {filepath} - {e}")
+            if detected_encoding and confidence >= 0.80:
+                candidates.append(detected_encoding)
+
+            candidates.extend([
+                "utf-8-sig",
+                "utf-8",
+                "cp932",
+                "shift_jis",
+                "euc_jp",
+                "iso2022_jp",
+            ])
+
+            tried = set()
+            for encoding in candidates:
+                normalized = encoding.lower().replace("-", "_")
+                if normalized in tried:
+                    continue
+                tried.add(normalized)
+                try:
+                    decoded = raw_data.decode(encoding, errors="strict")
+                except (UnicodeDecodeError, LookupError):
+                    continue
+                logger.debug("ファイル読み込み成功: %s (%s)", filepath, encoding)
+                return decoded
+
+            # Last-resort fallback is explicit and logged; successful strict
+            # decoding is preferred so a wrong candidate cannot silently mojibake.
+            logger.warning("文字コードを確定できず cp932 で置換デコードします: %s", filepath)
+            return raw_data.decode("cp932", errors="replace")
+
+        except OSError:
+            logger.exception("ファイル読み込みエラー: %s", filepath)
             return None
 
     def get_safe_installed_name(self: Any, filename: str, zip_path: str) -> str:
@@ -1494,6 +1507,63 @@ class ProjectIOMixin:
     # MainWindow 側の実装を MRO で隠さないため、ここにはダミー実装を置かない。
 
     def export_to_midi_file(self: Any):
-        """[LIVE] MIDIエクスポート"""
-        print("MIDIエクスポートを開始します...")
+        """現在のボーカルトラックを標準MIDIファイルへ書き出す。"""
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is None:
+            QMessageBox.warning(self, "MIDI書き出し", "タイムラインが初期化されていません。")
+            return False
 
+        tracks = list(getattr(self, "tracks", []) or [])
+        current_index = int(getattr(self, "current_track_idx", 0))
+        export_tracks: List[Dict[str, Any]] = []
+        for index, track in enumerate(tracks):
+            if str(getattr(track, "track_type", "vocal")).lower() != "vocal":
+                continue
+            notes = (
+                list(getattr(timeline, "notes_list", []) or [])
+                if index == current_index
+                else list(getattr(track, "notes", []) or [])
+            )
+            if notes:
+                export_tracks.append({
+                    "name": str(getattr(track, "name", f"Vocal {index + 1}")),
+                    "notes": notes,
+                })
+
+        # Compatibility with older single-track sessions without a track model.
+        if not export_tracks:
+            notes = list(getattr(timeline, "notes_list", []) or [])
+            if notes:
+                export_tracks.append({"name": "Vocal", "notes": notes})
+        if not export_tracks:
+            self.statusBar().showMessage("MIDIに書き出すノートがありません。", 4000)
+            return False
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "MIDIファイルを書き出す",
+            "output.mid",
+            "MIDI Files (*.mid *.midi)",
+        )
+        if not file_path:
+            return False
+        if not file_path.lower().endswith((".mid", ".midi")):
+            file_path += ".mid"
+
+        try:
+            from modules.data.midi_manager import save_midi_file
+
+            tempo = float(getattr(timeline, "tempo", 120.0))
+            save_midi_file(file_path, export_tracks, tempo=tempo)
+            self.statusBar().showMessage(
+                f"MIDI書き出し完了: {os.path.basename(file_path)}", 5000
+            )
+            return True
+        except Exception as exc:
+            logger.exception("MIDI書き出しエラー: %s", exc)
+            QMessageBox.critical(
+                self,
+                "MIDI書き出しエラー",
+                f"MIDIファイルの書き出しに失敗しました:\\n{exc}",
+            )
+            return False
