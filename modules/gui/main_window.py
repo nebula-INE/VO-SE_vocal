@@ -1883,6 +1883,64 @@ class _VocalPlaybackPreparationThread(QThread):
             })
 
 
+class _AudioMixerCommandThread(QThread):
+    """Run potentially blocking audio device startup/shutdown outside the GUI thread."""
+
+    completed = Signal(str, object)
+    failed = Signal(str, str)
+
+    def __init__(
+        self,
+        operation: str,
+        mixer: Any,
+        tracks: Optional[List[Any]] = None,
+        start_sec: float = 0.0,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.operation = operation
+        self.mixer = mixer
+        self.tracks = list(tracks or [])
+        self.start_sec = float(start_sec)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            if self.operation == "start":
+                self.mixer.set_tracks(self.tracks)
+                diagnostics = {}
+                get_diagnostics = getattr(self.mixer, "get_diagnostics", None)
+                if callable(get_diagnostics):
+                    try:
+                        value = get_diagnostics()
+                        if isinstance(value, dict):
+                            diagnostics = value
+                    except Exception:
+                        pass
+                load_errors = list(
+                    getattr(self.mixer, "last_load_errors", []) or []
+                )
+                self.mixer.play(self.start_sec)
+                self.completed.emit(
+                    self.operation,
+                    {
+                        "diagnostics": diagnostics,
+                        "load_errors": load_errors,
+                        "start_sec": self.start_sec,
+                    },
+                )
+            elif self.operation == "pause":
+                self.mixer.pause()
+                self.completed.emit(self.operation, {})
+            elif self.operation == "stop":
+                self.mixer.stop()
+                self.completed.emit(self.operation, {})
+            else:
+                raise ValueError(f"Unsupported audio mixer operation: {self.operation}")
+        except Exception as exc:
+            self.failed.emit(self.operation, str(exc))
+
+
 class MainWindow(
     ProjectIOMixin,
     AudioOutputMixin,
@@ -5200,13 +5258,14 @@ class MainWindow(
         tracks = self._pending_playback_tracks
         start_time = float(getattr(self, "_pending_playback_start_time", 0.0))
         self._pending_playback_tracks = None
-        self._set_playback_preparation_ui(False)
 
         if tracks is None:
+            self._set_playback_preparation_ui(False)
             return
         current_tracks = list(getattr(self, "tracks", []) or [])
         if (len(current_tracks) != len(tracks)
                 or any(current is not saved for current, saved in zip(current_tracks, tracks))):
+            self._set_playback_preparation_ui(False)
             self.statusBar().showMessage(
                 "レンダリング中にトラック構成が変わったため、再生を開始しませんでした。", 5000
             )
@@ -5222,60 +5281,163 @@ class MainWindow(
             or str(getattr(track, "audio_path", "") or "")
         ]
         if not playable:
+            self._set_playback_preparation_ui(False)
             self.statusBar().showMessage("再生する音声がありません。", 3000)
             return
 
         mixer = getattr(self, "audio_mixer", None)
         if mixer is None:
+            self._set_playback_preparation_ui(False)
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
-        try:
-            mixer.set_tracks(tracks)
-            # set_tracks() starts a fresh source set and clears previous per-file
-            # errors. Keep cumulative device counters as the baseline for this run.
-            get_diagnostics = getattr(mixer, "get_diagnostics", None)
-            if callable(get_diagnostics):
-                try:
-                    diagnostics = get_diagnostics()
-                    if isinstance(diagnostics, dict):
-                        previous = getattr(self, "_reported_audio_diagnostics", {})
-                        if not isinstance(previous, dict):
-                            previous = {}
-                        self._reported_audio_diagnostics = {
-                            "output_underflow_count": diagnostics.get("output_underflow_count", 0),
-                            "output_overflow_count": diagnostics.get("output_overflow_count", 0),
-                            "queue_underrun_count": diagnostics.get("queue_underrun_count", 0),
-                            "output_device_name": previous.get("output_device_name", ""),
-                            "last_playback_errors": [],
-                        }
-                except Exception as diagnostic_exc:
-                    print(f"[AudioMixer] Could not reset diagnostic baseline: {diagnostic_exc}")
-            load_errors = list(getattr(mixer, "last_load_errors", []) or [])
+
+        self._start_audio_mixer_command("start", tracks=tracks, start_sec=start_time)
+
+    @Slot(str, object)
+    def _on_audio_mixer_command_completed(self, operation: str, result: object) -> None:
+        details = result if isinstance(result, dict) else {}
+
+        if operation == "start":
+            diagnostics = details.get("diagnostics", {})
+            if isinstance(diagnostics, dict):
+                previous = getattr(self, "_reported_audio_diagnostics", {})
+                if not isinstance(previous, dict):
+                    previous = {}
+                self._reported_audio_diagnostics = {
+                    "output_underflow_count": diagnostics.get("output_underflow_count", 0),
+                    "output_overflow_count": diagnostics.get("output_overflow_count", 0),
+                    "queue_underrun_count": diagnostics.get("queue_underrun_count", 0),
+                    "output_device_name": previous.get("output_device_name", ""),
+                    "last_playback_errors": [],
+                }
+            load_errors = list(details.get("load_errors", []) or [])
             if load_errors:
-                # Partial playback is allowed, but skipped tracks must be visible.
                 self.statusBar().showMessage(
                     f"警告: {len(load_errors)} トラックの音声を読み込めませんでした。詳細はログを確認してください。",
                     8000,
                 )
-                print("[AudioMixer] Track load errors:\n" + "\n".join(load_errors))
-            mixer.play(start_time)
+                print("[AudioMixer] Track load errors:
+" + "
+".join(load_errors))
+
+            start_time = float(details.get("start_sec", 0.0))
             self.is_playing = True
             self.current_playback_time = start_time
             self.playback_start_time = start_time
             self.playback_started_monotonic = time.monotonic()
             self.playback_timer.start()
+            self._set_playback_preparation_ui(False)
             status_lbl = getattr(self, "status_label", None)
             if status_lbl is not None:
                 status_lbl.setText(f"再生中: {start_time:.2f}s")
             self._refresh_transport_button_states()
-        except Exception as exc:
+            return
+
+        if operation == "pause":
             self.is_playing = False
             self.playback_timer.stop()
+            self._set_mixer_transport_busy(False)
             status_lbl = getattr(self, "status_label", None)
             if status_lbl is not None:
-                status_lbl.setText(f"再生エラー: {exc}")
+                status_lbl.setText("一時停止しました")
             self._refresh_transport_button_states()
-            self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
+            self.statusBar().showMessage("再生を一時停止しました", 3000)
+            return
+
+        if operation == "stop":
+            self._complete_playback_stop_ui()
+            return
+
+    @Slot(str, str)
+    def _on_audio_mixer_command_failed(self, operation: str, error_message: str) -> None:
+        mixer = getattr(self, "audio_mixer", None)
+        self.is_playing = bool(getattr(mixer, "is_playing", False))
+        if operation == "start":
+            self.playback_timer.stop()
+            self._set_playback_preparation_ui(False)
+        else:
+            self._set_mixer_transport_busy(False)
+            if self.is_playing:
+                self.playback_timer.start()
+        status_lbl = getattr(self, "status_label", None)
+        if status_lbl is not None:
+            status_lbl.setText(f"再生エラー: {error_message}")
+        self._refresh_transport_button_states()
+        self.statusBar().showMessage(f"再生エラー: {error_message}", 6000)
+
+    @Slot()
+    def _on_audio_mixer_command_thread_finished(self) -> None:
+        worker = getattr(self, "_audio_mixer_command_thread", None)
+        if worker is not None and not worker.isRunning():
+            self._audio_mixer_command_thread = None
+
+    def _set_mixer_transport_busy(self, busy: bool) -> None:
+        for name in ("play_btn", "play_button", "stop_btn"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setEnabled"):
+                widget.setEnabled(not busy)
+
+    def _start_audio_mixer_command(
+        self,
+        operation: str,
+        tracks: Optional[List[Any]] = None,
+        start_sec: float = 0.0,
+    ) -> bool:
+        existing = getattr(self, "_audio_mixer_command_thread", None)
+        if existing is not None and existing.isRunning():
+            self.statusBar().showMessage("音声デバイス処理を実行中です。", 2500)
+            return False
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+            return False
+
+        worker = _AudioMixerCommandThread(
+            operation, mixer, tracks=tracks, start_sec=start_sec, parent=self
+        )
+        worker.completed.connect(self._on_audio_mixer_command_completed)
+        worker.failed.connect(self._on_audio_mixer_command_failed)
+        worker.finished.connect(self._on_audio_mixer_command_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._audio_mixer_command_thread = worker
+
+        if operation == "start":
+            self._set_playback_preparation_ui(True)
+            self.statusBar().showMessage("音声出力デバイスを起動中...", 0)
+        else:
+            self._set_mixer_transport_busy(True)
+            self.playback_timer.stop()
+            self.statusBar().showMessage("音声出力を停止中...", 0)
+        worker.start()
+        return True
+
+    def _complete_playback_stop_ui(self) -> None:
+        mixer = getattr(self, "audio_mixer", None)
+        self.audio_player = mixer
+        self.is_playing = False
+        self.current_playback_time = 0.0
+        self.playback_start_time = 0.0
+        self.playback_started_monotonic = 0.0
+        self.is_looping = False
+        self.is_looping_selection = False
+        self.playback_timer.stop()
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is not None:
+            if hasattr(timeline, "set_playback_time"):
+                timeline.set_playback_time(0.0)
+            elif hasattr(timeline, "set_current_time"):
+                timeline.set_current_time(0.0)
+        graph = getattr(self, "graph_editor_widget", None)
+        if graph is not None and hasattr(graph, "set_current_time"):
+            graph.set_current_time(0.0)
+        stop_btn = cast(QPushButton, getattr(self, "stop_btn", None))
+        if stop_btn is not None:
+            stop_btn.setChecked(True)
+            QTimer.singleShot(140, lambda: stop_btn.setChecked(False))
+        self._set_mixer_transport_busy(False)
+        self._refresh_transport_button_states()
+        self.statusBar().showMessage("Playback stopped and reset to 00:00.000")
+
 
     @Slot()
     def _on_vocal_playback_prepare_thread_finished(self) -> None:
@@ -5290,21 +5452,17 @@ class MainWindow(
             self.statusBar().showMessage("再生用レンダリングを準備中です。", 2000)
             return
 
+        command_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if command_worker is not None and command_worker.isRunning():
+            self.statusBar().showMessage("音声デバイス処理を実行中です。", 2500)
+            return
+
         mixer = getattr(self, "audio_mixer", None)
         if mixer is None:
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
-        play_btn = cast(QPushButton, getattr(self, "play_btn", None) or getattr(self, "play_button", None))
-        status_lbl = cast(QLabel, getattr(self, "status_label", None))
         if mixer.is_playing:
-            mixer.stop()
-            self.is_playing = False
-            self.playback_timer.stop()
-            if play_btn is not None:
-                play_btn.setText("▶ 再生")
-            if status_lbl is not None:
-                status_lbl.setText("停止しました")
-            self._refresh_transport_button_states()
+            self._start_audio_mixer_command("pause")
             return
 
         if getattr(self, "current_worker", None) is not None:
@@ -5424,34 +5582,12 @@ class MainWindow(
 
 
     def stop_and_clear_playback(self) -> None:
-        """Stop the unified mixer and reset transport state/UI."""
-        mixer = getattr(self, "audio_mixer", None)
-        stop_mixer = getattr(mixer, "stop", None)
-        if callable(stop_mixer):
-            stop_mixer()
-        self.audio_player = mixer
-        self.playback_timer.stop()
-        self.is_playing = False
-        self.current_playback_time = 0.0
-        self.playback_start_time = 0.0
-        self.playback_started_monotonic = 0.0
+        """Stop the unified mixer without blocking the GUI thread."""
         self.is_looping = False
         self.is_looping_selection = False
-        timeline = getattr(self, "timeline_widget", None)
-        if timeline is not None:
-            if hasattr(timeline, "set_playback_time"):
-                timeline.set_playback_time(0.0)
-            elif hasattr(timeline, "set_current_time"):
-                timeline.set_current_time(0.0)
-        graph = getattr(self, "graph_editor_widget", None)
-        if graph is not None and hasattr(graph, "set_current_time"):
-            graph.set_current_time(0.0)
-        stop_btn = cast(QPushButton, getattr(self, "stop_btn", None))
-        if stop_btn is not None:
-            stop_btn.setChecked(True)
-            QTimer.singleShot(140, lambda: stop_btn.setChecked(False))
-        self._refresh_transport_button_states()
-        self.statusBar().showMessage("Playback stopped and reset to 00:00.000")
+        self.playback_timer.stop()
+        self._start_audio_mixer_command("stop")
+
     @Slot(object)
     def on_single_note_modified(self, note):
         """
@@ -6485,6 +6621,18 @@ class MainWindow(
                 return
         self._playback_prepare_thread = None
         self._pending_playback_tracks = None
+
+        audio_command_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if audio_command_worker is not None and audio_command_worker.isRunning():
+            if not audio_command_worker.wait(15000):
+                QMessageBox.warning(
+                    self,
+                    "音声デバイス終了待ち",
+                    "音声デバイスの開始・停止処理がまだ実行中です。処理の終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+        self._audio_mixer_command_thread = None
 
         # Background QThreads must finish before their owning widgets are destroyed.
         # These operations are not forcibly terminated: closing is cancelled on timeout.
