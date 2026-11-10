@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import threading
 
 import numpy as np
 
@@ -32,6 +33,12 @@ def _memory_source(mixer, track, data, sample_rate=None):
 
 
 def _collect_blocks(mixer):
+    # set_tracks() uses _shutdown(), so the producer stop event is initially
+    # set. The real play() path resets these events before starting the worker.
+    mixer._producer_stop = threading.Event()
+    mixer._producer_done = threading.Event()
+    mixer._producer_ready = threading.Event()
+    mixer._producer_error = ""
     mixer._producer_loop()
     # The synchronous producer has finished; inspect queued blocks without
     # consuming them so callback tests can exercise the real delivery path.
