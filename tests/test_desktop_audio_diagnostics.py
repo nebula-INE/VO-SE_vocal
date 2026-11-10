@@ -105,3 +105,12 @@ def test_playback_snapshot_locks_editor_before_shallow_note_copy():
     assert "current_track.notes = list(" in handler
     assert "deepcopy(source_notes)" not in handler
     assert "deepcopy(" not in handler
+
+def test_legacy_space_shortcut_uses_unified_async_transport():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    shortcut = source.split("def toggle_playback(self, event=None):", 1)[1].split(
+        "def refresh_canvas", 1
+    )[0]
+    assert "self.on_play_pause_toggled()" in shortcut
+    assert "play_file(" not in shortcut
+    assert "pause()" not in shortcut
