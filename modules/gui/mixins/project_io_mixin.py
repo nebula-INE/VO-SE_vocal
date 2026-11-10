@@ -674,11 +674,6 @@ class ProjectIOMixin:
             commit_started = True
             self.tracks = loaded_tracks
             self.current_track_idx = new_current_idx
-            if restored_voice_id:
-                self._restore_project_voice_selection(
-                    restored_voice_id,
-                    restored_voice_name,
-                )
 
             timeline = getattr(self, "timeline_widget", None)
             active_notes = self.tracks[self.current_track_idx].notes
@@ -724,6 +719,14 @@ class ProjectIOMixin:
             sync_strips = getattr(self, "_sync_track_strips", None)
             if callable(sync_strips):
                 sync_strips()
+
+            # Apply the singer after the new timeline is committed so voice
+            # switching cannot refresh caches from the previous project.
+            if restored_voice_id:
+                self._restore_project_voice_selection(
+                    restored_voice_id,
+                    restored_voice_name,
+                )
 
             note_count = len(active_notes)
             self.statusBar().showMessage(
