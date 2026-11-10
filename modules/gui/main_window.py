@@ -1757,13 +1757,17 @@ class VoiceCardGallery(QWidget):
 # ==============================================================================
 
 class AnalysisThread(QThread):
-    """AI解析をバックグラウンドで実行するスレッド"""
+    """AI解析をバックグラウンドで実行するスレッド。
+
+    QThread が持つ finished() は終了通知として予約されているため、
+    解析結果には completed(dict) を使い、Qt の終了通知を上書きしない。
+    """
     progress = Signal(int, str)
-    finished = Signal(dict)
+    completed = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, voice_manager, target_dir):
-        super().__init__()
+    def __init__(self, voice_manager, target_dir, parent=None):
+        super().__init__(parent)
         self.voice_manager = voice_manager
         self.target_dir = target_dir
 
@@ -1773,7 +1777,7 @@ class AnalysisThread(QThread):
                 self.target_dir,
                 self.progress.emit
             )
-            self.finished.emit(results)
+            self.completed.emit(results)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -2091,7 +2095,7 @@ class MainWindow(
         self.vose_core = None
         self.text_analyzer = None
         self.playback_thread = None
-        self.analysis_thread = cast(QThread, None)
+        self.analysis_thread = None
         
         # エンジン類
         self.vo_se_engine = engine
@@ -5410,23 +5414,29 @@ class MainWindow(
             QMessageBox.warning(self, "Performance Error", "有効な音源ライブラリがロードされていません。")
             return
 
-        # 2. スレッド競合の防止（爆弾3・4対策）
-        if hasattr(self, 'analysis_thread') and self.analysis_thread.isRunning():
-            QMessageBox.warning(self, "System Busy", "現在、別の解析プロセスが実行中です。")
-            return
+        # 2. スレッド競合を防止する。終了済みスレッドの参照も安全に破棄する。
+        existing_thread = getattr(self, "analysis_thread", None)
+        if existing_thread is not None:
+            try:
+                if existing_thread.isRunning():
+                    QMessageBox.warning(self, "System Busy", "現在、別の解析プロセスが実行中です。")
+                    return
+            except RuntimeError:
+                # Qt 側ですでに破棄された QThread ラッパーを再利用しない。
+                pass
+            self.analysis_thread = None
 
         # 3. 解析スレッドの初期化
-        # ※AnalysisThreadは別途定義されているQThreadクラス
-        self.analysis_thread = AnalysisThread(self.voice_manager, target_dir)
-        
-        # 4. シグナルとスロットの完全接続（省略なし）
-        self.analysis_thread.progress.connect(self.update_analysis_status)
-        self.analysis_thread.finished.connect(self.on_analysis_complete)
-        self.analysis_thread.error.connect(self.on_analysis_error)
-        
-        # [爆弾5対策] 完了後のメモリ解放を予約
-        self.analysis_thread.finished.connect(self.analysis_thread.deleteLater)
-        
+        worker = AnalysisThread(self.voice_manager, target_dir, self)
+        self.analysis_thread = worker
+
+        # 4. 結果通知と QThread 本来の終了通知を分離する。
+        worker.progress.connect(self.update_analysis_status)
+        worker.completed.connect(self.on_analysis_complete)
+        worker.error.connect(self.on_analysis_error)
+        worker.finished.connect(self._on_analysis_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+
         # 5. UIの戦闘態勢への切り替え
         ai_btn = getattr(self, 'ai_analyze_button', None)
         if ai_btn:
@@ -5440,6 +5450,13 @@ class MainWindow(
         
         # 6. 解析実行
         self.analysis_thread.start()
+
+    @Slot()
+    def _on_analysis_thread_finished(self) -> None:
+        """解析スレッドの終了を受け、MainWindow が保持する参照を解放する。"""
+        worker = self.sender()
+        if getattr(self, "analysis_thread", None) is worker:
+            self.analysis_thread = None
 
     def update_analysis_status(self, percent: int, filename: str):
         """解析進捗のリアルタイム表示（UXの質で海外勢に差をつける）"""
@@ -6342,6 +6359,39 @@ class MainWindow(
                 return
         self._playback_prepare_thread = None
         self._pending_playback_tracks = None
+
+        # Background QThreads must finish before their owning widgets are destroyed.
+        # These operations are not forcibly terminated: closing is cancelled on timeout.
+        analysis_worker = getattr(self, "analysis_thread", None)
+        gallery = getattr(self, "voice_gallery", None)
+        import_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
+        for worker, title, message in (
+            (
+                analysis_worker,
+                "音源解析終了待ち",
+                "音源解析がまだ実行中です。解析の終了後に、もう一度終了してください。",
+            ),
+            (
+                import_worker,
+                "音源インポート終了待ち",
+                "音源のコピー・展開がまだ実行中です。処理の終了後に、もう一度終了してください。",
+            ),
+        ):
+            if worker is None:
+                continue
+            try:
+                running = worker.isRunning()
+            except RuntimeError:
+                # Qt object already deleted; it is no longer a live worker.
+                running = False
+            if running and not worker.wait(15000):
+                QMessageBox.warning(self, title, message)
+                event.ignore()
+                return
+
+        self.analysis_thread = None
+        if gallery is not None:
+            gallery._import_worker = None
 
         # Stop the legacy playback thread, if an older entry point started it.
         self.is_playing = False
