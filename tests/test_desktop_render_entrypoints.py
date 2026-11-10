@@ -121,7 +121,8 @@ def test_voice_gallery_uses_worker_scanned_voice_index():
     setup = gallery.split("def setup_gallery(self, voices=None):", 1)[1].split(
         "def _register_card", 1
     )[0]
-    assert "voices if isinstance(voices, dict) else self.manager.scan_voices()" in setup
+    assert "all_voices = voices" in setup
+    assert "self.manager.scan_voices()" not in setup
 
 
 def test_window_waits_for_voicebank_zip_worker_before_close():
