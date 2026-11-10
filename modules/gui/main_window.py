@@ -1759,7 +1759,7 @@ class VoiceCardGallery(QWidget):
 class AnalysisThread(QThread):
     """AI解析をバックグラウンドで実行するスレッド"""
     progress = Signal(int, str)
-    finished = Signal(dict)
+    completed = Signal(dict)
     error = Signal(str)
 
     def __init__(self, voice_manager, target_dir):
@@ -1773,7 +1773,7 @@ class AnalysisThread(QThread):
                 self.target_dir,
                 self.progress.emit
             )
-            self.finished.emit(results)
+            self.completed.emit(results)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -5421,7 +5421,7 @@ class MainWindow(
         
         # 4. シグナルとスロットの完全接続（省略なし）
         self.analysis_thread.progress.connect(self.update_analysis_status)
-        self.analysis_thread.finished.connect(self.on_analysis_complete)
+        self.analysis_thread.completed.connect(self.on_analysis_complete)
         self.analysis_thread.error.connect(self.on_analysis_error)
         
         # [爆弾5対策] 完了後のメモリ解放を予約
@@ -6342,6 +6342,25 @@ class MainWindow(
                 return
         self._playback_prepare_thread = None
         self._pending_playback_tracks = None
+
+        # Analysis and voice-import workers are children/references owned by the
+        # window's widgets. Never destroy their owners while native QThreads run.
+        from modules.gui.thread_utils import wait_for_thread_shutdown
+
+        gallery = getattr(self, "voice_gallery", None)
+        active_workers = (
+            ("音源解析", getattr(self, "analysis_thread", None)),
+            ("音源インポート", getattr(gallery, "_import_worker", None)),
+        )
+        for worker_label, background_worker in active_workers:
+            if not wait_for_thread_shutdown(background_worker, 15000):
+                QMessageBox.warning(
+                    self,
+                    f"{worker_label}終了待ち",
+                    f"{worker_label}がまだ実行中です。処理が終了してから、もう一度終了してください。",
+                )
+                event.ignore()
+                return
 
         # Stop the legacy playback thread, if an older entry point started it.
         self.is_playing = False
