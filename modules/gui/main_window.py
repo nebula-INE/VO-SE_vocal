@@ -6387,6 +6387,7 @@ class MainWindow(
                 print(f"Config save warning: {exc}")
 
         # The MIDI setup patch stores the live input manager under this name.
+        # Do not destroy the window while a MIDI callback may still be active.
         for manager_name in ("_midi_input_manager", "midi_manager"):
             midi_manager = getattr(self, manager_name, None)
             stop_midi = getattr(midi_manager, "stop", None)
@@ -6394,7 +6395,15 @@ class MainWindow(
                 try:
                     stop_midi()
                 except Exception as exc:
-                    print(f"MIDI shutdown warning: {exc}")
+                    QMessageBox.warning(
+                        self,
+                        "MIDI入力終了待ち",
+                        "MIDI入力デバイスを安全に切断できませんでした。"
+                        "デバイスの接続状態を確認してから、もう一度終了してください。"
+                        f"\n詳細: {exc}",
+                    )
+                    event.ignore()
+                    return
 
         engine = getattr(self, "vo_se_engine", None)
         stop_engine = getattr(engine, "stop", None)
