@@ -637,9 +637,14 @@ class ProjectIOMixin:
                         str(raw.get("type", "vocal")),
                     )
                     track.notes = notes
-                    track.audio_path = str(
+                    audio_path = str(
                         raw.get("audio_path", raw.get("audio", "")) or ""
                     )
+                    if audio_path and not os.path.isabs(audio_path):
+                        audio_path = os.path.abspath(
+                            os.path.join(os.path.dirname(os.path.abspath(file_path)), audio_path)
+                        )
+                    track.audio_path = audio_path
                     track.volume = volume
                     track.pan = pan
                     track.is_muted = bool(raw.get("is_muted", False))
@@ -779,39 +784,89 @@ class ProjectIOMixin:
             return False
 
     def load_midi_file_from_path(self: Any, file_path: str) -> bool:
-        """MIDI ファイルを読み込んでタイムラインに設定する"""
+        """MIDIを読み込み、元ファイルのトラック分割をデスクトッププロジェクトへ復元する。"""
         from modules.data.midi_manager import load_midi_file
 
-        before_state = self._capture_project_edit_state()
-        note_dicts = load_midi_file(file_path)
-        if not note_dicts:
-            self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
+        try:
+            before_state = self._capture_project_edit_state()
+            note_dicts = load_midi_file(file_path)
+            if not note_dicts:
+                self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
+                return False
+
+            notes_by_track: Dict[int, List[NoteEvent]] = {}
+            names_by_track: Dict[int, str] = {}
+            for note_data in note_dicts:
+                track_index = int(note_data.get("_midi_track_index", 0))
+                note = NoteEvent.from_dict(note_data)
+                notes_by_track.setdefault(track_index, []).append(note)
+                track_name = str(note_data.get("_midi_track_name", "") or "")
+                if track_name:
+                    names_by_track[track_index] = track_name
+
+            source_track_indices = sorted(notes_by_track)
+            if not source_track_indices:
+                self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
+                return False
+
+            tracks = list(getattr(self, "tracks", []) or [])
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            if not tracks or not (0 <= current_idx < len(tracks)):
+                raise ValueError("読み込み先のトラックがありません。")
+
+            target_track = tracks[current_idx]
+            first_source_index = source_track_indices[0]
+            target_track.notes = list(notes_by_track[first_source_index])
+            target_track.name = names_by_track.get(
+                first_source_index,
+                f"{os.path.splitext(os.path.basename(file_path))[0]} - Track {first_source_index + 1}",
+            )
+
+            track_class = type(target_track)
+            for source_index in source_track_indices[1:]:
+                new_track = track_class(
+                    names_by_track.get(
+                        source_index,
+                        f"{os.path.splitext(os.path.basename(file_path))[0]} - Track {source_index + 1}",
+                    ),
+                    "vocal",
+                )
+                new_track.notes = list(notes_by_track[source_index])
+                tracks.append(new_track)
+
+            self.tracks = tracks
+            timeline = getattr(self, "timeline_widget", None)
+            active_notes = list(notes_by_track[first_source_index])
+            if timeline is not None:
+                if hasattr(timeline, "set_notes"):
+                    timeline.set_notes(active_notes)
+                else:
+                    timeline.notes_list = active_notes
+                    if hasattr(timeline, "update"):
+                        timeline.update()
+
+            refresh = getattr(self, "refresh_track_list_ui", None)
+            if callable(refresh):
+                refresh()
+            self.statusBar().showMessage(
+                f"MIDI 読み込み完了: {len(note_dicts)} ノート / {len(source_track_indices)} トラック "
+                f"({os.path.basename(file_path)})"
+            )
+            self._record_project_state_edit(
+                before_state,
+                self._capture_project_edit_state(),
+                "MIDI読み込み",
+            )
+            return True
+
+        except Exception as exc:
+            logger.exception("MIDI 読み込みエラー: %s", exc)
+            QMessageBox.critical(
+                self,
+                "読み込みエラー",
+                f"MIDI の読み込みに失敗しました:\\n{exc}",
+            )
             return False
-
-        notes = [NoteEvent.from_dict(d) for d in note_dicts]
-
-        tracks = list(getattr(self, "tracks", []) or [])
-        current_idx = int(getattr(self, "current_track_idx", 0))
-        if 0 <= current_idx < len(tracks):
-            tracks[current_idx].notes = list(notes)
-
-        if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
-            if hasattr(self.timeline_widget, "set_notes"):
-                self.timeline_widget.set_notes(notes)
-            elif hasattr(self.timeline_widget, "notes_list"):
-                self.timeline_widget.notes_list = notes
-                if hasattr(self.timeline_widget, "update"):
-                    self.timeline_widget.update()
-
-        self.statusBar().showMessage(
-            f"MIDI 読み込み完了: {len(notes)} ノート ({os.path.basename(file_path)})"
-        )
-        self._record_project_state_edit(
-            before_state,
-            self._capture_project_edit_state(),
-            "MIDI読み込み",
-        )
-        return True
 
     # ------------------------------------------------------------------
     # 内部: .vsqx 読み込み
