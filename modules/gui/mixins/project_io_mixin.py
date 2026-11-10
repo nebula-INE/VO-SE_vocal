@@ -324,6 +324,113 @@ class _ExternalProjectLoadWorker(QRunnable):
 _TICKS_PER_BEAT = 480
 
 
+
+class _ProjectMixdownWorker(QThread):
+    """Render vocal tracks and create one project-wide WAV outside the GUI thread."""
+
+    progress = Signal(int, str)
+    completed = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        engine: Any,
+        tracks: List[Any],
+        parameters: Dict[str, Any],
+        tempo: float,
+        output_path: str,
+        mode_flag: int = 0,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.engine = engine
+        self.tracks = tracks
+        self.parameters = parameters
+        self.tempo = float(tempo)
+        self.output_path = output_path
+        self.mode_flag = int(mode_flag)
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_event.set()
+
+    @Slot()
+    def run(self) -> None:
+        import tempfile
+
+        try:
+            export_v2 = getattr(self.engine, "export_to_wav_v2", None)
+            vocal_jobs = [
+                (index, track)
+                for index, track in enumerate(self.tracks)
+                if str(getattr(track, "track_type", "vocal")).lower() == "vocal"
+                and bool(getattr(track, "notes", []) or [])
+            ]
+            total_vocals = max(1, len(vocal_jobs))
+
+            with tempfile.TemporaryDirectory(prefix="vose_project_mixdown_") as temp_dir:
+                for job_index, (track_index, track) in enumerate(vocal_jobs):
+                    if self._cancel_event.is_set():
+                        raise RuntimeError("プロジェクトのミックスダウンがキャンセルされました。")
+                    if not callable(export_v2):
+                        raise RuntimeError(
+                            "ボーカルトラックの書き出しに必要な export_to_wav_v2 がありません。"
+                        )
+
+                    track_name = str(getattr(track, "name", f"Vocal {track_index + 1}"))
+                    self.progress.emit(
+                        int(job_index * 65 / total_vocals),
+                        f"{track_name} を個別レンダリング中...",
+                    )
+                    vocal_path = os.path.join(temp_dir, f"vocal_track_{track_index:03d}.wav")
+
+                    def report_vocal_progress(percent: int, offset: int = job_index) -> None:
+                        local = max(0, min(100, int(percent)))
+                        overall = int(((offset + local / 100.0) / total_vocals) * 65)
+                        self.progress.emit(
+                            overall,
+                            f"{track_name} を個別レンダリング中...",
+                        )
+
+                    result = export_v2(
+                        list(getattr(track, "notes", []) or []),
+                        self.parameters,
+                        vocal_path,
+                        mode_flag=self.mode_flag,
+                        progress_callback=report_vocal_progress,
+                        cancel_check=self._cancel_event.is_set,
+                        tempo_bpm=self.tempo,
+                    )
+                    if not result:
+                        raise RuntimeError(f"「{track_name}」のWAV生成に失敗しました。")
+                    rendered_path = os.path.abspath(os.fsdecode(os.fspath(result)))
+                    if not os.path.isfile(rendered_path):
+                        raise RuntimeError(f"「{track_name}」のWAVが生成されませんでした。")
+                    # AudioMixer resolves playback_path before audio_path.
+                    track.playback_path = rendered_path
+
+                if self._cancel_event.is_set():
+                    raise RuntimeError("プロジェクトのミックスダウンがキャンセルされました。")
+
+                from modules.audio.project_mixdown import mixdown_tracks_to_wav
+
+                self.progress.emit(70, "全トラックを共通タイムラインで合成中...")
+                result_path = mixdown_tracks_to_wav(
+                    self.tracks,
+                    self.output_path,
+                    sample_rate=44100,
+                    block_size=65536,
+                    progress_callback=lambda percent: self.progress.emit(
+                        70 + int(max(0, min(100, int(percent))) * 0.29),
+                        "全トラックを共通タイムラインで合成中...",
+                    ),
+                    cancel_check=self._cancel_event.is_set,
+                )
+                self.completed.emit(result_path)
+        except Exception as exc:
+            logger.exception("プロジェクト全体のWAVミックスダウンに失敗しました")
+            self.failed.emit(str(exc))
+
 class ProjectIOMixin:
     """
     MainWindow に mix-in して使うファイル入出力クラス。
