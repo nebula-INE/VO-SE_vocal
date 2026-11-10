@@ -303,3 +303,17 @@ def test_project_load_resolves_relative_audio_paths_from_project_folder(tmp_path
 
     assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
     assert window.tracks[0].audio_path == str((tmp_path / "media" / "backing.wav").resolve())
+
+
+def test_project_history_snapshot_does_not_deepcopy_entire_note_tree():
+    window = _ProjectWindow()
+    note = window.tracks[0].notes[0]
+
+    snapshot = ProjectIOMixin._capture_project_edit_state(window)
+
+    window.tracks[0].name = "Changed after snapshot"
+    window.tracks[0].notes = []
+
+    assert snapshot["tracks"][0].name == "Current"
+    assert len(snapshot["tracks"][0].notes) == 1
+    assert snapshot["tracks"][0].notes[0] is note
