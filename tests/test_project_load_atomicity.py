@@ -317,3 +317,17 @@ def test_project_history_snapshot_does_not_deepcopy_entire_note_tree():
     assert snapshot["tracks"][0].name == "Current"
     assert len(snapshot["tracks"][0].notes) == 1
     assert snapshot["tracks"][0].notes[0] is note
+
+
+def test_legacy_project_load_uses_lightweight_track_container_clones():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+    loader = source.split("def load_json_project(", 1)[1].split(
+        "def load_midi_file_from_path(", 1
+    )[0]
+    assert "_clone_track_collection(existing_tracks)" in loader
+    assert "deepcopy(existing_tracks)" not in loader
