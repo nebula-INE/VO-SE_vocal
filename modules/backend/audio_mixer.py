@@ -245,14 +245,29 @@ class AudioMixer:
         stream = self._stream
         self._stream = None
         if stream is not None:
+            stop_error: Exception | None = None
             try:
                 stream.stop()
             except Exception as exc:
-                print(f"[AudioMixer] Stream stop warning: {exc}")
+                stop_error = exc
             try:
                 stream.close()
             except Exception as exc:
-                print(f"[AudioMixer] Stream close warning: {exc}")
+                raise RuntimeError(
+                    f"Audio output stream could not be closed: {exc}"
+                ) from exc
+
+            # A successful close must leave PortAudio inactive. A stop error
+            # alone is tolerated only when close has actually deactivated it.
+            try:
+                still_active = bool(getattr(stream, "active", False))
+            except Exception:
+                still_active = stop_error is not None
+            if still_active:
+                detail = f": {stop_error}" if stop_error is not None else ""
+                raise RuntimeError(
+                    "Audio output stream is still active after close" + detail
+                ) from stop_error
 
         producer = self._producer_thread
         if producer is not None and producer.is_alive():
