@@ -193,18 +193,15 @@ def test_callback_copies_partial_blocks_and_tracks_position(monkeypatch):
     assert mixer.position_sec == 0.5
 
     second = np.zeros((3, 2), dtype=np.float32)
-    mixer._audio_callback(second, 3, None, None)
-    assert np.allclose(second[:2], 1.0)
-    assert np.allclose(second[2:], 0.0)
-    assert mixer.position_sec == 1.0
-
-    final = np.zeros((1, 2), dtype=np.float32)
     try:
-        mixer._audio_callback(final, 1, None, None)
+        mixer._audio_callback(second, 3, None, None)
     except CallbackStop:
         pass
     else:
         raise AssertionError("callback should stop after the final queued block")
+    assert np.allclose(second[:2], 1.0)
+    assert np.allclose(second[2:], 0.0)
+    assert mixer.position_sec == 1.0
 
 
 def test_callback_records_device_underflow_and_queue_underrun(monkeypatch):
