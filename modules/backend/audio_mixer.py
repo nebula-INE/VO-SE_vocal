@@ -85,6 +85,10 @@ class AudioMixer:
         new_tracks = list(tracks)
         sources: Dict[int, Dict[str, Any]] = {}
         load_errors: list[str] = []
+        with self._lock:
+            self._tracks = []
+            self._sources = {}
+            self.last_load_errors = []
 
         for track in new_tracks:
             path = self._track_path(track)
