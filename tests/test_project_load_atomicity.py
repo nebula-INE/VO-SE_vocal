@@ -99,6 +99,9 @@ def _bind_project_mixin_methods(window):
     window._apply_project_voice_selection = lambda voice_id, name: ProjectIOMixin._apply_project_voice_selection(
         window, voice_id, name
     )
+    window._record_project_state_edit = lambda before, after, description: ProjectIOMixin._record_project_state_edit(
+        window, before, after, description
+    )
 
 
 def test_invalid_later_track_does_not_replace_current_project(tmp_path, monkeypatch):
