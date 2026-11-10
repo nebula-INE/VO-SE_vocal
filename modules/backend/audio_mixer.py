@@ -481,8 +481,9 @@ class AudioMixer:
                         return
                     if not status_underflow:
                         self._output_underflow_count += 1
-                    with self._lock:
-                        self._position += frames - written
+                    # Do not consume timeline frames while data is unavailable.
+                    # The next callback retries the same source position after
+                    # the producer has filled the queue, avoiding skipped audio.
                     return
 
             block_start, block, valid_frames = self._pending_block
