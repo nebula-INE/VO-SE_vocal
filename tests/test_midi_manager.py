@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from modules.data.midi_manager import MidiInputManager
 
@@ -43,3 +44,27 @@ def test_stop_without_open_port_is_safe():
     manager.stop()
 
     assert manager.port is None
+
+def test_desktop_midi_port_switch_keeps_manager_when_shutdown_fails():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    handler = source.split("def on_midi_port_changed(self):", 1)[1].split(
+        "def update_gui_with_midi", 1
+    )[0]
+
+    assert "except Exception as exc:" in handler
+    assert "self.status_label.setText(f\"MIDIの切断に失敗: {exc}\")" in handler
+    assert handler.index("self.midi_manager.stop()") < handler.index("return")
+    assert handler.index("return") < handler.index("self.midi_manager = None")
+
+
+def test_compatibility_midi_port_switch_reports_shutdown_failure():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "modules" / "gui" / "main_window_patch.py").read_text(encoding="utf-8")
+    handler = source.split("def _on_port_changed(port_name: str) -> None:", 1)[1].split(
+        "# セレクタのシグナルに接続", 1
+    )[0]
+
+    assert "except Exception as exc:" in handler
+    assert "MIDI入力を切断できません" in handler
+    assert handler.index("return") < handler.index("window._midi_input_manager.start()")
