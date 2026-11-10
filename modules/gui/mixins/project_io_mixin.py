@@ -56,6 +56,10 @@ class ProjectIOMixin:
                 getattr(graph, "all_parameters", {}) or {}
             ),
             "current_playback_time": float(getattr(self, "current_playback_time", 0.0)),
+            # Desktop currently uses one active singer for all vocal tracks.
+            # Persist that identity so reopening a project restores the same voice.
+            "current_voice_id": str(getattr(self, "current_voice_id", "NONE") or "NONE"),
+            "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
         }
 
     def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
@@ -113,9 +117,73 @@ class ProjectIOMixin:
         sync_strips = getattr(self, "_sync_track_strips", None)
         if callable(sync_strips):
             sync_strips()
+
+        voice_id = state.get("current_voice_id")
+        voice_name = state.get("current_voice", "未選択")
+        if not self._apply_project_voice_selection(voice_id, voice_name):
+            status_bar = getattr(self, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage(
+                    "保存されていた音源が見つからないため、現在の音源を維持しました。",
+                    5000,
+                )
+
         self.update_scrollbar_range() if callable(
             getattr(self, "update_scrollbar_range", None)
         ) else None
+
+    def _apply_project_voice_selection(
+        self: Any,
+        voice_id: Any,
+        display_name: Any = "",
+    ) -> bool:
+        """Restore a project singer only when its stable gallery ID is available."""
+        if voice_id is None:
+            # Older project files did not store singer identity.
+            return True
+        if not isinstance(voice_id, str):
+            return False
+
+        name = display_name if isinstance(display_name, str) else ""
+        if voice_id.strip() in {"", "NONE"}:
+            self.current_voice_id = "NONE"
+            self.current_voice = name or "未選択"
+            gallery = getattr(self, "voice_gallery", None)
+            cards = getattr(gallery, "cards", {}) if gallery is not None else {}
+            for card in cards.values():
+                setter = getattr(card, "set_selected", None)
+                if callable(setter):
+                    setter(False)
+            combo = getattr(self, "character_selector", None)
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(-1)
+                combo.blockSignals(False)
+            return True
+
+        gallery = getattr(self, "voice_gallery", None)
+        cards = getattr(gallery, "cards", {}) if gallery is not None else {}
+        card = cards.get(voice_id) if isinstance(cards, dict) else None
+        if card is not None and not bool(getattr(card, "is_recruiting", False)):
+            card_name = str(getattr(card, "display_name", name) or name)
+            select_card = getattr(gallery, "on_card_clicked", None)
+            if callable(select_card):
+                select_card(card_name, voice_id)
+                return True
+
+        combo = getattr(self, "character_selector", None)
+        if combo is not None:
+            index = combo.findData(voice_id)
+            if index >= 0:
+                resolved_name = str(combo.itemText(index))
+                on_voice_changed = getattr(self, "on_voice_changed", None)
+                if callable(on_voice_changed):
+                    on_voice_changed(resolved_name, voice_id)
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(index)
+                    combo.blockSignals(False)
+                    return True
+        return False
 
     def _record_project_state_edit(
         self: Any,
@@ -466,6 +534,12 @@ class ProjectIOMixin:
 
             tempo = float(data.get("tempo", 120.0))
             current_time = float(data.get("current_time", 0.0))
+            saved_voice_id = data.get("current_voice_id")
+            if saved_voice_id is not None and not isinstance(saved_voice_id, str):
+                raise ValueError("current_voice_id は文字列である必要があります。")
+            saved_voice_name = data.get("current_voice", "")
+            if not isinstance(saved_voice_name, str):
+                saved_voice_name = ""
             if not math.isfinite(tempo) or tempo <= 0.0:
                 raise ValueError("プロジェクトのテンポが不正です。")
             if not math.isfinite(current_time) or current_time < 0.0:
@@ -672,11 +746,17 @@ class ProjectIOMixin:
             if callable(sync_strips):
                 sync_strips()
 
-            note_count = len(active_notes)
-            self.statusBar().showMessage(
-                f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})",
-                3000,
+            voice_restored = self._apply_project_voice_selection(
+                saved_voice_id,
+                saved_voice_name,
             )
+            note_count = len(active_notes)
+            status_message = (
+                f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})"
+            )
+            if not voice_restored:
+                status_message += " / 保存時の音源が未検出のため現在の音源を維持"
+            self.statusBar().showMessage(status_message, 5000 if not voice_restored else 3000)
             self._record_project_state_edit(
                 before_state,
                 self._capture_project_edit_state(),
@@ -1159,6 +1239,14 @@ class ProjectIOMixin:
                 "tempo": tempo,
                 "current_track_idx": max(0, current_idx),
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
+                # Desktop currently has a single active singer shared by vocal tracks.
+                # Empty string represents the unselected "NONE" state.
+                "current_voice_id": (
+                    str(getattr(self, "current_voice_id", "NONE") or "NONE")
+                    if str(getattr(self, "current_voice_id", "NONE") or "NONE") != "NONE"
+                    else ""
+                ),
+                "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
                 "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
             }
