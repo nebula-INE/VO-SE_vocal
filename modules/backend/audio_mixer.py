@@ -243,7 +243,6 @@ class AudioMixer:
         stop_event.set()
 
         stream = self._stream
-        self._stream = None
         if stream is not None:
             stop_error: Exception | None = None
             try:
@@ -268,6 +267,7 @@ class AudioMixer:
                 raise RuntimeError(
                     "Audio output stream is still active after close" + detail
                 ) from stop_error
+            self._stream = None
 
         producer = self._producer_thread
         if producer is not None and producer.is_alive():
