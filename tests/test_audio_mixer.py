@@ -234,3 +234,85 @@ def test_callback_records_device_underflow_and_queue_underrun(monkeypatch):
 def test_stream_queue_has_a_fixed_memory_bound():
     mixer = AudioMixer(queue_blocks=3, block_size=512)
     assert mixer._blocks.maxsize == 3
+
+
+def test_play_probes_default_output_and_supports_mono_devices(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class CallbackStop(Exception):
+        pass
+
+    created = {}
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.channels = kwargs["channels"]
+            self.callback = kwargs["callback"]
+            self.active = False
+            created["stream"] = self
+
+        def start(self):
+            self.active = True
+
+        def stop(self):
+            self.active = False
+
+        def close(self):
+            self.active = False
+
+    class FakeSoundDevice:
+        CallbackStop = CallbackStop
+
+        @staticmethod
+        def query_devices(kind=None):
+            assert kind == "output"
+            return {
+                "name": "Mono Output",
+                "max_output_channels": 1,
+                "default_samplerate": 48000.0,
+            }
+
+        @staticmethod
+        def OutputStream(**kwargs):
+            return FakeStream(**kwargs)
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer(sample_rate=4, block_size=2)
+    track = _track()
+    _install_memory_sources(
+        mixer,
+        (track, np.asarray([[1.0, -1.0], [0.5, -0.5]], dtype=np.float32)),
+    )
+
+    mixer.play(0.0)
+    stream = created["stream"]
+    assert stream.channels == 1
+    assert mixer.get_diagnostics()["output_device_name"] == "Mono Output"
+    assert mixer.get_diagnostics()["output_default_samplerate"] == 48000.0
+
+    out = np.zeros((2, 1), dtype=np.float32)
+    try:
+        stream.callback(out, 2, None, None)
+    except CallbackStop:
+        pass
+    assert np.allclose(out[:, 0], 0.0)
+    mixer.stop()
+
+
+def test_play_reports_when_no_default_output_device_is_available(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class FakeSoundDevice:
+        @staticmethod
+        def query_devices(kind=None):
+            raise OSError("No default output device")
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer()
+
+    try:
+        mixer.play()
+    except RuntimeError as exc:
+        assert "既定の音声出力デバイスを取得できません" in str(exc)
+    else:
+        raise AssertionError("missing output device must be reported")
