@@ -181,7 +181,7 @@ def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
         if notes is None:
             raise ValueError("MIDIファイルを解析できませんでした。")
         return {"format": "midi", "notes": notes, **_prepare_midi_note_tracks(notes)}
-    if extension == ".json":
+    if extension in {".json", ".vose"}:
         with open(file_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         if not isinstance(data, dict):
@@ -527,11 +527,12 @@ class ProjectIOMixin:
             self,
             "プロジェクトを開く",
             "",
-            "対応ファイル (*.ust *.vsqx *.mid *.midi *.json);;"
+            "対応ファイル (*.ust *.vsqx *.mid *.midi *.json *.vose);;"
             "UTAU プロジェクト (*.ust);;"
             "Vocaloid プロジェクト (*.vsqx);;"
             "MIDI ファイル (*.mid *.midi);;"
-            "VO-SE プロジェクト (*.json)",
+            "VO-SE プロジェクト (*.vose *.json);;"
+            "JSON ファイル (*.json)",
         )
         if not file_path:
             return
