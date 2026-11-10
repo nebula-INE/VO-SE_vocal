@@ -257,3 +257,4 @@ def test_voicebank_import_entrypoint_starts_worker_and_reports_completion():
     assert "_VoiceBankImportWorker(manager, zip_path, source_type, self)" in handler
     assert "worker.start()" in handler
     assert "self._on_voice_bank_import_completed" in handler
+    assert 'getattr(gallery, "_scan_worker", None)' in handler
