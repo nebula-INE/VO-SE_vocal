@@ -156,7 +156,18 @@ def _patch_midi_realtime(window) -> None:
     def _on_port_changed(port_name: str) -> None:
         """ポートセレクタ変更時に MIDI 入力を切り替える"""
         if window._midi_input_manager.port is not None:
-            window._midi_input_manager.stop()
+            try:
+                window._midi_input_manager.stop()
+            except Exception as exc:
+                logger.error("MIDI入力の切断に失敗: %s", exc, exc_info=True)
+                try:
+                    window.statusBar().showMessage(
+                        f"MIDI入力を切断できません: {exc}",
+                        7000,
+                    )
+                except Exception:
+                    logger.exception("MIDI切断エラーを画面へ通知できませんでした")
+                return
 
         if port_name and port_name not in ("なし", "None", ""):
             window._midi_input_manager.port_name = port_name
