@@ -116,8 +116,8 @@ jobs:
           # These optional modules are candidates for exclusion from the Linux
           # validation artifact only. Qt Multimedia is deliberately retained.
           pattern = re.compile(
-              r"PySide6\\s*\\.\\s*(?:QtWebEngine(?:Core|Widgets|Quick)?|QtDesigner)"
-              r"|\\bQ(?:WebEngine|Designer)",
+              r"PySide6\s*\.\s*(?:QtWebEngine(?:Core|Widgets|Quick)?|QtDesigner)"
+              r"|\bQ(?:WebEngine|Designer)",
               re.IGNORECASE,
           )
           roots = (Path("main.py"), Path("modules"), Path("assets"))
@@ -146,7 +146,7 @@ jobs:
 
           print(f"Optional Qt source audit scanned {scanned} files")
           if hits:
-              print("\\n".join(hits))
+              print("\n".join(hits))
               raise SystemExit(
                   "QtWebEngine/QtDesigner references found; review exclusions before packaging"
               )
