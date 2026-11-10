@@ -33,8 +33,36 @@ class _Timeline:
 
 
 class _StatusBar:
-    def showMessage(self, *_args, **_kwargs):
-        pass
+    def __init__(self):
+        self.messages = []
+
+    def showMessage(self, message, *_args, **_kwargs):
+        self.messages.append(message)
+
+
+class _VoiceCard:
+    def __init__(self, display_name):
+        self.display_name = display_name
+        self.is_recruiting = False
+        self.selected = False
+
+    def set_selected(self, selected):
+        self.selected = selected
+
+
+class _VoiceGallery:
+    def __init__(self, window):
+        self.window = window
+        self.cards = {
+            "voice-a": _VoiceCard("Voice A"),
+            "voice-b": _VoiceCard("Voice B"),
+        }
+
+    def on_card_clicked(self, display_name, internal_id):
+        for card in self.cards.values():
+            card.set_selected(False)
+        self.cards[internal_id].set_selected(True)
+        self.window.on_voice_changed(display_name, internal_id)
 
 
 class _ProjectWindow:
@@ -44,12 +72,33 @@ class _ProjectWindow:
         self.tracks = [track]
         self.current_track_idx = 0
         self.timeline_widget = _Timeline()
-        self.graph_editor_widget = SimpleNamespace(tempo=120.0, all_parameters={})
+        self.graph_editor_widget = SimpleNamespace(
+            tempo=120.0,
+            all_parameters={},
+            update=lambda: None,
+        )
         self.current_playback_time = 0.0
+        self.current_voice_id = "voice-a"
+        self.current_voice = "Voice A"
+        self.voice_gallery = _VoiceGallery(self)
+        self.character_selector = None
+        self.history = None
         self._status_bar = _StatusBar()
 
     def statusBar(self):
         return self._status_bar
+
+    def on_voice_changed(self, display_name, internal_id):
+        self.current_voice = display_name
+        self.current_voice_id = internal_id
+
+
+def _bind_project_mixin_methods(window):
+    window._capture_project_edit_state = lambda: ProjectIOMixin._capture_project_edit_state(window)
+    window._restore_project_edit_state = lambda state: ProjectIOMixin._restore_project_edit_state(window, state)
+    window._apply_project_voice_selection = lambda voice_id, name: ProjectIOMixin._apply_project_voice_selection(
+        window, voice_id, name
+    )
 
 
 def test_invalid_later_track_does_not_replace_current_project(tmp_path, monkeypatch):
@@ -148,3 +197,82 @@ def test_non_finite_note_timing_is_rejected_before_commit(tmp_path, monkeypatch)
     assert len(window.tracks) == 1
     assert window.tracks[0].name == "Current"
     assert window.timeline_widget.tempo == 120.0
+
+
+def test_project_save_persists_the_current_voice_identity(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    project_path = tmp_path / "voice-project.vose"
+    monkeypatch.setattr(
+        project_io_module.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(project_path), "VO-SE Project (*.vose)"),
+    )
+
+    assert ProjectIOMixin.on_save_project_clicked(window) is True
+
+    saved = json.loads(project_path.read_text(encoding="utf-8"))
+    assert saved["current_voice_id"] == "voice-a"
+    assert saved["current_voice"] == "Voice A"
+
+
+def test_project_load_restores_saved_voice_when_installed(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    project_path = tmp_path / "saved-voice.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 135.0,
+            "current_voice_id": "voice-b",
+            "current_voice": "Voice B",
+            "tracks": [{
+                "name": "Loaded",
+                "type": "vocal",
+                "notes": [],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.current_voice_id == "voice-b"
+    assert window.current_voice == "Voice B"
+    assert window.voice_gallery.cards["voice-b"].selected is True
+
+
+def test_project_load_keeps_current_voice_when_saved_voice_is_missing(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    project_path = tmp_path / "missing-voice.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 135.0,
+            "current_voice_id": "voice-not-installed",
+            "current_voice": "Removed Voice",
+            "tracks": [{
+                "name": "Loaded",
+                "type": "vocal",
+                "notes": [],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.current_voice_id == "voice-a"
+    assert window.current_voice == "Voice A"
+    assert any("保存時の音源が未検出" in msg for msg in window._status_bar.messages)
+
+
+def test_project_undo_snapshot_restores_voice_identity():
+    window = _ProjectWindow()
+    before = ProjectIOMixin._capture_project_edit_state(window)
+
+    window.current_voice_id = "voice-b"
+    window.current_voice = "Voice B"
+    ProjectIOMixin._restore_project_edit_state(window, before)
+
+    assert window.current_voice_id == "voice-a"
+    assert window.current_voice == "Voice A"
+    assert window.voice_gallery.cards["voice-a"].selected is True
