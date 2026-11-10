@@ -6139,15 +6139,21 @@ class MainWindow(
 
         if selected_port and selected_port != "ポートなし":
             try:
-               from .midi_io import MidiInputManager  # type: ignore
-               self.midi_manager = MidiInputManager(selected_port)
-               self.midi_manager.start()
+                manager = MidiInputManager(selected_port)
+                self.midi_manager = manager
+                manager.start()
+            except Exception as exc:
+                if self.status_label is not None:
+                    self.status_label.setText(f"MIDI入力を開始できません: {exc}")
+                return
 
-               if self.status_label is not None:
-                   self.status_label.setText(f"MIDI: {selected_port}")
-
-            except ImportError:
-                pass
+            if self.status_label is not None:
+                if getattr(manager, "port", None) is None:
+                    self.status_label.setText(
+                        f"MIDI入力を開始できませんでした: {selected_port}"
+                    )
+                else:
+                    self.status_label.setText(f"MIDI: {selected_port}")
 
     @Slot(int, int, str)
     def update_gui_with_midi(self, note_number: int, velocity: int, event_type: str):
