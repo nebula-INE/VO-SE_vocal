@@ -6403,7 +6403,14 @@ class MainWindow(
             try:
                 stop_mixer()
             except Exception as exc:
-                print(f"Audio mixer shutdown warning: {exc}")
+                QMessageBox.warning(
+                    self,
+                    "音声再生の終了待ち",
+                    f"音声再生処理を安全に停止できませんでした。"
+                    f"再生停止後に、もう一度終了してください。\\n{exc}",
+                )
+                event.ignore()
+                return
 
         config = {
             "default_voice": getattr(self, "current_voice", None),
