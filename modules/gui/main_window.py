@@ -1569,6 +1569,14 @@ class VoiceCardGallery(QWidget):
         from PySide6.QtWidgets import QProgressDialog
         if self._import_worker is not None and self._import_worker.isRunning():
             return
+        owner = self.window()
+        voice_bank_worker = getattr(owner, "_voice_bank_import_worker", None)
+        if voice_bank_worker is not None:
+            try:
+                if voice_bank_worker.isRunning():
+                    return
+            except RuntimeError:
+                pass
 
         dlg = QProgressDialog(label, "", 0, 0, self.window())
         dlg.setWindowTitle("音源を追加")
