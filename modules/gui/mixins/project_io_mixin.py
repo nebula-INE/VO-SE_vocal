@@ -1193,7 +1193,7 @@ class ProjectIOMixin:
             else:
                 notes_by_track: Dict[int, List[NoteEvent]] = {}
                 names_by_track: Dict[int, str] = {}
-                for note_data in note_dicts:
+                for note_data in (note_dicts or []):
                     track_index = int(note_data.get("_midi_track_index", 0))
                     note = NoteEvent.from_dict(note_data)
                     notes_by_track.setdefault(track_index, []).append(note)
@@ -1245,8 +1245,13 @@ class ProjectIOMixin:
             refresh = getattr(self, "refresh_track_list_ui", None)
             if callable(refresh):
                 refresh()
+            note_count = (
+                int(prepared_note_tracks.get("note_count", len(note_dicts or [])))
+                if prepared_note_tracks is not None
+                else len(note_dicts or [])
+            )
             self.statusBar().showMessage(
-                f"MIDI 読み込み完了: {len(note_dicts)} ノート / {len(source_track_indices)} トラック "
+                f"MIDI 読み込み完了: {note_count} ノート / {len(source_track_indices)} トラック "
                 f"({os.path.basename(file_path)})"
             )
             self._record_project_state_edit(
