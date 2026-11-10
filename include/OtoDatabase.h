@@ -312,7 +312,7 @@ public:
     // vose_core への一括転送: WAV先読み込み(load_embedded_resource) +
     // oto情報転送(set_oto_data)。戻り値は正常に登録できたエントリ数。
     // --------------------------------------------------------------
-    int pushAllToCore (VoseCoreLibrary& core) const
+    int pushAllToCore (VoseCoreLibrary& core, bool clearOtoWhenEmpty = true) const
     {
         if (! core.isLoaded() || core.load_embedded_resource == nullptr)
             return 0;
@@ -372,8 +372,13 @@ public:
             cEntries.push_back (c);
         }
 
-        if (core.set_oto_data != nullptr && ! cEntries.empty())
-            core.set_oto_data (cEntries.data(), (int) cEntries.size());
+        if (core.set_oto_data != nullptr)
+        {
+            if (! cEntries.empty())
+                core.set_oto_data (cEntries.data(), (int) cEntries.size());
+            else if (clearOtoWhenEmpty)
+                core.set_oto_data (nullptr, 0);
+        }
 
         return loadedCount;
     }
@@ -393,11 +398,47 @@ private:
             if (line.isEmpty() || line.startsWithChar ('#') || line.startsWithChar (';'))
                 continue;
 
-            auto columns = juce::StringArray::fromTokens (rawLine, "\t", "");
-            if (columns.size() < 2)
-                columns = juce::StringArray::fromTokens (line, " ", "");
-            if (columns.size() < 2)
-                continue;
+            juce::String boundaryText;
+            juce::String prefix;
+            juce::String suffix;
+
+            // Keep empty tab-separated fields. A classic row such as
+            // C1<TAB><TAB>_C4 means an empty prefix and the suffix "_C4".
+            const int firstTab = rawLine.indexOf ("\t");
+            if (firstTab >= 0)
+            {
+                boundaryText = rawLine.substring (0, firstTab).trim();
+                const int secondTab = rawLine.indexOfChar (firstTab + 1, '\t');
+                if (secondTab < 0)
+                {
+                    // Legacy two-column format: note + suffix.
+                    suffix = rawLine.substring (firstTab + 1).trim();
+                }
+                else
+                {
+                    prefix = rawLine.substring (firstTab + 1, secondTab).trim();
+                    suffix = rawLine.substring (secondTab + 1).trim();
+                }
+            }
+            else
+            {
+                // Whitespace-delimited fallback for nonstandard files.
+                auto columns = juce::StringArray::fromTokens (line, " ", "");
+                if (columns.size() < 2)
+                    continue;
+
+                boundaryText = columns[0].trim();
+                if (columns.size() >= 3)
+                {
+                    prefix = columns[1].trim();
+                    suffix = columns[2].trim();
+                }
+                else
+                {
+                    // Match the Python resolver's legacy two-column rule.
+                    suffix = columns[1].trim();
+                }
+            }
 
             const auto midiForNote = [] (juce::String value) -> int
             {
@@ -425,12 +466,10 @@ private:
                 return (octave + 1) * 12 + semitone;
             };
 
-            const int boundary = midiForNote (columns[0]);
+            const int boundary = midiForNote (boundaryText);
             if (boundary < 0)
                 continue;
 
-            const auto prefix = columns.size() >= 2 ? columns[1].trim() : juce::String();
-            const auto suffix = columns.size() >= 3 ? columns[2].trim() : juce::String();
             prefixMap[boundary] = { prefix == "-" ? juce::String() : prefix,
                                     suffix == "-" ? juce::String() : suffix };
         }

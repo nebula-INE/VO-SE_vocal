@@ -72,18 +72,44 @@ void VoseAudioProcessor::loadVoiceDirectory (const juce::File& dir, int trackInd
     trackIndex = juce::jlimit (0, kMaxTracks - 1, trackIndex);
     auto& track = tracks[(size_t) trackIndex];
 
+    // The native OTO table is global even though the plugin owns one
+    // OtoDatabase per track. Only clear it on an empty/failed replacement when
+    // this track currently owns that global table (or no track owns it yet).
+    const bool ownsCoreOtoState =
+        activeOtoTrackIndex < 0 || activeOtoTrackIndex == trackIndex;
     track.otoDb.clear();
+    track.voiceDirPath = {};
+
     const int entryCount = track.otoDb.loadVoiceDir (dir);
 
     if (entryCount == 0)
     {
+        if (ownsCoreOtoState && coreLib.set_oto_data != nullptr)
+            coreLib.set_oto_data (nullptr, 0);
+        if (activeOtoTrackIndex == trackIndex)
+            activeOtoTrackIndex = -1;
         juce::Logger::writeToLog ("VO-SE: oto.ini が見つからないか0エントリでした: "
                                    + dir.getFullPathName());
         return;
     }
 
-    const int loaded = track.otoDb.pushAllToCore (coreLib);
+    const int loaded = track.otoDb.pushAllToCore (coreLib, ownsCoreOtoState);
+    if (loaded <= 0)
+    {
+        track.voiceDirPath = {};
+        if (ownsCoreOtoState)
+        {
+            if (coreLib.set_oto_data != nullptr)
+                coreLib.set_oto_data (nullptr, 0);
+            activeOtoTrackIndex = -1;
+        }
+        juce::Logger::writeToLog ("VO-SE: 有効なWAVを読み込めなかったため音源を未設定に戻しました: "
+                                   + dir.getFullPathName());
+        return;
+    }
+
     track.voiceDirPath = dir.getFullPathName();
+    activeOtoTrackIndex = trackIndex;
 
     juce::Logger::writeToLog ("VO-SE: [track" + juce::String (trackIndex) + "] oto.ini "
                                + juce::String (entryCount) + "エントリ解析、"

@@ -73,6 +73,41 @@ def test_callback_mixes_multiple_tracks_with_mute_and_volume():
     assert np.allclose(out, 0.5 * np.sqrt(0.5))
 
 
+def test_all_muted_tracks_keep_timeline_running_until_audio_ends(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class CallbackStop(Exception):
+        pass
+
+    fake_sound_device = SimpleNamespace(CallbackStop=CallbackStop)
+    monkeypatch.setattr(audio_mixer_module, "sd", fake_sound_device)
+
+    mixer = AudioMixer(sample_rate=4, block_size=2)
+    muted = _track(is_muted=True)
+    mixer._tracks = [muted]
+    mixer._buffers = {
+        id(muted): np.ones((4, 2), dtype=np.float32),
+    }
+
+    first = np.ones((2, 2), dtype=np.float32)
+    mixer._callback(first, 2, None, None)
+    assert np.allclose(first, 0.0)
+    assert mixer.position_sec == 0.5
+
+    second = np.ones((2, 2), dtype=np.float32)
+    mixer._callback(second, 2, None, None)
+    assert np.allclose(second, 0.0)
+    assert mixer.position_sec == 1.0
+
+    final = np.ones((2, 2), dtype=np.float32)
+    try:
+        mixer._callback(final, 2, None, None)
+    except CallbackStop:
+        pass
+    else:
+        raise AssertionError("playback should stop only after the muted buffer ends")
+
+
 def test_callback_solo_excludes_non_solo_tracks():
     mixer = AudioMixer(sample_rate=4, block_size=4)
     normal = _track(volume=1.0)

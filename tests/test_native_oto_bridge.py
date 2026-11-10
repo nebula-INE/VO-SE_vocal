@@ -14,9 +14,67 @@ class _FakeLib:
         self.calls.append((entries, count))
 
 
+def _oto_entry(*, alias: str, filename: str = "a.wav", voice_dir: str = "/tmp/voice") -> OtoEntry:
+    """Build a complete OTO model for ABI bridge tests."""
+    return OtoEntry(
+        alias=alias,
+        filename=filename,
+        voice_dir=voice_dir,
+        left_blank=0.0,
+        fixed_range=0.0,
+        right_blank=0.0,
+        preutterance=0.0,
+        overlap=0.0,
+    )
+
+
 def test_oto_entry_abi_layout():
     validate_oto_entry_layout()
     assert ctypes.sizeof(COtoEntry) == 632
+
+
+def test_set_oto_data_skips_alias_that_exceeds_native_abi_limit():
+    engine = VO_SE_Engine.__new__(VO_SE_Engine)
+    fake_lib = _FakeLib()
+    engine.lib = cast(Any, fake_lib)
+
+    entry = _oto_entry(alias="a" * 64)
+    engine.set_oto_data({"long-alias": entry})
+
+    assert len(fake_lib.calls) == 1
+    entries, count = fake_lib.calls[0]
+    assert entries is None
+    assert count == 0
+
+
+def test_set_oto_data_skips_wav_path_that_exceeds_native_abi_limit():
+    engine = VO_SE_Engine.__new__(VO_SE_Engine)
+    fake_lib = _FakeLib()
+    engine.lib = cast(Any, fake_lib)
+
+    entry = _oto_entry(alias="あ", voice_dir="/tmp/" + ("v" * 520))
+    engine.set_oto_data({"あ": entry})
+
+    assert len(fake_lib.calls) == 1
+    entries, count = fake_lib.calls[0]
+    assert entries is None
+    assert count == 0
+
+
+def test_set_oto_data_compacts_valid_entries_after_skipping_overlong_one():
+    engine = VO_SE_Engine.__new__(VO_SE_Engine)
+    fake_lib = _FakeLib()
+    engine.lib = cast(Any, fake_lib)
+
+    too_long = _oto_entry(alias="x" * 64)
+    valid = _oto_entry(alias="あ")
+    engine.set_oto_data({"too-long": too_long, "valid": valid})
+
+    assert len(fake_lib.calls) == 1
+    entries, count = fake_lib.calls[0]
+    assert count == 1
+    assert entries[0].alias == "あ".encode("utf-8")
+    assert entries[0].wav_path == b"/tmp/voice/a.wav"
 
 
 def test_set_oto_data_syncs_alias_and_wav_path():

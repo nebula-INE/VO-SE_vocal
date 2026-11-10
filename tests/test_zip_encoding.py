@@ -120,6 +120,42 @@ def test_backslash_separators_are_normalised(tmp_path):
 
 
 @pytest.mark.unit
+def test_safe_extract_rejects_total_uncompressed_size_before_writing(tmp_path):
+    archive = tmp_path / "oversized_total.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Voice/oto.ini", "x" * 4)
+        zf.writestr("Voice/a.wav", b"x" * 4)
+
+    output = tmp_path / "out"
+    with zipfile.ZipFile(archive) as zf, pytest.raises(ValueError, match="合計サイズ"):
+        safe_extract_zip(zf, str(output), max_total_size=7)
+
+    assert not (output / "Voice" / "oto.ini").exists()
+    assert not (output / "Voice" / "a.wav").exists()
+
+
+def test_safe_extract_rejects_single_oversized_member(tmp_path):
+    archive = tmp_path / "oversized_member.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Voice/a.wav", b"x" * 8)
+
+    output = tmp_path / "out"
+    with zipfile.ZipFile(archive) as zf, pytest.raises(ValueError, match="ファイルサイズ"):
+        safe_extract_zip(zf, str(output), max_member_size=7)
+
+    assert not (output / "Voice" / "a.wav").exists()
+
+
+def test_safe_extract_rejects_too_many_members(tmp_path):
+    archive = tmp_path / "too_many_members.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("a.txt", "a")
+        zf.writestr("b.txt", "b")
+
+    with zipfile.ZipFile(archive) as zf, pytest.raises(ValueError, match="ファイル数"):
+        safe_extract_zip(zf, str(tmp_path / "out"), max_members=1)
+
+
 def test_path_traversal_still_rejected_with_legacy_names(tmp_path):
     archive = tmp_path / "evil.zip"
     make_legacy_zip(archive, {"../../悪.txt": b"x"})

@@ -125,6 +125,8 @@ class AudioMixer:
         source_rate = int(sample_rate or self.sample_rate)
         data = self._resample(data, source_rate)
         stereo = self._to_stereo(data)
+        # Validate and prepare the replacement buffer before stopping current audio.
+        self.stop()
 
         class _BufferTrack:
             volume = 1.0
@@ -213,17 +215,20 @@ class AudioMixer:
                 bool(getattr(track, "is_solo", False)) for track in tracks
             )
             has_audio = False
-            all_finished = True
+            all_finished = bool(buffers)
 
             for track in tracks:
-                if not self._track_is_active(track, solo_exists):
-                    continue
-
                 data = buffers.get(id(track))
                 if data is None:
                     continue
+
+                # Muted or solo-excluded tracks still own timeline duration.
+                # Only skip their contribution to the mix, not their completion
+                # accounting, so an all-muted session does not stop immediately.
                 if start < len(data):
                     all_finished = False
+                if not self._track_is_active(track, solo_exists):
+                    continue
                 if start >= len(data):
                     continue
 

@@ -2,6 +2,7 @@ import ctypes
 from typing import Optional 
 import os
 import sys
+import logging
 import numpy as np
 from typing import List, Dict, Any, Callable, cast
 try:
@@ -130,7 +131,8 @@ class VO_SE_Engine:
             entries = []
 
         c_entries = (COtoEntry * len(entries))()
-        for i, entry in enumerate(entries):
+        written = 0
+        for entry in entries:
             alias = str(getattr(entry, "alias", "") or "")
             wav_path = str(getattr(entry, "wav_path", "") or "")
             # OtoEntry 互換オブジェクトでは wav_path プロパティを
@@ -154,37 +156,36 @@ class VO_SE_Engine:
             if not alias or not wav_path:
                 continue
 
-            def fixed_utf8(value: str, limit: int) -> bytes:
-                raw = value.encode("utf-8")
-                if len(raw) < limit:
-                    return raw
-                raw = raw[: limit - 1]
-                while raw:
-                    try:
-                        raw.decode("utf-8")
-                        return raw
-                    except UnicodeDecodeError:
-                        raw = raw[:-1]
-                return b""
+            alias_bytes = alias.encode("utf-8")
+            wav_bytes = wav_path.encode("utf-8")
+            if len(alias_bytes) >= 64 or len(wav_bytes) >= 512:
+                logging.getLogger(__name__).warning(
+                    "OTO entry skipped because its UTF-8 value exceeds the native ABI limit "
+                    "(alias=%d/63 bytes, wav_path=%d/511 bytes): %r",
+                    len(alias_bytes),
+                    len(wav_bytes),
+                    alias,
+                )
+                continue
 
-            c_entries[i].filename = None
-            c_entries[i].cutoff = float(getattr(entry, "right_blank", 0.0))
-            c_entries[i].alias = fixed_utf8(alias, 64)
+            target = written
+            c_entries[target].filename = None
+            c_entries[target].cutoff = float(getattr(entry, "right_blank", 0.0))
+            c_entries[target].alias = alias_bytes
             # OtoEntry.wav_path は既に解決済みのパス。ここで abspath() を通すと\n            # Windows 上で POSIX 形式の絶対パス (例: /tmp/voice/a.wav) まで\n            # 実行環境のドライブ付きパスへ変換され、元のパス情報が壊れる。\n            # macOS の ctypes で固定長 char 配列フィールドへの代入結果が
             # 不安定にならないよう、対象フィールドへ明示的にゼロ初期化して書き込む。
-            wav_bytes = fixed_utf8(wav_path, 512)
-            wav_addr = ctypes.addressof(c_entries[i]) + COtoEntry.wav_path.offset
+            wav_addr = ctypes.addressof(c_entries[target]) + COtoEntry.wav_path.offset
             ctypes.memset(wav_addr, 0, 512)
-            if wav_bytes:
-                ctypes.memmove(wav_addr, wav_bytes, len(wav_bytes))
-            c_entries[i].offset = float(getattr(entry, "left_blank", 0.0))
-            c_entries[i].consonant = float(getattr(entry, "fixed_range", 0.0))
-            c_entries[i].blank = float(getattr(entry, "right_blank", 0.0))
-            c_entries[i].preutterance = float(getattr(entry, "preutterance", 0.0))
-            c_entries[i].overlap = float(getattr(entry, "overlap", 0.0))
+            ctypes.memmove(wav_addr, wav_bytes, len(wav_bytes))
+            c_entries[target].offset = float(getattr(entry, "left_blank", 0.0))
+            c_entries[target].consonant = float(getattr(entry, "fixed_range", 0.0))
+            c_entries[target].blank = float(getattr(entry, "right_blank", 0.0))
+            c_entries[target].preutterance = float(getattr(entry, "preutterance", 0.0))
+            c_entries[target].overlap = float(getattr(entry, "overlap", 0.0))
+            written += 1
 
-        if entries:
-            set_oto(c_entries, len(entries))
+        if written:
+            set_oto(c_entries, written)
         else:
             set_oto(None, 0)
 
