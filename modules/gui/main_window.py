@@ -6117,8 +6117,24 @@ class MainWindow(
         selected_port = self.midi_port_selector.currentData()
 
         if self.midi_manager is not None:
-           self.midi_manager.stop()
-           self.midi_manager = None
+            previous_port_name = getattr(self.midi_manager, "port_name", None)
+            try:
+                self.midi_manager.stop()
+            except Exception as exc:
+                # Keep the live manager so the user can retry the disconnect.
+                if self.status_label is not None:
+                    self.status_label.setText(f"MIDIの切断に失敗: {exc}")
+                if previous_port_name:
+                    selector = self.midi_port_selector
+                    previous_index = selector.findData(previous_port_name)
+                    if previous_index >= 0:
+                        signals_were_blocked = selector.blockSignals(True)
+                        try:
+                            selector.setCurrentIndex(previous_index)
+                        finally:
+                            selector.blockSignals(signals_were_blocked)
+                return
+            self.midi_manager = None
 
         if selected_port and selected_port != "ポートなし":
             try:
