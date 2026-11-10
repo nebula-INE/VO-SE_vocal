@@ -172,8 +172,23 @@ def _patch_midi_realtime(window) -> None:
                 return
 
         if port_name and port_name not in ("なし", "None", ""):
-            window._midi_input_manager.port_name = port_name
-            window._midi_input_manager.start()
+            manager.port_name = port_name
+            try:
+                manager.start()
+            except Exception as exc:
+                logger.exception("MIDI 入力開始に失敗しました: %s", exc)
+                window.statusBar().showMessage(
+                    f"MIDI 入力を開始できません: {exc}",
+                    7000,
+                )
+                return
+
+            if manager.port is None:
+                window.statusBar().showMessage(
+                    f"MIDI 入力を開始できませんでした: {port_name}",
+                    7000,
+                )
+                return
             window.statusBar().showMessage(f"MIDI 入力: {port_name}")
         else:
             window.statusBar().showMessage("MIDI 入力: 切断")
