@@ -196,3 +196,16 @@ def test_external_vose_project_is_loaded_as_native_json_project(tmp_path):
     assert payload["format"] == "json"
     assert payload["data"] == expected
     assert payload["prepared_note_tracks"][0][0].lyric == "あ"
+
+
+def test_legacy_load_file_from_path_routes_to_async_project_loader():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+    loader = source.split("def load_file_from_path(", 1)[1].split(
+        "def _parse_midi", 1
+    )[0]
+    assert "return self.load_external_project_async(filepath)" in loader
