@@ -1412,6 +1412,24 @@ class _VoiceImportWorker(QThread):
         self.succeeded.emit(str(name), voices)
 
 
+class _VoiceScanWorker(QThread):
+    """Run the recursive VoiceManager scan without blocking the GUI."""
+
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, manager, parent=None):
+        super().__init__(parent)
+        self.manager = manager
+
+    def run(self):
+        try:
+            voices = self.manager.scan_voices()
+            self.completed.emit(dict(voices or {}))
+        except Exception as exc:
+            self.failed.emit(str(exc) or exc.__class__.__name__)
+
+
 class VoiceCardGallery(QWidget):
     """
     音源カードを並べて表示するメインコンテナ。
@@ -1446,6 +1464,7 @@ class VoiceCardGallery(QWidget):
         self._empty_label = None
         self._last_columns = None
         self._import_worker = None
+        self._scan_worker = None
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -1569,6 +1588,9 @@ class VoiceCardGallery(QWidget):
         from PySide6.QtWidgets import QProgressDialog
         if self._import_worker is not None and self._import_worker.isRunning():
             return
+        scan_worker = getattr(self, "_scan_worker", None)
+        if scan_worker is not None and scan_worker.isRunning():
+            return
         owner = self.window()
         voice_bank_worker = getattr(owner, "_voice_bank_import_worker", None)
         if voice_bank_worker is not None:
@@ -1616,7 +1638,40 @@ class VoiceCardGallery(QWidget):
     # 一覧の構築
     # ------------------------------------------------------------------
     def setup_gallery(self, voices=None):
-        """Build cards from a prepared voice index, scanning only when necessary."""
+        """Build cards from a prepared voice index; scan recursively on a worker if needed."""
+        if not isinstance(voices, dict):
+            active_scan = getattr(self, "_scan_worker", None)
+            if active_scan is not None:
+                try:
+                    if active_scan.isRunning():
+                        return
+                except RuntimeError:
+                    self._scan_worker = None
+
+            import_worker = getattr(self, "_import_worker", None)
+            if import_worker is not None and import_worker.isRunning():
+                return
+            owner = self.window()
+            voice_bank_worker = getattr(owner, "_voice_bank_import_worker", None)
+            if voice_bank_worker is not None:
+                try:
+                    if voice_bank_worker.isRunning():
+                        return
+                except RuntimeError:
+                    pass
+
+            worker = _VoiceScanWorker(self.manager, self)
+            worker.completed.connect(self._on_voice_scan_completed)
+            worker.failed.connect(self._on_voice_scan_failed)
+            worker.finished.connect(worker.deleteLater)
+            self._scan_worker = worker
+            status_bar = getattr(owner, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage("音源一覧をバックグラウンドでスキャン中...", 0)
+            worker.start()
+            return
+
+        selected_id = None
         selected_id = None
         for internal_id, card in self.cards.items():
             if getattr(card, "_selected", False):
@@ -1668,6 +1723,21 @@ class VoiceCardGallery(QWidget):
 
         self._apply_filter()
         self.gallery_rebuilt.emit()
+
+    @Slot(object)
+    def _on_voice_scan_completed(self, voices: object) -> None:
+        self._scan_worker = None
+        if isinstance(voices, dict):
+            self.setup_gallery(voices=voices)
+
+    @Slot(str)
+    def _on_voice_scan_failed(self, error_message: str) -> None:
+        self._scan_worker = None
+        QMessageBox.warning(
+            self.window(),
+            "音源一覧を更新できませんでした",
+            error_message,
+        )
 
     def _register_card(self, card, display_name, internal_id):
         card.clicked.connect(
@@ -6669,6 +6739,7 @@ class MainWindow(
         analysis_worker = getattr(self, "analysis_thread", None)
         gallery = getattr(self, "voice_gallery", None)
         import_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
+        voice_scan_worker = getattr(gallery, "_scan_worker", None) if gallery is not None else None
         voice_bank_worker = getattr(self, "_voice_bank_import_worker", None)
         for worker, title, message in (
             (
@@ -6686,6 +6757,11 @@ class MainWindow(
                 "音源ZIPインストール終了待ち",
                 "音源ZIPの展開・モデル読み込みがまだ実行中です。処理の終了後に、もう一度終了してください。",
             ),
+            (
+                voice_scan_worker,
+                "音源一覧スキャン終了待ち",
+                "音源一覧のスキャンがまだ実行中です。スキャン完了後に、もう一度終了してください。",
+            ),
         ):
             if worker is None:
                 continue
@@ -6702,6 +6778,7 @@ class MainWindow(
         self.analysis_thread = None
         if gallery is not None:
             gallery._import_worker = None
+            gallery._scan_worker = None
         self._voice_bank_import_worker = None
 
         # Stop the legacy playback thread, if an older entry point started it.
