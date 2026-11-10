@@ -274,3 +274,88 @@ def test_file_sources_are_read_in_small_blocks_on_the_producer(monkeypatch):
     assert mixer._queue.maxsize == 8
     assert all(block[1].shape == (4, 2) for block in blocks)
     assert np.allclose(np.concatenate([b[1][:b[2]] for b in blocks]), source_data)
+
+
+
+def test_play_uses_background_file_reader_and_queued_callback(monkeypatch):
+    import threading
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    source_data = np.asarray(
+        [[0.1, 0.2], [0.2, 0.3], [0.3, 0.4], [0.4, 0.5]],
+        dtype=np.float32,
+    )
+    read_threads = []
+
+    class Info:
+        samplerate = 4
+        frames = len(source_data)
+
+    class FakeSoundFile:
+        def __init__(self, _path, mode="r"):
+            assert mode == "r"
+            self.position = 0
+
+        def seek(self, frame):
+            self.position = frame
+
+        def read(self, frames, dtype, always_2d):
+            read_threads.append(threading.current_thread().name)
+            assert dtype == "float32"
+            assert always_2d
+            result = source_data[self.position:self.position + frames]
+            self.position += len(result)
+            return result.copy()
+
+        def close(self):
+            pass
+
+    class CallbackStop(Exception):
+        pass
+
+    class FakeOutputStream:
+        def __init__(self, **kwargs):
+            self.callback = kwargs["callback"]
+            self.active = False
+            self.first_output = None
+            self.latency = 0.0
+
+        def start(self):
+            self.active = True
+            self.first_output = np.zeros((2, 2), dtype=np.float32)
+            try:
+                self.callback(self.first_output, 2, None, None)
+            except CallbackStop:
+                self.active = False
+
+        def stop(self):
+            self.active = False
+
+        def close(self):
+            self.active = False
+
+    monkeypatch.setattr(
+        audio_mixer_module,
+        "sf",
+        SimpleNamespace(
+            info=lambda _path: Info(),
+            SoundFile=FakeSoundFile,
+        ),
+    )
+    monkeypatch.setattr(
+        audio_mixer_module,
+        "sd",
+        SimpleNamespace(
+            CallbackStop=CallbackStop,
+            OutputStream=FakeOutputStream,
+        ),
+    )
+    mixer = AudioMixer(sample_rate=4, block_size=2)
+    mixer.set_tracks([_track(audio_path="short.wav")])
+
+    mixer.play()
+
+    assert read_threads
+    assert set(read_threads) == {"VO-SE-AudioProducer"}
+    assert np.allclose(mixer._stream.first_output, source_data[:2])
+    mixer.stop()
