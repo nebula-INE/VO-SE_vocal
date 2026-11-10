@@ -70,7 +70,7 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
         events.sort(key=lambda item: (item[0], item[1], item[2]))
 
         notes: List[Dict[str, Any]] = []
-        active_notes: Dict[tuple[int, int], List[tuple[float, int, int, str]]] = {}
+        active_notes: Dict[tuple[int, int, int], List[tuple[float, int, int, str]]] = {}
         pending_lyrics: Dict[tuple[int, int], List[str]] = {}
         previous_tick = 0
         current_seconds = 0.0
@@ -103,7 +103,7 @@ def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
             note_number = int(getattr(message, "note", 0))
             velocity = int(getattr(message, "velocity", 0))
             channel = int(getattr(message, "channel", 0))
-            key = (channel, note_number)
+            key = (event_track_index, channel, note_number)
 
             if message_type == "note_on" and velocity > 0:
                 lyric_key = (event_track_index, absolute_tick)
