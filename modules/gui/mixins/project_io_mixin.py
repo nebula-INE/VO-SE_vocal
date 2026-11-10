@@ -131,6 +131,11 @@ class ProjectIOMixin:
         """Restore a saved singer only when the referenced voice is installed."""
         if not voice_id:
             return
+        if voice_id.strip().upper() == "NONE":
+            self.current_voice_id = voice_id
+            if voice_name:
+                self.current_voice = voice_name
+            return
 
         gallery = getattr(self, "voice_gallery", None)
         cards = getattr(gallery, "cards", {}) if gallery is not None else {}
