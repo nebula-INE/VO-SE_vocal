@@ -280,3 +280,26 @@ def test_project_undo_snapshot_restores_voice_identity():
     assert window.current_voice_id == "voice-a"
     assert window.current_voice == "Voice A"
     assert window.voice_gallery.cards["voice-a"].selected is True
+
+
+
+def test_project_load_resolves_relative_audio_paths_from_project_folder(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    project_path = tmp_path / "project.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 120.0,
+            "tracks": [{
+                "name": "Backing",
+                "type": "wave",
+                "audio_path": "media/backing.wav",
+                "notes": [],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.tracks[0].audio_path == str((tmp_path / "media" / "backing.wav").resolve())
