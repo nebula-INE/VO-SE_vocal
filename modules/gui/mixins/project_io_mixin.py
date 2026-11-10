@@ -16,6 +16,7 @@ import json
 import logging
 import multiprocessing
 import os
+import threading
 from typing import Any, Dict, List, Optional, cast
 from copy import deepcopy
 
@@ -69,6 +70,7 @@ class _ExternalProjectLoadWorker(QRunnable):
         super().__init__()
         self.file_path = file_path
         self.signals = _ExternalProjectLoadSignals()
+        self.done = threading.Event()
 
     def run(self) -> None:
         try:
@@ -77,6 +79,8 @@ class _ExternalProjectLoadWorker(QRunnable):
         except Exception as exc:
             logger.exception("外部プロジェクトのバックグラウンド解析に失敗: %s", self.file_path)
             self.signals.failed.emit(self.file_path, str(exc))
+        finally:
+            self.done.set()
 
 
 # UST 書き出し時のデフォルト解像度 (ticks/beat)
