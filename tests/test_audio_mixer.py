@@ -18,16 +18,55 @@ def _track(**kwargs):
     return SimpleNamespace(**values)
 
 
+def _memory_source(mixer, track, data, sample_rate=None):
+    stereo = mixer._to_stereo(np.asarray(data, dtype=np.float32))
+    mixer._tracks = [track]
+    mixer._sources = {
+        id(track): {
+            "path": "",
+            "sample_rate": int(sample_rate or mixer.sample_rate),
+            "frames": len(stereo),
+            "array": stereo,
+        }
+    }
+
+
+def _collect_blocks(mixer):
+    mixer._producer_loop()
+    blocks = []
+    while not mixer._queue.empty():
+        blocks.append(mixer._queue.get_nowait())
+    return blocks
+
+
+def _render_callback(mixer, frames, monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class CallbackStop(Exception):
+        pass
+
+    monkeypatch.setattr(
+        audio_mixer_module,
+        "sd",
+        SimpleNamespace(CallbackStop=CallbackStop),
+    )
+    output = np.zeros((frames, 2), dtype=np.float32)
+    try:
+        mixer._audio_callback(output, frames, None, None)
+    except CallbackStop:
+        return output, True
+    return output, False
+
+
 def test_mute_and_solo_activity_rules():
-    mixer = AudioMixer()
     normal = _track()
     muted = _track(is_muted=True)
     solo = _track(is_solo=True)
 
-    assert mixer._track_is_active(normal, solo_exists=False)
-    assert not mixer._track_is_active(muted, solo_exists=False)
-    assert mixer._track_is_active(solo, solo_exists=True)
-    assert not mixer._track_is_active(normal, solo_exists=True)
+    assert AudioMixer._track_is_active(normal, solo_exists=False)
+    assert not AudioMixer._track_is_active(muted, solo_exists=False)
+    assert AudioMixer._track_is_active(solo, solo_exists=True)
+    assert not AudioMixer._track_is_active(normal, solo_exists=True)
 
 
 def test_pan_is_centered_and_hard_panned():
@@ -58,66 +97,126 @@ def test_resample_preserves_channel_count():
     assert np.allclose(result[:, 1], 0.0)
 
 
-def test_callback_mixes_multiple_tracks_with_mute_and_volume():
-    mixer = AudioMixer(sample_rate=4, block_size=4)
+def test_producer_streams_mixed_blocks_without_full_file_buffers(monkeypatch):
+    mixer = AudioMixer(sample_rate=4, block_size=2)
     audible = _track(volume=0.5)
-    muted = _track(volume=1.0, is_muted=True)
-    mixer._tracks = [audible, muted]
-    mixer._buffers = {
-        id(audible): np.ones((4, 2), dtype=np.float32),
-        id(muted): np.ones((4, 2), dtype=np.float32) * 0.75,
+    muted = _track(is_muted=True)
+    _memory_source(mixer, audible, np.ones((4, 2), dtype=np.float32))
+    muted_data = np.full((4, 2), 0.75, dtype=np.float32)
+    mixer._sources[id(muted)] = {
+        "path": "",
+        "sample_rate": 4,
+        "frames": len(muted_data),
+        "array": muted_data,
     }
+    mixer._tracks = [audible, muted]
 
-    out = np.zeros((4, 2), dtype=np.float32)
-    mixer._callback(out, 4, None, None)
-    assert np.allclose(out, 0.5 * np.sqrt(0.5))
+    blocks = _collect_blocks(mixer)
+
+    assert len(blocks) == 2
+    assert all(data.shape == (2, 2) for _, data, _ in blocks)
+    assert all(valid == 2 for _, _, valid in blocks)
+    assert np.allclose(blocks[0][1], 0.5 * np.sqrt(0.5))
+    assert np.allclose(blocks[1][1], 0.5 * np.sqrt(0.5))
+    assert mixer._producer_done.is_set()
+
+
+def test_callback_stops_only_after_last_valid_frame(monkeypatch):
+    mixer = AudioMixer(sample_rate=4, block_size=4)
+    track = _track()
+    _memory_source(
+        mixer,
+        track,
+        np.asarray([[0.25, 0.5], [0.5, 0.75], [0.75, 1.0]], dtype=np.float32),
+    )
+    _collect_blocks(mixer)
+
+    output, stopped = _render_callback(mixer, 4, monkeypatch)
+
+    assert stopped
+    assert np.allclose(output[:3], [[0.25, 0.5], [0.5, 0.75], [0.75, 1.0]])
+    assert np.allclose(output[3], 0.0)
+    assert mixer.position_sec == 0.75
 
 
 def test_all_muted_tracks_keep_timeline_running_until_audio_ends(monkeypatch):
-    import modules.backend.audio_mixer as audio_mixer_module
-
-    class CallbackStop(Exception):
-        pass
-
-    fake_sound_device = SimpleNamespace(CallbackStop=CallbackStop)
-    monkeypatch.setattr(audio_mixer_module, "sd", fake_sound_device)
-
     mixer = AudioMixer(sample_rate=4, block_size=2)
     muted = _track(is_muted=True)
-    mixer._tracks = [muted]
-    mixer._buffers = {
-        id(muted): np.ones((4, 2), dtype=np.float32),
-    }
+    _memory_source(mixer, muted, np.ones((4, 2), dtype=np.float32))
+    _collect_blocks(mixer)
 
-    first = np.ones((2, 2), dtype=np.float32)
-    mixer._callback(first, 2, None, None)
+    first, stopped_first = _render_callback(mixer, 2, monkeypatch)
+    assert not stopped_first
     assert np.allclose(first, 0.0)
     assert mixer.position_sec == 0.5
 
-    second = np.ones((2, 2), dtype=np.float32)
-    mixer._callback(second, 2, None, None)
+    second, stopped_second = _render_callback(mixer, 2, monkeypatch)
+    assert stopped_second
     assert np.allclose(second, 0.0)
     assert mixer.position_sec == 1.0
-
-    final = np.ones((2, 2), dtype=np.float32)
-    try:
-        mixer._callback(final, 2, None, None)
-    except CallbackStop:
-        pass
-    else:
-        raise AssertionError("playback should stop only after the muted buffer ends")
 
 
 def test_callback_solo_excludes_non_solo_tracks():
     mixer = AudioMixer(sample_rate=4, block_size=4)
     normal = _track(volume=1.0)
     solo = _track(volume=0.25, is_solo=True)
+    normal_data = np.ones((4, 2), dtype=np.float32)
+    solo_data = np.ones((4, 2), dtype=np.float32)
     mixer._tracks = [normal, solo]
-    mixer._buffers = {
-        id(normal): np.ones((4, 2), dtype=np.float32),
-        id(solo): np.ones((4, 2), dtype=np.float32),
+    mixer._sources = {
+        id(normal): {
+            "path": "",
+            "sample_rate": 4,
+            "frames": 4,
+            "array": normal_data,
+        },
+        id(solo): {
+            "path": "",
+            "sample_rate": 4,
+            "frames": 4,
+            "array": solo_data,
+        },
     }
+    _collect_blocks(mixer)
 
-    out = np.zeros((4, 2), dtype=np.float32)
-    mixer._callback(out, 4, None, None)
-    assert np.allclose(out, 0.25 * np.sqrt(0.5))
+    output = np.zeros((4, 2), dtype=np.float32)
+    mixer._audio_callback(output, 4, None, None)
+    assert np.allclose(output, 0.25 * np.sqrt(0.5))
+
+
+def test_metadata_loading_does_not_decode_the_entire_audio_file(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class Info:
+        samplerate = 48000
+        frames = 48000 * 60 * 20
+
+    class NoFullReadSoundFile:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("files should only be opened by the producer")
+
+    monkeypatch.setattr(audio_mixer_module, "sf", SimpleNamespace(
+        info=lambda _path: Info(),
+        SoundFile=NoFullReadSoundFile,
+    ))
+    track = _track(audio_path="long.wav")
+    mixer = AudioMixer(sample_rate=44100, block_size=1024)
+
+    mixer.set_tracks([track])
+
+    source = mixer._sources[id(track)]
+    assert source["frames"] == 48000 * 60 * 20
+    assert source["array"] is None
+
+
+def test_callback_underflow_is_counted_and_does_not_block(monkeypatch):
+    mixer = AudioMixer(sample_rate=4, block_size=2)
+    mixer._producer_ready.set()
+    mixer._producer_done.clear()
+    output = np.ones((2, 2), dtype=np.float32)
+
+    mixer._audio_callback(output, 2, None, None)
+
+    assert np.allclose(output, 0.0)
+    assert mixer.output_underflow_count == 1
+    assert mixer.position_sec == 0.5
