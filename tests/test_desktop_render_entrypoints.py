@@ -157,3 +157,18 @@ def test_voice_scan_worker_is_waited_for_during_window_shutdown():
     )[0]
     assert 'getattr(gallery, "_scan_worker", None)' in close_handler
     assert "voice_scan_worker" in close_handler
+
+
+def test_window_drains_audio_mixer_command_callbacks_before_shutdown():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    close_handler = source.split("def closeEvent(self, event):", 1)[1].split(
+        "# レリタリング実行メゾット", 1
+    )[0]
+    wait_position = close_handler.index("audio_command_worker.wait(15000)")
+    process_position = close_handler.index(
+        "QCoreApplication.processEvents()", wait_position
+    )
+    mixer_shutdown_position = close_handler.index(
+        "stop_mixer()", process_position
+    )
+    assert wait_position < process_position < mixer_shutdown_position
