@@ -262,3 +262,45 @@ def test_project_worker_renders_each_vocal_then_mixes_audio_tracks(tmp_path):
     assert rate == 44100
     assert data.shape == (16, 2)
     assert np.allclose(data, 0.6 * np.sqrt(0.5), atol=2e-5)
+
+def test_project_worker_reports_vocal_render_cancellation_as_cancelled(tmp_path):
+    original_note = SimpleNamespace(value="original")
+    vocal = _track(
+        "",
+        track_type="vocal",
+        audio_path="",
+        notes=[original_note],
+        name="Cancelled Vocal",
+    )
+    output = tmp_path / "cancelled-project.wav"
+    worker_ref = {}
+    failed = []
+    completed = []
+
+    class CancellingEngine:
+        def export_to_wav_v2(self, notes, parameters, file_path, **kwargs):
+            # Emulate export_to_wav_v2 returning None after a cancel request.
+            worker_ref["worker"].request_cancel()
+            return None
+
+    worker = _ProjectMixdownWorker(
+        CancellingEngine(),
+        [vocal],
+        {"Pitch": [], "Gender": [], "Tension": [], "Breath": []},
+        120.0,
+        str(output),
+        mode_flag=0,
+    )
+    worker_ref["worker"] = worker
+    worker.failed.connect(failed.append)
+    worker.completed.connect(completed.append)
+
+    worker.run()
+
+    assert completed == []
+    assert len(failed) == 1
+    assert "キャンセル" in failed[0]
+    assert "パスが不正" not in failed[0]
+    assert not output.exists()
+    assert original_note.value == "original"
+
