@@ -234,7 +234,9 @@ class MasterEffectsProcessor:
                 delay = max(1, int(round(seconds * self.sample_rate)))
                 channel_delays.append({
                     "delay": delay,
-                    "zi": np.zeros(delay, dtype=np.float64),
+                    "position": 0,
+                    "input_ring": np.zeros(delay, dtype=np.float64),
+                    "output_ring": np.zeros(delay, dtype=np.float64),
                     "damping_zi": np.zeros(1, dtype=np.float64),
                 })
             delay_frames.append(channel_delays)
@@ -249,17 +251,11 @@ class MasterEffectsProcessor:
         for channel in range(2):
             channel_wet = np.zeros(len(audio), dtype=np.float64)
             for comb in state["combs"][channel]:
-                delay = int(comb["delay"])
-                numerator = np.zeros(delay + 1, dtype=np.float64)
-                denominator = np.zeros(delay + 1, dtype=np.float64)
-                numerator[-1] = 1.0
-                denominator[0] = 1.0
-                denominator[-1] = -feedback
-                echoed, zi = lfilter(
-                    numerator, denominator, audio[:, channel].astype(np.float64, copy=False),
-                    zi=comb["zi"],
+                echoed = self._process_feedback_comb(
+                    audio[:, channel].astype(np.float64, copy=False),
+                    comb,
+                    feedback,
                 )
-                comb["zi"] = zi
                 damped, damping_zi = lfilter(
                     [1.0 - damping], [1.0, -damping], echoed,
                     zi=comb["damping_zi"],
@@ -277,6 +273,33 @@ class MasterEffectsProcessor:
             + wet_signal * params["wet"]
         )
         return result.astype(np.float32, copy=False)
+
+    @staticmethod
+    def _process_feedback_comb(
+        samples: np.ndarray, state: dict[str, Any], feedback: float
+    ) -> np.ndarray:
+        """Run a delayed feedback comb in O(frames), not O(frames * delay)."""
+        delay = int(state["delay"])
+        position = int(state["position"])
+        input_ring = state["input_ring"]
+        output_ring = state["output_ring"]
+        output = np.empty(len(samples), dtype=np.float64)
+
+        # Each vector segment is at most one delay long, so a ring slot is read
+        # before it is overwritten. This keeps long offline blocks efficient.
+        for offset in range(0, len(samples), delay):
+            count = min(delay, len(samples) - offset)
+            indices = (position + np.arange(count)) % delay
+            delayed_input = input_ring[indices].copy()
+            delayed_output = output_ring[indices].copy()
+            result = delayed_input + feedback * delayed_output
+            input_ring[indices] = samples[offset : offset + count]
+            output_ring[indices] = result
+            output[offset : offset + count] = result
+            position = (position + count) % delay
+
+        state["position"] = position
+        return output
 
     def _process_eq(
         self, audio: np.ndarray, params: dict[str, float], state: dict[str, Any]
