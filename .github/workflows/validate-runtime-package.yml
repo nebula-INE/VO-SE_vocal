@@ -70,7 +70,17 @@ jobs:
           if found:
               raise SystemExit(f"Unexpected training modules in runtime environment: {found}")
           from PySide6 import QtCore, QtGui, QtWidgets
-          import soundfile, sounddevice, pyopenjtalk
+          import soundfile, pyopenjtalk
+          if importlib.util.find_spec("sounddevice") is None:
+              raise ImportError("sounddevice package is not installed")
+          try:
+              import sounddevice
+          except Exception as exc:
+              # GitHub's Linux runner is headless; absence of a PulseAudio
+              # server must not be mistaken for a missing Python dependency.
+              if type(exc).__name__ != "PortAudioError":
+                  raise
+              print("PortAudio device unavailable in headless CI; package is installed:", exc)
           from modules.tools import batch_voice_optimizer
           from modules.tools.batch_voice_optimizer import BatchVoiceOptimizer
           assert batch_voice_optimizer.TORCH_AVAILABLE is False, (
