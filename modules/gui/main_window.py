@@ -7168,7 +7168,7 @@ class MainWindow(
         if eta_label is not None:
             eta_label.setText("ミックスダウンをキャンセル中...")
         self.statusBar().showMessage(
-            "プロジェクトミックスダウンのキャンセルを要求しました。現在の音声ブロック完了後に停止します。"
+            "プロジェクトミックスダウンのキャンセルを要求しました。実行中のボーカル合成は完了後に停止し、音声ミックス中は次のブロック境界で停止します。"
         )
 
     def play_rendered_audio(self, wav_path: str) -> None:
