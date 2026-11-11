@@ -407,6 +407,13 @@ class _ProjectMixdownWorker(QThread):
                         cancel_check=self._cancel_event.is_set,
                         tempo_bpm=self.tempo,
                     )
+                    # Some renderers signal cancellation by returning None.
+                    # Check the event before classifying a missing path as a
+                    # render failure, so the UI reports a normal cancellation.
+                    if self._cancel_event.is_set():
+                        raise RuntimeError(
+                            "プロジェクトのミックスダウンがキャンセルされました。"
+                        )
                     if not isinstance(result, (str, bytes, os.PathLike)):
                         raise RuntimeError(f"「{track_name}」のWAV生成パスが不正です。")
                     if not result:
