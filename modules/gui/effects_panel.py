@@ -110,8 +110,13 @@ class EffectsPanel(QWidget):
         effect_type = str(effect_type).strip().lower()
         if effect_type not in EFFECT_DEFAULTS:
             raise ValueError(f"未対応のエフェクトです: {effect_type}")
-        effect_id = f"{effect_type}_{self._next_id}"
-        self._next_id += 1
+        while True:
+            effect_id = f"{effect_type}_{self._next_id}"
+            self._next_id += 1
+            if effect_id not in self.effect_widgets and all(
+                item["id"] != effect_id for item in self.effects
+            ):
+                break
         data = {
             "id": effect_id,
             "type": effect_type,
@@ -160,7 +165,7 @@ class EffectsPanel(QWidget):
 
         grid = QGridLayout(group)
         for row, (name, value) in enumerate(data["params"].items()):
-            label_text, unit = PARAMETER_LABELS[name]
+            label_text = PARAMETER_LABELS[name][0]
             label = QLabel(label_text)
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 1000)
