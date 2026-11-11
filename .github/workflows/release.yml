@@ -308,9 +308,9 @@ jobs:
               r"QtPdf(?:Widgets)?|QtMultimediaWidgets|QtVirtualKeyboard(?:Qml)?"
           )
           pattern = re.compile(
-              rf"PySide6\\s*\\.\\s*(?:{optional_module})\\b"
-              rf"|\\bfrom\\s+PySide6\\s+import\\s+[^\\n#]*\\b(?:{optional_module})\\b"
-              r"|\\bQ(?:WebEngine|Designer|Network|Pdf|VideoWidget)\\w*",
+              rf"PySide6\s*\.\s*(?:{optional_module})\b"
+              rf"|\bfrom\s+PySide6\s+import\s+[^\n#]*\b(?:{optional_module})\b"
+              r"|\bQ(?:WebEngine|Designer|Network|Pdf|VideoWidget)\w*",
               re.IGNORECASE,
           )
           roots = (Path("main.py"), Path("modules"), Path("assets"))
@@ -339,7 +339,7 @@ jobs:
 
           print(f"Optional Qt source audit scanned {scanned} files")
           if hits:
-              print("\\n".join(hits))
+              print("\n".join(hits))
               raise SystemExit("Optional Qt imports conflict with the Linux exclusion list")
           print("No unsupported optional Qt module references found.")
           PY
