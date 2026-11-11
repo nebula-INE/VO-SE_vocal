@@ -10,12 +10,35 @@ from typing import List, Dict, Any, Optional, Protocol, runtime_checkable, cast
 
 from PySide6.QtWidgets import (QWidget, QApplication, QInputDialog, QLineEdit,
                                QMainWindow, QMenu)
-from PySide6.QtCore import Qt, QRect, QRectF, Signal, Slot, QPoint, QPointF, QSize
+from PySide6.QtCore import Qt, QRect, QRectF, Signal, Slot, QPoint, QPointF, QSize, QObject, QRunnable, QThreadPool
 from PySide6.QtGui import (QPainter, QPen, QBrush, QColor, QFont, QAction, QContextMenuEvent,
                             QLinearGradient, QPaintEvent, QMouseEvent, QKeyEvent, QWheelEvent,
                             QPixmap)  # [OPT] QPixmap追加
 
 logger = logging.getLogger(__name__)
+
+
+class _WaveformWorkerSignals(QObject):
+    completed = Signal(str, object)
+    failed = Signal(str, str)
+
+
+class _WaveformWorker(QRunnable):
+    def __init__(self, file_path: str, num_peaks: int) -> None:
+        super().__init__()
+        self.file_path = file_path
+        self.num_peaks = num_peaks
+        self.signals = _WaveformWorkerSignals()
+
+    def run(self) -> None:
+        try:
+            from modules.audio.waveform import read_waveform_peaks
+            peaks = read_waveform_peaks(self.file_path, self.num_peaks)
+            self.signals.completed.emit(self.file_path, peaks)
+        except Exception as exc:
+            self.signals.failed.emit(self.file_path, str(exc))
+
+
 
 # ============================================================
 # 1. データモデル
@@ -159,6 +182,12 @@ class TimelineWidget(QWidget):
 
         self._wave_cache: List[float] = []
         self._wave_cache_path: str = ""
+        self._waveform_cache: Dict[str, tuple[tuple[int, int], List[float]]] = {}
+        self._waveform_pending: set[str] = set()
+        self._waveform_errors: Dict[str, tuple[tuple[int, int], str]] = {}
+        self._waveform_workers: Dict[str, _WaveformWorker] = {}
+        self._waveform_pool = QThreadPool(self)
+        self._waveform_pool.setMaxThreadCount(2)
 
         self.show_ai_phonemes: bool = True
         self.ai_ghost_alpha: int = 100
@@ -670,47 +699,130 @@ class TimelineWidget(QWidget):
     # 音声波形
     # ============================================================
 
-    def get_audio_peaks(self, file_path: str, num_peaks: int = 2000) -> List[float]:
-        if not file_path or not os.path.exists(file_path):
-            return []
+    def _waveform_file_signature(self, file_path: str) -> tuple[int, int]:
+        stat = os.stat(file_path)
+        return (int(stat.st_mtime_ns), int(stat.st_size))
+
+    def _active_waveform_path(self) -> str:
+        main_window = self.window()
+        tracks = getattr(main_window, "tracks", []) or []
         try:
-            with wave.open(file_path, 'rb') as w:
-                params = w.getparams()
-                if params.nframes == 0:
-                    return []
-                samples = np.frombuffer(w.readframes(params.nframes), dtype=np.int16)
-                if params.nchannels == 2:
-                    samples = samples[::2]
-                num_peaks = min(num_peaks, max(1, len(samples)))
-                chunks = np.array_split(samples, num_peaks)
-                peaks = [float(np.max(np.abs(c))) if len(c) > 0 else 0.0 for c in chunks]
-                max_val = float(np.max(peaks)) if peaks else 1.0
-                return [p / max_val for p in peaks] if max_val > 0 else peaks
-        except Exception as e:
-            logger.error(f"Waveform Analysis Error: {e}")
+            current_index = int(getattr(main_window, "current_track_idx", -1))
+            current_track = tracks[current_index] if 0 <= current_index < len(tracks) else None
+        except (TypeError, ValueError, IndexError):
+            current_track = None
+
+        if current_track is not None and str(
+            getattr(current_track, "track_type", "")
+        ).lower() == "wave":
+            track_path = str(getattr(current_track, "audio_path", "") or "")
+            if track_path:
+                return track_path
+        return str(getattr(main_window, "current_audio_path", "") or "")
+
+    def get_audio_peaks(self, file_path: str, num_peaks: int = 2000) -> List[float]:
+        """Return cached peaks immediately; otherwise schedule bounded background analysis."""
+        if not file_path or not os.path.isfile(file_path):
+            return []
+        absolute_path = os.path.abspath(file_path)
+        try:
+            signature = self._waveform_file_signature(absolute_path)
+        except OSError:
             return []
 
+        previous_error = self._waveform_errors.get(absolute_path)
+        if previous_error is not None and previous_error[0] == signature:
+            return []
+
+        cached = self._waveform_cache.get(absolute_path)
+        if cached is not None and cached[0] == signature:
+            peaks = list(cached[1])
+            if self._active_waveform_path() and os.path.abspath(
+                self._active_waveform_path()
+            ) == absolute_path:
+                self._wave_cache_path = absolute_path
+                self._wave_cache = peaks
+            return peaks
+
+        if absolute_path not in self._waveform_pending:
+            worker = _WaveformWorker(absolute_path, num_peaks)
+            worker.signals.completed.connect(self._on_waveform_ready)
+            worker.signals.failed.connect(self._on_waveform_failed)
+            self._waveform_pending.add(absolute_path)
+            self._waveform_workers[absolute_path] = worker
+            self._waveform_pool.start(worker)
+        return []
+
+    @Slot(str, object)
+    def _on_waveform_ready(self, file_path: str, peaks: object) -> None:
+        absolute_path = os.path.abspath(file_path)
+        self._waveform_pending.discard(absolute_path)
+        self._waveform_workers.pop(absolute_path, None)
+        peak_values = [float(value) for value in peaks] if isinstance(peaks, (list, tuple)) else []
+        try:
+            signature = self._waveform_file_signature(absolute_path)
+        except OSError:
+            return
+        self._waveform_errors.pop(absolute_path, None)
+        self._waveform_cache[absolute_path] = (signature, peak_values)
+
+        main_window = self.window()
+        for track in getattr(main_window, "tracks", []) or []:
+            track_path = str(getattr(track, "audio_path", "") or "")
+            if track_path and os.path.abspath(track_path) == absolute_path:
+                track.vose_peaks = list(peak_values)
+
+        active_path = self._active_waveform_path()
+        if active_path and os.path.abspath(active_path) == absolute_path:
+            self._wave_cache_path = absolute_path
+            self._wave_cache = list(peak_values)
+            self.update()
+
+    @Slot(str, str)
+    def _on_waveform_failed(self, file_path: str, error_message: str) -> None:
+        absolute_path = os.path.abspath(file_path)
+        self._waveform_pending.discard(absolute_path)
+        self._waveform_workers.pop(absolute_path, None)
+        try:
+            signature = self._waveform_file_signature(absolute_path)
+            self._waveform_errors[absolute_path] = (signature, error_message)
+        except OSError:
+            pass
+        active_path = self._active_waveform_path()
+        if active_path and os.path.abspath(active_path) == absolute_path:
+            main_window = self.window()
+            status_bar = getattr(main_window, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage(
+                    f"波形を読み込めませんでした: {os.path.basename(file_path)} ({error_message})",
+                    6000,
+                )
+
     def _draw_audio_waveform(self, p: QPainter) -> None:
-        audio_path = str(getattr(self.window(), 'current_audio_path', ''))
-        if not audio_path or not os.path.exists(audio_path):
+        audio_path = self._active_waveform_path()
+        if not audio_path or not os.path.isfile(audio_path):
             return
-        if self._wave_cache_path != audio_path:
-            self._wave_cache = self.get_audio_peaks(audio_path)
-            self._wave_cache_path = audio_path
-        if not self._wave_cache:
+        peaks = self.get_audio_peaks(audio_path)
+        if not peaks:
             return
+
         p.setPen(QPen(QColor(0, 255, 255, 50), 1))
         mid_y = self.height() / 2.0
         max_h = self.height() * 0.7
         interval_px = (self.tempo / 60.0) * self.pixels_per_beat * 0.05
-        for i, peak in enumerate(self._wave_cache):
-            x = i * interval_px - self.scroll_x_offset
+        for index, peak in enumerate(peaks):
+            x = index * interval_px - self.scroll_x_offset
             if x < -interval_px:
                 continue
             if x > self.width():
                 break
-            h = peak * max_h
-            p.drawLine(int(x), int(mid_y - h / 2), int(x), int(mid_y + h / 2))
+            height = peak * max_h
+            p.drawLine(
+                int(x),
+                int(mid_y - height / 2),
+                int(x),
+                int(mid_y + height / 2),
+            )
 
     # ============================================================
     # 描画
