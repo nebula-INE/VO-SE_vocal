@@ -75,13 +75,22 @@ def normalize_effect_chain(chain: Any) -> list[dict[str, Any]]:
     for index, raw in enumerate(chain):
         if not isinstance(raw, dict):
             raise ValueError(f"エフェクト {index + 1} の形式が不正です。")
-        effect_type = str(raw.get("type", "")).strip().lower()
+        raw_type = raw.get("type", "")
+        if not isinstance(raw_type, str):
+            raise ValueError(f"エフェクト {index + 1} の type は文字列である必要があります。")
+        effect_type = raw_type.strip().lower()
         if effect_type not in EFFECT_DEFAULTS:
             raise ValueError(f"未対応のエフェクトです: {effect_type or '(empty)'}")
-        effect_id = str(raw.get("id", f"effect_{index + 1}")).strip()
+        raw_id = raw.get("id", f"effect_{index + 1}")
+        if not isinstance(raw_id, str):
+            raise ValueError(f"エフェクト {index + 1} のIDは文字列である必要があります。")
+        effect_id = raw_id.strip()
         if not effect_id or len(effect_id) > 128 or effect_id in seen_ids:
             raise ValueError(f"エフェクト {index + 1} のIDが不正または重複しています。")
         seen_ids.add(effect_id)
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"エフェクト {effect_id} の enabled は真偽値である必要があります。")
 
         raw_params = raw.get("params", {})
         if not isinstance(raw_params, dict):
@@ -111,7 +120,7 @@ def normalize_effect_chain(chain: Any) -> list[dict[str, Any]]:
         normalized.append({
             "id": effect_id,
             "type": effect_type,
-            "enabled": bool(raw.get("enabled", True)),
+            "enabled": enabled,
             "params": params,
         })
     return normalized
