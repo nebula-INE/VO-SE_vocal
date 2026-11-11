@@ -6198,7 +6198,7 @@ class MainWindow(
         try:
             chain = get_chain() if callable(get_chain) else []
             if callable(set_chain):
-                set_chain(chain)
+                set_chain(chain, preserve_state=True)
         except (TypeError, ValueError, RuntimeError) as exc:
             self.statusBar().showMessage(f"エフェクト設定エラー: {exc}", 5000)
             return
