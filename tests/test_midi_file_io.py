@@ -1,12 +1,22 @@
-import pytest
-
-mido = pytest.importorskip("mido")
-
 from types import SimpleNamespace
 
-from modules.data.midi_manager import load_midi_file, save_midi_file
-from modules.gui.mixins.project_io_mixin import ProjectIOMixin
-import modules.data.midi_manager as midi_manager
+import pytest
+
+
+def _load_midi_test_dependencies():
+    """Skip before importing modules that require the optional mido package."""
+    mido = pytest.importorskip("mido")
+
+    from modules.data.midi_manager import load_midi_file, save_midi_file
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+    import modules.data.midi_manager as midi_manager
+
+    return mido, load_midi_file, save_midi_file, ProjectIOMixin, midi_manager
+
+
+mido, load_midi_file, save_midi_file, ProjectIOMixin, midi_manager = (
+    _load_midi_test_dependencies()
+)
 
 
 def test_midi_import_applies_global_tempo_changes_and_keeps_overlaps(tmp_path):
