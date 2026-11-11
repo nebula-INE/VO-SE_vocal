@@ -221,6 +221,7 @@ class AudioMixer:
         with self._lock:
             self._effects = processor
             self._total_frames = self._track_total_frames + processor.tail_frames
+            self._position = min(self._position, self._total_frames)
 
     def get_effect_chain(self) -> list[dict[str, Any]]:
         """Return a detached snapshot of the current master chain."""
