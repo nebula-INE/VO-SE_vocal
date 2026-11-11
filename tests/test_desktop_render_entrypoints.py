@@ -224,6 +224,7 @@ def test_project_mixdown_uses_the_existing_toolbar_cancel_action():
     )[0]
     assert 'getattr(self, "_project_mixdown_worker", None)' in cancel_handler
     assert 'getattr(mixdown_worker, "request_cancel", None)' in cancel_handler
+    assert "実行中のボーカル合成は完了後に停止" in cancel_handler
     assert 'cancel_button.setText("✖ ミックスダウンをキャンセル")' in project_io_source
     assert 'cancel_button.setVisible(True)' in project_io_source
     assert 'cancel_button.setVisible(False)' in project_io_source
