@@ -315,3 +315,63 @@ def test_play_reports_when_no_default_output_device_is_available(monkeypatch):
         assert "既定の音声出力デバイスを取得できません" in str(exc)
     else:
         raise AssertionError("missing output device must be reported")
+
+
+
+def test_master_compressor_processes_the_combined_track_bus():
+    mixer = AudioMixer(sample_rate=1000, block_size=256)
+    first = _track()
+    second = _track()
+    _install_memory_sources(
+        mixer,
+        (first, np.full((256, 2), 0.5, dtype=np.float32)),
+        (second, np.full((256, 2), 0.5, dtype=np.float32)),
+    )
+    unprocessed = mixer._mix_block(0, 256)
+
+    mixer.set_effect_chain([{
+        "id": "compressor-main",
+        "type": "compressor",
+        "enabled": True,
+        "params": {
+            "threshold_db": -12.0,
+            "ratio": 8.0,
+            "attack_ms": 2.0,
+            "release_ms": 80.0,
+            "makeup_gain_db": 0.0,
+        },
+    }])
+    processed = mixer._mix_block(0, 256)
+
+    assert processed.shape == unprocessed.shape
+    assert float(np.mean(np.abs(processed[-100:]))) < float(
+        np.mean(np.abs(unprocessed[-100:]))
+    )
+    assert mixer.get_diagnostics()["enabled_effects"] == 1
+
+
+def test_master_reverb_extends_project_duration_and_renders_its_tail():
+    mixer = AudioMixer(sample_rate=8000, block_size=128)
+    track = _track()
+    impulse = np.zeros((128, 2), dtype=np.float32)
+    impulse[0] = (0.8, 0.8)
+    _install_memory_sources(mixer, (track, impulse))
+    track_frames = mixer._total_frames
+
+    mixer.set_effect_chain([{
+        "id": "reverb-main",
+        "type": "reverb",
+        "enabled": True,
+        "params": {
+            "room_size": 0.55,
+            "damping": 0.4,
+            "wet": 0.5,
+            "dry": 0.5,
+            "width": 0.8,
+        },
+    }])
+    assert mixer._total_frames > track_frames
+
+    mixer._mix_block(0, 128)
+    tail = mixer._mix_block(128, 512)
+    assert float(np.max(np.abs(tail))) > 1e-5
