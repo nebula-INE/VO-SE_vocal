@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
 
-sf = pytest.importorskip("soundfile")
-
 from modules.audio.waveform import read_waveform_peaks
+
+# This module imports soundfile lazily, so the dependency check can follow imports.
+sf = pytest.importorskip("soundfile")
 
 
 def test_waveform_peaks_support_24_bit_stereo_without_loading_full_file(tmp_path):
