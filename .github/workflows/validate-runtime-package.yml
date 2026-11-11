@@ -161,7 +161,13 @@ jobs:
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
             --paths . --paths modules \
-            --collect-submodules=PySide6 \
+            # Keep only the Qt modules used by the desktop application.
+            # Avoid collecting every PySide6 submodule and its optional runtime.
+            --hidden-import=PySide6.QtCore \
+            --hidden-import=PySide6.QtGui \
+            --hidden-import=PySide6.QtWidgets \
+            --hidden-import=PySide6.QtMultimedia \
+            --hidden-import=PySide6.QtNetwork \
             --exclude-module=PySide6.QtWebEngineCore \
             --exclude-module=PySide6.QtWebEngineWidgets \
             --exclude-module=PySide6.QtWebEngineQuick \
