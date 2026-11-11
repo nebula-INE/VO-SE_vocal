@@ -1434,7 +1434,7 @@ class TimelineWidget(QWidget):
 
             menu.addSeparator()
 
-        act_export = QAction("JSONエクスポート (Ctrl+S)", self)
+        act_export = QAction("JSONエクスポート...", self)
         act_export.triggered.connect(self.export_all_data)
         menu.addAction(act_export)
 

@@ -216,6 +216,62 @@ def test_project_save_persists_the_current_voice_identity(tmp_path, monkeypatch)
     saved = json.loads(project_path.read_text(encoding="utf-8"))
     assert saved["current_voice_id"] == "voice-a"
     assert saved["current_voice"] == "Voice A"
+    assert window.current_project_path == str(project_path.resolve())
+
+
+def test_save_shortcut_reuses_current_project_path(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    project_path = tmp_path / "existing-project.vose"
+    window.current_project_path = str(project_path)
+    window.on_save_project_clicked = lambda path=None: ProjectIOMixin.on_save_project_clicked(window, path)
+    monkeypatch.setattr(
+        project_io_module.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Save dialog should not open")),
+    )
+    assert ProjectIOMixin.save_file_dialog_and_save_midi(window) is True
+    assert project_path.is_file()
+
+
+def test_project_load_remembers_absolute_path(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    project_path = tmp_path / "remember-path.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 121.0,
+            "tracks": [{"name": "Loaded", "type": "vocal", "notes": []}],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.current_project_path == str(project_path.resolve())
+
+
+def test_apply_project_tempo_updates_all_desktop_surfaces():
+    class _TempoInput:
+        def __init__(self):
+            self.value = ""
+            self.signals_blocked = False
+        def blockSignals(self, blocked):
+            previous = self.signals_blocked
+            self.signals_blocked = blocked
+            return previous
+        def setText(self, value):
+            self.value = value
+
+    window = _ProjectWindow()
+    window.tempo_input = _TempoInput()
+    engine_tempos = []
+    window.vo_se_engine = SimpleNamespace(set_tempo=engine_tempos.append)
+    window.update_scrollbar_range = lambda: None
+    applied = ProjectIOMixin._apply_project_tempo(window, 137.5)
+    assert applied == 137.5
+    assert window.timeline_widget.tempo == 137.5
+    assert window.graph_editor_widget.tempo == 137.5
+    assert window.tempo_input.value == "137.5"
+    assert engine_tempos == [137.5]
 
 
 def test_project_load_restores_saved_voice_when_installed(tmp_path, monkeypatch):

@@ -44,6 +44,39 @@ def _extract_lyric(message: Any) -> str:
                 return candidate
     return "a"
 
+def get_midi_initial_tempo(filepath: str) -> float:
+    """Return the BPM active at tick zero (MIDI's default is 120 BPM).
+
+    Note positions remain converted through the complete tempo map in
+    load_midi_file(); this value is only the editor's initial grid tempo.
+    """
+    try:
+        try:
+            mid = mido.MidiFile(filepath, charset="utf-8")
+        except UnicodeDecodeError:
+            try:
+                mid = mido.MidiFile(filepath, charset="cp932")
+            except UnicodeDecodeError:
+                mid = mido.MidiFile(filepath, charset="latin1")
+
+        initial_events = []
+        for track_index, track in enumerate(mid.tracks):
+            absolute_tick = 0
+            for event_index, message in enumerate(track):
+                absolute_tick += int(getattr(message, "time", 0))
+                if absolute_tick == 0 and getattr(message, "type", "") == "set_tempo":
+                    microseconds = int(getattr(message, "tempo", 500000))
+                    if microseconds <= 0:
+                        raise ValueError("MIDI contains an invalid initial tempo")
+                    initial_events.append((track_index, event_index, microseconds))
+        if not initial_events:
+            return 120.0
+        _track_index, _event_index, microseconds = min(initial_events)
+        return 60_000_000.0 / float(microseconds)
+    except Exception as exc:
+        raise ValueError(f"MIDIの初期テンポを取得できません: {exc}") from exc
+
+
 def load_midi_file(filepath: str) -> Optional[List[Dict[str, Any]]]:
     """Load MIDI notes using the file-wide tempo map and preserve overlapping same-pitch notes."""
     try:

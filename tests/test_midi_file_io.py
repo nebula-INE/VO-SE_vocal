@@ -46,6 +46,23 @@ def test_midi_import_applies_global_tempo_changes_and_keeps_overlaps(tmp_path):
     assert [note["velocity"] for note in notes] == [80, 100]
 
 
+def test_midi_initial_tempo_uses_tick_zero_meta_event(tmp_path):
+    midi_path = tmp_path / "initial-tempo.mid"
+    tempo_track = mido.MidiTrack()
+    tempo_track.append(mido.MetaMessage("set_tempo", tempo=400_000, time=0))
+    tempo_track.append(mido.MetaMessage("set_tempo", tempo=750_000, time=480))
+    tempo_track.append(mido.MetaMessage("end_of_track", time=0))
+    note_track = mido.MidiTrack()
+    note_track.append(mido.Message("note_on", note=60, velocity=90, time=0))
+    note_track.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    note_track.append(mido.MetaMessage("end_of_track", time=0))
+    midi_file = mido.MidiFile(type=1, ticks_per_beat=480)
+    midi_file.tracks.extend([tempo_track, note_track])
+    midi_file.save(midi_path)
+
+    assert midi_manager.get_midi_initial_tempo(str(midi_path)) == pytest.approx(150.0)
+
+
 def test_midi_export_writes_track_names_tempo_and_notes(tmp_path):
     midi_path = tmp_path / "roundtrip.mid"
     result = save_midi_file(
@@ -134,6 +151,7 @@ def test_desktop_midi_import_restores_source_tracks(monkeypatch):
         def statusBar(self):
             return self._status_bar
 
+    monkeypatch.setattr(midi_manager, "get_midi_initial_tempo", lambda _path: 150.0)
     monkeypatch.setattr(
         midi_manager,
         "load_midi_file",
@@ -163,6 +181,7 @@ def test_desktop_midi_import_restores_source_tracks(monkeypatch):
     assert [note.note_number for note in window.tracks[0].notes] == [60]
     assert [note.note_number for note in window.tracks[1].notes] == [64]
     assert [note.note_number for note in window.timeline_widget.notes_list] == [60]
+    assert window.timeline_widget.tempo == pytest.approx(150.0)
 
 
 

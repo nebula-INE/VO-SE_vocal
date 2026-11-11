@@ -113,7 +113,9 @@ def _prepare_ust_notes(note_dicts: List[Dict[str, Any]]) -> List[NoteEvent]:
     return notes
 
 
-def _prepare_midi_note_tracks(note_dicts: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _prepare_midi_note_tracks(
+    note_dicts: List[Dict[str, Any]], tempo_bpm: float = 120.0
+) -> Dict[str, Any]:
     notes_by_track: Dict[int, List[NoteEvent]] = {}
     names_by_track: Dict[int, str] = {}
     for note_data in note_dicts:
@@ -127,6 +129,7 @@ def _prepare_midi_note_tracks(note_dicts: List[Dict[str, Any]]) -> Dict[str, Any
         "notes_by_track": notes_by_track,
         "names_by_track": names_by_track,
         "note_count": len(note_dicts),
+        "tempo_bpm": float(tempo_bpm),
     }
 
 
@@ -175,12 +178,14 @@ def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
     if extension == ".vsqx":
         return {"format": "vsqx", "project": parse_vsqx(file_path)}
     if extension in {".mid", ".midi"}:
-        from modules.data.midi_manager import load_midi_file
+        from modules.data.midi_manager import get_midi_initial_tempo, load_midi_file
 
         notes = load_midi_file(file_path)
         if notes is None:
             raise ValueError("MIDIファイルを解析できませんでした。")
-        return {"format": "midi", "notes": notes, **_prepare_midi_note_tracks(notes)}
+        initial_tempo = get_midi_initial_tempo(file_path)
+        prepared = _prepare_midi_note_tracks(notes, tempo_bpm=initial_tempo)
+        return {"format": "midi", "notes": notes, **prepared}
     if extension in {".json", ".vose"}:
         with open(file_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -483,6 +488,7 @@ class ProjectIOMixin:
             # Persist that identity so reopening a project restores the same voice.
             "current_voice_id": str(getattr(self, "current_voice_id", "NONE") or "NONE"),
             "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
+            "current_project_path": str(getattr(self, "current_project_path", "") or ""),
         }
 
     def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
@@ -529,6 +535,7 @@ class ProjectIOMixin:
         if callable(set_tempo):
             set_tempo(tempo)
 
+        self.current_project_path = str(state.get("current_project_path", "") or "")
         self.current_playback_time = float(state.get("current_playback_time", 0.0))
         set_time = getattr(self, "_set_transport_time", None)
         if callable(set_time):
@@ -629,6 +636,74 @@ class ProjectIOMixin:
             description,
         ))
 
+    def _apply_project_tempo(self: Any, tempo: float) -> float:
+        """Apply one project tempo consistently to the timeline, graph, control and engine."""
+        value = float(tempo)
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError("プロジェクトのテンポが不正です。")
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is not None:
+            timeline.tempo = value
+            update = getattr(timeline, "update", None)
+            if callable(update):
+                update()
+        graph = getattr(self, "graph_editor_widget", None)
+        if graph is not None:
+            graph.tempo = value
+            update = getattr(graph, "update", None)
+            if callable(update):
+                update()
+        tempo_input = getattr(self, "tempo_input", None)
+        if tempo_input is not None:
+            tempo_input.blockSignals(True)
+            tempo_input.setText(f"{value:.15g}")
+            tempo_input.blockSignals(False)
+        tempo_spinbox = getattr(self, "tempo_spinbox", None)
+        if tempo_spinbox is not None and tempo_input is None:
+            tempo_spinbox.setValue(value)
+        engine = getattr(self, "vo_se_engine", None)
+        set_tempo = getattr(engine, "set_tempo", None)
+        if callable(set_tempo):
+            set_tempo(value)
+        update_scrollbar = getattr(self, "update_scrollbar_range", None)
+        if callable(update_scrollbar):
+            update_scrollbar()
+        return value
+
+    def _sync_voice_selection_from_path(self: Any, voice_path: str) -> bool:
+        """Reflect a UST VoiceDir in the gallery, or clear a stale unrelated selection."""
+        normalized_path = os.path.normcase(os.path.realpath(voice_path))
+        gallery = getattr(self, "voice_gallery", None)
+        cards = getattr(gallery, "cards", {}) if gallery is not None else {}
+        if isinstance(cards, dict):
+            for voice_id, card in cards.items():
+                if str(voice_id).startswith("__"):
+                    continue
+                try:
+                    matches = os.path.normcase(os.path.realpath(str(voice_id))) == normalized_path
+                except (OSError, TypeError, ValueError):
+                    matches = False
+                if matches:
+                    display_name = str(getattr(card, "display_name", "") or "")
+                    select_card = getattr(gallery, "on_card_clicked", None)
+                    if callable(select_card):
+                        select_card(display_name, str(voice_id))
+                        return True
+        # UST may refer to an external folder not yet registered in the gallery.
+        if isinstance(cards, dict):
+            for card in cards.values():
+                setter = getattr(card, "set_selected", None)
+                if callable(setter):
+                    setter(False)
+        self.current_voice_id = "NONE"
+        self.current_voice = os.path.basename(os.path.normpath(voice_path)) or "外部音源"
+        combo = getattr(self, "character_selector", None)
+        if combo is not None:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(-1)
+            combo.blockSignals(False)
+        return False
+
     # ------------------------------------------------------------------
     # UST 読み込み
     # ------------------------------------------------------------------
@@ -674,6 +749,7 @@ class ProjectIOMixin:
                     if callable(set_voice_library):
                         try:
                             set_voice_library(voice_dir)
+                            self._sync_voice_selection_from_path(voice_dir)
                             logger.info("UST VoiceDir を音源ライブラリへ適用: %s", voice_dir)
                         except Exception as exc:
                             logger.warning("UST VoiceDir の適用に失敗: %s", exc)
@@ -699,19 +775,14 @@ class ProjectIOMixin:
             if 0 <= current_idx < len(tracks):
                 tracks[current_idx].notes = list(notes)
 
-            # テンポの適用
             if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
-                self.timeline_widget.tempo = project.tempo
                 if hasattr(self.timeline_widget, "set_notes"):
                     self.timeline_widget.set_notes(notes)
                 elif hasattr(self.timeline_widget, "notes_list"):
                     self.timeline_widget.notes_list = notes
                     if hasattr(self.timeline_widget, "update"):
                         self.timeline_widget.update()
-
-            # テンポスピンボックスがある場合は更新
-            if hasattr(self, "tempo_spinbox") and self.tempo_spinbox is not None:
-                self.tempo_spinbox.setValue(int(project.tempo))
+            self._apply_project_tempo(float(project.tempo))
 
             self.statusBar().showMessage(
                 f"UST 読み込み完了: {len(notes)} ノート / Tempo {project.tempo:.1f} BPM"
@@ -1006,7 +1077,10 @@ class ProjectIOMixin:
     # ------------------------------------------------------------------
 
     def save_file_dialog_and_save_midi(self: Any) -> bool:
-        """互換用保存エントリポイント。正式なマルチトラック保存へ委譲する。"""
+        """Save the current project, prompting only before its first save."""
+        current_path = str(getattr(self, "current_project_path", "") or "")
+        if current_path and os.path.splitext(current_path)[1].lower() in {".vose", ".json"}:
+            return bool(self.on_save_project_clicked(current_path))
         return bool(self.on_save_project_clicked())
 
     def load_json_project(
@@ -1211,6 +1285,7 @@ class ProjectIOMixin:
             commit_started = True
             self.tracks = loaded_tracks
             self.current_track_idx = new_current_idx
+            self.current_project_path = os.path.abspath(file_path)
 
             timeline = getattr(self, "timeline_widget", None)
             active_notes = self.tracks[self.current_track_idx].notes
@@ -1296,7 +1371,7 @@ class ProjectIOMixin:
         prepared_note_tracks: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """MIDIを読み込み、元ファイルのトラック分割をデスクトッププロジェクトへ復元する。"""
-        from modules.data.midi_manager import load_midi_file
+        from modules.data.midi_manager import get_midi_initial_tempo, load_midi_file
 
         try:
             before_state = self._capture_project_edit_state()
@@ -1363,6 +1438,12 @@ class ProjectIOMixin:
                     timeline.notes_list = active_notes
                     if hasattr(timeline, "update"):
                         timeline.update()
+            midi_tempo = (
+                float(prepared_note_tracks["tempo_bpm"])
+                if prepared_note_tracks is not None and "tempo_bpm" in prepared_note_tracks
+                else get_midi_initial_tempo(file_path)
+            )
+            self._apply_project_tempo(midi_tempo)
 
             refresh = getattr(self, "refresh_track_list_ui", None)
             if callable(refresh):
@@ -1411,25 +1492,12 @@ class ProjectIOMixin:
             self.tracks = tracks
             timeline = getattr(self, "timeline_widget", None)
             if timeline is not None:
-                timeline.tempo = project.tempo
                 if hasattr(timeline, "set_notes"):
                     timeline.set_notes(project.notes)
                 else:
                     timeline.notes_list = list(project.notes)
                     timeline.update()
-            tempo_input = getattr(self, "tempo_input", None)
-            if tempo_input is not None:
-                tempo_input.blockSignals(True)
-                tempo_input.setText(str(int(round(project.tempo))))
-                tempo_input.blockSignals(False)
-            graph = getattr(self, "graph_editor_widget", None)
-            if graph is not None:
-                graph.tempo = project.tempo
-                graph.update()
-            engine = getattr(self, "vo_se_engine", None)
-            set_tempo = getattr(engine, "set_tempo", None)
-            if callable(set_tempo):
-                set_tempo(project.tempo)
+            self._apply_project_tempo(float(project.tempo))
             refresh = getattr(self, "refresh_track_list_ui", None)
             if callable(refresh):
                 refresh()
@@ -1723,26 +1791,23 @@ class ProjectIOMixin:
         """マルチトラック対応のVO-SEプロジェクト保存。"""
         return bool(self.on_save_project_clicked())
 
-    def on_save_project_clicked(self: Any) -> bool:
-        """現在のプロジェクト全体を安全に保存する。"""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "プロジェクトを保存",
-            "project.vose",
-            "VO-SE Project (*.vose);;JSON Files (*.json);;All Files (*)",
-        )
+    def on_save_project_clicked(self: Any, file_path: Optional[str] = None) -> bool:
+        """Save the project; omit file_path to show the Save As dialog."""
+        if not file_path:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "プロジェクトを保存", "project.vose",
+                "VO-SE Project (*.vose);;JSON Files (*.json);;All Files (*)",
+            )
         if not file_path:
             return False
-
+        file_path = os.path.abspath(os.path.expanduser(str(file_path)))
         tmp_file_path = f"{file_path}.tmp"
         try:
             tracks = list(getattr(self, "tracks", []) or [])
             timeline = getattr(self, "timeline_widget", None)
             current_idx = int(getattr(self, "current_track_idx", 0))
-
             if timeline is not None and 0 <= current_idx < len(tracks):
                 tracks[current_idx].notes = list(getattr(timeline, "notes_list", []) or [])
-
             tempo = float(getattr(timeline, "tempo", 120.0)) if timeline is not None else 120.0
             serialized_tracks = []
             for track in tracks:
@@ -1756,12 +1821,9 @@ class ProjectIOMixin:
                     "is_solo": bool(getattr(track, "is_solo", False)),
                     "engine_type": str(getattr(track, "engine_type", "Aural")),
                     "color_label": str(getattr(track, "color_label", "")),
-                    "notes": [
-                        n.to_dict() if hasattr(n, "to_dict") else dict(n)
-                        for n in (getattr(track, "notes", []) or [])
-                    ],
+                    "notes": [n.to_dict() if hasattr(n, "to_dict") else dict(n)
+                              for n in (getattr(track, "notes", []) or [])],
                 })
-
             graph = getattr(self, "graph_editor_widget", None)
             all_parameters = getattr(graph, "all_parameters", {}) if graph is not None else {}
             serialized_parameters = {
@@ -1774,13 +1836,9 @@ class ProjectIOMixin:
                 ]
                 for name in ("Pitch", "Gender", "Tension", "Breath")
             }
-
-            current_voice_id = str(
-                getattr(self, "current_voice_id", "NONE") or "NONE"
-            )
+            current_voice_id = str(getattr(self, "current_voice_id", "NONE") or "NONE")
             if current_voice_id == "NONE":
                 current_voice_id = ""
-
             project_data = {
                 "app_id": "VO_SE_Pro_2026",
                 "version": "1.5.0",
@@ -1788,22 +1846,17 @@ class ProjectIOMixin:
                 "tempo": tempo,
                 "current_track_idx": max(0, current_idx),
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
-                # Desktop currently has a single active singer shared by vocal tracks.
-                # Empty string represents the unselected "NONE" state.
                 "current_voice_id": current_voice_id,
                 "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
                 "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
             }
-
-            with open(tmp_file_path, "w", encoding="utf-8") as f:
-                json.dump(project_data, f, ensure_ascii=False, indent=2)
+            with open(tmp_file_path, "w", encoding="utf-8") as handle:
+                json.dump(project_data, handle, ensure_ascii=False, indent=2)
             os.replace(tmp_file_path, file_path)
-            self.statusBar().showMessage(
-                f"保存完了: {os.path.basename(file_path)}", 3000
-            )
+            self.current_project_path = file_path
+            self.statusBar().showMessage(f"保存完了: {os.path.basename(file_path)}", 3000)
             return True
-
         except Exception as exc:
             if os.path.exists(tmp_file_path):
                 try:
@@ -1811,11 +1864,7 @@ class ProjectIOMixin:
                 except OSError:
                     pass
             logger.exception("プロジェクト保存エラー: %s", exc)
-            QMessageBox.critical(
-                self,
-                "保存エラー",
-                f"プロジェクトの保存に失敗しました:\n{exc}",
-            )
+            QMessageBox.critical(self, "保存エラー", f"プロジェクトの保存に失敗しました:\n{exc}")
             return False
 
     def export_analysis_to_oto_ini(self: Any):
