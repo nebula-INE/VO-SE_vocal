@@ -42,6 +42,7 @@ def test_bind_warns_for_missing_symbols_by_default(caplog):
 
     assert "required_symbol" in caplog.text
 
+
 def test_bind_all_preserves_legacy_process_voice_signature_when_exported():
     exported_symbols = (
         "load_embedded_resource",
