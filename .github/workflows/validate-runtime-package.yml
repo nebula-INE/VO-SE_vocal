@@ -76,8 +76,9 @@ jobs:
           try:
               import sounddevice
           except Exception as exc:
-              # GitHub's Linux runner is headless; absence of a PulseAudio
-              # server must not be mistaken for a missing Python dependency.
+              # Headless GitHub runners may not expose a PulseAudio server.
+              # The package must be installed; an unavailable host audio device
+              # is not a dependency/import failure for the desktop application.
               if type(exc).__name__ != "PortAudioError":
                   raise
               print("PortAudio device unavailable in headless CI; package is installed:", exc)
