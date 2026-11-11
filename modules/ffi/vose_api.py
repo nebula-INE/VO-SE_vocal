@@ -101,20 +101,36 @@ def bind_all(lib: ctypes.CDLL) -> None:
     _bind(lib, "set_bigvgan_model", [ctypes.c_char_p], None)
 
     # main.py VoSeEngine が呼ぶ process_voice（旧 API、互換性のため残す）
-    _bind(lib, "process_voice", [
-        ctypes.POINTER(ctypes.c_float),
-        ctypes.c_int,
-        ctypes.POINTER(ctypes.c_float),
-    ], None)
+    _bind(
+        lib,
+        "process_voice",
+        [
+            ctypes.POINTER(ctypes.c_float),
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_float),
+        ],
+        None,
+        warn_missing=False,
+    )
 
 
-def _bind(lib: ctypes.CDLL, name: str, argtypes: list, restype) -> None:
+def _bind(
+    lib: ctypes.CDLL,
+    name: str,
+    argtypes: list,
+    restype,
+    *,
+    warn_missing: bool = True,
+) -> None:
     if hasattr(lib, name):
         fn = getattr(lib, name)
         fn.argtypes = argtypes
-        fn.restype  = restype
-    else:
-        logger.warning("[vose_api] DLL にシンボル '%s' が見つかりません（バージョン差異の可能性）", name)
+        fn.restype = restype
+    elif warn_missing:
+        logger.warning(
+            "[vose_api] DLL にシンボル '%s' が見つかりません（バージョン差異の可能性）",
+            name,
+        )
 
 
 # ============================================================
