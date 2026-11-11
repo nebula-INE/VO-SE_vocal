@@ -3317,9 +3317,9 @@ class MainWindow(
             self,
             "プロジェクトを開く",
             "",
-            "VO-SE Files (*.vose *.json *.ust *.ustx *.vsqx *.mid *.midi);;"
+            "VO-SE Files (*.vose *.json *.ust *.vsqx *.mid *.midi);;"
             "MIDI Files (*.mid *.midi);;"
-            "UTAU Files (*.ust *.ustx);;"
+            "UTAU Files (*.ust);;"
             "VSQX Files (*.vsqx);;"
             "VO-SE/JSON Files (*.vose *.json);;"
             "All Files (*)",
@@ -3388,9 +3388,19 @@ class MainWindow(
             self.timeline_widget.paste_notes_from_clipboard
         )
         
+        self.open_action = QAction("開く(&O)", self)
+        self.open_action.setObjectName("openProjectAction")
+        self.open_action.setShortcuts(QKeySequence.StandardKey.Open)
+        self.open_action.triggered.connect(self.open_file_dialog_and_load_midi)
+
         self.save_action = QAction("保存(&S)", self)
+        self.save_action.setObjectName("saveProjectAction")
         self.save_action.setShortcuts(QKeySequence.StandardKey.Save)
         self.save_action.triggered.connect(self.save_file_dialog_and_save_midi)
+
+        self.save_as_action = QAction("名前を付けて保存(&A)...", self)
+        self.save_as_action.setObjectName("saveProjectAsAction")
+        self.save_as_action.triggered.connect(lambda _checked=False: self.on_save_project_clicked())
 
         # Undo / Redo
         # (ショートカット自体は setup_vose_shortcuts の QShortcut で結線済み。
@@ -3406,8 +3416,11 @@ class MainWindow(
         """メニューバーの構築"""
         # ファイルメニュー
         file_menu = self.menuBar().addMenu("ファイル(&F)")
+        file_menu.addAction(self.open_action)
+        file_menu.addSeparator()
         file_menu.addAction(self.save_action)
-        
+        file_menu.addAction(self.save_as_action)
+        file_menu.addSeparator()
         export_action = QAction("WAV書き出し...", self)
         export_action.triggered.connect(self.on_export_button_clicked)
         file_menu.addAction(export_action)
