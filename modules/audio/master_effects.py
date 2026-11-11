@@ -6,6 +6,7 @@ is a strict no-op, preserving the existing mixer output bit-for-bit.
 from __future__ import annotations
 
 import math
+import threading
 from typing import Any
 
 import numpy as np
@@ -142,42 +143,57 @@ class MasterEffectsProcessor:
             raise ValueError("sample_rate must be positive")
         self.chain: list[dict[str, Any]] = []
         self._states: dict[str, dict[str, Any]] = {}
+        self._lock = threading.RLock()
         self.set_chain(chain or [])
 
-    def set_chain(self, chain: Any) -> None:
+    def set_chain(self, chain: Any, *, preserve_state: bool = False) -> None:
+        """Validate a new chain and optionally retain state for matching effects."""
         normalized = normalize_effect_chain(chain)
-        self.chain = normalized
-        self._states = {}
-        for effect in normalized:
-            effect_type = effect["type"]
-            if effect_type == "compressor":
-                self._states[effect["id"]] = {"envelope": 0.0}
-            elif effect_type == "eq":
-                self._states[effect["id"]] = {
-                    "zi": np.zeros((2, 2), dtype=np.float64)
-                }
-            elif effect_type == "reverb":
-                self._states[effect["id"]] = self._new_reverb_state(effect["params"])
+        with self._lock:
+            previous_types = {
+                item["id"]: item["type"] for item in self.chain
+            }
+            previous_states = self._states
+            new_states: dict[str, dict[str, Any]] = {}
+            for effect in normalized:
+                effect_id = effect["id"]
+                effect_type = effect["type"]
+                if preserve_state and previous_types.get(effect_id) == effect_type:
+                    new_states[effect_id] = previous_states[effect_id]
+                elif effect_type == "compressor":
+                    new_states[effect_id] = {"envelope": 0.0}
+                elif effect_type == "eq":
+                    new_states[effect_id] = {
+                        "zi": np.zeros((2, 2), dtype=np.float64)
+                    }
+                elif effect_type == "reverb":
+                    new_states[effect_id] = self._new_reverb_state(effect["params"])
+            self.chain = normalized
+            self._states = new_states
 
     def reset(self) -> None:
         """Clear delay/envelope histories, for a new transport start or seek."""
-        current = [dict(item) for item in self.chain]
-        self.set_chain(current)
+        with self._lock:
+            current = [dict(item) for item in self.chain]
+            self.set_chain(current, preserve_state=False)
 
     @property
     def tail_frames(self) -> int:
-        tail = 0
-        for effect in self.chain:
-            if effect["type"] != "reverb" or not effect["enabled"]:
-                continue
-            params = effect["params"]
-            if params["wet"] <= 0.0:
-                continue
-            feedback = 0.18 + params["room_size"] * 0.62
+        with self._lock:
+            tail = 0
             max_delay = max(self._REVERB_LEFT_DELAYS + self._REVERB_RIGHT_DELAYS)
-            decay_seconds = max_delay * math.log(0.001) / math.log(feedback)
-            tail = max(tail, int(min(4.0, decay_seconds) * self.sample_rate))
-        return tail
+            for effect in self.chain:
+                if effect["type"] != "reverb" or not effect["enabled"]:
+                    continue
+                params = effect["params"]
+                if params["wet"] <= 0.0:
+                    continue
+                feedback = 0.18 + params["room_size"] * 0.62
+                decay_seconds = max_delay * math.log(0.001) / math.log(feedback)
+                # Serial reverbs have additive decay windows; retain the complete
+                # tail rather than truncating the later stages at the longest one.
+                tail += int(min(4.0, decay_seconds) * self.sample_rate)
+            return tail
 
     def process(self, audio: np.ndarray) -> np.ndarray:
         """Apply the enabled chain to a float stereo block.
@@ -185,27 +201,28 @@ class MasterEffectsProcessor:
         The caller owns final peak clipping. With no enabled effects, the exact
         input array is returned without copying or arithmetic.
         """
-        if not any(item["enabled"] for item in self.chain):
-            return audio
-        if audio.ndim != 2 or audio.shape[1] != 2:
-            raise ValueError("Master effects require a two-channel audio block.")
-        if len(audio) == 0:
-            return audio
+        with self._lock:
+            if not any(item["enabled"] for item in self.chain):
+                return audio
+            if audio.ndim != 2 or audio.shape[1] != 2:
+                raise ValueError("Master effects require a two-channel audio block.")
+            if len(audio) == 0:
+                return audio
 
-        output = np.asarray(audio, dtype=np.float32).copy()
-        for effect in self.chain:
-            if not effect["enabled"]:
-                continue
-            effect_type = effect["type"]
-            params = effect["params"]
-            state = self._states[effect["id"]]
-            if effect_type == "compressor":
-                output = self._process_compressor(output, params, state)
-            elif effect_type == "reverb":
-                output = self._process_reverb(output, params, state)
-            elif effect_type == "eq":
-                output = self._process_eq(output, params, state)
-        return output
+            output = np.asarray(audio, dtype=np.float32).copy()
+            for effect in self.chain:
+                if not effect["enabled"]:
+                    continue
+                effect_type = effect["type"]
+                params = effect["params"]
+                state = self._states[effect["id"]]
+                if effect_type == "compressor":
+                    output = self._process_compressor(output, params, state)
+                elif effect_type == "reverb":
+                    output = self._process_reverb(output, params, state)
+                elif effect_type == "eq":
+                    output = self._process_eq(output, params, state)
+            return output
 
     def _process_compressor(
         self, audio: np.ndarray, params: dict[str, float], state: dict[str, Any]
