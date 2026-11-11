@@ -34,7 +34,8 @@ def _install_memory_sources(mixer, *pairs):
         )
     mixer._tracks = tracks
     mixer._sources = sources
-    mixer._total_frames = max(source.output_frames for source in sources.values())
+    mixer._track_total_frames = max(source.output_frames for source in sources.values())
+    mixer._total_frames = mixer._track_total_frames + mixer._effects.tail_frames
 
 
 def test_mute_and_solo_activity_rules():
