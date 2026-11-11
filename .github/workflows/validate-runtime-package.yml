@@ -69,8 +69,11 @@ jobs:
           print("Training-only modules installed:", found)
           if found:
               raise SystemExit(f"Unexpected training modules in runtime environment: {found}")
-          from PySide6 import QtCore, QtGui, QtWidgets
+          from PySide6 import QtCore, QtGui, QtWidgets, QtMultimedia
+          import importlib.util
           import soundfile, pyopenjtalk
+          if importlib.util.find_spec("sounddevice") is None:
+              raise ImportError("sounddevice package is not installed")
           try:
               import sounddevice
           except Exception as exc:
@@ -80,6 +83,8 @@ jobs:
               if type(exc).__name__ != "PortAudioError":
                   raise
               print("PortAudio device unavailable in headless CI; package is installed:", exc)
+          assert QtMultimedia.QMediaPlayer is not None
+          assert QtMultimedia.QAudioOutput is not None
           from modules.tools import batch_voice_optimizer
           from modules.tools.batch_voice_optimizer import BatchVoiceOptimizer
           assert batch_voice_optimizer.TORCH_AVAILABLE is False, (
@@ -115,18 +120,81 @@ jobs:
             src/vose_core.cpp src/vose_streaming_final.cpp build/linux-world/*.o
           test -s bin/libvose_core.so
 
+      - name: Audit optional Qt module references
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          # These optional modules are candidates for exclusion from the Linux
+          # validation artifact only. Qt Multimedia is deliberately retained.
+          pattern = re.compile(
+              r"PySide6\s*\.\s*(?:QtWebEngine(?:Core|Widgets|Quick)?|QtDesigner|QtNetwork|QtPdf(?:Widgets)?|QtMultimediaWidgets|QtVirtualKeyboard(?:Qml)?)"
+              r"|\bQ(?:WebEngine|Designer|Network|Pdf|VideoWidget)\w*",
+              re.IGNORECASE,
+          )
+          roots = (Path("main.py"), Path("modules"), Path("assets"))
+          allowed_suffixes = {".py", ".qml", ".ui", ".qrc", ".json", ".toml"}
+          ignored_parts = {".git", ".venv", "venv", "__pycache__", "build", "dist"}
+
+          scanned = 0
+          hits = []
+          for root in roots:
+              if not root.exists():
+                  continue
+              paths = [root] if root.is_file() else root.rglob("*")
+              for path in paths:
+                  if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
+                      continue
+                  if ignored_parts.intersection(path.parts):
+                      continue
+                  try:
+                      lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                  except OSError:
+                      continue
+                  scanned += 1
+                  for line_number, line in enumerate(lines, 1):
+                      if pattern.search(line):
+                          hits.append(f"{path}:{line_number}:{line.strip()}")
+
+          print(f"Optional Qt source audit scanned {scanned} files")
+          if hits:
+              print("\n".join(hits))
+              raise SystemExit(
+                  "QtWebEngine/QtDesigner references found; review exclusions before packaging"
+              )
+          print("No QtWebEngine or QtDesigner references found.")
+          print("Qt Multimedia remains enabled and is not an exclusion candidate.")
+          PY
+
       - name: Build PyInstaller desktop bundle
         run: |
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
             --paths . --paths modules \
-            --collect-all=PySide6 \
+            --hidden-import=PySide6.QtCore \
+            --hidden-import=PySide6.QtGui \
+            --hidden-import=PySide6.QtWidgets \
+            --hidden-import=PySide6.QtMultimedia \
+            --exclude-module=PySide6.QtWebEngineCore \
+            --exclude-module=PySide6.QtWebEngineWidgets \
+            --exclude-module=PySide6.QtWebEngineQuick \
+            --exclude-module=PySide6.QtWebEngine \
+            --exclude-module=PySide6.QtDesigner \
             --exclude-module=PySide6.QtQml \
             --exclude-module=PySide6.QtQuick \
             --exclude-module=PySide6.Qt3DAnimation \
             --exclude-module=PySide6.Qt3DCore \
             --exclude-module=PySide6.Qt3DRender \
+            --exclude-module=PySide6.QtNetwork \
+            --exclude-module=PySide6.QtPdf \
+            --exclude-module=PySide6.QtPdfWidgets \
+            --exclude-module=PySide6.QtMultimediaWidgets \
+            --exclude-module=PySide6.QtVirtualKeyboard \
+            --exclude-module=PySide6.QtVirtualKeyboardQml \
             --hidden-import=modules.gui.main_window \
+            --hidden-import=PySide6.QtMultimedia \
             --hidden-import=rtmidi \
             --hidden-import=mido.backends.rtmidi \
             --hidden-import=backports \
@@ -157,13 +225,24 @@ jobs:
                   rows.append((name.lower(), int(uncompressed_size), int(compressed_size)))
               except (TypeError, ValueError):
                   continue
-          forbidden = ("torch/", "torch.", "torchaudio", "triton", "nvidia/", "transformers", "peft")
+          forbidden = (
+              "torch/", "torch.", "torchaudio", "triton", "nvidia/", "transformers", "peft",
+              "qtwebengine", "qwebengine", "qtdesigner", "qdesigner",
+          )
           hits = [(name, unpacked, packed) for name, unpacked, packed in rows
                   if any(token in name for token in forbidden)]
           print("Archive entries inspected:", len(rows))
           print("Largest embedded entries (unpacked bytes):")
           for name, unpacked, packed in sorted(rows, key=lambda row: row[1], reverse=True)[:30]:
               print(f"{unpacked:>12} unpacked | {packed:>12} packed | {name}")
+          optional_qt_tokens = (
+              "qtmultimediawidgets", "qtpdf", "qtvirtualkeyboard", "qtquick", "qtqml",
+          )
+          optional_qt_hits = [
+              name for name, _, _ in rows
+              if any(token in name for token in optional_qt_tokens)
+          ]
+          print("Optional Qt candidate entries remaining:", optional_qt_hits[:50])
           print("Forbidden training/CUDA entries:", hits[:30])
           if hits:
               raise SystemExit("Training/CUDA libraries unexpectedly present in runtime bundle")
