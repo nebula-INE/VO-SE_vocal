@@ -1,13 +1,19 @@
 import ctypes
 import logging
 from types import SimpleNamespace
+from typing import Any, cast
 
 from modules.ffi.vose_api import _bind, bind_all
 
 
 class _StubFunction:
-    argtypes = None
-    restype = None
+    argtypes: Any = None
+    restype: Any = None
+
+
+def _stub_library(**symbols: _StubFunction) -> Any:
+    # bind_all/_bind need only attribute access and mutable argtypes/restype.
+    return cast(Any, SimpleNamespace(**symbols))
 
 
 def test_bind_all_silently_accepts_missing_legacy_process_voice(caplog):
@@ -22,9 +28,7 @@ def test_bind_all_silently_accepts_missing_legacy_process_voice(caplog):
         "init_official_engine",
         "set_bigvgan_model",
     )
-    lib = SimpleNamespace(
-        **{name: _StubFunction() for name in exported_symbols}
-    )
+    lib = _stub_library(**{name: _StubFunction() for name in exported_symbols})
 
     with caplog.at_level(logging.WARNING, logger="modules.ffi.vose_api"):
         bind_all(lib)
@@ -35,7 +39,7 @@ def test_bind_all_silently_accepts_missing_legacy_process_voice(caplog):
 
 
 def test_bind_warns_for_missing_symbols_by_default(caplog):
-    lib = SimpleNamespace()
+    lib = _stub_library()
 
     with caplog.at_level(logging.WARNING, logger="modules.ffi.vose_api"):
         _bind(lib, "required_symbol", [], None)
@@ -56,9 +60,7 @@ def test_bind_all_preserves_legacy_process_voice_signature_when_exported():
         "set_bigvgan_model",
         "process_voice",
     )
-    lib = SimpleNamespace(
-        **{name: _StubFunction() for name in exported_symbols}
-    )
+    lib = _stub_library(**{name: _StubFunction() for name in exported_symbols})
 
     bind_all(lib)
 
@@ -68,4 +70,3 @@ def test_bind_all_preserves_legacy_process_voice_signature_when_exported():
         ctypes.POINTER(ctypes.c_float),
     ]
     assert lib.process_voice.restype is None
-
