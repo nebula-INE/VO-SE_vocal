@@ -53,9 +53,9 @@ class CVoseFrame(ctypes.Structure):
 
 def bind_all(lib: ctypes.CDLL) -> None:
     """
-    lib に対して vose_core.h に定義された全エクスポート関数の
-    argtypes / restype を設定する。
-    関数が存在しない場合は警告のみ出して続行する（バージョン差異への耐性）。
+    lib に対して vose_core.h に定義された関数の argtypes / restype を設定する。
+    未対応シンボルは警告付きでスキップするが、旧互換専用の process_voice は
+    現行デスクトップ経路で使わないため、存在しなくても警告しない。
     """
     _bind(lib, "load_embedded_resource", [
         ctypes.c_char_p,
