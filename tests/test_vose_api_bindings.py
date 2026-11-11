@@ -41,3 +41,30 @@ def test_bind_warns_for_missing_symbols_by_default(caplog):
         _bind(lib, "required_symbol", [], None)
 
     assert "required_symbol" in caplog.text
+
+def test_bind_all_preserves_legacy_process_voice_signature_when_exported():
+    exported_symbols = (
+        "load_embedded_resource",
+        "set_oto_data",
+        "execute_render",
+        "execute_render_cancelable",
+        "set_vocal_timeline",
+        "get_engine_version",
+        "clear_engine_cache",
+        "init_official_engine",
+        "set_bigvgan_model",
+        "process_voice",
+    )
+    lib = SimpleNamespace(
+        **{name: _StubFunction() for name in exported_symbols}
+    )
+
+    bind_all(lib)
+
+    assert lib.process_voice.argtypes == [
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_float),
+    ]
+    assert lib.process_voice.restype is None
+
