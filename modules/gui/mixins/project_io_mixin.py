@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import multiprocessing
 import os
+import threading
 from typing import Any, Dict, List, Optional, cast
-from copy import deepcopy
+from copy import copy, deepcopy
 
+from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from modules.data.data_models import NoteEvent, PitchEvent
@@ -27,9 +30,421 @@ from modules.data.vsqx_parser import parse_vsqx
 
 logger = logging.getLogger(__name__)
 
+
+def _clone_track_collection(tracks: List[Any]) -> List[Any]:
+    """Clone track containers and note lists without recursively copying note trees."""
+    snapshots = []
+    for track in tracks:
+        try:
+            track_snapshot = copy(track)
+            notes = getattr(track, "notes", None)
+            if isinstance(notes, list):
+                track_snapshot.notes = list(notes)
+            snapshots.append(track_snapshot)
+        except Exception:
+            logger.exception("トラックの軽量コピーに失敗。deepcopyへフォールバック")
+            snapshots.append(deepcopy(track))
+    return snapshots
+
+
+def _prepare_project_note(note_data: Dict[str, Any], description: str) -> NoteEvent:
+    """Convert and validate a serialized note without accessing any GUI object."""
+    if not isinstance(note_data, dict):
+        raise ValueError(f"{description} の形式が不正です。")
+    note = NoteEvent.from_dict(note_data)
+    try:
+        raw_note_number = float(note.note_number)
+        note_number = int(raw_note_number)
+        start_time = float(note.start_time)
+        duration = float(note.duration)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{description} の音程・開始位置・長さが不正です。") from exc
+
+    if (
+        not math.isfinite(raw_note_number)
+        or not raw_note_number.is_integer()
+        or not 0 <= note_number <= 127
+        or not math.isfinite(start_time)
+        or start_time < 0.0
+        or not math.isfinite(duration)
+        or duration < 0.0
+    ):
+        raise ValueError(f"{description} の音程・開始位置・長さが範囲外です。")
+
+    note.note_number = note_number
+    note.start_time = start_time
+    note.duration = duration
+    for field_name in (
+        "velocity", "vibrato_depth", "vibrato_rate", "formant_shift",
+        "onset", "pre_utterance", "overlap",
+    ):
+        value = getattr(note, field_name, None)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"{description} の {field_name} が数値ではありません。"
+            ) from exc
+        if not math.isfinite(number):
+            raise ValueError(
+                f"{description} の {field_name} に無効な数値があります。"
+            )
+    return note
+
+
+def _prepare_ust_notes(note_dicts: List[Dict[str, Any]]) -> List[NoteEvent]:
+    """Convert UST note dictionaries into models before returning to the GUI thread."""
+    notes: List[NoteEvent] = []
+    for index, data in enumerate(note_dicts):
+        try:
+            note = NoteEvent.from_dict(data)
+            if data.get("pre_utterance") is not None:
+                note.pre_utterance = data["pre_utterance"]
+            if data.get("overlap") is not None:
+                note.overlap = data["overlap"]
+            for key, value in data.items():
+                if key.startswith("_ust_"):
+                    setattr(note, key, value)
+            notes.append(note)
+        except Exception as exc:
+            logger.warning("UST NoteEvent 変換失敗: %s / note=%d", exc, index + 1)
+    return notes
+
+
+def _prepare_midi_note_tracks(note_dicts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    notes_by_track: Dict[int, List[NoteEvent]] = {}
+    names_by_track: Dict[int, str] = {}
+    for note_data in note_dicts:
+        track_index = int(note_data.get("_midi_track_index", 0))
+        note = NoteEvent.from_dict(note_data)
+        notes_by_track.setdefault(track_index, []).append(note)
+        name = str(note_data.get("_midi_track_name", "") or "")
+        if name:
+            names_by_track[track_index] = name
+    return {
+        "notes_by_track": notes_by_track,
+        "names_by_track": names_by_track,
+        "note_count": len(note_dicts),
+    }
+
+
+def _prepare_json_note_tracks(data: Dict[str, Any]) -> Dict[str, Any]:
+    raw_tracks = data.get("tracks")
+    if raw_tracks is not None and not isinstance(raw_tracks, list):
+        raise ValueError("tracks は配列である必要があります。")
+    if isinstance(raw_tracks, list) and raw_tracks:
+        prepared_tracks: List[List[NoteEvent]] = []
+        for track_index, raw_track in enumerate(raw_tracks):
+            if not isinstance(raw_track, dict):
+                raise ValueError(f"Track {track_index + 1} の形式が不正です。")
+            raw_notes = raw_track.get("notes", [])
+            if not isinstance(raw_notes, list):
+                raise ValueError(
+                    f"Track {track_index + 1} の notes は配列である必要があります。"
+                )
+            prepared_tracks.append([
+                _prepare_project_note(note_data, f"Track {track_index + 1} / Note {note_index + 1}")
+                for note_index, note_data in enumerate(raw_notes)
+            ])
+        return {"prepared_note_tracks": prepared_tracks, "prepared_legacy_notes": None}
+
+    raw_notes = data.get("notes", [])
+    if not isinstance(raw_notes, list):
+        raise ValueError("notes は配列である必要があります。")
+    prepared_legacy = [
+        _prepare_project_note(note_data, f"Note {note_index + 1}")
+        for note_index, note_data in enumerate(raw_notes)
+    ]
+    return {"prepared_note_tracks": None, "prepared_legacy_notes": prepared_legacy}
+
+
+def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
+    """Parse an external project file without touching GUI objects."""
+    extension = os.path.splitext(file_path)[1].lower()
+    if extension == ".ust":
+        project = UstParser().load(file_path)
+        note_dicts = UstConverter.to_note_dicts(project)
+        return {
+            "format": "ust",
+            "project": project,
+            "note_dicts": note_dicts,
+            "prepared_notes": _prepare_ust_notes(note_dicts),
+        }
+    if extension == ".vsqx":
+        return {"format": "vsqx", "project": parse_vsqx(file_path)}
+    if extension in {".mid", ".midi"}:
+        from modules.data.midi_manager import load_midi_file
+
+        notes = load_midi_file(file_path)
+        if notes is None:
+            raise ValueError("MIDIファイルを解析できませんでした。")
+        return {"format": "midi", "notes": notes, **_prepare_midi_note_tracks(notes)}
+    if extension in {".json", ".vose"}:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            raise ValueError("プロジェクトJSONのルートはオブジェクトである必要があります。")
+        prepared = _prepare_json_note_tracks(data)
+        return {"format": "json", "data": data, **prepared}
+    raise ValueError(f"対応していない形式です: {extension}")
+
+
+class _VoiceBankImportWorker(QThread):
+    """Download, safely install and inspect a voicebank without blocking the GUI."""
+
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, manager: Any, source_path: str, source_type: str = "local", parent=None):
+        super().__init__(parent)
+        self.manager = manager
+        self.source_path = source_path
+        self.source_type = source_type
+        self.done = threading.Event()
+
+    def run(self) -> None:
+        temporary_path = None
+        try:
+            zip_path = self.source_path
+            if self.source_type == "url":
+                from urllib.parse import urlparse
+                from urllib.request import urlretrieve
+                import tempfile
+
+                parsed = urlparse(self.source_path)
+                if parsed.scheme not in ("http", "https"):
+                    raise ValueError(f"未対応のURLスキームです: {parsed.scheme}")
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as handle:
+                    temporary_path = handle.name
+                urlretrieve(self.source_path, temporary_path)
+                zip_path = temporary_path
+
+            install = getattr(self.manager, "install_voice_from_zip", None)
+            if not callable(install):
+                raise RuntimeError("音源マネージャーにZIPインストール機能がありません。")
+            installed_name = install(zip_path)
+            if not installed_name:
+                raise RuntimeError("音源のインストール結果を取得できませんでした。")
+
+            # install_voice_from_zip() already refreshes VoiceManager.voices.
+            # Avoid running the full recursive scan a second time here.
+            voices = dict(getattr(self.manager, "voices", {}) or {})
+            voice_record = voices.get(str(installed_name))
+            if isinstance(voice_record, dict):
+                voice_path = str(voice_record.get("path", "") or "")
+            else:
+                voice_path = str(voice_record or "")
+            if not voice_path or not os.path.isdir(voice_path):
+                scan = getattr(self.manager, "scan_voices", None)
+                if callable(scan):
+                    scanned = scan()
+                    if isinstance(scanned, dict):
+                        voices = dict(scanned)
+                voice_record = voices.get(str(installed_name))
+                if isinstance(voice_record, dict):
+                    voice_path = str(voice_record.get("path", "") or "")
+                else:
+                    voice_path = str(voice_record or "")
+            if not voice_path or not os.path.isdir(voice_path):
+                raise RuntimeError(
+                    f"インストール済み音源の保存先が見つかりません: {installed_name}"
+                )
+
+            # Optional ONNX model initialization can also be expensive. Keep it
+            # off the GUI thread and only pass the prepared Python object back.
+            from modules.gui.aural_engine import AuralAIEngine
+            from modules.gui.shared import DynamicsAIEngine
+
+            aural_model = os.path.join(voice_path, "aural_dynamics.onnx")
+            standard_model = os.path.join(voice_path, "model.onnx")
+            if os.path.isfile(aural_model):
+                dynamics_ai = AuralAIEngine()
+                load_model = getattr(dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(aural_model)
+                engine_message = "上位Auralモデル"
+            elif os.path.isfile(standard_model):
+                dynamics_ai = DynamicsAIEngine()
+                load_model = getattr(dynamics_ai, "load_model", None)
+                if callable(load_model):
+                    load_model(standard_model)
+                engine_message = "標準Dynamicsモデル"
+            else:
+                dynamics_ai = AuralAIEngine()
+                engine_message = "汎用Auralエンジン"
+
+            self.completed.emit({
+                "name": str(installed_name),
+                "voice_path": voice_path,
+                "voices": voices,
+                "dynamics_ai": dynamics_ai,
+                "engine_message": engine_message,
+            })
+        except Exception as exc:
+            logger.exception("音源ZIPのバックグラウンドインストールに失敗")
+            self.failed.emit(str(exc) or exc.__class__.__name__)
+        finally:
+            if temporary_path:
+                try:
+                    if os.path.exists(temporary_path):
+                        os.remove(temporary_path)
+                except OSError:
+                    logger.warning("一時ZIPを削除できません: %s", temporary_path)
+            self.done.set()
+
+
+class _ExternalProjectLoadSignals(QObject):
+    completed = Signal(str, object)
+    failed = Signal(str, str)
+
+
+class _ExternalProjectLoadWorker(QRunnable):
+    """Run potentially expensive parsing outside the Qt GUI thread."""
+
+    def __init__(self, file_path: str) -> None:
+        super().__init__()
+        self.file_path = file_path
+        self.signals = _ExternalProjectLoadSignals()
+        self.done = threading.Event()
+
+    def run(self) -> None:
+        try:
+            payload = _parse_external_project_file(self.file_path)
+            self.signals.completed.emit(self.file_path, payload)
+        except Exception as exc:
+            logger.exception("外部プロジェクトのバックグラウンド解析に失敗: %s", self.file_path)
+            self.signals.failed.emit(self.file_path, str(exc))
+        finally:
+            self.done.set()
+
+
 # UST 書き出し時のデフォルト解像度 (ticks/beat)
 _TICKS_PER_BEAT = 480
 
+
+
+class _ProjectMixdownWorker(QThread):
+    """Render vocal tracks and create one project-wide WAV outside the GUI thread."""
+
+    progress = Signal(int, str)
+    completed = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        engine: Any,
+        tracks: List[Any],
+        parameters: Dict[str, Any],
+        tempo: float,
+        output_path: str,
+        mode_flag: int = 0,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.engine = engine
+        self.tracks = tracks
+        self.parameters = parameters
+        self.tempo = float(tempo)
+        self.output_path = output_path
+        self.mode_flag = int(mode_flag)
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_event.set()
+
+    @Slot()
+    def run(self) -> None:
+        import tempfile
+
+        try:
+            export_v2 = getattr(self.engine, "export_to_wav_v2", None)
+            vocal_jobs = [
+                (index, track)
+                for index, track in enumerate(self.tracks)
+                if str(getattr(track, "track_type", "vocal")).lower() == "vocal"
+                and bool(getattr(track, "notes", []) or [])
+            ]
+            total_vocals = max(1, len(vocal_jobs))
+
+            with tempfile.TemporaryDirectory(prefix="vose_project_mixdown_") as temp_dir:
+                for job_index, (track_index, track) in enumerate(vocal_jobs):
+                    if self._cancel_event.is_set():
+                        raise RuntimeError("プロジェクトのミックスダウンがキャンセルされました。")
+                    if not callable(export_v2):
+                        raise RuntimeError(
+                            "ボーカルトラックの書き出しに必要な export_to_wav_v2 がありません。"
+                        )
+
+                    track_name = str(getattr(track, "name", f"Vocal {track_index + 1}"))
+                    self.progress.emit(
+                        int(job_index * 65 / total_vocals),
+                        f"{track_name} を個別レンダリング中...",
+                    )
+                    vocal_path = os.path.join(temp_dir, f"vocal_track_{track_index:03d}.wav")
+
+                    def report_vocal_progress(percent: int, offset: int = job_index) -> None:
+                        local = max(0, min(100, int(percent)))
+                        overall = int(((offset + local / 100.0) / total_vocals) * 65)
+                        self.progress.emit(
+                            overall,
+                            f"{track_name} を個別レンダリング中...",
+                        )
+
+                    # Note objects can be numerous and may be modified by render
+                    # preparation. Snapshot them here so deepcopy never blocks
+                    # the GUI thread that requested the project export.
+                    notes_snapshot = deepcopy(
+                        list(getattr(track, "notes", []) or [])
+                    )
+                    result = export_v2(
+                        notes_snapshot,
+                        self.parameters,
+                        vocal_path,
+                        mode_flag=self.mode_flag,
+                        progress_callback=report_vocal_progress,
+                        cancel_check=self._cancel_event.is_set,
+                        tempo_bpm=self.tempo,
+                    )
+                    # Some renderers signal cancellation by returning None.
+                    # Check the event before classifying a missing path as a
+                    # render failure, so the UI reports a normal cancellation.
+                    if self._cancel_event.is_set():
+                        raise RuntimeError(
+                            "プロジェクトのミックスダウンがキャンセルされました。"
+                        )
+                    if not isinstance(result, (str, bytes, os.PathLike)):
+                        raise RuntimeError(f"「{track_name}」のWAV生成パスが不正です。")
+                    if not result:
+                        raise RuntimeError(f"「{track_name}」のWAV生成に失敗しました。")
+                    rendered_path = os.path.abspath(os.fsdecode(os.fspath(result)))
+                    if not os.path.isfile(rendered_path):
+                        raise RuntimeError(f"「{track_name}」のWAVが生成されませんでした。")
+                    # AudioMixer resolves playback_path before audio_path.
+                    track.playback_path = rendered_path
+
+                if self._cancel_event.is_set():
+                    raise RuntimeError("プロジェクトのミックスダウンがキャンセルされました。")
+
+                from modules.audio.project_mixdown import mixdown_tracks_to_wav
+
+                self.progress.emit(70, "全トラックを共通タイムラインで合成中...")
+                result_path = mixdown_tracks_to_wav(
+                    self.tracks,
+                    self.output_path,
+                    sample_rate=44100,
+                    block_size=65536,
+                    progress_callback=lambda percent: self.progress.emit(
+                        70 + int(max(0, min(100, int(percent))) * 0.29),
+                        "全トラックを共通タイムラインで合成中...",
+                    ),
+                    cancel_check=self._cancel_event.is_set,
+                )
+                self.completed.emit(result_path)
+        except Exception as exc:
+            logger.exception("プロジェクト全体のWAVミックスダウンに失敗しました")
+            self.failed.emit(str(exc))
 
 class ProjectIOMixin:
     """
@@ -47,15 +462,27 @@ class ProjectIOMixin:
         timeline = getattr(self, "timeline_widget", None)
         graph = getattr(self, "graph_editor_widget", None)
         tempo = float(getattr(timeline, "tempo", 120.0))
+        track_snapshots = _clone_track_collection(
+            list(getattr(self, "tracks", []) or [])
+        )
+
+        raw_graph_parameters = getattr(graph, "all_parameters", {}) or {}
+        graph_parameter_snapshot = {
+            name: list(values) if isinstance(values, list) else copy(values)
+            for name, values in raw_graph_parameters.items()
+        } if isinstance(raw_graph_parameters, dict) else deepcopy(raw_graph_parameters)
+
         return {
-            "tracks": deepcopy(list(getattr(self, "tracks", []) or [])),
+            "tracks": track_snapshots,
             "current_track_idx": int(getattr(self, "current_track_idx", 0)),
             "tempo": tempo,
             "graph_tempo": float(getattr(graph, "tempo", tempo)),
-            "graph_parameters": deepcopy(
-                getattr(graph, "all_parameters", {}) or {}
-            ),
+            "graph_parameters": graph_parameter_snapshot,
             "current_playback_time": float(getattr(self, "current_playback_time", 0.0)),
+            # Desktop currently uses one active singer for all vocal tracks.
+            # Persist that identity so reopening a project restores the same voice.
+            "current_voice_id": str(getattr(self, "current_voice_id", "NONE") or "NONE"),
+            "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
         }
 
     def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
@@ -113,9 +540,73 @@ class ProjectIOMixin:
         sync_strips = getattr(self, "_sync_track_strips", None)
         if callable(sync_strips):
             sync_strips()
+
+        voice_id = state.get("current_voice_id")
+        voice_name = state.get("current_voice", "未選択")
+        if not self._apply_project_voice_selection(voice_id, voice_name):
+            status_bar = getattr(self, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage(
+                    "保存されていた音源が見つからないため、現在の音源を維持しました。",
+                    5000,
+                )
+
         self.update_scrollbar_range() if callable(
             getattr(self, "update_scrollbar_range", None)
         ) else None
+
+    def _apply_project_voice_selection(
+        self: Any,
+        voice_id: Any,
+        display_name: Any = "",
+    ) -> bool:
+        """Restore a project singer only when its stable gallery ID is available."""
+        if voice_id is None:
+            # Older project files did not store singer identity.
+            return True
+        if not isinstance(voice_id, str):
+            return False
+
+        name = display_name if isinstance(display_name, str) else ""
+        if voice_id.strip() in {"", "NONE"}:
+            self.current_voice_id = "NONE"
+            self.current_voice = name or "未選択"
+            gallery = getattr(self, "voice_gallery", None)
+            cards = getattr(gallery, "cards", {}) if gallery is not None else {}
+            for card in cards.values():
+                setter = getattr(card, "set_selected", None)
+                if callable(setter):
+                    setter(False)
+            combo = getattr(self, "character_selector", None)
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(-1)
+                combo.blockSignals(False)
+            return True
+
+        gallery = getattr(self, "voice_gallery", None)
+        cards = getattr(gallery, "cards", {}) if gallery is not None else {}
+        card = cards.get(voice_id) if isinstance(cards, dict) else None
+        if card is not None and not bool(getattr(card, "is_recruiting", False)):
+            card_name = str(getattr(card, "display_name", name) or name)
+            select_card = getattr(gallery, "on_card_clicked", None)
+            if callable(select_card):
+                select_card(card_name, voice_id)
+                return True
+
+        combo = getattr(self, "character_selector", None)
+        if combo is not None:
+            index = combo.findData(voice_id)
+            if index >= 0:
+                resolved_name = str(combo.itemText(index))
+                on_voice_changed = getattr(self, "on_voice_changed", None)
+                if callable(on_voice_changed):
+                    on_voice_changed(resolved_name, voice_id)
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(index)
+                    combo.blockSignals(False)
+                    return True
+        return False
 
     def _record_project_state_edit(
         self: Any,
@@ -142,7 +633,13 @@ class ProjectIOMixin:
     # UST 読み込み
     # ------------------------------------------------------------------
 
-    def load_ust_file(self: Any, file_path: str) -> bool:
+    def load_ust_file(
+        self: Any,
+        file_path: str,
+        parsed_project: Any = None,
+        parsed_note_dicts: Optional[List[Dict[str, Any]]] = None,
+        prepared_notes: Optional[List[NoteEvent]] = None,
+    ) -> bool:
         """
         .ust ファイルをネイティブパーサーで読み込み、
         タイムラインに反映する。
@@ -155,9 +652,12 @@ class ProjectIOMixin:
         """
         try:
             before_state = self._capture_project_edit_state()
-            parser = UstParser()
-            project = parser.load(file_path)
-            note_dicts = UstConverter.to_note_dicts(project)
+            project = parsed_project if parsed_project is not None else UstParser().load(file_path)
+            note_dicts = (
+                parsed_note_dicts
+                if parsed_note_dicts is not None
+                else UstConverter.to_note_dicts(project)
+            )
 
             # UST の VoiceDir を解決し、実在する音源なら読み込み時点で
             # エンジンの音源ライブラリを切り替える。%VOICE% のような
@@ -186,28 +686,12 @@ class ProjectIOMixin:
                 self.statusBar().showMessage("UST: ノートが見つかりませんでした。")
                 return False
 
-            # NoteEvent に変換してタイムラインに設定
-            notes: List[NoteEvent] = []
-            for d in note_dicts:
-                try:
-                    # UST 拡張フィールドは NoteEvent.from_dict() では無視されるが
-                    # _ust_* キーを note 属性として後から設定する
-                    note = NoteEvent.from_dict(d)
+            # Worker で変換済みならそのまま使用し、旧呼び出しは互換変換する。
+            if prepared_notes is not None:
+                notes = list(prepared_notes)
+            else:
+                notes = _prepare_ust_notes(note_dicts)
 
-                    # 先行発声・オーバーラップが UST で明示されている場合のみ設定
-                    if d.get("pre_utterance") is not None:
-                        note.pre_utterance = d["pre_utterance"]
-                    if d.get("overlap") is not None:
-                        note.overlap = d["overlap"]
-
-                    # UST 拡張フィールドをそのまま属性として保持
-                    for k, v in d.items():
-                        if k.startswith("_ust_"):
-                            setattr(note, k, v)
-
-                    notes.append(note)
-                except Exception as exc:
-                    logger.warning("NoteEvent 変換失敗: %s / %s", exc, d)
 
             # 現在のトラックにも実データを同期する。
             tracks = list(getattr(self, "tracks", []) or [])
@@ -256,36 +740,109 @@ class ProjectIOMixin:
     # ------------------------------------------------------------------
 
     def import_external_project(self: Any) -> None:
-        """
-        ファイルダイアログを開き、拡張子に応じて適切なローダーを呼び出す。
-        対応形式: .ust, .vsqx, .mid, .json
-        """
+        """ファイル選択後、解析をワーカースレッドで実行してからUIへ反映する。"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "プロジェクトを開く",
             "",
-            "対応ファイル (*.ust *.vsqx *.mid *.json);;"
+            "対応ファイル (*.ust *.vsqx *.mid *.midi *.json *.vose);;"
             "UTAU プロジェクト (*.ust);;"
             "Vocaloid プロジェクト (*.vsqx);;"
             "MIDI ファイル (*.mid *.midi);;"
-            "VO-SE プロジェクト (*.json)",
+            "VO-SE プロジェクト (*.vose *.json);;"
+            "JSON ファイル (*.json)",
         )
+        if file_path:
+            self.load_external_project_async(file_path)
 
+    def load_external_project_async(self: Any, file_path: str) -> bool:
+        """Load a known project path asynchronously; suitable for menus and drag/drop."""
         if not file_path:
+            return False
+        extension = os.path.splitext(file_path)[1].lower()
+        if extension not in {".ust", ".vsqx", ".mid", ".midi", ".json", ".vose"}:
+            self.statusBar().showMessage(
+                f"未対応のファイル形式です: {extension}", 4000
+            )
+            return False
+
+        worker = getattr(self, "_project_load_worker", None)
+        if worker is not None:
+            self.statusBar().showMessage(
+                "別のファイルを読み込み中です。完了してから次のファイルを開いてください。",
+                4000,
+            )
+            return False
+
+        self._project_load_worker = _ExternalProjectLoadWorker(file_path)
+        self._project_load_worker.signals.completed.connect(
+            self._on_external_project_loaded
+        )
+        self._project_load_worker.signals.failed.connect(
+            self._on_external_project_load_failed
+        )
+        self.statusBar().showMessage(
+            f"ファイルを解析中: {os.path.basename(file_path)}", 0
+        )
+        QThreadPool.globalInstance().start(self._project_load_worker)
+        return True
+
+    @Slot(str, object)
+    def _on_external_project_loaded(self: Any, file_path: str, payload: object) -> None:
+        self._project_load_worker = None
+        if not isinstance(payload, dict):
+            self._on_external_project_load_failed(
+                file_path, "ファイル解析結果が不正です。"
+            )
             return
 
-        ext = os.path.splitext(file_path)[1].lower()
+        file_format = payload.get("format")
+        try:
+            if file_format == "ust":
+                self.load_ust_file(
+                    file_path,
+                    parsed_project=payload.get("project"),
+                    parsed_note_dicts=payload.get("note_dicts"),
+                    prepared_notes=payload.get("prepared_notes"),
+                )
+            elif file_format == "vsqx":
+                self._load_vsqx(
+                    file_path,
+                    parsed_project=payload.get("project"),
+                )
+            elif file_format == "midi":
+                self.load_midi_file_from_path(
+                    file_path,
+                    parsed_notes=payload.get("notes"),
+                    prepared_note_tracks=payload,
+                )
+            elif file_format == "json":
+                self.load_json_project(
+                    file_path,
+                    parsed_data=payload.get("data"),
+                    prepared_note_tracks=payload.get("prepared_note_tracks"),
+                    prepared_legacy_notes=payload.get("prepared_legacy_notes"),
+                )
+            else:
+                raise ValueError(f"不明なファイル形式です: {file_format}")
+        except Exception as exc:
+            logger.exception("解析済みプロジェクトの反映に失敗: %s", file_path)
+            self._on_external_project_load_failed(file_path, str(exc))
 
-        if ext == ".ust":
-            self.load_ust_file(file_path)
-        elif ext == ".vsqx":
-            self._load_vsqx(file_path)
-        elif ext in (".mid", ".midi"):
-            self.load_midi_file_from_path(file_path)
-        elif ext == ".json":
-            self.load_json_project(file_path)
-        else:
-            QMessageBox.warning(self, "非対応形式", f"対応していない形式です: {ext}")
+    @Slot(str, str)
+    def _on_external_project_load_failed(
+        self: Any, file_path: str, error_message: str
+    ) -> None:
+        self._project_load_worker = None
+        logger.error("プロジェクト読み込み失敗 (%s): %s", file_path, error_message)
+        self.statusBar().showMessage(
+            f"読み込み失敗: {os.path.basename(file_path)}", 6000
+        )
+        QMessageBox.critical(
+            self,
+            "読み込みエラー",
+            f"{os.path.basename(file_path)} を読み込めませんでした。\n{error_message}",
+        )
 
     # ------------------------------------------------------------------
     # UST 書き出し
@@ -452,20 +1009,35 @@ class ProjectIOMixin:
         """互換用保存エントリポイント。正式なマルチトラック保存へ委譲する。"""
         return bool(self.on_save_project_clicked())
 
-    def load_json_project(self: Any, file_path: str) -> bool:
+    def load_json_project(
+        self: Any,
+        file_path: str,
+        parsed_data: Optional[Dict[str, Any]] = None,
+        prepared_note_tracks: Optional[List[List[NoteEvent]]] = None,
+        prepared_legacy_notes: Optional[List[NoteEvent]] = None,
+    ) -> bool:
         """旧単一トラックJSONと新マルチトラックVOSE/JSONを検証してから反映する。"""
         import math
 
         before_state = None
         commit_started = False
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            if parsed_data is None:
+                with open(file_path, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+            else:
+                data = parsed_data
             if not isinstance(data, dict):
                 raise ValueError("プロジェクトJSONのルートはオブジェクトである必要があります。")
 
             tempo = float(data.get("tempo", 120.0))
             current_time = float(data.get("current_time", 0.0))
+            saved_voice_id = data.get("current_voice_id")
+            if saved_voice_id is not None and not isinstance(saved_voice_id, str):
+                raise ValueError("current_voice_id は文字列である必要があります。")
+            saved_voice_name = data.get("current_voice", "")
+            if not isinstance(saved_voice_name, str):
+                saved_voice_name = ""
             if not math.isfinite(tempo) or tempo <= 0.0:
                 raise ValueError("プロジェクトのテンポが不正です。")
             if not math.isfinite(current_time) or current_time < 0.0:
@@ -537,18 +1109,23 @@ class ProjectIOMixin:
                     raw_notes = raw.get("notes", [])
                     if not isinstance(raw_notes, list):
                         raise ValueError(f"Track {index + 1} の notes は配列である必要があります。")
-                    notes = []
-                    for note_index, note_data in enumerate(raw_notes):
-                        if not isinstance(note_data, dict):
-                            raise ValueError(
-                                f"Track {index + 1} / Note {note_index + 1} の形式が不正です。"
+                    if prepared_note_tracks is not None:
+                        if index >= len(prepared_note_tracks):
+                            raise ValueError("事前解析されたトラックノート数が一致しません。")
+                        notes = list(prepared_note_tracks[index])
+                    else:
+                        notes = []
+                        for note_index, note_data in enumerate(raw_notes):
+                            if not isinstance(note_data, dict):
+                                raise ValueError(
+                                    f"Track {index + 1} / Note {note_index + 1} の形式が不正です。"
+                                )
+                            notes.append(
+                                parse_project_note(
+                                    note_data,
+                                    f"Track {index + 1} / Note {note_index + 1}",
+                                )
                             )
-                        notes.append(
-                            parse_project_note(
-                                note_data,
-                                f"Track {index + 1} / Note {note_index + 1}",
-                            )
-                        )
 
                     mixer = raw.get("mixer", {})
                     if not isinstance(mixer, dict):
@@ -563,9 +1140,14 @@ class ProjectIOMixin:
                         str(raw.get("type", "vocal")),
                     )
                     track.notes = notes
-                    track.audio_path = str(
+                    audio_path = str(
                         raw.get("audio_path", raw.get("audio", "")) or ""
                     )
+                    if audio_path and not os.path.isabs(audio_path):
+                        audio_path = os.path.abspath(
+                            os.path.join(os.path.dirname(os.path.abspath(file_path)), audio_path)
+                        )
+                    track.audio_path = audio_path
                     track.volume = volume
                     track.pan = pan
                     track.is_muted = bool(raw.get("is_muted", False))
@@ -583,15 +1165,18 @@ class ProjectIOMixin:
                 raw_notes = data.get("notes", [])
                 if not isinstance(raw_notes, list):
                     raise ValueError("notes は配列である必要があります。")
-                notes = []
-                for note_index, note_data in enumerate(raw_notes):
-                    if not isinstance(note_data, dict):
-                        raise ValueError(f"Note {note_index + 1} の形式が不正です。")
-                    notes.append(
-                        parse_project_note(note_data, f"Note {note_index + 1}")
-                    )
+                if prepared_legacy_notes is not None:
+                    notes = list(prepared_legacy_notes)
+                else:
+                    notes = []
+                    for note_index, note_data in enumerate(raw_notes):
+                        if not isinstance(note_data, dict):
+                            raise ValueError(f"Note {note_index + 1} の形式が不正です。")
+                        notes.append(
+                            parse_project_note(note_data, f"Note {note_index + 1}")
+                        )
 
-                loaded_tracks = deepcopy(existing_tracks)
+                loaded_tracks = _clone_track_collection(existing_tracks)
                 requested_idx = int(getattr(self, "current_track_idx", 0))
                 new_current_idx = min(max(requested_idx, 0), len(loaded_tracks) - 1)
                 loaded_tracks[new_current_idx].notes = notes
@@ -672,11 +1257,17 @@ class ProjectIOMixin:
             if callable(sync_strips):
                 sync_strips()
 
-            note_count = len(active_notes)
-            self.statusBar().showMessage(
-                f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})",
-                3000,
+            voice_restored = self._apply_project_voice_selection(
+                saved_voice_id,
+                saved_voice_name,
             )
+            note_count = len(active_notes)
+            status_message = (
+                f"読み込み完了: {note_count} ノート ({os.path.basename(file_path)})"
+            )
+            if not voice_restored:
+                status_message += " / 保存時の音源が未検出のため現在の音源を維持"
+            self.statusBar().showMessage(status_message, 5000 if not voice_restored else 3000)
             self._record_project_state_edit(
                 before_state,
                 self._capture_project_edit_state(),
@@ -698,50 +1289,118 @@ class ProjectIOMixin:
             )
             return False
 
-    def load_midi_file_from_path(self: Any, file_path: str) -> bool:
-        """MIDI ファイルを読み込んでタイムラインに設定する"""
+    def load_midi_file_from_path(
+        self: Any,
+        file_path: str,
+        parsed_notes: Optional[List[Dict[str, Any]]] = None,
+        prepared_note_tracks: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """MIDIを読み込み、元ファイルのトラック分割をデスクトッププロジェクトへ復元する。"""
         from modules.data.midi_manager import load_midi_file
 
-        before_state = self._capture_project_edit_state()
-        note_dicts = load_midi_file(file_path)
-        if not note_dicts:
-            self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
+        try:
+            before_state = self._capture_project_edit_state()
+            note_dicts = (
+                parsed_notes
+                if parsed_notes is not None
+                else load_midi_file(file_path)
+            )
+            if not note_dicts and prepared_note_tracks is None:
+                self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
+                return False
+
+            if prepared_note_tracks is not None:
+                notes_by_track = prepared_note_tracks.get("notes_by_track", {})
+                names_by_track = prepared_note_tracks.get("names_by_track", {})
+            else:
+                notes_by_track: Dict[int, List[NoteEvent]] = {}
+                names_by_track: Dict[int, str] = {}
+                for note_data in (note_dicts or []):
+                    track_index = int(note_data.get("_midi_track_index", 0))
+                    note = NoteEvent.from_dict(note_data)
+                    notes_by_track.setdefault(track_index, []).append(note)
+                    track_name = str(note_data.get("_midi_track_name", "") or "")
+                    if track_name:
+                        names_by_track[track_index] = track_name
+
+            source_track_indices = sorted(notes_by_track)
+            if not source_track_indices:
+                self.statusBar().showMessage("MIDI: ノートを読み込めませんでした。")
+                return False
+
+            tracks = list(getattr(self, "tracks", []) or [])
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            if not tracks or not (0 <= current_idx < len(tracks)):
+                raise ValueError("読み込み先のトラックがありません。")
+
+            target_track = tracks[current_idx]
+            first_source_index = source_track_indices[0]
+            target_track.notes = list(notes_by_track[first_source_index])
+            target_track.name = names_by_track.get(
+                first_source_index,
+                f"{os.path.splitext(os.path.basename(file_path))[0]} - Track {first_source_index + 1}",
+            )
+
+            track_class = type(target_track)
+            for source_index in source_track_indices[1:]:
+                new_track = track_class(
+                    names_by_track.get(
+                        source_index,
+                        f"{os.path.splitext(os.path.basename(file_path))[0]} - Track {source_index + 1}",
+                    ),
+                    "vocal",
+                )
+                new_track.notes = list(notes_by_track[source_index])
+                tracks.append(new_track)
+
+            self.tracks = tracks
+            timeline = getattr(self, "timeline_widget", None)
+            active_notes = list(notes_by_track[first_source_index])
+            if timeline is not None:
+                if hasattr(timeline, "set_notes"):
+                    timeline.set_notes(active_notes)
+                else:
+                    timeline.notes_list = active_notes
+                    if hasattr(timeline, "update"):
+                        timeline.update()
+
+            refresh = getattr(self, "refresh_track_list_ui", None)
+            if callable(refresh):
+                refresh()
+            note_count = (
+                int(prepared_note_tracks.get("note_count", len(note_dicts or [])))
+                if prepared_note_tracks is not None
+                else len(note_dicts or [])
+            )
+            self.statusBar().showMessage(
+                f"MIDI 読み込み完了: {note_count} ノート / {len(source_track_indices)} トラック "
+                f"({os.path.basename(file_path)})"
+            )
+            self._record_project_state_edit(
+                before_state,
+                self._capture_project_edit_state(),
+                "MIDI読み込み",
+            )
+            return True
+
+        except Exception as exc:
+            logger.exception("MIDI 読み込みエラー: %s", exc)
+            QMessageBox.critical(
+                self,
+                "読み込みエラー",
+                f"MIDI の読み込みに失敗しました:\n{exc}",
+            )
             return False
-
-        notes = [NoteEvent.from_dict(d) for d in note_dicts]
-
-        tracks = list(getattr(self, "tracks", []) or [])
-        current_idx = int(getattr(self, "current_track_idx", 0))
-        if 0 <= current_idx < len(tracks):
-            tracks[current_idx].notes = list(notes)
-
-        if hasattr(self, "timeline_widget") and self.timeline_widget is not None:
-            if hasattr(self.timeline_widget, "set_notes"):
-                self.timeline_widget.set_notes(notes)
-            elif hasattr(self.timeline_widget, "notes_list"):
-                self.timeline_widget.notes_list = notes
-                if hasattr(self.timeline_widget, "update"):
-                    self.timeline_widget.update()
-
-        self.statusBar().showMessage(
-            f"MIDI 読み込み完了: {len(notes)} ノート ({os.path.basename(file_path)})"
-        )
-        self._record_project_state_edit(
-            before_state,
-            self._capture_project_edit_state(),
-            "MIDI読み込み",
-        )
-        return True
 
     # ------------------------------------------------------------------
     # 内部: .vsqx 読み込み
     # ------------------------------------------------------------------
 
-    def _load_vsqx(self: Any, file_path: str) -> bool:
+    def _load_vsqx(self: Any, file_path: str, parsed_project: Any = None) -> bool:
         """VOCALOID 3/4 .vsqx を読み込み、現在のトラックへ反映する。"""
         try:
             before_state = self._capture_project_edit_state()
-            project = parse_vsqx(file_path)
+            project = parsed_project if parsed_project is not None else parse_vsqx(file_path)
             if not project.notes:
                 raise ValueError("VSQX に有効なノートがありません。")
             tracks = list(getattr(self, "tracks", []) or [])
@@ -784,7 +1443,7 @@ class ProjectIOMixin:
             return False
         except Exception as exc:
             logger.exception("VSQX 読み込みエラー: %s", exc)
-            QMessageBox.critical(self, "読み込みエラー", f"VSQX の読み込みに失敗しました:\\n{exc}")
+            QMessageBox.critical(self, "読み込みエラー", f"VSQX の読み込みに失敗しました:\n{exc}")
             return False
 
     # oto.ini 書き出し（AutoOtoEngine の結果を保存する用途）
@@ -826,80 +1485,100 @@ class ProjectIOMixin:
     # 【従来実装】音源インポート・oto.ini 生成
     # ======================================================================
 
-    def import_voice_bank(self: Any, zip_path: str):
-        """ドラッグ＆ドロップZIPもVoiceManagerの安全な永続保存経路へ統一する。"""
-        from modules.gui.aural_engine import AuralAIEngine
-        from modules.gui.shared import DynamicsAIEngine
-
+    def import_voice_bank(
+        self: Any,
+        zip_path: str,
+        source_type: str = "local",
+    ) -> bool:
+        """Start voicebank download/install/model inspection in a worker thread."""
         manager = getattr(self, "voice_manager", None)
-        install_from_zip = getattr(manager, "install_voice_from_zip", None)
-        if manager is None or not callable(install_from_zip):
+        if manager is None:
             QMessageBox.critical(
                 self,
                 "導入エラー",
                 "音源マネージャーが初期化されていません。",
             )
+            return False
+
+        active = getattr(self, "_voice_bank_import_worker", None)
+        gallery = getattr(self, "voice_gallery", None)
+        gallery_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
+        scan_worker = getattr(gallery, "_scan_worker", None) if gallery is not None else None
+        for running_worker in (active, gallery_worker, scan_worker):
+            if running_worker is None:
+                continue
+            try:
+                if running_worker.isRunning():
+                    self.statusBar().showMessage(
+                        "別の音源を導入中です。完了してから再試行してください。", 4000
+                    )
+                    return False
+            except RuntimeError:
+                continue
+
+        worker = _VoiceBankImportWorker(manager, zip_path, source_type, self)
+        worker.completed.connect(self._on_voice_bank_import_completed)
+        worker.failed.connect(self._on_voice_bank_import_failed)
+        worker.finished.connect(self._on_voice_bank_import_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._voice_bank_import_worker = worker
+        self.statusBar().showMessage(
+            f"音源をバックグラウンドで導入中: {os.path.basename(zip_path)}", 0
+        )
+        worker.start()
+        return True
+
+    @Slot(object)
+    def _on_voice_bank_import_completed(self: Any, result: object) -> None:
+        self._voice_bank_import_worker = None
+        if not isinstance(result, dict):
+            self._on_voice_bank_import_failed("音源インストール結果が不正です。")
             return
 
-        try:
-            # VoiceManager は安全なZIP展開、oto.ini検出、ユーザーデータ領域への
-            # コピー、重複名回避、失敗時の部分フォルダ削除をまとめて処理する。
-            # PyInstaller の _MEIPASS へ直接展開したり、既存音源を削除したりしない。
-            installed_name = install_from_zip(zip_path)
-            if not installed_name:
-                raise RuntimeError("音源のインストール結果を取得できませんでした。")
-
-            voice_path = manager.voices.get(installed_name)
-            if isinstance(voice_path, dict):
-                voice_path = voice_path.get("path", "")
-            voice_path = str(voice_path or "")
-            if not voice_path or not os.path.isdir(voice_path):
-                raise RuntimeError(
-                    f"インストール済み音源の保存先が見つかりません: {installed_name}"
-                )
-
-            aural_model = os.path.join(voice_path, "aural_dynamics.onnx")
-            std_model = os.path.join(voice_path, "model.onnx")
-            if os.path.isfile(aural_model):
-                self.dynamics_ai = AuralAIEngine()
-                load_model = getattr(self.dynamics_ai, "load_model", None)
-                if callable(load_model):
-                    load_model(aural_model)
-                engine_msg = "上位Auralモデル"
-            elif os.path.isfile(std_model):
-                self.dynamics_ai = DynamicsAIEngine()
-                load_model = getattr(self.dynamics_ai, "load_model", None)
-                if callable(load_model):
-                    load_model(std_model)
-                engine_msg = "標準Dynamicsモデル"
-            else:
-                self.dynamics_ai = AuralAIEngine()
-                engine_msg = "汎用Auralエンジン"
-
-            refresh_voices = getattr(manager, "scan_voices", None)
-            if callable(refresh_voices):
-                refresh_voices()
-
-            gallery = getattr(self, "voice_gallery", None)
+        self.dynamics_ai = result.get("dynamics_ai")
+        gallery = getattr(self, "voice_gallery", None)
+        if gallery is not None:
             refresh_gallery = getattr(gallery, "setup_gallery", None)
-            if gallery is not None and callable(refresh_gallery):
-                refresh_gallery()
+            if callable(refresh_gallery):
+                voices = result.get("voices")
+                try:
+                    refresh_gallery(voices=voices if isinstance(voices, dict) else None)
+                except TypeError:
+                    refresh_gallery()
                 gallery.update()
 
-            message = f"音源「{installed_name}」をインストールしました。\nエンジン: {engine_msg}"
-            self.statusBar().showMessage(
-                f"音源インストール完了: {installed_name} ({engine_msg})",
-                5000,
-            )
-            QMessageBox.information(self, "導入成功", message)
+        name = str(result.get("name", ""))
+        engine_message = str(result.get("engine_message", "汎用Auralエンジン"))
+        self.statusBar().showMessage(
+            f"音源インストール完了: {name} ({engine_message})", 5000
+        )
+        QMessageBox.information(
+            self,
+            "導入成功",
+            f"音源「{name}」をインストールしました。\nエンジン: {engine_message}",
+        )
 
-        except Exception as exc:
-            logger.exception("ドラッグ＆ドロップ音源インストール失敗: %s", exc)
-            QMessageBox.critical(
-                self,
-                "導入エラー",
-                f"インストール中にエラーが発生しました:\n{exc}",
-            )
+    @Slot(str)
+    def _on_voice_bank_import_failed(self: Any, error_message: str) -> None:
+        self._voice_bank_import_worker = None
+        logger.error("ドラッグ＆ドロップ音源インストール失敗: %s", error_message)
+        self.statusBar().showMessage("音源のインストールに失敗しました。", 6000)
+        QMessageBox.critical(
+            self,
+            "導入エラー",
+            f"インストール中にエラーが発生しました:\n{error_message}",
+        )
+
+    @Slot()
+    def _on_voice_bank_import_thread_finished(self: Any) -> None:
+        worker = getattr(self, "_voice_bank_import_worker", None)
+        if worker is not None:
+            try:
+                if not worker.isRunning():
+                    self._voice_bank_import_worker = None
+            except RuntimeError:
+                self._voice_bank_import_worker = None
+
 
     def generate_and_save_oto(self: Any, target_voice_dir: str, force_redo: bool = False) -> None:
         """
@@ -989,11 +1668,7 @@ class ProjectIOMixin:
             event.ignore()
 
     def dropEvent(self: Any, event):
-        """[LIVE] ファイルドロップ処理"""
-        from urllib.parse import urlparse
-        from urllib.request import urlretrieve
-        import tempfile
-
+        """[LIVE] ファイルドロップ処理。重いファイル処理は専用ワーカーへ委譲する。"""
         mime_data = event.mimeData()
         if not mime_data.hasUrls():
             return
@@ -1012,77 +1687,25 @@ class ProjectIOMixin:
             file_path = item["path"]
             source_type = item["source"]
             file_lower = file_path.lower()
-            
+
             if file_lower.endswith(".zip") or (source_type == "url" and ".zip" in file_lower):
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage(f"音源を処理中: {os.path.basename(file_path)}")
-                
-                try:
-                    zip_input_path = file_path
-                    tmp_file_path = None
-                    
-                    if source_type == "url":
-                        parsed = urlparse(file_path)
-                        if parsed.scheme not in ("http", "https"):
-                            raise ValueError(f"未対応のURLスキームです: {parsed.scheme}")
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
-                            tmp_file_path = tmp.name
-                        urlretrieve(file_path, tmp_file_path)
-                        zip_input_path = tmp_file_path
+                self.import_voice_bank(file_path, source_type=source_type)
 
-                    self.import_voice_bank(zip_input_path)
-                    
-                    if tmp_file_path and os.path.exists(tmp_file_path):
-                        os.remove(tmp_file_path)
-
-                except Exception as e:
-                    if 'tmp_file_path' in locals() and tmp_file_path and os.path.exists(tmp_file_path):
-                        os.remove(tmp_file_path)
-                    QMessageBox.critical(self, "導入失敗", f"インストール中にエラーが発生しました:\n{str(e)}")
-
-            elif file_lower.endswith(('.mid', '.midi')):
-                if hasattr(self, 'load_file_from_path'):
-                    self.load_file_from_path(file_path)
-                
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage(f"MIDIファイルを読み込みました: {os.path.basename(file_path)}")
-
-            elif file_lower.endswith(('.json', '.ust')):
-                if hasattr(self, 'load_file_from_path'):
-                    self.load_file_from_path(file_path)
-                
-                status_bar = self.statusBar()
-                if status_bar:
-                    status_bar.showMessage(f"プロジェクトを読み込みました: {os.path.basename(file_path)}")
+            elif file_lower.endswith((".mid", ".midi", ".json", ".vose", ".ust", ".vsqx")):
+                if self.load_file_from_path(file_path):
+                    status_bar = self.statusBar()
+                    if status_bar:
+                        status_bar.showMessage(
+                            f"読み込みを開始しました: {os.path.basename(file_path)}", 3000
+                        )
 
     # ======================================================================
     # 【従来実装】その他メソッド
     # ======================================================================
 
     def load_file_from_path(self: Any, filepath: str) -> bool:
-        """ファイル拡張子に応じて、実際のプロジェクトローダーへ振り分ける。"""
-        ext = os.path.splitext(filepath)[1].lower()
-        try:
-            if ext in (".mid", ".midi"):
-                return bool(self.load_midi_file_from_path(filepath))
-            if ext == ".ust":
-                return bool(self.load_ust_file(filepath))
-            if ext in (".json", ".vose"):
-                return bool(self.load_json_project(filepath))
-            if ext == ".vsqx":
-                self._load_vsqx(filepath)
-                return False
-            if ext == ".ustx":
-                self._parse_ustx(filepath)
-                return False
-            self.statusBar().showMessage(f"未対応のファイル形式です: {ext}", 3000)
-            return False
-        except Exception as exc:
-            logger.exception("ファイル読み込みエラー: %s", exc)
-            QMessageBox.critical(self, "読み込みエラー", f"ファイルの読み込みに失敗しました:\n{exc}")
-            return False
+        """Compatibility entry point that routes every supported file through the async loader."""
+        return self.load_external_project_async(filepath)
 
     def _parse_midi(self: Any, filepath: str):
         """互換用MIDIローダー。正式経路は load_midi_file_from_path()."""
@@ -1152,6 +1775,12 @@ class ProjectIOMixin:
                 for name in ("Pitch", "Gender", "Tension", "Breath")
             }
 
+            current_voice_id = str(
+                getattr(self, "current_voice_id", "NONE") or "NONE"
+            )
+            if current_voice_id == "NONE":
+                current_voice_id = ""
+
             project_data = {
                 "app_id": "VO_SE_Pro_2026",
                 "version": "1.5.0",
@@ -1159,6 +1788,10 @@ class ProjectIOMixin:
                 "tempo": tempo,
                 "current_track_idx": max(0, current_idx),
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
+                # Desktop currently has a single active singer shared by vocal tracks.
+                # Empty string represents the unselected "NONE" state.
+                "current_voice_id": current_voice_id,
+                "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
                 "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
             }
@@ -1217,55 +1850,70 @@ class ProjectIOMixin:
             QMessageBox.critical(self, "Write Error", f"保存に失敗しました:\n{e}")
 
     def read_file_safely(self: Any, filepath: str) -> Optional[str]:
-        """[LIVE] 文字コード自動判別読み込み"""
-        import chardet
+        """文字コードを厳密に検証して読み込む。誤った文字コードでの文字化けを防ぐ。"""
+        try:
+            import chardet
+        except ImportError:
+            chardet = None
 
-        if not os.path.exists(filepath):
-            print(f"エラー: ファイルが見つかりません: {filepath}")
+        if not os.path.isfile(filepath):
+            logger.warning("ファイルが見つかりません: %s", filepath)
             return None
 
         try:
-            with open(filepath, 'rb') as f:
-                raw_data = f.read()
-        
+            with open(filepath, "rb") as handle:
+                raw_data = handle.read()
             if not raw_data:
                 return ""
-            
+
+            candidates: List[str] = []
+            if raw_data.startswith(bytes((0xEF, 0xBB, 0xBF))):
+                candidates.append("utf-8-sig")
+
             detected_encoding: Optional[str] = None
-            try:
-                detection_result = chardet.detect(raw_data)
-                detected_encoding = detection_result.get('encoding')
-                confidence = detection_result.get('confidence', 0)
-            
-                if confidence < 0.7:
-                    detected_encoding = None
-            except Exception as e:
-                print(f"文字コード検出エラー: {e}")
-                detected_encoding = None
-        
-            candidate_encodings = []
-        
-            if detected_encoding:
-                candidate_encodings.append(detected_encoding)
-        
-            for enc in ['shift_jis', 'utf-8', 'utf-8-sig', 'cp932', 'euc-jp', 'iso-2022-jp']:
-                if enc not in candidate_encodings:
-                    candidate_encodings.append(enc)
-
-            for encoding in candidate_encodings:
+            confidence = 0.0
+            if chardet is not None:
                 try:
-                    decoded_text = raw_data.decode(encoding, errors='replace')
-                    print(f"ファイル読み込み成功: {filepath} ({encoding})")
-                    return decoded_text
-                
-                except (UnicodeDecodeError, LookupError) :
-                    continue
+                    result = chardet.detect(raw_data)
+                    detected_encoding = result.get("encoding")
+                    confidence = float(result.get("confidence") or 0.0)
+                except Exception:
+                    detected_encoding = None
 
-            print(f"警告: すべてのエンコーディングで失敗。cp932で強制デコード: {filepath}")
-            return raw_data.decode('cp932', errors='replace')
-        
-        except Exception as e:
-            print(f"ファイル読み込みエラー: {filepath} - {e}")
+            normalized_detected = (detected_encoding.lower().replace("_", "-") if detected_encoding else "")
+            known_text_encoding = normalized_detected.startswith("utf-") or normalized_detected in {"cp932", "shift-jis", "shift-jis-2004", "euc-jp", "iso-2022-jp"}
+            if detected_encoding and confidence >= 0.80 and known_text_encoding:
+                candidates.append(detected_encoding)
+
+            candidates.extend([
+                "utf-8-sig",
+                "utf-8",
+                "cp932",
+                "shift_jis",
+                "euc_jp",
+                "iso2022_jp",
+            ])
+
+            tried = set()
+            for encoding in candidates:
+                normalized = encoding.lower().replace("-", "_")
+                if normalized in tried:
+                    continue
+                tried.add(normalized)
+                try:
+                    decoded = raw_data.decode(encoding, errors="strict")
+                except (UnicodeDecodeError, LookupError):
+                    continue
+                logger.debug("ファイル読み込み成功: %s (%s)", filepath, encoding)
+                return decoded
+
+            # Last-resort fallback is explicit and logged; successful strict
+            # decoding is preferred so a wrong candidate cannot silently mojibake.
+            logger.warning("文字コードを確定できず cp932 で置換デコードします: %s", filepath)
+            return raw_data.decode("cp932", errors="replace")
+
+        except OSError:
+            logger.exception("ファイル読み込みエラー: %s", filepath)
             return None
 
     def get_safe_installed_name(self: Any, filename: str, zip_path: str) -> str:
@@ -1331,6 +1979,18 @@ class ProjectIOMixin:
             "Breath": list(all_params.get("Breath", [])),
         }
 
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        mixer_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if (
+            playback_worker is not None and playback_worker.isRunning()
+        ) or (
+            mixer_worker is not None and mixer_worker.isRunning()
+        ):
+            self.statusBar().showMessage(
+                "再生準備・音声デバイス処理の完了後にWAVを書き出してください。", 5000
+            )
+            return
+
         stop_playback = getattr(self, "stop_and_clear_playback", None)
         if callable(stop_playback):
             stop_playback()
@@ -1353,6 +2013,224 @@ class ProjectIOMixin:
         )
         if not started:
             logger.warning("WAV書き出しを開始できませんでした: %s", file_path)
+
+    def export_project_mixdown(self: Any) -> bool:
+        """Export every project track to one WAV without changing single-track export."""
+        from modules.data.licensing import LicenseManager
+
+        timeline = getattr(self, "timeline_widget", None)
+        graph = getattr(self, "graph_editor_widget", None)
+        if timeline is None or graph is None:
+            QMessageBox.warning(
+                self,
+                "ミックスダウン",
+                "プロジェクトのタイムラインまたはパラメーター画面が初期化されていません。",
+            )
+            return False
+
+        def is_running(worker: Any) -> bool:
+            if worker is None:
+                return False
+            try:
+                return bool(worker.isRunning())
+            except (AttributeError, RuntimeError):
+                return False
+
+        playback_worker = getattr(self, "_playback_prepare_thread", None)
+        mixer_worker = getattr(self, "_audio_mixer_command_thread", None)
+        mixdown_worker = getattr(self, "_project_mixdown_worker", None)
+        if (
+            is_running(playback_worker)
+            or is_running(mixer_worker)
+            or is_running(mixdown_worker)
+            or getattr(self, "current_worker", None) is not None
+        ):
+            self.statusBar().showMessage(
+                "再生準備・レンダリング・別のミックスダウンが完了してから実行してください。",
+                5000,
+            )
+            return False
+
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is not None and bool(getattr(mixer, "is_playing", False)):
+            self.statusBar().showMessage(
+                "ミックスダウンの前に再生を停止してください。",
+                5000,
+            )
+            return False
+
+        tracks = list(getattr(self, "tracks", []) or [])
+        if not tracks:
+            QMessageBox.warning(self, "ミックスダウン", "プロジェクトにトラックがありません。")
+            return False
+
+        current_index = int(getattr(self, "current_track_idx", 0))
+        current_notes = list(getattr(timeline, "notes_list", []) or [])
+        track_snapshots = []
+        has_renderable_content = False
+        for index, track in enumerate(tracks):
+            snapshot = copy(track)
+            track_type = str(getattr(track, "track_type", "vocal")).lower()
+            source_notes = (
+                current_notes
+                if index == current_index and track_type == "vocal"
+                else list(getattr(track, "notes", []) or [])
+            )
+            # The editor is disabled until the background worker finishes.
+            # Keep this list snapshot shallow here; clone note objects in the worker.
+            snapshot.notes = list(source_notes)
+            snapshot.audio_path = str(getattr(track, "audio_path", "") or "")
+            # Do not reuse a stale playback cache from a previous transport session.
+            snapshot.playback_path = ""
+            snapshot.volume = float(getattr(track, "volume", 1.0))
+            snapshot.pan = float(getattr(track, "pan", 0.0))
+            snapshot.is_muted = bool(getattr(track, "is_muted", False))
+            snapshot.is_solo = bool(getattr(track, "is_solo", False))
+            track_snapshots.append(snapshot)
+            if (track_type == "vocal" and snapshot.notes) or snapshot.audio_path:
+                has_renderable_content = True
+
+        if not has_renderable_content:
+            QMessageBox.warning(
+                self,
+                "ミックスダウン",
+                "書き出せるノートまたはオーディオトラックがありません。",
+            )
+            return False
+
+        if any(
+            str(getattr(track, "track_type", "vocal")).lower() == "vocal"
+            and bool(getattr(track, "notes", []) or [])
+            for track in track_snapshots
+        ) and getattr(self, "vo_se_engine", None) is None:
+            QMessageBox.warning(
+                self,
+                "ミックスダウン",
+                "ボーカルトラックの合成エンジンが初期化されていません。",
+            )
+            return False
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "プロジェクト全体をWAVにミックスダウン",
+            "project_mixdown.wav",
+            "WAV Files (*.wav)",
+        )
+        if not file_path:
+            return False
+        if not file_path.lower().endswith(".wav"):
+            file_path += ".wav"
+
+        all_params = getattr(graph, "all_parameters", {}) or {}
+        parameters: Dict[str, Any] = {
+            "Pitch": list(all_params.get("Pitch", [])),
+            "Gender": list(all_params.get("Gender", [])),
+            "Tension": list(all_params.get("Tension", [])),
+            "Breath": list(all_params.get("Breath", [])),
+        }
+        try:
+            tempo = float(getattr(timeline, "tempo", 120.0))
+        except (TypeError, ValueError, OverflowError):
+            tempo = 120.0
+        if not math.isfinite(tempo) or tempo <= 0.0:
+            tempo = 120.0
+
+        worker = _ProjectMixdownWorker(
+            getattr(self, "vo_se_engine", None),
+            track_snapshots,
+            parameters,
+            tempo,
+            file_path,
+            mode_flag=1 if LicenseManager.is_pro() else 0,
+            parent=self,
+        )
+        worker.progress.connect(self._on_project_mixdown_progress)
+        worker.completed.connect(self._on_project_mixdown_completed)
+        worker.failed.connect(self._on_project_mixdown_failed)
+        worker.finished.connect(self._on_project_mixdown_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._project_mixdown_worker = worker
+        self._set_playback_preparation_ui(True)
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setText("✖ ミックスダウンをキャンセル")
+            cancel_button.setVisible(True)
+            cancel_button.setEnabled(True)
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("ミックスダウン準備中...")
+        self.statusBar().showMessage("プロジェクト全体のWAVミックスダウンを開始しました。")
+        try:
+            worker.start()
+        except Exception as exc:
+            self._project_mixdown_worker = None
+            self._set_playback_preparation_ui(False)
+            cancel_button = getattr(self, "cancel_render_btn", None)
+            if cancel_button is not None:
+                cancel_button.setVisible(False)
+                cancel_button.setEnabled(False)
+                cancel_button.setText("✖ キャンセル")
+            eta_label = getattr(self, "render_eta_label", None)
+            if eta_label is not None:
+                eta_label.setText("エラー")
+            QMessageBox.critical(
+                self,
+                "ミックスダウン",
+                f"バックグラウンド処理を開始できませんでした: {exc}",
+            )
+            return False
+        return True
+
+    @Slot(int, str)
+    def _on_project_mixdown_progress(self: Any, percent: int, message: str) -> None:
+        self.statusBar().showMessage(f"ミックスダウン {int(percent)}% — {message}")
+
+    @Slot(str)
+    def _on_project_mixdown_completed(self: Any, output_path: str) -> None:
+        self._set_playback_preparation_ui(False)
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setVisible(False)
+            cancel_button.setEnabled(False)
+            cancel_button.setText("✖ キャンセル")
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("完了")
+        self.statusBar().showMessage(
+            f"プロジェクト全体のWAV書き出しが完了しました: {os.path.basename(output_path)}",
+            10000,
+        )
+
+    @Slot(str)
+    def _on_project_mixdown_failed(self: Any, message: str) -> None:
+        self._set_playback_preparation_ui(False)
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setVisible(False)
+            cancel_button.setEnabled(False)
+            cancel_button.setText("✖ キャンセル")
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("キャンセル済み" if "キャンセル" in str(message) else "エラー")
+        if "キャンセル" in str(message):
+            self.statusBar().showMessage("プロジェクトのミックスダウンをキャンセルしました。", 5000)
+            return
+        self.statusBar().showMessage("プロジェクトのミックスダウンに失敗しました。", 5000)
+        QMessageBox.critical(
+            self,
+            "ミックスダウンに失敗しました",
+            str(message),
+        )
+
+    @Slot()
+    def _on_project_mixdown_thread_finished(self: Any) -> None:
+        worker = getattr(self, "_project_mixdown_worker", None)
+        if worker is not None:
+            try:
+                if not worker.isRunning():
+                    self._project_mixdown_worker = None
+            except RuntimeError:
+                self._project_mixdown_worker = None
 
     def parse_ust_dict_to_note(self: Any, d: Dict[str, Any], current_time_sec: float = 0.0, tempo: float = 120.0) -> Any:
         """[LIVE] UST辞書 → NoteEvent変換"""
@@ -1404,6 +2282,63 @@ class ProjectIOMixin:
     # MainWindow 側の実装を MRO で隠さないため、ここにはダミー実装を置かない。
 
     def export_to_midi_file(self: Any):
-        """[LIVE] MIDIエクスポート"""
-        print("MIDIエクスポートを開始します...")
+        """現在のボーカルトラックを標準MIDIファイルへ書き出す。"""
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is None:
+            QMessageBox.warning(self, "MIDI書き出し", "タイムラインが初期化されていません。")
+            return False
 
+        tracks = list(getattr(self, "tracks", []) or [])
+        current_index = int(getattr(self, "current_track_idx", 0))
+        export_tracks: List[Dict[str, Any]] = []
+        for index, track in enumerate(tracks):
+            if str(getattr(track, "track_type", "vocal")).lower() != "vocal":
+                continue
+            notes = (
+                list(getattr(timeline, "notes_list", []) or [])
+                if index == current_index
+                else list(getattr(track, "notes", []) or [])
+            )
+            if notes:
+                export_tracks.append({
+                    "name": str(getattr(track, "name", f"Vocal {index + 1}")),
+                    "notes": notes,
+                })
+
+        # Compatibility with older single-track sessions without a track model.
+        if not export_tracks:
+            notes = list(getattr(timeline, "notes_list", []) or [])
+            if notes:
+                export_tracks.append({"name": "Vocal", "notes": notes})
+        if not export_tracks:
+            self.statusBar().showMessage("MIDIに書き出すノートがありません。", 4000)
+            return False
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "MIDIファイルを書き出す",
+            "output.mid",
+            "MIDI Files (*.mid *.midi)",
+        )
+        if not file_path:
+            return False
+        if not file_path.lower().endswith((".mid", ".midi")):
+            file_path += ".mid"
+
+        try:
+            from modules.data.midi_manager import save_midi_file
+
+            tempo = float(getattr(timeline, "tempo", 120.0))
+            save_midi_file(file_path, export_tracks, tempo=tempo)
+            self.statusBar().showMessage(
+                f"MIDI書き出し完了: {os.path.basename(file_path)}", 5000
+            )
+            return True
+        except Exception as exc:
+            logger.exception("MIDI書き出しエラー: %s", exc)
+            QMessageBox.critical(
+                self,
+                "MIDI書き出しエラー",
+                f"MIDIファイルの書き出しに失敗しました:\n{exc}",
+            )
+            return False

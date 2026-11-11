@@ -86,11 +86,18 @@ def _patch_file_io(window) -> None:
         "load_ust_file",
         "export_as_ust",
         "import_external_project",
+        "load_external_project_async",
+        "load_file_from_path",
         "save_file_dialog_and_save_midi",
         "load_json_project",
         "load_midi_file_from_path",
         "save_oto_ini",
         "_load_vsqx",
+        "export_project_mixdown",
+        "_on_project_mixdown_progress",
+        "_on_project_mixdown_completed",
+        "_on_project_mixdown_failed",
+        "_on_project_mixdown_thread_finished",
     ):
         method = getattr(ProjectIOMixin, method_name, None)
         if method is not None and not hasattr(window, method_name):
@@ -155,12 +162,40 @@ def _patch_midi_realtime(window) -> None:
 
     def _on_port_changed(port_name: str) -> None:
         """ポートセレクタ変更時に MIDI 入力を切り替える"""
-        if window._midi_input_manager.port is not None:
-            window._midi_input_manager.stop()
+        manager = window._midi_input_manager
+        if manager.port is not None:
+            try:
+                manager.stop()
+            except RuntimeError as exc:
+                logger.warning("MIDI ポート切断失敗。切替を中止します: %s", exc)
+                window.statusBar().showMessage(f"MIDI 入力の切断に失敗: {exc}", 6000)
+                # Keep the selector consistent with the still-open previous port.
+                previous_name = manager.port_name or "なし"
+                signals_were_blocked = port_selector.blockSignals(True)
+                try:
+                    port_selector.setCurrentText(previous_name)
+                finally:
+                    port_selector.blockSignals(signals_were_blocked)
+                return
 
         if port_name and port_name not in ("なし", "None", ""):
-            window._midi_input_manager.port_name = port_name
-            window._midi_input_manager.start()
+            manager.port_name = port_name
+            try:
+                manager.start()
+            except Exception as exc:
+                logger.exception("MIDI 入力開始に失敗しました: %s", exc)
+                window.statusBar().showMessage(
+                    f"MIDI 入力を開始できません: {exc}",
+                    7000,
+                )
+                return
+
+            if manager.port is None:
+                window.statusBar().showMessage(
+                    f"MIDI 入力を開始できませんでした: {port_name}",
+                    7000,
+                )
+                return
             window.statusBar().showMessage(f"MIDI 入力: {port_name}")
         else:
             window.statusBar().showMessage("MIDI 入力: 切断")
@@ -209,14 +244,43 @@ def _patch_menus(window) -> None:
         # セパレーター
         file_menu.addSeparator()
 
+        # 複数トラックを再生と同じミキサー規則でWAVへ書き出す。
+        existing_mixdown_action = next(
+            (
+                action for action in file_menu.actions()
+                if action.objectName() == "projectMixdownAction"
+            ),
+            None,
+        )
+        if existing_mixdown_action is None:
+            act_mixdown = QAction("プロジェクト全体をWAVにミックスダウン...", window)
+            act_mixdown.setObjectName("projectMixdownAction")
+            act_mixdown.triggered.connect(
+                lambda _checked=False: window.export_project_mixdown()
+                if callable(getattr(window, "export_project_mixdown", None))
+                else None
+            )
+            file_menu.addAction(act_mixdown)
+
         # UST 読み込み
         act_import_ust = QAction("UTAU プロジェクト (.ust) を開く...", window)
-        act_import_ust.triggered.connect(
-            lambda: window.load_ust_file(
-                __import__("PySide6.QtWidgets", fromlist=["QFileDialog"])
-                .QFileDialog.getOpenFileName(window, "UST を開く", "", "UTAU (*.ust)")[0]
-            ) if hasattr(window, "load_ust_file") else None
-        )
+
+        def _open_ust_project_async():
+            QFileDialog = __import__(
+                "PySide6.QtWidgets", fromlist=["QFileDialog"]
+            ).QFileDialog
+            file_path, _ = QFileDialog.getOpenFileName(
+                window, "UST を開く", "", "UTAU (*.ust)"
+            )
+            if not file_path:
+                return
+            async_loader = getattr(window, "load_external_project_async", None)
+            if callable(async_loader):
+                async_loader(file_path)
+            elif hasattr(window, "load_ust_file"):
+                window.load_ust_file(file_path)
+
+        act_import_ust.triggered.connect(_open_ust_project_async)
         file_menu.addAction(act_import_ust)
 
         # UST 書き出し
@@ -226,7 +290,7 @@ def _patch_menus(window) -> None:
         )
         file_menu.addAction(act_export_ust)
 
-        logger.info("メニューパッチ: UST 読み込み/書き出し 追加")
+        logger.info("メニューパッチ: UST入出力 + プロジェクトWAVミックスダウン 追加")
 
     except Exception as exc:
         logger.warning("メニューパッチ失敗: %s", exc)

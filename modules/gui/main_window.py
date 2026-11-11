@@ -33,7 +33,7 @@ ort = importlib.import_module("onnxruntime") if importlib.util.find_spec("onnxru
 # 3. GUIライブラリ (PySide6 )
 # ==========================================================================
 from PySide6.QtCore import (  # noqa: E402
-    Qt, Signal, QThread, QTimer,
+    Qt, Signal, QThread, QTimer, QCoreApplication,
     QObject, QRunnable, QThreadPool, Slot,
     QElapsedTimer
 )
@@ -1391,21 +1391,43 @@ class VoiceCardWidget(QFrame):
 # ==============================================================================
 
 class _VoiceImportWorker(QThread):
-    """音源のコピー（数百MBになることがある）を UI を止めずに行うスレッド。"""
-    succeeded = Signal(str)
+    """Install a voicebank without blocking the UI; return the refreshed voice index."""
+
+    succeeded = Signal(str, object)
     failed = Signal(str)
 
-    def __init__(self, func, parent=None):
+    def __init__(self, func, manager=None, parent=None):
         super().__init__(parent)
         self._func = func
+        self._manager = manager
 
     def run(self):
         try:
             name = self._func()
-        except Exception as e:  # noqa: BLE001 - 利用者へメッセージを返すため広く捕捉する
-            self.failed.emit(str(e) or e.__class__.__name__)
+            # install_voice_from_zip/folder already refreshes VoiceManager.voices.
+            voices = dict(getattr(self._manager, "voices", {}) or {})
+        except Exception as exc:  # noqa: BLE001 - surface the failure to the user
+            self.failed.emit(str(exc) or exc.__class__.__name__)
             return
-        self.succeeded.emit(str(name))
+        self.succeeded.emit(str(name), voices)
+
+
+class _VoiceScanWorker(QThread):
+    """Run the recursive VoiceManager scan without blocking the GUI."""
+
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, manager, parent=None):
+        super().__init__(parent)
+        self.manager = manager
+
+    def run(self):
+        try:
+            voices = self.manager.scan_voices()
+            self.completed.emit(dict(voices or {}))
+        except Exception as exc:
+            self.failed.emit(str(exc) or exc.__class__.__name__)
 
 
 class VoiceCardGallery(QWidget):
@@ -1442,6 +1464,7 @@ class VoiceCardGallery(QWidget):
         self._empty_label = None
         self._last_columns = None
         self._import_worker = None
+        self._scan_worker = None
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -1565,6 +1588,17 @@ class VoiceCardGallery(QWidget):
         from PySide6.QtWidgets import QProgressDialog
         if self._import_worker is not None and self._import_worker.isRunning():
             return
+        scan_worker = getattr(self, "_scan_worker", None)
+        if scan_worker is not None and scan_worker.isRunning():
+            return
+        owner = self.window()
+        voice_bank_worker = getattr(owner, "_voice_bank_import_worker", None)
+        if voice_bank_worker is not None:
+            try:
+                if voice_bank_worker.isRunning():
+                    return
+            except RuntimeError:
+                pass
 
         dlg = QProgressDialog(label, "", 0, 0, self.window())
         dlg.setWindowTitle("音源を追加")
@@ -1573,17 +1607,19 @@ class VoiceCardGallery(QWidget):
         dlg.setMinimumDuration(0)
         dlg.show()
 
-        worker = _VoiceImportWorker(func, self)
-        worker.succeeded.connect(lambda name, d=dlg: self._on_import_done(name, d))
+        worker = _VoiceImportWorker(func, self.manager, self)
+        worker.succeeded.connect(
+            lambda name, voices, d=dlg: self._on_import_done(name, d, voices)
+        )
         worker.failed.connect(lambda msg, d=dlg: self._on_import_failed(msg, d))
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect(lambda: setattr(self, "_import_worker", None))
         self._import_worker = worker
         worker.start()
 
-    def _on_import_done(self, name: str, dlg):
+    def _on_import_done(self, name: str, dlg, voices=None):
         dlg.close()
-        self.setup_gallery()
+        self.setup_gallery(voices=voices)
         self._select_category("utau")
         # 取り込んだ音源をそのまま選択状態にして、見える位置までスクロールする
         voice_path = self.manager.voices.get(name)
@@ -1601,8 +1637,41 @@ class VoiceCardGallery(QWidget):
     # ------------------------------------------------------------------
     # 一覧の構築
     # ------------------------------------------------------------------
-    def setup_gallery(self):
-        """全音源を再スキャンしてカードを作り直す（音源追加/削除があった時に呼ぶ）"""
+    def setup_gallery(self, voices=None):
+        """Build cards from a prepared voice index; scan recursively on a worker if needed."""
+        if not isinstance(voices, dict):
+            active_scan = getattr(self, "_scan_worker", None)
+            if active_scan is not None:
+                try:
+                    if active_scan.isRunning():
+                        return
+                except RuntimeError:
+                    self._scan_worker = None
+
+            import_worker = getattr(self, "_import_worker", None)
+            if import_worker is not None and import_worker.isRunning():
+                return
+            owner = self.window()
+            voice_bank_worker = getattr(owner, "_voice_bank_import_worker", None)
+            if voice_bank_worker is not None:
+                try:
+                    if voice_bank_worker.isRunning():
+                        return
+                except RuntimeError:
+                    pass
+
+            worker = _VoiceScanWorker(self.manager, self)
+            worker.completed.connect(self._on_voice_scan_completed)
+            worker.failed.connect(self._on_voice_scan_failed)
+            worker.finished.connect(worker.deleteLater)
+            self._scan_worker = worker
+            status_bar = getattr(owner, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage("音源一覧をバックグラウンドでスキャン中...", 0)
+            worker.start()
+            return
+
+        selected_id = None
         selected_id = None
         for internal_id, card in self.cards.items():
             if getattr(card, "_selected", False):
@@ -1619,7 +1688,7 @@ class VoiceCardGallery(QWidget):
         self.cards.clear()
         self._entries.clear()
 
-        all_voices = self.manager.scan_voices()
+        all_voices = voices
 
         for display_name, internal_id in all_voices.items():
             if internal_id.startswith("__INTERNAL__"):
@@ -1654,6 +1723,24 @@ class VoiceCardGallery(QWidget):
 
         self._apply_filter()
         self.gallery_rebuilt.emit()
+
+    @Slot(object)
+    def _on_voice_scan_completed(self, voices: object) -> None:
+        self._scan_worker = None
+        if isinstance(voices, dict):
+            self.setup_gallery(voices=voices)
+            status_bar = getattr(self.window(), "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage(f"音源一覧を更新しました: {len(voices)} 件", 3000)
+
+    @Slot(str)
+    def _on_voice_scan_failed(self, error_message: str) -> None:
+        self._scan_worker = None
+        QMessageBox.warning(
+            self.window(),
+            "音源一覧を更新できませんでした",
+            error_message,
+        )
 
     def _register_card(self, card, display_name, internal_id):
         card.clicked.connect(
@@ -1757,13 +1844,17 @@ class VoiceCardGallery(QWidget):
 # ==============================================================================
 
 class AnalysisThread(QThread):
-    """AI解析をバックグラウンドで実行するスレッド"""
+    """AI解析をバックグラウンドで実行するスレッド。
+
+    QThread が持つ finished() は終了通知として予約されているため、
+    解析結果には completed(dict) を使い、Qt の終了通知を上書きしない。
+    """
     progress = Signal(int, str)
-    finished = Signal(dict)
+    completed = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, voice_manager, target_dir):
-        super().__init__()
+    def __init__(self, voice_manager, target_dir, parent=None):
+        super().__init__(parent)
         self.voice_manager = voice_manager
         self.target_dir = target_dir
 
@@ -1773,7 +1864,7 @@ class AnalysisThread(QThread):
                 self.target_dir,
                 self.progress.emit
             )
-            self.finished.emit(results)
+            self.completed.emit(results)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -1877,6 +1968,64 @@ class _VocalPlaybackPreparationThread(QThread):
                 "message": str(exc),
                 "track": current_track,
             })
+
+
+class _AudioMixerCommandThread(QThread):
+    """Run potentially blocking audio device startup/shutdown outside the GUI thread."""
+
+    completed = Signal(str, object)
+    failed = Signal(str, str)
+
+    def __init__(
+        self,
+        operation: str,
+        mixer: Any,
+        tracks: Optional[List[Any]] = None,
+        start_sec: float = 0.0,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.operation = operation
+        self.mixer = mixer
+        self.tracks = list(tracks or [])
+        self.start_sec = float(start_sec)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            if self.operation == "start":
+                self.mixer.set_tracks(self.tracks)
+                diagnostics = {}
+                get_diagnostics = getattr(self.mixer, "get_diagnostics", None)
+                if callable(get_diagnostics):
+                    try:
+                        value = get_diagnostics()
+                        if isinstance(value, dict):
+                            diagnostics = value
+                    except Exception:
+                        pass
+                load_errors = list(
+                    getattr(self.mixer, "last_load_errors", []) or []
+                )
+                self.mixer.play(self.start_sec)
+                self.completed.emit(
+                    self.operation,
+                    {
+                        "diagnostics": diagnostics,
+                        "load_errors": load_errors,
+                        "start_sec": self.start_sec,
+                    },
+                )
+            elif self.operation == "pause":
+                self.mixer.pause()
+                self.completed.emit(self.operation, {})
+            elif self.operation == "stop":
+                self.mixer.stop()
+                self.completed.emit(self.operation, {})
+            else:
+                raise ValueError(f"Unsupported audio mixer operation: {self.operation}")
+        except Exception as exc:
+            self.failed.emit(self.operation, str(exc))
 
 
 class MainWindow(
@@ -2091,7 +2240,7 @@ class MainWindow(
         self.vose_core = None
         self.text_analyzer = None
         self.playback_thread = None
-        self.analysis_thread = cast(QThread, None)
+        self.analysis_thread = None
         
         # エンジン類
         self.vo_se_engine = engine
@@ -2335,10 +2484,77 @@ class MainWindow(
         record_handler = cast(Callable[[], Any], self.on_record_toggled)
         return record_handler()
 
+    def _report_audio_mixer_diagnostics(self, mixer: Any) -> None:
+        """Poll audio-thread diagnostics on the GUI timer, never from PortAudio."""
+        get_diagnostics = getattr(mixer, "get_diagnostics", None)
+        if not callable(get_diagnostics):
+            return
+        try:
+            diagnostics = get_diagnostics()
+        except Exception as exc:
+            print(f"[AudioMixer] Diagnostic read failed: {exc}")
+            return
+        if not isinstance(diagnostics, dict):
+            return
+
+        previous = getattr(self, "_reported_audio_diagnostics", {})
+        if not isinstance(previous, dict):
+            previous = {}
+
+        def counter_delta(name: str) -> int:
+            try:
+                current = max(0, int(diagnostics.get(name, 0) or 0))
+                prior = max(0, int(previous.get(name, 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                return 0
+            previous[name] = current
+            return max(0, current - prior)
+
+        messages = []
+        underflows = counter_delta("output_underflow_count")
+        overflows = counter_delta("output_overflow_count")
+        queue_underruns = counter_delta("queue_underrun_count")
+        if underflows:
+            messages.append(f"デバイス出力アンダーラン {underflows} 回")
+        if overflows:
+            messages.append(f"デバイス出力オーバーフロー {overflows} 回")
+        if queue_underruns:
+            messages.append(f"音声供給バッファ不足 {queue_underruns} 回")
+
+        errors = diagnostics.get("last_playback_errors", [])
+        if not isinstance(errors, list):
+            errors = []
+        previous_errors = previous.get("last_playback_errors", [])
+        if (
+            not isinstance(previous_errors, list)
+            or errors[: len(previous_errors)] != previous_errors
+        ):
+            previous_errors = []
+        new_errors = errors[len(previous_errors):]
+        previous["last_playback_errors"] = list(errors)
+        if new_errors:
+            messages.append(f"音声ファイル読み込みエラー {len(new_errors)} 件")
+            for error in new_errors:
+                print(f"[AudioMixer] Playback source error: {error}")
+
+        device_name = str(diagnostics.get("output_device_name", "") or "")
+        if device_name and device_name != previous.get("output_device_name", ""):
+            previous["output_device_name"] = device_name
+            self.statusBar().showMessage(f"音声出力デバイス: {device_name}", 4000)
+
+        self._reported_audio_diagnostics = previous
+        if messages:
+            self.statusBar().showMessage(
+                "音声出力の診断: " + " / ".join(messages),
+                7000,
+            )
+
     def update_playback_ui(self):
         """再生位置・時間表示・タイムラインのプレイヘッドを同期する。"""
         if getattr(self, 'is_playing', False):
             mixer = getattr(self, "audio_mixer", None)
+            if mixer is not None:
+                self._report_audio_mixer_diagnostics(mixer)
 
             # AudioMixer は全バッファ終了時に CallbackStop で自然停止する。
             # ループ中はここで再スタートし、通常再生時だけ停止処理へ進む。
@@ -2346,17 +2562,15 @@ class MainWindow(
             # 自然終了とユーザー操作による停止を明確に分ける。
             if mixer is not None and not bool(getattr(mixer, "is_playing", False)):
                 if getattr(self, "is_looping", False):
-                    try:
-                        mixer.play(0.0)
-                        self.current_playback_time = 0.0
-                        self.playback_start_time = 0.0
-                        self.playback_started_monotonic = time.monotonic()
-                        self._set_transport_time(0.0)
+                    tracks = list(getattr(self, "tracks", []) or [])
+                    self._set_transport_time(0.0)
+                    if self._start_audio_mixer_command(
+                        "start", tracks=tracks, start_sec=0.0
+                    ):
                         return
-                    except Exception as exc:
-                        self.statusBar().showMessage(
-                            f"ループ再生の再開に失敗しました: {exc}", 5000
-                        )
+                    # An in-flight command owns the device. Do not make a second
+                    # direct call from the GUI thread; keep the transport idle.
+                    return
                 self.stop_and_clear_playback()
                 return
 
@@ -3370,72 +3584,9 @@ class MainWindow(
             self.timeline_widget.update()
 
     def toggle_playback(self, event=None):
-        """現在のトラックを再生/一時停止する互換再生経路。"""
-        with self._playback_lock:
-            monitoring = getattr(self, "pro_monitoring", None)
-            is_playing = (
-                getattr(monitoring, "is_playing", False)
-                if monitoring is not None and not isinstance(monitoring, bool)
-                else bool(getattr(self, "is_playing", False))
-            )
+        """Legacy Space-key entry point; delegate to the unified asynchronous transport."""
+        self.on_play_pause_toggled()
 
-            if is_playing:
-                player = getattr(self, "audio_player", None)
-                pause = getattr(player, "pause", None)
-                if callable(pause):
-                    pause()
-                self.is_playing = False
-                if monitoring is not None and not isinstance(monitoring, bool):
-                    setattr(monitoring, "is_playing", False)
-                self._refresh_transport_button_states()
-                self.statusBar().showMessage("一時停止", 2000)
-                return
-
-            tracks = list(getattr(self, "tracks", []) or [])
-            idx = int(getattr(self, "current_track_idx", 0))
-            if not (0 <= idx < len(tracks)):
-                self.statusBar().showMessage("再生するトラックがありません。", 2000)
-                return
-
-            current_track = tracks[idx]
-            timeline = getattr(self, "timeline_widget", None)
-            start_time = float(
-                getattr(timeline, "_current_playback_time", 0.0)
-                if timeline is not None
-                else 0.0
-            )
-
-            if getattr(current_track, "track_type", "vocal") == "wave":
-                audio_path = str(getattr(current_track, "audio_path", "") or "")
-                player = getattr(self, "audio_player", None)
-                play_file = getattr(player, "play_file", None)
-
-                if not audio_path or not os.path.exists(audio_path):
-                    self.statusBar().showMessage("オーディオファイルが見つかりません。", 3000)
-                    return
-                if not callable(play_file):
-                    self.statusBar().showMessage("オーディオプレイヤーを初期化できません。", 3000)
-                    return
-
-                play_file(audio_path)
-                set_position = getattr(player, "set_position", None)
-                if callable(set_position):
-                    set_position(int(start_time * 1000))
-            else:
-                engine = getattr(self, "vo_se_engine", None)
-                notes = list(getattr(timeline, "notes_list", []) or []) if timeline is not None else []
-                play_audio = getattr(engine, "play_audio", None)
-                if notes and callable(play_audio):
-                    threading.Thread(target=play_audio, daemon=True).start()
-
-            self.is_playing = True
-            if monitoring is not None and not isinstance(monitoring, bool):
-                setattr(monitoring, "is_playing", True)
-            self.current_playback_time = start_time
-            self._refresh_transport_button_states()
-            self.statusBar().showMessage(
-                f"再生中: {self._format_timecode(start_time)}", 2000
-            )
 
     def refresh_canvas(self):
         """キャンバス（描画領域）を再描画する"""
@@ -4575,24 +4726,40 @@ class MainWindow(
         pass
 
     def play_audio(self, path: str) -> None:
-        """Play a rendered WAV through the unified desktop AudioMixer."""
-        if not path or not os.path.exists(path):
-            print(f"エラー: ファイルが見つかりません: {path}")
+        """Play a rendered WAV through the non-blocking unified desktop transport."""
+        if not path or not os.path.isfile(path):
+            self.statusBar().showMessage(f"再生ファイルが見つかりません: {path}", 4000)
             return
+
+        class _RenderedAudioTrack:
+            def __init__(self, audio_path: str) -> None:
+                self.audio_path = audio_path
+                self.playback_path = ""
+                self.volume = 1.0
+                self.pan = 0.0
+                self.is_muted = False
+                self.is_solo = False
+                self.track_type = "wave"
+
         mixer = getattr(self, "audio_mixer", None)
-        play_file = getattr(mixer, "play_file", None)
-        if not callable(play_file):
-            print("警告: AudioMixer が初期化されていません")
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
-        try:
-            play_file(os.path.abspath(path))
-            self.is_playing = True
-            self.current_playback_time = 0.0
-            self.playback_timer.start()
-            print(f"再生開始: {path}")
-        except Exception as exc:
-            self.is_playing = False
-            print(f"再生エラー: {exc}")
+
+        track = _RenderedAudioTrack(os.path.abspath(path))
+        self._playback_preview_mode = True
+        self._playback_resume_tracks = [track]
+        if not self._start_audio_mixer_command(
+            "start", tracks=[track], start_sec=0.0
+        ):
+            self._playback_preview_mode = False
+            self._playback_resume_tracks = []
+            self.statusBar().showMessage(
+                "別の音声デバイス処理が実行中のため、プレビュー再生を開始できません。",
+                4000,
+            )
+
+
     def _check_for_updates(self):
         try:
             import importlib
@@ -5091,6 +5258,7 @@ class MainWindow(
             "character_selector",
             "track_list_widget",
             "render_btn",
+            "stop_btn",
         ):
             widget = getattr(self, name, None)
             if widget is not None and hasattr(widget, "setEnabled"):
@@ -5129,13 +5297,14 @@ class MainWindow(
         tracks = self._pending_playback_tracks
         start_time = float(getattr(self, "_pending_playback_start_time", 0.0))
         self._pending_playback_tracks = None
-        self._set_playback_preparation_ui(False)
 
         if tracks is None:
+            self._set_playback_preparation_ui(False)
             return
         current_tracks = list(getattr(self, "tracks", []) or [])
         if (len(current_tracks) != len(tracks)
                 or any(current is not saved for current, saved in zip(current_tracks, tracks))):
+            self._set_playback_preparation_ui(False)
             self.statusBar().showMessage(
                 "レンダリング中にトラック構成が変わったため、再生を開始しませんでした。", 5000
             )
@@ -5151,41 +5320,177 @@ class MainWindow(
             or str(getattr(track, "audio_path", "") or "")
         ]
         if not playable:
+            self._set_playback_preparation_ui(False)
             self.statusBar().showMessage("再生する音声がありません。", 3000)
             return
 
         mixer = getattr(self, "audio_mixer", None)
         if mixer is None:
+            self._set_playback_preparation_ui(False)
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
-        try:
-            mixer.set_tracks(tracks)
-            load_errors = list(getattr(mixer, "last_load_errors", []) or [])
+
+        self._playback_preview_mode = False
+        self._playback_resume_tracks = []
+        if not self._start_audio_mixer_command(
+            "start", tracks=tracks, start_sec=start_time
+        ):
+            self._set_playback_preparation_ui(False)
+
+    @Slot(str, object)
+    def _on_audio_mixer_command_completed(self, operation: str, result: object) -> None:
+        details = result if isinstance(result, dict) else {}
+
+        if operation == "start":
+            diagnostics = details.get("diagnostics", {})
+            if isinstance(diagnostics, dict):
+                previous = getattr(self, "_reported_audio_diagnostics", {})
+                if not isinstance(previous, dict):
+                    previous = {}
+                self._reported_audio_diagnostics = {
+                    "output_underflow_count": diagnostics.get("output_underflow_count", 0),
+                    "output_overflow_count": diagnostics.get("output_overflow_count", 0),
+                    "queue_underrun_count": diagnostics.get("queue_underrun_count", 0),
+                    "output_device_name": previous.get("output_device_name", ""),
+                    "last_playback_errors": [],
+                }
+            load_errors = list(details.get("load_errors", []) or [])
             if load_errors:
-                # Partial playback is allowed, but skipped tracks must be visible.
                 self.statusBar().showMessage(
                     f"警告: {len(load_errors)} トラックの音声を読み込めませんでした。詳細はログを確認してください。",
                     8000,
                 )
                 print("[AudioMixer] Track load errors:\n" + "\n".join(load_errors))
-            mixer.play(start_time)
+
+            start_time = float(details.get("start_sec", 0.0))
             self.is_playing = True
             self.current_playback_time = start_time
             self.playback_start_time = start_time
             self.playback_started_monotonic = time.monotonic()
             self.playback_timer.start()
+            self._set_playback_preparation_ui(False)
             status_lbl = getattr(self, "status_label", None)
             if status_lbl is not None:
                 status_lbl.setText(f"再生中: {start_time:.2f}s")
             self._refresh_transport_button_states()
-        except Exception as exc:
+            return
+
+        if operation == "pause":
+            mixer = getattr(self, "audio_mixer", None)
+            position_sec = getattr(mixer, "position_sec", None)
+            if position_sec is not None:
+                self.current_playback_time = max(0.0, float(position_sec))
+                self._set_transport_time(self.current_playback_time)
+            self.playback_start_time = self.current_playback_time
+            self.playback_started_monotonic = time.monotonic()
             self.is_playing = False
             self.playback_timer.stop()
+            self._set_mixer_transport_busy(False)
             status_lbl = getattr(self, "status_label", None)
             if status_lbl is not None:
-                status_lbl.setText(f"再生エラー: {exc}")
+                status_lbl.setText("一時停止しました")
             self._refresh_transport_button_states()
-            self.statusBar().showMessage(f"再生エラー: {exc}", 5000)
+            self.statusBar().showMessage("再生を一時停止しました", 3000)
+            return
+
+        if operation == "stop":
+            self._complete_playback_stop_ui()
+            return
+
+    @Slot(str, str)
+    def _on_audio_mixer_command_failed(self, operation: str, error_message: str) -> None:
+        mixer = getattr(self, "audio_mixer", None)
+        self.is_playing = bool(getattr(mixer, "is_playing", False))
+        if operation == "start":
+            self.playback_timer.stop()
+            self._set_playback_preparation_ui(False)
+        else:
+            self._set_mixer_transport_busy(False)
+            if self.is_playing:
+                self.playback_timer.start()
+        status_lbl = getattr(self, "status_label", None)
+        if status_lbl is not None:
+            status_lbl.setText(f"再生エラー: {error_message}")
+        self._refresh_transport_button_states()
+        self.statusBar().showMessage(f"再生エラー: {error_message}", 6000)
+
+    @Slot()
+    def _on_audio_mixer_command_thread_finished(self) -> None:
+        worker = getattr(self, "_audio_mixer_command_thread", None)
+        if worker is not None and not worker.isRunning():
+            self._audio_mixer_command_thread = None
+
+    def _set_mixer_transport_busy(self, busy: bool) -> None:
+        for name in ("play_btn", "play_button", "stop_btn"):
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "setEnabled"):
+                widget.setEnabled(not busy)
+
+    def _start_audio_mixer_command(
+        self,
+        operation: str,
+        tracks: Optional[List[Any]] = None,
+        start_sec: float = 0.0,
+    ) -> bool:
+        existing = getattr(self, "_audio_mixer_command_thread", None)
+        if existing is not None and existing.isRunning():
+            self.statusBar().showMessage("音声デバイス処理を実行中です。", 2500)
+            return False
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+            return False
+
+        worker = _AudioMixerCommandThread(
+            operation, mixer, tracks=tracks, start_sec=start_sec, parent=self
+        )
+        worker.completed.connect(self._on_audio_mixer_command_completed)
+        worker.failed.connect(self._on_audio_mixer_command_failed)
+        worker.finished.connect(self._on_audio_mixer_command_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._audio_mixer_command_thread = worker
+
+        if operation == "start":
+            self.playback_timer.stop()
+            self.is_playing = False
+            self._set_playback_preparation_ui(True)
+            self.statusBar().showMessage("音声出力デバイスを起動中...", 0)
+        else:
+            self._set_mixer_transport_busy(True)
+            self.playback_timer.stop()
+            self.statusBar().showMessage("音声出力を停止中...", 0)
+        worker.start()
+        return True
+
+    def _complete_playback_stop_ui(self) -> None:
+        mixer = getattr(self, "audio_mixer", None)
+        self.audio_player = mixer
+        self.is_playing = False
+        self.current_playback_time = 0.0
+        self.playback_start_time = 0.0
+        self.playback_started_monotonic = 0.0
+        self.is_looping = False
+        self.is_looping_selection = False
+        self._playback_preview_mode = False
+        self._playback_resume_tracks = []
+        self.playback_timer.stop()
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is not None:
+            if hasattr(timeline, "set_playback_time"):
+                timeline.set_playback_time(0.0)
+            elif hasattr(timeline, "set_current_time"):
+                timeline.set_current_time(0.0)
+        graph = getattr(self, "graph_editor_widget", None)
+        if graph is not None and hasattr(graph, "set_current_time"):
+            graph.set_current_time(0.0)
+        stop_btn = cast(QPushButton, getattr(self, "stop_btn", None))
+        if stop_btn is not None:
+            stop_btn.setChecked(True)
+            QTimer.singleShot(140, lambda: stop_btn.setChecked(False))
+        self._set_mixer_transport_busy(False)
+        self._refresh_transport_button_states()
+        self.statusBar().showMessage("Playback stopped and reset to 00:00.000")
+
 
     @Slot()
     def _on_vocal_playback_prepare_thread_finished(self) -> None:
@@ -5200,22 +5505,29 @@ class MainWindow(
             self.statusBar().showMessage("再生用レンダリングを準備中です。", 2000)
             return
 
+        command_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if command_worker is not None and command_worker.isRunning():
+            self.statusBar().showMessage("音声デバイス処理を実行中です。", 2500)
+            return
+
         mixer = getattr(self, "audio_mixer", None)
         if mixer is None:
             self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
             return
-        play_btn = cast(QPushButton, getattr(self, "play_btn", None) or getattr(self, "play_button", None))
-        status_lbl = cast(QLabel, getattr(self, "status_label", None))
         if mixer.is_playing:
-            mixer.stop()
-            self.is_playing = False
-            self.playback_timer.stop()
-            if play_btn is not None:
-                play_btn.setText("▶ 再生")
-            if status_lbl is not None:
-                status_lbl.setText("停止しました")
-            self._refresh_transport_button_states()
+            self._start_audio_mixer_command("pause")
             return
+
+        if bool(getattr(self, "_playback_preview_mode", False)):
+            preview_tracks = list(getattr(self, "_playback_resume_tracks", []) or [])
+            if preview_tracks:
+                self._start_audio_mixer_command(
+                    "start",
+                    tracks=preview_tracks,
+                    start_sec=max(0.0, float(getattr(self, "current_playback_time", 0.0))),
+                )
+                return
+            self._playback_preview_mode = False
 
         if getattr(self, "current_worker", None) is not None:
             self.statusBar().showMessage(
@@ -5223,17 +5535,21 @@ class MainWindow(
             )
             return
 
+        self._set_playback_preparation_ui(True)
         tracks = list(getattr(self, "tracks", []) or [])
         try:
             timeline = cast(Any, getattr(self, "timeline_widget", None))
             current_idx = int(getattr(self, "current_track_idx", 0))
             current_track = tracks[current_idx] if 0 <= current_idx < len(tracks) else None
             if current_track is not None and getattr(current_track, "track_type", "") == "vocal":
-                current_track.notes = deepcopy(
+                current_track.notes = list(
                     getattr(timeline, "notes_list", []) if timeline is not None else []
                 )
 
-            parameters = deepcopy(self._build_render_parameters())
+            parameters = {
+                name: list(values)
+                for name, values in self._build_render_parameters().items()
+            }
             voice_id = getattr(self, "current_voice_id", None)
             tempo = float(getattr(timeline, "tempo", 120.0)) if timeline is not None else 120.0
             jobs = []
@@ -5243,9 +5559,7 @@ class MainWindow(
                 # Reuse the current track's already-isolated snapshot to avoid
                 # copying a long UST twice on the GUI thread.
                 source_notes = getattr(track, "notes", []) or []
-                notes_snapshot = (
-                    source_notes if track is current_track else deepcopy(source_notes)
-                )
+                notes_snapshot = list(source_notes)
                 jobs.append({
                     "index": index,
                     "track": track,
@@ -5260,16 +5574,14 @@ class MainWindow(
             if not any(
                 (job["notes"] for job in jobs)
             ) and not any(str(getattr(track, "audio_path", "") or "") for track in tracks):
+                self._set_playback_preparation_ui(False)
                 self.statusBar().showMessage("再生する音声がありません。", 3000)
                 return
 
             self._pending_playback_tracks = tracks
-            self._pending_playback_start_time = (
-                float(getattr(timeline, "_current_playback_time", 0.0))
-                if timeline is not None else 0.0
+            self._pending_playback_start_time = max(
+                0.0, float(getattr(self, "current_playback_time", 0.0))
             )
-            self._set_playback_preparation_ui(True)
-
             worker = _VocalPlaybackPreparationThread(
                 getattr(self, "vo_se_engine", None), jobs, self
             )
@@ -5283,6 +5595,7 @@ class MainWindow(
         except Exception as exc:
             self._pending_playback_tracks = None
             self._set_playback_preparation_ui(False)
+            status_lbl = getattr(self, "status_label", None)
             if status_lbl is not None:
                 status_lbl.setText(f"再生エラー: {exc}")
             self._refresh_transport_button_states()
@@ -5334,34 +5647,15 @@ class MainWindow(
 
 
     def stop_and_clear_playback(self) -> None:
-        """Stop the unified mixer and reset transport state/UI."""
-        mixer = getattr(self, "audio_mixer", None)
-        stop_mixer = getattr(mixer, "stop", None)
-        if callable(stop_mixer):
-            stop_mixer()
-        self.audio_player = mixer
-        self.playback_timer.stop()
-        self.is_playing = False
-        self.current_playback_time = 0.0
-        self.playback_start_time = 0.0
-        self.playback_started_monotonic = 0.0
+        """Stop the unified mixer without blocking the GUI thread."""
         self.is_looping = False
         self.is_looping_selection = False
-        timeline = getattr(self, "timeline_widget", None)
-        if timeline is not None:
-            if hasattr(timeline, "set_playback_time"):
-                timeline.set_playback_time(0.0)
-            elif hasattr(timeline, "set_current_time"):
-                timeline.set_current_time(0.0)
-        graph = getattr(self, "graph_editor_widget", None)
-        if graph is not None and hasattr(graph, "set_current_time"):
-            graph.set_current_time(0.0)
-        stop_btn = cast(QPushButton, getattr(self, "stop_btn", None))
-        if stop_btn is not None:
-            stop_btn.setChecked(True)
-            QTimer.singleShot(140, lambda: stop_btn.setChecked(False))
-        self._refresh_transport_button_states()
-        self.statusBar().showMessage("Playback stopped and reset to 00:00.000")
+        self.playback_timer.stop()
+        if not self._start_audio_mixer_command("stop"):
+            mixer = getattr(self, "audio_mixer", None)
+            if mixer is None:
+                self._complete_playback_stop_ui()
+
     @Slot(object)
     def on_single_note_modified(self, note):
         """
@@ -5410,23 +5704,29 @@ class MainWindow(
             QMessageBox.warning(self, "Performance Error", "有効な音源ライブラリがロードされていません。")
             return
 
-        # 2. スレッド競合の防止（爆弾3・4対策）
-        if hasattr(self, 'analysis_thread') and self.analysis_thread.isRunning():
-            QMessageBox.warning(self, "System Busy", "現在、別の解析プロセスが実行中です。")
-            return
+        # 2. スレッド競合を防止する。終了済みスレッドの参照も安全に破棄する。
+        existing_thread = getattr(self, "analysis_thread", None)
+        if existing_thread is not None:
+            try:
+                if existing_thread.isRunning():
+                    QMessageBox.warning(self, "System Busy", "現在、別の解析プロセスが実行中です。")
+                    return
+            except RuntimeError:
+                # Qt 側ですでに破棄された QThread ラッパーを再利用しない。
+                pass
+            self.analysis_thread = None
 
         # 3. 解析スレッドの初期化
-        # ※AnalysisThreadは別途定義されているQThreadクラス
-        self.analysis_thread = AnalysisThread(self.voice_manager, target_dir)
-        
-        # 4. シグナルとスロットの完全接続（省略なし）
-        self.analysis_thread.progress.connect(self.update_analysis_status)
-        self.analysis_thread.finished.connect(self.on_analysis_complete)
-        self.analysis_thread.error.connect(self.on_analysis_error)
-        
-        # [爆弾5対策] 完了後のメモリ解放を予約
-        self.analysis_thread.finished.connect(self.analysis_thread.deleteLater)
-        
+        worker = AnalysisThread(self.voice_manager, target_dir, self)
+        self.analysis_thread = worker
+
+        # 4. 結果通知と QThread 本来の終了通知を分離する。
+        worker.progress.connect(self.update_analysis_status)
+        worker.completed.connect(self.on_analysis_complete)
+        worker.error.connect(self.on_analysis_error)
+        worker.finished.connect(self._on_analysis_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+
         # 5. UIの戦闘態勢への切り替え
         ai_btn = getattr(self, 'ai_analyze_button', None)
         if ai_btn:
@@ -5440,6 +5740,13 @@ class MainWindow(
         
         # 6. 解析実行
         self.analysis_thread.start()
+
+    @Slot()
+    def _on_analysis_thread_finished(self) -> None:
+        """解析スレッドの終了を受け、MainWindow が保持する参照を解放する。"""
+        worker = self.sender()
+        if getattr(self, "analysis_thread", None) is worker:
+            self.analysis_thread = None
 
     def update_analysis_status(self, percent: int, filename: str):
         """解析進捗のリアルタイム表示（UXの質で海外勢に差をつける）"""
@@ -6111,26 +6418,49 @@ class MainWindow(
 
     @Slot()
     def on_midi_port_changed(self):
-        if self.midi_port_selector is None:
-           return
+        selector = self.midi_port_selector
+        if selector is None:
+            return
 
-        selected_port = self.midi_port_selector.currentData()
+        selected_port = selector.currentData()
 
-        if self.midi_manager is not None:
-           self.midi_manager.stop()
-           self.midi_manager = None
+        manager = self.midi_manager
+        if manager is not None:
+            previous_port_name = getattr(manager, "port_name", None)
+            try:
+                manager.stop()
+            except Exception as exc:
+                # Keep the live manager so the user can retry the disconnect.
+                if self.status_label is not None:
+                    self.status_label.setText(f"MIDIの切断に失敗: {exc}")
+                if previous_port_name:
+                    previous_index = selector.findData(previous_port_name)
+                    if previous_index >= 0:
+                        signals_were_blocked = selector.blockSignals(True)
+                        try:
+                            selector.setCurrentIndex(previous_index)
+                        finally:
+                            selector.blockSignals(signals_were_blocked)
+                return
+            self.midi_manager = None
 
         if selected_port and selected_port != "ポートなし":
             try:
-               from .midi_io import MidiInputManager  # type: ignore
-               self.midi_manager = MidiInputManager(selected_port)
-               self.midi_manager.start()
+                manager = MidiInputManager(selected_port)
+                self.midi_manager = manager
+                manager.start()
+            except Exception as exc:
+                if self.status_label is not None:
+                    self.status_label.setText(f"MIDI入力を開始できません: {exc}")
+                return
 
-               if self.status_label is not None:
-                   self.status_label.setText(f"MIDI: {selected_port}")
-
-            except ImportError:
-                pass
+            if self.status_label is not None:
+                if getattr(manager, "port", None) is None:
+                    self.status_label.setText(
+                        f"MIDI入力を開始できませんでした: {selected_port}"
+                    )
+                else:
+                    self.status_label.setText(f"MIDI: {selected_port}")
 
     @Slot(int, int, str)
     def update_gui_with_midi(self, note_number: int, velocity: int, event_type: str):
@@ -6278,6 +6608,23 @@ class MainWindow(
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        # An external project parser emits its result back to this window.
+        # Wait for the parser and drain the queued result before asking whether
+        # to save/discard, so a just-finished load cannot race the exit dialog.
+        project_load_worker = getattr(self, "_project_load_worker", None)
+        if project_load_worker is not None:
+            done = getattr(project_load_worker, "done", None)
+            if done is not None and not done.wait(15.0):
+                QMessageBox.warning(
+                    self,
+                    "プロジェクト読み込み終了待ち",
+                    "ファイル解析がまだ実行中です。解析の終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+            QCoreApplication.processEvents()
+            self._project_load_worker = None
+
         reply = QMessageBox.question(
             self,
             "確認",
@@ -6325,6 +6672,24 @@ class MainWindow(
                 except OSError as exc:
                     print(f"[Render] Shutdown cleanup warning: {exc}")
 
+        # A project-wide offline render can spend time in native synthesis and
+        # audio-file decoding. Request cooperative cancellation, then keep the
+        # window alive until the worker has left those code paths.
+        mixdown_worker = getattr(self, "_project_mixdown_worker", None)
+        if mixdown_worker is not None and mixdown_worker.isRunning():
+            request_cancel = getattr(mixdown_worker, "request_cancel", None)
+            if callable(request_cancel):
+                request_cancel()
+            if not mixdown_worker.wait(15000):
+                QMessageBox.warning(
+                    self,
+                    "ミックスダウン終了待ち",
+                    "プロジェクトのミックスダウンがまだ実行中です。安全な終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+            self._project_mixdown_worker = None
+
         # Playback preparation uses a QThread, so it must leave native code
         # before the engine and the parent window are released.
         playback_worker = getattr(self, "_playback_prepare_thread", None)
@@ -6340,8 +6705,73 @@ class MainWindow(
                 )
                 event.ignore()
                 return
+        # Deliver a queued playback-preparation result before checking whether
+        # it has launched the asynchronous mixer-start command.
+        QCoreApplication.processEvents()
         self._playback_prepare_thread = None
         self._pending_playback_tracks = None
+
+        audio_command_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if audio_command_worker is not None and audio_command_worker.isRunning():
+            if not audio_command_worker.wait(15000):
+                QMessageBox.warning(
+                    self,
+                    "音声デバイス終了待ち",
+                    "音声デバイスの開始・停止処理がまだ実行中です。処理の終了後に、もう一度終了してください。",
+                )
+                event.ignore()
+                return
+        # Deliver queued completion/failure callbacks before the mixer and
+        # window are released; the worker has already left its native code.
+        QCoreApplication.processEvents()
+        self._audio_mixer_command_thread = None
+
+        # Background QThreads must finish before their owning widgets are destroyed.
+        # These operations are not forcibly terminated: closing is cancelled on timeout.
+        analysis_worker = getattr(self, "analysis_thread", None)
+        gallery = getattr(self, "voice_gallery", None)
+        import_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
+        voice_scan_worker = getattr(gallery, "_scan_worker", None) if gallery is not None else None
+        voice_bank_worker = getattr(self, "_voice_bank_import_worker", None)
+        for worker, title, message in (
+            (
+                analysis_worker,
+                "音源解析終了待ち",
+                "音源解析がまだ実行中です。解析の終了後に、もう一度終了してください。",
+            ),
+            (
+                import_worker,
+                "音源インポート終了待ち",
+                "音源のコピー・展開がまだ実行中です。処理の終了後に、もう一度終了してください。",
+            ),
+            (
+                voice_bank_worker,
+                "音源ZIPインストール終了待ち",
+                "音源ZIPの展開・モデル読み込みがまだ実行中です。処理の終了後に、もう一度終了してください。",
+            ),
+            (
+                voice_scan_worker,
+                "音源一覧スキャン終了待ち",
+                "音源一覧のスキャンがまだ実行中です。スキャン完了後に、もう一度終了してください。",
+            ),
+        ):
+            if worker is None:
+                continue
+            try:
+                running = worker.isRunning()
+            except RuntimeError:
+                # Qt object already deleted; it is no longer a live worker.
+                running = False
+            if running and not worker.wait(15000):
+                QMessageBox.warning(self, title, message)
+                event.ignore()
+                return
+
+        self.analysis_thread = None
+        if gallery is not None:
+            gallery._import_worker = None
+            gallery._scan_worker = None
+        self._voice_bank_import_worker = None
 
         # Stop the legacy playback thread, if an older entry point started it.
         self.is_playing = False
@@ -6387,6 +6817,7 @@ class MainWindow(
                 print(f"Config save warning: {exc}")
 
         # The MIDI setup patch stores the live input manager under this name.
+        # Do not destroy the window while a MIDI callback may still be active.
         for manager_name in ("_midi_input_manager", "midi_manager"):
             midi_manager = getattr(self, manager_name, None)
             stop_midi = getattr(midi_manager, "stop", None)
@@ -6394,7 +6825,15 @@ class MainWindow(
                 try:
                     stop_midi()
                 except Exception as exc:
-                    print(f"MIDI shutdown warning: {exc}")
+                    QMessageBox.warning(
+                        self,
+                        "MIDI入力終了待ち",
+                        "MIDI入力デバイスを安全に切断できませんでした。"
+                        "デバイスの接続状態を確認してから、もう一度終了してください。"
+                        f"\n詳細: {exc}",
+                    )
+                    event.ignore()
+                    return
 
         engine = getattr(self, "vo_se_engine", None)
         stop_engine = getattr(engine, "stop", None)
@@ -6696,7 +7135,7 @@ class MainWindow(
 
     @Slot()
     def cancel_current_render(self):
-        """現在実行中のレンダリングをキャンセルする（協調的キャンセル）"""
+        """現在の通常レンダーまたはプロジェクトミックスダウンを協調キャンセルする。"""
         if self.current_worker:
             self._render_cancelled = True
             self.current_worker.cancel()
@@ -6706,6 +7145,31 @@ class MainWindow(
             self.statusBar().showMessage(
                 "キャンセル要求を送信しました（現在のチャンク完了後に停止します）。"
             )
+            return
+
+        mixdown_worker = getattr(self, "_project_mixdown_worker", None)
+        if mixdown_worker is None:
+            return
+        try:
+            is_running = bool(mixdown_worker.isRunning())
+        except RuntimeError:
+            is_running = False
+        if not is_running:
+            return
+
+        request_cancel = getattr(mixdown_worker, "request_cancel", None)
+        if callable(request_cancel):
+            request_cancel()
+        cancel_button = getattr(self, "cancel_render_btn", None)
+        if cancel_button is not None:
+            cancel_button.setVisible(False)
+            cancel_button.setEnabled(False)
+        eta_label = getattr(self, "render_eta_label", None)
+        if eta_label is not None:
+            eta_label.setText("ミックスダウンをキャンセル中...")
+        self.statusBar().showMessage(
+            "プロジェクトミックスダウンのキャンセルを要求しました。実行中のボーカル合成は完了後に停止し、音声ミックス中は次のブロック境界で停止します。"
+        )
 
     def play_rendered_audio(self, wav_path: str) -> None:
         """Play a rendered WAV through the unified desktop AudioMixer."""
