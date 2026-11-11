@@ -214,13 +214,16 @@ class AudioMixer:
             )
             self._total_frames = self._track_total_frames + self._effects.tail_frames
 
-    def set_effect_chain(self, chain: Any) -> None:
-        """Replace the post-track master chain without touching source tracks."""
+    def set_effect_chain(self, chain: Any, *, preserve_state: bool = False) -> None:
+        """Replace master parameters without touching tracks or the vocal renderer.
+
+        Live parameter drags preserve reverb and compressor histories for matching
+        effect IDs; loading a different project or seeking can request a reset.
+        """
         normalized = normalize_effect_chain(chain)
-        processor = MasterEffectsProcessor(self.sample_rate, normalized)
         with self._lock:
-            self._effects = processor
-            self._total_frames = self._track_total_frames + processor.tail_frames
+            self._effects.set_chain(normalized, preserve_state=preserve_state)
+            self._total_frames = self._track_total_frames + self._effects.tail_frames
             self._position = min(self._position, self._total_frames)
 
     def get_effect_chain(self) -> list[dict[str, Any]]:
