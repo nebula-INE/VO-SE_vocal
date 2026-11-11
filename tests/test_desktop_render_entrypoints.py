@@ -110,7 +110,7 @@ def test_project_open_dialog_does_not_advertise_unsupported_ustx():
     source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
     open_handler = source.split("def open_file_dialog_and_load_midi(", 1)[1].split("def setup_status_bar", 1)[0]
     assert "*.ustx" not in open_handler
-    assert "*.ust " in open_handler
+    assert "*.ust);;" in open_handler
 
 
 def test_legacy_ust_menu_routes_to_async_project_loader():
