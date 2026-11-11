@@ -631,40 +631,40 @@ jobs:
               cp dist/VO-SE_vocal_Win.exe dist_out/
             elif [ "${{ runner.os }}" = "Linux" ]; then
               echo "Building Linux app on runner: ${{ matrix.os }}"
-              pyinstaller --noconsole --onefile --clean \\
-                --paths modules \\
-                --icon="assets/icon.ico" \\
-                --hidden-import=PySide6.QtCore \\
-                --hidden-import=PySide6.QtGui \\
-                --hidden-import=PySide6.QtWidgets \\
-                --hidden-import=PySide6.QtMultimedia \\
-                --hidden-import=modules.gui.main_window \\
-                --hidden-import=rtmidi \\
-                --hidden-import=mido.backends.rtmidi \\
-                --hidden-import=backports \\
-                --hidden-import=backports.tarfile \\
-                --exclude-module=PySide6.QtWebEngineCore \\
-                --exclude-module=PySide6.QtWebEngineWidgets \\
-                --exclude-module=PySide6.QtWebEngineQuick \\
-                --exclude-module=PySide6.QtWebEngine \\
-                --exclude-module=PySide6.QtDesigner \\
-                --exclude-module=PySide6.QtQml \\
-                --exclude-module=PySide6.QtQuick \\
-                --exclude-module=PySide6.Qt3DAnimation \\
-                --exclude-module=PySide6.Qt3DCore \\
-                --exclude-module=PySide6.Qt3DRender \\
-                --exclude-module=PySide6.QtNetwork \\
-                --exclude-module=PySide6.QtPdf \\
-                --exclude-module=PySide6.QtPdfWidgets \\
-                --exclude-module=PySide6.QtMultimediaWidgets \\
-                --exclude-module=PySide6.QtVirtualKeyboard \\
-                --exclude-module=PySide6.QtVirtualKeyboardQml \\
-                --collect-all=sounddevice \\
-                --collect-all=soundfile \\
-                --collect-all=pyopenjtalk \\
-                --add-data "bin/libvose_core.so:bin" \\
-                --add-data "assets:assets" \\
-                --add-data "modules:modules" \\
+              pyinstaller --noconsole --onefile --clean \
+                --paths modules \
+                --icon="assets/icon.ico" \
+                --hidden-import=PySide6.QtCore \
+                --hidden-import=PySide6.QtGui \
+                --hidden-import=PySide6.QtWidgets \
+                --hidden-import=PySide6.QtMultimedia \
+                --hidden-import=modules.gui.main_window \
+                --hidden-import=rtmidi \
+                --hidden-import=mido.backends.rtmidi \
+                --hidden-import=backports \
+                --hidden-import=backports.tarfile \
+                --exclude-module=PySide6.QtWebEngineCore \
+                --exclude-module=PySide6.QtWebEngineWidgets \
+                --exclude-module=PySide6.QtWebEngineQuick \
+                --exclude-module=PySide6.QtWebEngine \
+                --exclude-module=PySide6.QtDesigner \
+                --exclude-module=PySide6.QtQml \
+                --exclude-module=PySide6.QtQuick \
+                --exclude-module=PySide6.Qt3DAnimation \
+                --exclude-module=PySide6.Qt3DCore \
+                --exclude-module=PySide6.Qt3DRender \
+                --exclude-module=PySide6.QtNetwork \
+                --exclude-module=PySide6.QtPdf \
+                --exclude-module=PySide6.QtPdfWidgets \
+                --exclude-module=PySide6.QtMultimediaWidgets \
+                --exclude-module=PySide6.QtVirtualKeyboard \
+                --exclude-module=PySide6.QtVirtualKeyboardQml \
+                --collect-all=sounddevice \
+                --collect-all=soundfile \
+                --collect-all=pyopenjtalk \
+                --add-data "bin/libvose_core.so:bin" \
+                --add-data "assets:assets" \
+                --add-data "modules:modules" \
                 --name "VO-SE_vocal_Linux" main.py
               chmod +x dist/VO-SE_vocal_Linux
               cp dist/VO-SE_vocal_Linux dist_out/VO-SE_vocal_Linux_x86_64
