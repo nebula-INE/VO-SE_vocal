@@ -514,7 +514,13 @@ def test_project_undo_snapshot_restores_master_effect_chain():
         "id": "saved-reverb",
         "type": "reverb",
         "enabled": True,
-        "params": {"wet": 0.25, "dry": 0.8},
+        "params": {
+            "room_size": 0.45,
+            "damping": 0.5,
+            "wet": 0.25,
+            "dry": 0.8,
+            "width": 0.75,
+        },
     }]
     window.effects_panel.set_effect_chain(before_chain)
     before = ProjectIOMixin._capture_project_edit_state(window)
