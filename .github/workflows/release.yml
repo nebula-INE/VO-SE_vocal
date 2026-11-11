@@ -294,6 +294,56 @@ jobs:
 
 
       
+      - name: Audit optional Qt imports (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          optional_module = (
+              r"QtWebEngine(?:Core|Widgets|Quick)?|QtDesigner|QtNetwork|"
+              r"QtPdf(?:Widgets)?|QtMultimediaWidgets|QtVirtualKeyboard(?:Qml)?"
+          )
+          pattern = re.compile(
+              rf"PySide6\\s*\\.\\s*(?:{optional_module})\\b"
+              rf"|\\bfrom\\s+PySide6\\s+import\\s+[^\\n#]*\\b(?:{optional_module})\\b"
+              r"|\\bQ(?:WebEngine|Designer|Network|Pdf|VideoWidget)\\w*",
+              re.IGNORECASE,
+          )
+          roots = (Path("main.py"), Path("modules"), Path("assets"))
+          allowed_suffixes = {".py", ".qml", ".ui", ".qrc", ".json", ".toml"}
+          ignored_parts = {".git", ".venv", "venv", "__pycache__", "build", "dist"}
+          hits = []
+          scanned = 0
+
+          for root in roots:
+              if not root.exists():
+                  continue
+              paths = [root] if root.is_file() else root.rglob("*")
+              for path in paths:
+                  if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
+                      continue
+                  if ignored_parts.intersection(path.parts):
+                      continue
+                  try:
+                      lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                  except OSError:
+                      continue
+                  scanned += 1
+                  for line_number, line in enumerate(lines, 1):
+                      if pattern.search(line):
+                          hits.append(f"{path}:{line_number}:{line.strip()}")
+
+          print(f"Optional Qt source audit scanned {scanned} files")
+          if hits:
+              print("\\n".join(hits))
+              raise SystemExit("Optional Qt imports conflict with the Linux exclusion list")
+          print("No unsupported optional Qt module references found.")
+          PY
+
       - name: Package with PyInstaller
         shell: bash
         run: |
@@ -346,7 +396,8 @@ jobs:
             ICON_ARG="--icon=$ICON"
           fi
 
-          # PySide6 の個別モジュール指定と不要フック（QML等）の完全排除設定
+          # Preserve the platform-specific collection policy. Linux uses the
+          # module set proven by the standalone runtime validation workflow.
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             PYSIDE_ARGS="
               --hidden-import=PySide6.QtCore
@@ -361,6 +412,29 @@ jobs:
               --exclude-module=PySide6.Qt3DRender
               --exclude-module=PySide6.QtCharts
               --exclude-module=PySide6.QtDataVisualization
+            "
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            PYSIDE_ARGS="
+              --hidden-import=PySide6.QtCore
+              --hidden-import=PySide6.QtGui
+              --hidden-import=PySide6.QtWidgets
+              --hidden-import=PySide6.QtMultimedia
+              --exclude-module=PySide6.QtWebEngineCore
+              --exclude-module=PySide6.QtWebEngineWidgets
+              --exclude-module=PySide6.QtWebEngineQuick
+              --exclude-module=PySide6.QtWebEngine
+              --exclude-module=PySide6.QtDesigner
+              --exclude-module=PySide6.QtQml
+              --exclude-module=PySide6.QtQuick
+              --exclude-module=PySide6.Qt3DAnimation
+              --exclude-module=PySide6.Qt3DCore
+              --exclude-module=PySide6.Qt3DRender
+              --exclude-module=PySide6.QtNetwork
+              --exclude-module=PySide6.QtPdf
+              --exclude-module=PySide6.QtPdfWidgets
+              --exclude-module=PySide6.QtMultimediaWidgets
+              --exclude-module=PySide6.QtVirtualKeyboard
+              --exclude-module=PySide6.QtVirtualKeyboardQml
             "
           else
             PYSIDE_ARGS="
@@ -557,25 +631,40 @@ jobs:
               cp dist/VO-SE_vocal_Win.exe dist_out/
             elif [ "${{ runner.os }}" = "Linux" ]; then
               echo "Building Linux app on runner: ${{ matrix.os }}"
-              pyinstaller --noconsole --onefile --clean \
-                --paths modules \
-                --icon="assets/icon.ico" \
-                --hidden-import=modules.gui.main_window \
-                --hidden-import=rtmidi \
-                --hidden-import=mido.backends.rtmidi \
-                --hidden-import=backports \
-                --hidden-import=backports.tarfile \
-                --exclude-module=PySide6.QtQml \
-                --exclude-module=PySide6.QtQuick \
-                --exclude-module=PySide6.Qt3DAnimation \
-                --exclude-module=PySide6.Qt3DCore \
-                --exclude-module=PySide6.Qt3DRender \
-                --collect-all=sounddevice \
-                --collect-all=soundfile \
-                --collect-all=pyopenjtalk \
-                --add-data "bin/libvose_core.so:bin" \
-                --add-data "assets:assets" \
-                --add-data "modules:modules" \
+              pyinstaller --noconsole --onefile --clean \\
+                --paths modules \\
+                --icon="assets/icon.ico" \\
+                --hidden-import=PySide6.QtCore \\
+                --hidden-import=PySide6.QtGui \\
+                --hidden-import=PySide6.QtWidgets \\
+                --hidden-import=PySide6.QtMultimedia \\
+                --hidden-import=modules.gui.main_window \\
+                --hidden-import=rtmidi \\
+                --hidden-import=mido.backends.rtmidi \\
+                --hidden-import=backports \\
+                --hidden-import=backports.tarfile \\
+                --exclude-module=PySide6.QtWebEngineCore \\
+                --exclude-module=PySide6.QtWebEngineWidgets \\
+                --exclude-module=PySide6.QtWebEngineQuick \\
+                --exclude-module=PySide6.QtWebEngine \\
+                --exclude-module=PySide6.QtDesigner \\
+                --exclude-module=PySide6.QtQml \\
+                --exclude-module=PySide6.QtQuick \\
+                --exclude-module=PySide6.Qt3DAnimation \\
+                --exclude-module=PySide6.Qt3DCore \\
+                --exclude-module=PySide6.Qt3DRender \\
+                --exclude-module=PySide6.QtNetwork \\
+                --exclude-module=PySide6.QtPdf \\
+                --exclude-module=PySide6.QtPdfWidgets \\
+                --exclude-module=PySide6.QtMultimediaWidgets \\
+                --exclude-module=PySide6.QtVirtualKeyboard \\
+                --exclude-module=PySide6.QtVirtualKeyboardQml \\
+                --collect-all=sounddevice \\
+                --collect-all=soundfile \\
+                --collect-all=pyopenjtalk \\
+                --add-data "bin/libvose_core.so:bin" \\
+                --add-data "assets:assets" \\
+                --add-data "modules:modules" \\
                 --name "VO-SE_vocal_Linux" main.py
               chmod +x dist/VO-SE_vocal_Linux
               cp dist/VO-SE_vocal_Linux dist_out/VO-SE_vocal_Linux_x86_64
@@ -624,6 +713,21 @@ jobs:
 
               echo "macOS app bundle is ready for signing before packaging."
             fi
+
+      - name: Linux desktop startup smoke test
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          timeout --signal=TERM --kill-after=10s 45s ./dist/VO-SE_vocal_Linux
+          rc=$?
+          set -e
+          echo "GUI startup smoke exit code: $rc"
+          if [ "$rc" -ne 124 ] && [ "$rc" -ne 143 ]; then
+            echo "Expected the GUI process to remain alive until timeout; got exit code $rc"
+            exit 1
+          fi
 
       - name: Verify macOS binary linkage
         if: startsWith(matrix.os, 'macos')
