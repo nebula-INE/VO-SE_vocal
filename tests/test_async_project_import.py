@@ -170,6 +170,9 @@ def test_external_midi_worker_converts_notes_and_preserves_track_identity(
             },
         ],
     )
+    # This test stubs the MIDI parser and intentionally writes a non-MIDI fixture.
+    # Stub the new metadata read as well, so this remains focused on track mapping.
+    monkeypatch.setattr(midi_manager, "get_midi_initial_tempo", lambda _path: 137.5)
 
     payload = _parse_external_project_file(str(path))
 
@@ -178,6 +181,7 @@ def test_external_midi_worker_converts_notes_and_preserves_track_identity(
     assert payload["notes_by_track"][0][0].lyric == "あ"
     assert payload["notes_by_track"][2][0].note_number == 67
     assert payload["names_by_track"] == {0: "Lead", 2: "Harmony"}
+    assert payload["tempo_bpm"] == pytest.approx(137.5)
 
 
 def test_external_vose_project_is_loaded_as_native_json_project(tmp_path):
