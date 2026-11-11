@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/validate-runtime-package.yml"
+      - ".github/workflows/release.yml"
       - "requirements-runtime.txt"
       - "requirements-training.txt"
       - "main.py"
