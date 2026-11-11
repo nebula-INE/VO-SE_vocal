@@ -69,7 +69,7 @@ jobs:
           print("Training-only modules installed:", found)
           if found:
               raise SystemExit(f"Unexpected training modules in runtime environment: {found}")
-          from PySide6 import QtCore, QtGui, QtWidgets, QtMultimedia, QtNetwork
+          from PySide6 import QtCore, QtGui, QtWidgets, QtMultimedia
           import importlib.util
           import soundfile, pyopenjtalk
           if importlib.util.find_spec("sounddevice") is None:
@@ -130,8 +130,8 @@ jobs:
           # These optional modules are candidates for exclusion from the Linux
           # validation artifact only. Qt Multimedia is deliberately retained.
           pattern = re.compile(
-              r"PySide6\s*\.\s*(?:QtWebEngine(?:Core|Widgets|Quick)?|QtDesigner)"
-              r"|\bQ(?:WebEngine|Designer)",
+              r"PySide6\s*\.\s*(?:QtWebEngine(?:Core|Widgets|Quick)?|QtDesigner|QtNetwork|QtPdf(?:Widgets)?|QtMultimediaWidgets|QtVirtualKeyboard(?:Qml)?)"
+              r"|\bQ(?:WebEngine|Designer|Network|Pdf|VideoWidget)\w*",
               re.IGNORECASE,
           )
           roots = (Path("main.py"), Path("modules"), Path("assets"))
@@ -177,7 +177,6 @@ jobs:
             --hidden-import=PySide6.QtGui \
             --hidden-import=PySide6.QtWidgets \
             --hidden-import=PySide6.QtMultimedia \
-            --hidden-import=PySide6.QtNetwork \
             --exclude-module=PySide6.QtWebEngineCore \
             --exclude-module=PySide6.QtWebEngineWidgets \
             --exclude-module=PySide6.QtWebEngineQuick \
@@ -188,9 +187,14 @@ jobs:
             --exclude-module=PySide6.Qt3DAnimation \
             --exclude-module=PySide6.Qt3DCore \
             --exclude-module=PySide6.Qt3DRender \
+            --exclude-module=PySide6.QtNetwork \
+            --exclude-module=PySide6.QtPdf \
+            --exclude-module=PySide6.QtPdfWidgets \
+            --exclude-module=PySide6.QtMultimediaWidgets \
+            --exclude-module=PySide6.QtVirtualKeyboard \
+            --exclude-module=PySide6.QtVirtualKeyboardQml \
             --hidden-import=modules.gui.main_window \
             --hidden-import=PySide6.QtMultimedia \
-            --hidden-import=PySide6.QtNetwork \
             --hidden-import=rtmidi \
             --hidden-import=mido.backends.rtmidi \
             --hidden-import=backports \
@@ -231,6 +235,14 @@ jobs:
           print("Largest embedded entries (unpacked bytes):")
           for name, unpacked, packed in sorted(rows, key=lambda row: row[1], reverse=True)[:30]:
               print(f"{unpacked:>12} unpacked | {packed:>12} packed | {name}")
+          optional_qt_tokens = (
+              "qtmultimediawidgets", "qtpdf", "qtvirtualkeyboard", "qtquick", "qtqml",
+          )
+          optional_qt_hits = [
+              name for name, _, _ in rows
+              if any(token in name for token in optional_qt_tokens)
+          ]
+          print("Optional Qt candidate entries remaining:", optional_qt_hits[:50])
           print("Forbidden training/CUDA entries:", hits[:30])
           if hits:
               raise SystemExit("Training/CUDA libraries unexpectedly present in runtime bundle")
