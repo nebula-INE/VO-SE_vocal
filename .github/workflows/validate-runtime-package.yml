@@ -214,7 +214,7 @@ jobs:
 
           # Pillow is an optional convenience library, not the desktop's Qt image path.
           pil_pattern = re.compile(
-              r"(?:^|\\s)(?:from\\s+PIL\\b|import\\s+PIL\\b|PIL\\.Image\\b)"
+              r"(?:^|\s)(?:from\s+PIL\b|import\s+PIL\b|PIL\.Image\b)"
           )
           pil_hits = []
           for root in roots:
@@ -236,7 +236,7 @@ jobs:
 
           print(f"Optional Qt source audit scanned {scanned} files")
           if pil_hits:
-              print("\\n".join(pil_hits))
+              print("\n".join(pil_hits))
               raise SystemExit("Pillow/PIL references found; do not exclude Pillow")
           print("No Pillow/PIL source references found.")
           if hits:
