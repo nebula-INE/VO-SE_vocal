@@ -14,6 +14,7 @@ on:
       - "src/**"
       - "include/**"
       - "tests/**"
+      - "scripts/audit_linux_runtime_bundle.py"
       - "build/**"
       - "bin/**"
   workflow_dispatch:
@@ -258,6 +259,16 @@ jobs:
           stat -c 'Tarball bytes=%s' dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
           du -h dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
 
+      - name: Generate detailed runtime size report
+        run: |
+          set -euo pipefail
+          python scripts/audit_linux_runtime_bundle.py \
+            --binary dist/VO-SE_vocal_Linux \
+            --tarball dist_out/VO-SE_vocal_Linux_x86_64.tar.gz \
+            --json-output dist_out/linux-runtime-size-report.json \
+            --baseline-tarball-bytes 401936365
+          python -m pytest tests/test_linux_runtime_bundle_audit.py -q
+
       - name: Desktop startup smoke test
         shell: bash
         run: |
@@ -278,6 +289,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: VO-SE-vocal-Linux-runtime-validation
-          path: dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
+          path: |
+            dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
+            dist_out/linux-runtime-size-report.json
           if-no-files-found: error
           retention-days: 7
