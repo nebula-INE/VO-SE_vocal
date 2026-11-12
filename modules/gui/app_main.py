@@ -12,6 +12,10 @@ from PySide6.QtCore import QTimer
 # --- 自作モジュールのインポート ---
 # フォルダ構成に合わせてパスを調整（絶対インポートを推奨）
 from modules.gui.main_window import MainWindow
+from modules.gui.update_notification_patch import install_update_notification_patch
+
+# Must run before MainWindow is instantiated and registers its startup timer.
+install_update_notification_patch(MainWindow)
 
 # PyInstallerのスプラッシュスクリーン制御
 try:
