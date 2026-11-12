@@ -133,3 +133,49 @@ def test_reset_clears_reverb_delay_history():
 
     silence = processor.process(np.zeros((512, 2), dtype=np.float32))
     assert np.allclose(silence, 0.0)
+
+
+
+def test_live_parameter_update_preserves_matching_reverb_history():
+    sample_rate = 8000
+    chain = [_effect("reverb", {
+        "room_size": 0.45,
+        "damping": 0.5,
+        "wet": 1.0,
+        "dry": 0.0,
+        "width": 1.0,
+    }, effect_id="room")]
+    processor = MasterEffectsProcessor(sample_rate, chain)
+    impulse = np.zeros((128, 2), dtype=np.float32)
+    impulse[0] = 1.0
+    processor.process(impulse[:128])
+
+    updated_chain = [_effect("reverb", {
+        "room_size": 0.7,
+        "damping": 0.35,
+        "wet": 1.0,
+        "dry": 0.0,
+        "width": 1.0,
+    }, effect_id="room")]
+    processor.set_chain(updated_chain, preserve_state=True)
+    tail = processor.process(np.zeros((128, 2), dtype=np.float32))
+
+    reset_processor = MasterEffectsProcessor(sample_rate, updated_chain)
+    reset_tail = reset_processor.process(np.zeros((128, 2), dtype=np.float32))
+    assert float(np.max(np.abs(tail))) > 1e-5
+    assert np.allclose(reset_tail, 0.0)
+
+
+def test_serial_reverbs_add_their_tail_windows():
+    one = MasterEffectsProcessor(
+        8000,
+        [_effect("reverb", {"room_size": 0.8, "wet": 0.5})],
+    )
+    two = MasterEffectsProcessor(
+        8000,
+        [
+            _effect("reverb", {"room_size": 0.8, "wet": 0.5}, effect_id="first"),
+            _effect("reverb", {"room_size": 0.8, "wet": 0.5}, effect_id="second"),
+        ],
+    )
+    assert two.tail_frames == 2 * one.tail_frames
