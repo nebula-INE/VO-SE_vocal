@@ -278,3 +278,25 @@ def test_secondary_desktop_launcher_applies_engine_patch_after_loading_engine():
     assignment = source.index("window.vo_se_engine = engine")
     patch = source.index("patch_main_window(window)", assignment)
     assert patch > assignment
+
+
+def test_playback_preparation_worker_initializes_vose_export_before_lookup():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    worker = source.split("class _VocalPlaybackPreparationThread", 1)[1].split(
+        "class MainWindow", 1
+    )[0]
+    assert "ensure_desktop_export_ready(self.engine)" in worker
+    assert worker.index("ensure_desktop_export_ready") < worker.index(
+        'getattr(self.engine, "export_to_wav_v2", None)'
+    )
+
+
+def test_direct_playback_renderer_initializes_vose_export_before_lookup():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    renderer = source.split("def _render_vocal_track_for_playback", 1)[1].split(
+        "\n    def ", 1
+    )[0]
+    assert "ensure_desktop_export_ready(self.vo_se_engine)" in renderer
+    assert renderer.index("ensure_desktop_export_ready") < renderer.index(
+        'getattr(self.vo_se_engine, "export_to_wav_v2", None)'
+    )
