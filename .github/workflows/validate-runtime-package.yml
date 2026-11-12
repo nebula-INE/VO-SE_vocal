@@ -15,6 +15,7 @@ on:
       - "include/**"
       - "tests/**"
       - "scripts/audit_linux_runtime_bundle.py"
+      - "scripts/linux_runtime_scipy_probe.py"
       - "build/**"
       - "bin/**"
   workflow_dispatch:
