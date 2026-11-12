@@ -58,6 +58,7 @@ jobs:
             libasound2t64 libportaudio2 upx-ucl
           command -v upx
           upx --version
+          echo "UPX compression is enabled for this validation-only build."
           command -v upx
           upx --version
 
