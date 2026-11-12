@@ -6191,12 +6191,16 @@ class MainWindow(
     @Slot(str, dict)
     def on_effect_parameters_changed(self, effect_id: str, params: dict):
         """Apply the current master-bus chain to live playback and project mixdown."""
+        from modules.audio.master_effects import normalize_effect_chain
+
         effects_panel = getattr(self, "effects_panel", None)
         get_chain = getattr(effects_panel, "get_effect_chain", None)
         audio_mixer = getattr(self, "audio_mixer", None)
         set_chain = getattr(audio_mixer, "set_effect_chain", None)
         try:
-            chain = get_chain() if callable(get_chain) else []
+            chain = normalize_effect_chain(
+                get_chain() if callable(get_chain) else []
+            )
             if callable(set_chain):
                 set_chain(chain, preserve_state=True)
         except (TypeError, ValueError, RuntimeError) as exc:
