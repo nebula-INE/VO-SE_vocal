@@ -171,6 +171,11 @@ class MasterEffectsProcessor:
             self.chain = normalized
             self._states = new_states
 
+    def get_chain(self) -> list[dict[str, Any]]:
+        """Return a validated detached copy of the current chain."""
+        with self._lock:
+            return normalize_effect_chain(self.chain)
+
     def reset(self) -> None:
         """Clear delay/envelope histories, for a new transport start or seek."""
         with self._lock:
