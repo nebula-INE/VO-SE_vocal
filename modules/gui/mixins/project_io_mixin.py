@@ -2214,7 +2214,9 @@ class ProjectIOMixin:
 
         effects_panel = getattr(self, "effects_panel", None)
         get_effect_chain = getattr(effects_panel, "get_effect_chain", None)
-        effect_chain = get_effect_chain() if callable(get_effect_chain) else []
+        effect_chain = normalize_effect_chain(
+            get_effect_chain() if callable(get_effect_chain) else []
+        )
 
         worker = _ProjectMixdownWorker(
             getattr(self, "vo_se_engine", None),
