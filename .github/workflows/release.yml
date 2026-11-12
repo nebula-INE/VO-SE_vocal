@@ -435,6 +435,7 @@ jobs:
               --exclude-module=PySide6.QtMultimediaWidgets
               --exclude-module=PySide6.QtVirtualKeyboard
               --exclude-module=PySide6.QtVirtualKeyboardQml
+              --exclude-module=Cython
             "
           else
             PYSIDE_ARGS="
@@ -737,6 +738,14 @@ jobs:
           print("PDF-only Qt payload:", pdf_payload)
           if pdf_payload:
               raise SystemExit("Optional Qt PDF plugin/library remains in official Linux bundle")
+
+          cython_payload = sorted(
+              name for name in names
+              if name.startswith("cython/")
+          )
+          print("Python Cython build-tool payload:", cython_payload)
+          if cython_payload:
+              raise SystemExit("Cython build-time modules remain in official Linux bundle")
 
           imageformat_plugins = {
               name.rsplit("/", 1)[-1]
