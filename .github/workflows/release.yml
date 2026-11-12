@@ -661,6 +661,7 @@ jobs:
                 --exclude-module=PySide6.QtMultimediaWidgets \
                 --exclude-module=PySide6.QtVirtualKeyboard \
                 --exclude-module=PySide6.QtVirtualKeyboardQml \
+                --exclude-module=Cython \
                 --collect-all=sounddevice \
                 --collect-all=soundfile \
                 --collect-all=pyopenjtalk \
