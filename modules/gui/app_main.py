@@ -68,6 +68,11 @@ def main():
                 engine = VO_SE_Engine()
                 window.vo_se_engine = engine
 
+                # Keep this secondary launcher consistent with main.py: the
+                # engine patch must be applied after the real engine is injected.
+                from modules.gui.main_window_patch import patch_main_window
+                patch_main_window(window)
+
                 window.statusBar().showMessage("AI推論モデルを最適化中...")
                 ai = AIManager()
                 ai.init_model()

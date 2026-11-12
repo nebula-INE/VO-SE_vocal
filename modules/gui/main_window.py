@@ -710,6 +710,20 @@ class SynthesisWorker(QRunnable):
         self._cancelled = True
 
     def run(self):
+        # Alternate desktop launchers may inject VO_SE_Engine after MainWindow
+        # has already been created. Ensure the VCV/UST-aware WAV API is patched
+        # on the actual instance before resolving the export method.
+        try:
+            from modules.audio.vo_se_engine import VO_SE_Engine
+            if isinstance(self.vose_core, VO_SE_Engine):
+                from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
+                ensure_desktop_export_ready(self.vose_core)
+        except Exception as exc:
+            self.signals.error.emit(
+                f"WAV書き出しエンジンの初期化に失敗しました: {exc}"
+            )
+            return
+
         # 通常のデスクトップレンダーは VO_SE_Engine v2 を優先する。
         # v2 が無い古い環境だけ従来の C ABI 経路へフォールバックする。
         export_v2 = cast(
@@ -1894,6 +1908,11 @@ class _VocalPlaybackPreparationThread(QThread):
     def run(self) -> None:
         current_track = None
         try:
+            from modules.audio.vo_se_engine import VO_SE_Engine
+            if isinstance(self.engine, VO_SE_Engine):
+                from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
+                ensure_desktop_export_ready(self.engine)
+
             export_v2 = getattr(self.engine, "export_to_wav_v2", None)
             needs_render = any(job["notes"] for job in self.jobs)
             if needs_render and not callable(export_v2):
@@ -5199,6 +5218,11 @@ class MainWindow(
             track.playback_path = ""
             track._playback_signature = ""
             return ""
+
+        from modules.audio.vo_se_engine import VO_SE_Engine
+        if isinstance(self.vo_se_engine, VO_SE_Engine):
+            from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
+            ensure_desktop_export_ready(self.vo_se_engine)
 
         export_v2 = getattr(self.vo_se_engine, "export_to_wav_v2", None)
         if not callable(export_v2):
