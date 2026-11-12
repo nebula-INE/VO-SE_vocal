@@ -512,63 +512,33 @@ jobs:
           except Exception as e:
               print(f'Skip dict creation: {e}')
 
-      # ── ① バージョンをソースに埋め込む ──────────────────────────
-      - name: Inject version into update_checker.py
+      # Embed the exact source commit so installed builds can be compared
+      # with the commit currently published under the stable "latest" tag.
+      - name: Inject build commit into update checker
         shell: bash
         env:
-          RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '0.0.0-dev' }}
+          BUILD_COMMIT: ${{ github.sha }}
         run: |
-          echo "Injecting version: $RELEASE_VERSION"
-
           python - <<'PY'
           import os
           import re
           from pathlib import Path
 
-          version = os.environ["RELEASE_VERSION"].removeprefix("v")
           checker = Path("modules/updater/update_checker.py")
-          checker.parent.mkdir(parents=True, exist_ok=True)
-
-          if checker.exists():
-              text = checker.read_text(encoding="utf-8")
-              text = re.sub(
-                  r'^CURRENT_VERSION = .*$',
-                  f'CURRENT_VERSION = "{version}"',
-                  text,
-                  count=1,
-                  flags=re.MULTILINE,
-              )
-              if 'CURRENT_VERSION = ' not in text:
-                  text = f'CURRENT_VERSION = "{version}"\n' + text
-          else:
-              text = (
-                  'import json, threading, urllib.request\n'
-                  'from packaging.version import Version\n\n'
-                  f'CURRENT_VERSION = "{version}"\n'
-                  'GITHUB_API_URL = "https://api.github.com/repos/YOUR_ORG/VO-SE-vocal/releases/latest"\n\n'
-                  'class UpdateChecker:\n'
-                  '    def check_async(self, callback):\n'
-                  '        threading.Thread(target=self._check, args=(callback,), daemon=True).start()\n\n'
-                  '    def _check(self, callback):\n'
-                  '        try:\n'
-                  '            req = urllib.request.Request(GITHUB_API_URL, headers={"User-Agent": "VO-SE-vocal"})\n'
-                  '            with urllib.request.urlopen(req, timeout=5) as res:\n'
-                  '                data = json.loads(res.read())\n'
-                  '            latest = data["tag_name"].lstrip("v")\n'
-                  '            page_url = data["html_url"]\n'
-                  '            assets = data.get("assets", [])\n'
-                  '            exe_url = next((a["browser_download_url"] for a in assets if a["name"].endswith("_update.zip") or a["name"].endswith(".exe")), None)\n'
-                  '            if Version(latest) > Version(CURRENT_VERSION):\n'
-                  '                callback(True, latest, page_url, exe_url)\n'
-                  '            else:\n'
-                  '                callback(False, latest, None, None)\n'
-                  '        except Exception:\n'
-                  '            callback(None, None, None, None)\n'
-              )
-
-          checker.write_text(text, encoding="utf-8")
+          source = checker.read_text(encoding="utf-8")
+          commit = os.environ["BUILD_COMMIT"]
+          source, count = re.subn(
+              r'^CURRENT_BUILD_SHA = .*$',
+              f'CURRENT_BUILD_SHA = "{commit}"',
+              source,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if count != 1:
+              raise SystemExit("CURRENT_BUILD_SHA marker missing from update_checker.py")
+          checker.write_text(source, encoding="utf-8")
+          print(f"Embedded build commit: {commit}")
           PY
-          echo "Done. CURRENT_VERSION is now ${RELEASE_VERSION#v}"
 
       - name: Lint with Ruff
         shell: bash
@@ -1218,6 +1188,52 @@ jobs:
         with:
           name: VO-SE-vocal-Package-${{ matrix.os }}
           path: dist_out/
+
+  # Publish the desktop packages as actual GitHub Release assets. The
+  # Actions artifacts remain an internal hand-off between build and publish jobs.
+  publish-release:
+    name: Publish desktop packages to GitHub Release
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download desktop packages from build matrix
+        uses: actions/download-artifact@v4
+        with:
+          pattern: VO-SE-vocal-Package-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-assets -maxdepth 1 -type f -print
+          test -n "$(find release-assets -maxdepth 1 -type f -print -quit)"
+
+      - name: Move stable latest tag to this build
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -f latest "$GITHUB_SHA"
+          git push origin refs/tags/latest --force
+
+      - name: Publish latest Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: VO-SE PRO (Official Edition)
+          target_commitish: ${{ github.sha }}
+          files: release-assets/*
+          overwrite_files: true
+          fail_on_unmatched_files: true
 
   # =============================================================================
   # 2. JUCEプラグイン ビルド + コード署名/公証
