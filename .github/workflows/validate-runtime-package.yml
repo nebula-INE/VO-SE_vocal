@@ -16,6 +16,7 @@ on:
       - "tests/**"
       - "scripts/audit_linux_runtime_bundle.py"
       - "build/**"
+      - "packaging/pyinstaller-hooks/**"
       - "bin/**"
   workflow_dispatch:
 
@@ -174,7 +175,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
-            --additional-hooks-dir=build/pyinstaller-hooks \
+            --additional-hooks-dir=packaging/pyinstaller-hooks \
             --paths . --paths modules \
             --hidden-import=PySide6.QtCore \
             --hidden-import=PySide6.QtGui \
