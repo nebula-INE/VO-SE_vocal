@@ -197,6 +197,7 @@ jobs:
             --exclude-module=PySide6.QtMultimediaWidgets \
             --exclude-module=PySide6.QtVirtualKeyboard \
             --exclude-module=PySide6.QtVirtualKeyboardQml \
+            --exclude-module=Cython \
             --hidden-import=modules.gui.main_window \
             --hidden-import=PySide6.QtMultimedia \
             --hidden-import=rtmidi \
@@ -248,6 +249,22 @@ jobs:
           print("Removed PDF-only Qt payload present:", pdf_members)
           if pdf_members:
               raise SystemExit("Unused Qt PDF plugin/library remains in validation bundle")
+
+          cython_members = [
+              name for name, _, _ in rows
+              if name.lower().startswith("cython/")
+          ]
+          cython_packed_bytes = sum(
+              packed for name, _, packed in rows if name.lower().startswith("cython/")
+          )
+          print(
+              "Cython build-tool payload present:",
+              cython_members,
+              "packed bytes:",
+              cython_packed_bytes,
+          )
+          if cython_members:
+              raise SystemExit("Cython package modules remain in runtime validation bundle")
 
           imageformat_plugins = {
               name.rsplit("/", 1)[-1]
