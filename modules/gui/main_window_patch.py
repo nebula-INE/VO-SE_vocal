@@ -56,11 +56,8 @@ def _patch_engine(window) -> None:
         logger.warning("vo_se_engine が見つかりません。エンジンパッチをスキップ。")
         return
 
-    from modules.audio.vo_se_engine_patch import apply_patch
-    apply_patch(type(engine))
-
-    # 音源ライブラリを VCV 対応版で再スキャン
-    engine.refresh_voice_library_v2()
+    from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
+    ensure_desktop_export_ready(engine)
 
     # export_to_wav を v2 に差し替え
     import types
