@@ -661,6 +661,8 @@ jobs:
                 --exclude-module=PySide6.QtMultimediaWidgets \
                 --exclude-module=PySide6.QtVirtualKeyboard \
                 --exclude-module=PySide6.QtVirtualKeyboardQml \
+                --exclude-module=Cython \
+                --exclude-module=PIL \
                 --collect-all=sounddevice \
                 --collect-all=soundfile \
                 --collect-all=pyopenjtalk \
@@ -746,6 +748,19 @@ jobs:
           print("Python Cython build-tool payload:", cython_payload)
           if cython_payload:
               raise SystemExit("Cython build-time modules remain in official Linux bundle")
+
+          pillow_payload = sorted(
+              name for name in names
+              if (
+                  name.startswith("pil/")
+                  or name.startswith("pillow/")
+                  or name.startswith("pillow.libs/")
+                  or name.startswith("pillow-")
+              )
+          )
+          print("Python Pillow/PIL payload:", pillow_payload)
+          if pillow_payload:
+              raise SystemExit("Pillow/PIL package modules remain in official Linux bundle")
 
           imageformat_plugins = {
               name.rsplit("/", 1)[-1]
