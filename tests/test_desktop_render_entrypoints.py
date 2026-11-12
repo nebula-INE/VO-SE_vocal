@@ -247,3 +247,34 @@ def test_project_mixdown_uses_the_existing_toolbar_cancel_action():
     assert 'cancel_button.setVisible(True)' in project_io_source
     assert 'cancel_button.setVisible(False)' in project_io_source
     assert 'self.statusBar().showMessage("プロジェクトのミックスダウンをキャンセルしました。", 5000)' in project_io_source
+
+
+def test_synthesis_worker_prepares_vose_export_api_before_method_lookup():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    worker = source.split("class SynthesisWorker", 1)[1].split(
+        "class AutoOtoEngine", 1
+    )[0]
+    assert "ensure_desktop_export_ready(self.vose_core)" in worker
+    assert worker.index("ensure_desktop_export_ready") < worker.index(
+        'getattr(self.vose_core, "export_to_wav_v2", None)'
+    )
+
+
+def test_project_mixdown_worker_prepares_vose_export_api_before_method_lookup():
+    source = (ROOT / "modules" / "gui" / "mixins" / "project_io_mixin.py").read_text(
+        encoding="utf-8"
+    )
+    worker = source.split("class _ProjectMixdownWorker", 1)[1].split(
+        "class ProjectIOMixin", 1
+    )[0]
+    assert "ensure_desktop_export_ready(self.engine)" in worker
+    assert worker.index("ensure_desktop_export_ready") < worker.index(
+        'getattr(self.engine, "export_to_wav_v2", None)'
+    )
+
+
+def test_secondary_desktop_launcher_applies_engine_patch_after_loading_engine():
+    source = (ROOT / "modules" / "gui" / "app_main.py").read_text(encoding="utf-8")
+    assignment = source.index("window.vo_se_engine = engine")
+    patch = source.index("patch_main_window(window)", assignment)
+    assert patch > assignment
