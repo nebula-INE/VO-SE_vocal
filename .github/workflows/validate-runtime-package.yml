@@ -239,9 +239,9 @@ jobs:
               name for name, _, _ in rows
               if (
                   name.endswith("/plugins/imageformats/libqpdf.so")
-                  or name.endswith("/lib/libQt6Pdf.so.6")
-                  or name.endswith("/lib/libQt6Pdf.so")
-                  or name == "libQt6Pdf.so.6"
+                  or name.endswith("/lib/libqt6pdf.so.6")
+                  or name.endswith("/lib/libqt6pdf.so")
+                  or name == "libqt6pdf.so.6"
               )
           ]
           print("Removed PDF-only Qt payload present:", pdf_members)
