@@ -1218,13 +1218,6 @@ jobs:
           find release-assets -maxdepth 1 -type f -print
           test -n "$(find release-assets -maxdepth 1 -type f -print -quit)"
 
-      - name: Move stable latest tag to this build
-        shell: bash
-        run: |
-          set -euo pipefail
-          git tag -f latest "$GITHUB_SHA"
-          git push origin refs/tags/latest --force
-
       - name: Publish latest Release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -1234,6 +1227,14 @@ jobs:
           files: release-assets/*
           overwrite_files: true
           fail_on_unmatched_files: true
+
+      # Advance the stable tag only after every Release asset was uploaded.
+      - name: Move stable latest tag to this build
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -f latest "$GITHUB_SHA"
+          git push origin refs/tags/latest --force
 
   # =============================================================================
   # 2. JUCEプラグイン ビルド + コード署名/公証
