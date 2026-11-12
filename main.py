@@ -443,6 +443,12 @@ def main():
             traceback.print_exc()
         sys.exit(1)
 
+    # Install the updater override before MainWindow.__init__ schedules its
+    # startup timer; patching the instance afterward would leave the old bound
+    # method queued and silently bypass the working updater.
+    from modules.gui.update_notification_patch import install_update_notification_patch
+    install_update_notification_patch(MainWindow)
+
     QApplication = QtWidgets.QApplication
     QMessageBox = QtWidgets.QMessageBox
     QIcon = QtGui.QIcon
