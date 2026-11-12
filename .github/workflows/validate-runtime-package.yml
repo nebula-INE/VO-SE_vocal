@@ -198,7 +198,6 @@ jobs:
             --exclude-module=PySide6.QtMultimediaWidgets \
             --exclude-module=PySide6.QtVirtualKeyboard \
             --exclude-module=PySide6.QtVirtualKeyboardQml \
-            --exclude-module=scipy.optimize \
             --exclude-module=scipy.stats \
             --hidden-import=modules.gui.main_window \
             --hidden-import=PySide6.QtMultimedia \
@@ -223,7 +222,6 @@ jobs:
           set -euo pipefail
           python -m PyInstaller --noconfirm --clean --onefile \
             --paths . \
-            --exclude-module=scipy.optimize \
             --exclude-module=scipy.stats \
             --distpath /tmp/vose-scipy-probe-dist \
             --workpath /tmp/vose-scipy-probe-work \
@@ -258,18 +256,17 @@ jobs:
           pyz = archive.open_embedded_archive(pyz_name)
           excluded_python_modules = sorted(
               name for name in pyz.toc
-              if name == "scipy.optimize" or name.startswith("scipy.optimize.")
-              or name == "scipy.stats" or name.startswith("scipy.stats.")
+              if name == "scipy.stats" or name.startswith("scipy.stats.")
           )
           excluded_native_entries = sorted(
               name for name in archive.toc
-              if name.lower().startswith(("scipy/optimize/", "scipy/stats/"))
+              if name.lower().startswith("scipy/stats/")
           )
-          print("Excluded SciPy Python modules present:", excluded_python_modules[:20])
-          print("Excluded SciPy native entries present:", excluded_native_entries[:20])
+          print("Excluded SciPy stats Python modules present:", excluded_python_modules[:20])
+          print("Excluded SciPy stats native entries present:", excluded_native_entries[:20])
           if excluded_python_modules or excluded_native_entries:
-              raise SystemExit("Experimental SciPy subpackage exclusions were not applied")
-          print("Required SciPy subpackages only: OK")
+              raise SystemExit("Experimental scipy.stats exclusion was not applied")
+          print("Required SciPy signal/fft/linalg APIs with scipy.optimize retained: OK")
           print("Largest embedded entries (unpacked bytes):")
           for name, unpacked, packed in sorted(rows, key=lambda row: row[1], reverse=True)[:30]:
               print(f"{unpacked:>12} unpacked | {packed:>12} packed | {name}")
