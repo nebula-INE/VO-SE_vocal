@@ -58,6 +58,8 @@ jobs:
             libasound2t64 libportaudio2 upx-ucl
           command -v upx
           upx --version
+          command -v upx
+          upx --version
 
       - name: Install runtime dependencies only
         run: |
