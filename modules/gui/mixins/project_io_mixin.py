@@ -364,6 +364,11 @@ class _ProjectMixdownWorker(QThread):
         import tempfile
 
         try:
+            from modules.audio.vo_se_engine import VO_SE_Engine
+            if isinstance(self.engine, VO_SE_Engine):
+                from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
+                ensure_desktop_export_ready(self.engine)
+
             export_v2 = getattr(self.engine, "export_to_wav_v2", None)
             vocal_jobs = [
                 (index, track)
