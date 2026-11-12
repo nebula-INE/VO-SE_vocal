@@ -99,6 +99,32 @@ jobs:
           print("Optional BatchVoiceOptimizer import without PyTorch: OK")
           PY
 
+          # Pillow is installed in the runner but must not be importable for
+          # this probe. Verify Qt's own PNG/SVG readers cover the app assets.
+          python - <<'PY'
+          import importlib.abc
+          import sys
+
+          class _BlockPILImports(importlib.abc.MetaPathFinder):
+              def find_spec(self, fullname, path=None, target=None):
+                  if fullname == "PIL" or fullname.startswith("PIL."):
+                      raise ModuleNotFoundError(
+                          f"Pillow/PIL is intentionally unavailable: {fullname}"
+                      )
+                  return None
+
+          sys.meta_path.insert(0, _BlockPILImports())
+          from PySide6.QtGui import QIcon, QImage
+
+          png = QImage("assets/dmg_bg.png")
+          assert not png.isNull(), "Qt could not load the app's PNG asset without Pillow"
+          svg = QIcon("assets/icons/dark/play.svg")
+          assert not svg.isNull(), "Qt could not load the app's SVG icon without Pillow"
+          from modules.tools import batch_voice_optimizer
+          assert batch_voice_optimizer.TORCH_AVAILABLE is False
+          print("Qt PNG/SVG assets load with Python Pillow/PIL blocked: OK")
+          PY
+
           # Cython is a build-time dependency of pyopenjtalk-prebuilt. Verify
           # its compiled extensions import in a clean process with Python-level
           # Cython modules unavailable, before excluding Cython from the bundle.
@@ -186,7 +212,33 @@ jobs:
                       if pattern.search(line):
                           hits.append(f"{path}:{line_number}:{line.strip()}")
 
+          # Pillow is an optional convenience library, not the desktop's Qt image path.
+          pil_pattern = re.compile(
+              r"(?:^|\\s)(?:from\\s+PIL\\b|import\\s+PIL\\b|PIL\\.Image\\b)"
+          )
+          pil_hits = []
+          for root in roots:
+              if not root.exists():
+                  continue
+              paths = [root] if root.is_file() else root.rglob("*")
+              for path in paths:
+                  if not path.is_file() or path.suffix.lower() != ".py":
+                      continue
+                  if ignored_parts.intersection(path.parts):
+                      continue
+                  try:
+                      lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                  except OSError:
+                      continue
+                  for line_number, line in enumerate(lines, 1):
+                      if pil_pattern.search(line):
+                          pil_hits.append(f"{path}:{line_number}:{line.strip()}")
+
           print(f"Optional Qt source audit scanned {scanned} files")
+          if pil_hits:
+              print("\\n".join(pil_hits))
+              raise SystemExit("Pillow/PIL references found; do not exclude Pillow")
+          print("No Pillow/PIL source references found.")
           if hits:
               print("\n".join(hits))
               raise SystemExit(
@@ -223,6 +275,7 @@ jobs:
             --exclude-module=PySide6.QtVirtualKeyboard \
             --exclude-module=PySide6.QtVirtualKeyboardQml \
             --exclude-module=Cython \
+            --exclude-module=PIL \
             --hidden-import=modules.gui.main_window \
             --hidden-import=PySide6.QtMultimedia \
             --hidden-import=rtmidi \
@@ -290,6 +343,33 @@ jobs:
           )
           if cython_members:
               raise SystemExit("Cython package modules remain in runtime validation bundle")
+
+          pillow_members = [
+              name for name, _, _ in rows
+              if (
+                  name.startswith("pil/")
+                  or name.startswith("pillow/")
+                  or name.startswith("pillow.libs/")
+                  or name.startswith("pillow-")
+              )
+          ]
+          pillow_packed_bytes = sum(
+              packed for name, _, packed in rows
+              if (
+                  name.startswith("pil/")
+                  or name.startswith("pillow/")
+                  or name.startswith("pillow.libs/")
+                  or name.startswith("pillow-")
+              )
+          )
+          print(
+              "Pillow/PIL payload present:",
+              pillow_members,
+              "packed bytes:",
+              pillow_packed_bytes,
+          )
+          if pillow_members:
+              raise SystemExit("Pillow/PIL modules remain in runtime validation bundle")
 
           imageformat_plugins = {
               name.rsplit("/", 1)[-1]
