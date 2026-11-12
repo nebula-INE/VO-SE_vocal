@@ -111,6 +111,9 @@ def _dependency_audit(archive: Any, rows: list[dict[str, Any]]) -> dict[str, Any
         temp_root = Path(temp_dir)
         for index, row in enumerate(rows):
             name = row["name"]
+            lowered_name = name.lower()
+            if not (lowered_name.endswith((".so", ".dylib", ".dll")) or ".so." in lowered_name):
+                continue
             try:
                 data = archive.extract(name)
             except Exception as exc:  # Keep the report useful even if one entry cannot be decoded.
