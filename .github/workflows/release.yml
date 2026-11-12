@@ -632,6 +632,7 @@ jobs:
             elif [ "${{ runner.os }}" = "Linux" ]; then
               echo "Building Linux app on runner: ${{ matrix.os }}"
               pyinstaller --noconsole --onefile --clean \
+                --additional-hooks-dir=packaging/pyinstaller-hooks \
                 --paths modules \
                 --icon="assets/icon.ico" \
                 --hidden-import=PySide6.QtCore \
@@ -713,6 +714,42 @@ jobs:
 
               echo "macOS app bundle is ready for signing before packaging."
             fi
+
+      - name: Verify Linux Qt PDF image payload exclusion
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from PyInstaller.archive.readers import CArchiveReader
+
+          archive = CArchiveReader("dist/VO-SE_vocal_Linux")
+          names = {name.lower() for name in archive.toc}
+          pdf_payload = sorted(
+              name for name in names
+              if (
+                  name.endswith("/plugins/imageformats/libqpdf.so")
+                  or name.endswith("/lib/libqt6pdf.so.6")
+                  or name.endswith("/lib/libqt6pdf.so")
+                  or name == "libqt6pdf.so.6"
+              )
+          )
+          print("PDF-only Qt payload:", pdf_payload)
+          if pdf_payload:
+              raise SystemExit("Optional Qt PDF plugin/library remains in official Linux bundle")
+
+          imageformat_plugins = {
+              name.rsplit("/", 1)[-1]
+              for name in names
+              if "/plugins/imageformats/" in name
+          }
+          required = {"libqjpeg.so", "libqico.so", "libqsvg.so", "libqwebp.so"}
+          missing = sorted(required - imageformat_plugins)
+          print("Retained image format plugins:", sorted(imageformat_plugins))
+          if missing:
+              raise SystemExit(f"Required image format plugins missing: {missing}")
+          print("Official Linux Qt image-format audit: OK")
+          PY
 
       - name: Linux desktop startup smoke test
         if: matrix.os == 'ubuntu-latest'
