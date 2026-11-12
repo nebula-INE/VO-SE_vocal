@@ -55,7 +55,9 @@ jobs:
             libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 \
             libxcb-cursor0 libxrender1 libxi6 libsm6 libxext6 \
             libfontconfig1 libdbus-1-3 libglib2.0-0 libpulse0 \
-            libasound2t64 libportaudio2
+            libasound2t64 libportaudio2 upx-ucl
+          command -v upx
+          upx --version
 
       - name: Install runtime dependencies only
         run: |
@@ -174,6 +176,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
+            --upx-dir="$(dirname "$(command -v upx)")" \
             --paths . --paths modules \
             --hidden-import=PySide6.QtCore \
             --hidden-import=PySide6.QtGui \
