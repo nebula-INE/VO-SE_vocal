@@ -104,7 +104,7 @@ class AudioMixer:
                 "last_load_errors": list(self.last_load_errors),
                 "last_playback_errors": list(self.last_playback_errors),
                 "queued_blocks": self._blocks.qsize(),
-                "enabled_effects": sum(1 for item in self._effects.chain if item["enabled"]),
+                "enabled_effects": sum(1 for item in self._effects.get_chain() if item["enabled"]),
                 "effect_tail_frames": self._effects.tail_frames,
             }
 
@@ -229,7 +229,7 @@ class AudioMixer:
     def get_effect_chain(self) -> list[dict[str, Any]]:
         """Return a detached snapshot of the current master chain."""
         with self._lock:
-            return normalize_effect_chain(self._effects.chain)
+            return self._effects.get_chain()
 
     def play(self, start_sec: float | None = None) -> None:
         """Start playback at start_sec, or resume from the current position."""
