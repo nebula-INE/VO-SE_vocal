@@ -220,13 +220,13 @@ jobs:
       - name: Verify required SciPy runtime APIs with excluded subpackages
         run: |
           set -euo pipefail
-          python -m PyInstaller --noconfirm --clean --onefile \\
-            --paths . \\
-            --exclude-module=scipy.optimize \\
-            --exclude-module=scipy.stats \\
-            --distpath /tmp/vose-scipy-probe-dist \\
-            --workpath /tmp/vose-scipy-probe-work \\
-            --name vose_scipy_runtime_probe \\
+          python -m PyInstaller --noconfirm --clean --onefile \
+            --paths . \
+            --exclude-module=scipy.optimize \
+            --exclude-module=scipy.stats \
+            --distpath /tmp/vose-scipy-probe-dist \
+            --workpath /tmp/vose-scipy-probe-work \
+            --name vose_scipy_runtime_probe \
             scripts/linux_runtime_scipy_probe.py
           /tmp/vose-scipy-probe-dist/vose_scipy_runtime_probe
 
