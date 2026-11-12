@@ -5,6 +5,8 @@ import logging
 import os
 import webbrowser
 
+from PySide6.QtWidgets import QMessageBox
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,18 +52,17 @@ def install_update_notification_patch(main_window_class) -> None:
             return
 
         latest_version, page_url = pending
-        reply = self.__class__._vose_update_message_box.question(
+        reply = QMessageBox.question(
             self,
             "アップデートがあります",
             (
                 f"VO-SE Pro の新しいビルド {latest_version} が公開されています。\n"
                 "Releaseページを開いて、使用中のOSに合った最新版をダウンロードしますか？"
             ),
-            self.__class__._vose_update_message_box.StandardButton.Yes
-            | self.__class__._vose_update_message_box.StandardButton.No,
-            self.__class__._vose_update_message_box.StandardButton.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if reply == self.__class__._vose_update_message_box.StandardButton.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 opened = webbrowser.open(page_url)
                 if not opened:
@@ -76,10 +77,8 @@ def install_update_notification_patch(main_window_class) -> None:
                     7000,
                 )
 
-    # Use the real QMessageBox from the already-imported GUI module at install time.
-    from PySide6.QtWidgets import QMessageBox
-
-    main_window_class._vose_update_message_box = QMessageBox
+    # Replacing these class methods before construction is important: MainWindow
+    # schedules _check_for_updates with a bound callback during __init__.
     main_window_class._check_for_updates = _check_for_updates
     main_window_class._on_update_result = _on_update_result
     main_window_class._show_update_dialog = _show_update_dialog
