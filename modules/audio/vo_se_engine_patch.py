@@ -746,3 +746,36 @@ def apply_patch(engine_class) -> None:
     engine_class.export_to_wav_v2 = _export_to_wav_v2
     engine_class.load_ust_project = _load_ust_project
     logger.info("VO_SE_Engine パッチ適用完了 (VCV + UST + Vibrato + Portamento)")
+
+
+def ensure_desktop_export_ready(engine: Any) -> None:
+    """Prepare the VO-SE desktop renderer regardless of the GUI entry point.
+
+    Some legacy launchers construct MainWindow before loading VO_SE_Engine and
+    do not run patch_main_window after injection. Keep that from silently
+    falling back to the older, incompatible export path.
+    """
+    from modules.audio.vo_se_engine import VO_SE_Engine
+
+    if not isinstance(engine, VO_SE_Engine):
+        raise TypeError(
+            "デスクトップWAV書き出しには VO_SE_Engine が必要です。"
+            f" 現在のエンジン: {type(engine).__name__}"
+        )
+
+    if bool(getattr(engine, "_vose_desktop_export_ready", False)):
+        if not callable(getattr(engine, "export_to_wav_v2", None)):
+            raise RuntimeError("WAV書き出しAPIの初期化状態が不正です。")
+        return
+
+    apply_patch(type(engine))
+
+    refresh = getattr(engine, "refresh_voice_library_v2", None)
+    exporter = getattr(engine, "export_to_wav_v2", None)
+    if not callable(refresh) or not callable(exporter):
+        raise RuntimeError("VO-SEデスクトップWAV書き出しAPIを初期化できません。")
+
+    # Resolve oto.ini / prefix.map only after the compatibility methods have
+    # been installed on the actual engine instance.
+    refresh()
+    setattr(engine, "_vose_desktop_export_ready", True)
