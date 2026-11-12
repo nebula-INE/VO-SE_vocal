@@ -99,6 +99,31 @@ jobs:
           print("Optional BatchVoiceOptimizer import without PyTorch: OK")
           PY
 
+          # Cython is a build-time dependency of pyopenjtalk-prebuilt. Verify
+          # its compiled extensions import in a clean process with Python-level
+          # Cython modules unavailable, before excluding Cython from the bundle.
+          python - <<'PY'
+          import importlib.abc
+          import sys
+
+          class _BlockCythonImports(importlib.abc.MetaPathFinder):
+              def find_spec(self, fullname, path=None, target=None):
+                  if fullname == "Cython" or fullname.startswith("Cython."):
+                      raise ModuleNotFoundError(
+                          f"Cython is intentionally unavailable at runtime: {fullname}"
+                      )
+                  return None
+
+          sys.meta_path.insert(0, _BlockCythonImports())
+          import pyopenjtalk
+          from pyopenjtalk import htsengine, openjtalk
+
+          assert pyopenjtalk is not None
+          assert htsengine is not None
+          assert openjtalk is not None
+          print("pyopenjtalk compiled runtime imports without Python Cython: OK")
+          PY
+
       - name: Generate voice data header
         run: python modules/tools/pack_all_voices.py
 
