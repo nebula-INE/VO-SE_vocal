@@ -55,10 +55,7 @@ jobs:
             libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 \
             libxcb-cursor0 libxrender1 libxi6 libsm6 libxext6 \
             libfontconfig1 libdbus-1-3 libglib2.0-0 libpulse0 \
-            libasound2t64 libportaudio2 upx-ucl
-          command -v upx
-          upx --version
-          echo "UPX compression is enabled for this validation-only build."
+            libasound2t64 libportaudio2
           command -v upx
           upx --version
 
@@ -179,7 +176,6 @@ jobs:
         run: |
           set -euo pipefail
           python -m PyInstaller --noconsole --clean --onefile \
-            --upx-dir="$(dirname "$(command -v upx)")" \
             --paths . --paths modules \
             --hidden-import=PySide6.QtCore \
             --hidden-import=PySide6.QtGui \
@@ -201,6 +197,8 @@ jobs:
             --exclude-module=PySide6.QtMultimediaWidgets \
             --exclude-module=PySide6.QtVirtualKeyboard \
             --exclude-module=PySide6.QtVirtualKeyboardQml \
+            --exclude-module=scipy.optimize \
+            --exclude-module=scipy.stats \
             --hidden-import=modules.gui.main_window \
             --hidden-import=PySide6.QtMultimedia \
             --hidden-import=rtmidi \
@@ -218,6 +216,19 @@ jobs:
           chmod +x dist/VO-SE_vocal_Linux
           stat -c 'Linux executable bytes=%s' dist/VO-SE_vocal_Linux
           du -h dist/VO-SE_vocal_Linux
+
+      - name: Verify required SciPy runtime APIs with excluded subpackages
+        run: |
+          set -euo pipefail
+          python -m PyInstaller --noconfirm --clean --onefile \\
+            --paths . \\
+            --exclude-module=scipy.optimize \\
+            --exclude-module=scipy.stats \\
+            --distpath /tmp/vose-scipy-probe-dist \\
+            --workpath /tmp/vose-scipy-probe-work \\
+            --name vose_scipy_runtime_probe \\
+            scripts/linux_runtime_scipy_probe.py
+          /tmp/vose-scipy-probe-dist/vose_scipy_runtime_probe
 
       - name: Inspect packaged dependency archive
         run: |
@@ -240,6 +251,24 @@ jobs:
           hits = [(name, unpacked, packed) for name, unpacked, packed in rows
                   if any(token in name for token in forbidden)]
           print("Archive entries inspected:", len(rows))
+          pyz_name = next(
+              name for name, entry in archive.toc.items() if entry[-1] == "z"
+          )
+          pyz = archive.open_embedded_archive(pyz_name)
+          excluded_python_modules = sorted(
+              name for name in pyz.toc
+              if name == "scipy.optimize" or name.startswith("scipy.optimize.")
+              or name == "scipy.stats" or name.startswith("scipy.stats.")
+          )
+          excluded_native_entries = sorted(
+              name for name in archive.toc
+              if name.lower().startswith(("scipy/optimize/", "scipy/stats/"))
+          )
+          print("Excluded SciPy Python modules present:", excluded_python_modules[:20])
+          print("Excluded SciPy native entries present:", excluded_native_entries[:20])
+          if excluded_python_modules or excluded_native_entries:
+              raise SystemExit("Experimental SciPy subpackage exclusions were not applied")
+          print("Required SciPy subpackages only: OK")
           print("Largest embedded entries (unpacked bytes):")
           for name, unpacked, packed in sorted(rows, key=lambda row: row[1], reverse=True)[:30]:
               print(f"{unpacked:>12} unpacked | {packed:>12} packed | {name}")
