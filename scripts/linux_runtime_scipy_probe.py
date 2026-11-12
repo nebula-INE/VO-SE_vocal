@@ -1,7 +1,7 @@
 """Runtime smoke probe for the SciPy APIs used by VO-SE.
 
 This is frozen as a small one-file executable by the Linux validation workflow
-with scipy.optimize and scipy.stats excluded. It proves the required signal,
+with scipy.stats excluded and scipy.optimize retained because scipy.interpolate\nimports it internally. It proves the required signal,
 FFT, and linear-algebra APIs remain usable without those unrelated subpackages.
 """
 from __future__ import annotations
