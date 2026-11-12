@@ -150,15 +150,21 @@ class MasterEffectsProcessor:
         """Validate a new chain and optionally retain state for matching effects."""
         normalized = normalize_effect_chain(chain)
         with self._lock:
-            previous_types = {
-                item["id"]: item["type"] for item in self.chain
+            previous_effects = {
+                item["id"]: item for item in self.chain
             }
             previous_states = self._states
             new_states: dict[str, dict[str, Any]] = {}
             for effect in normalized:
                 effect_id = effect["id"]
                 effect_type = effect["type"]
-                if preserve_state and previous_types.get(effect_id) == effect_type:
+                previous = previous_effects.get(effect_id)
+                if (
+                    preserve_state
+                    and previous is not None
+                    and previous["type"] == effect_type
+                    and previous["enabled"] == effect["enabled"]
+                ):
                     new_states[effect_id] = previous_states[effect_id]
                 elif effect_type == "compressor":
                     new_states[effect_id] = {"envelope": 0.0}
