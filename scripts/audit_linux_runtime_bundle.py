@@ -81,7 +81,7 @@ def calculate_reduction_percent(baseline_bytes: int, current_bytes: int) -> floa
 
 def _is_elf_member(name: str, data: bytes) -> bool:
     lowered = name.lower()
-    return (lowered.endswith(".so") or ".so." in lowered) and data.startswith(b"\\x7fELF")
+    return (lowered.endswith(".so") or ".so." in lowered) and data.startswith(b"\x7fELF")
 
 
 def _dependency_audit(archive: Any, rows: list[dict[str, Any]]) -> dict[str, Any]:
