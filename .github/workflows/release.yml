@@ -939,7 +939,12 @@ jobs:
         run: |
           set -euo pipefail
           APP_BUNDLE="dist/VO-SE_vocal_Mac.app"
-          ZIP_PATH="dist_out/VO-SE_vocal_Mac_notarize.zip"
+          if [ "${{ matrix.os }}" = "macos-15-intel" ]; then
+            MAC_LABEL="Intel"
+          else
+            MAC_LABEL="AppleSilicon"
+          fi
+          ZIP_PATH="dist_out/VO-SE_vocal_Mac_${MAC_LABEL}_notarize.zip"
           if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
             echo "Skip notarization: secrets not set"
             exit 0
@@ -956,6 +961,9 @@ jobs:
             --wait
           xcrun stapler staple "$APP_BUNDLE"
           spctl --assess --type execute "$APP_BUNDLE"
+          # The signed app is packaged as the architecture-specific DMG/ZIP below.
+          # Keep the temporary notarization submission archive out of Release assets.
+          rm -f "$ZIP_PATH"
 
       
       - name: 💿 Package macOS artifacts (DMG + ZIP)
@@ -1216,7 +1224,21 @@ jobs:
         run: |
           set -euo pipefail
           find release-assets -maxdepth 1 -type f -print
-          test -n "$(find release-assets -maxdepth 1 -type f -print -quit)"
+          expected_files=(
+            "VO-SE_vocal_Win.exe"
+            "VO-SE_vocal_Linux_x86_64.tar.gz"
+            "vo-se-vocal_amd64.deb"
+            "VO-SE_vocal_Mac_Intel.dmg"
+            "VO-SE_vocal_Mac_Intel_update.zip"
+            "VO-SE_vocal_Mac_AppleSilicon.dmg"
+            "VO-SE_vocal_Mac_AppleSilicon_update.zip"
+          )
+          for file in "${expected_files[@]}"; do
+            if [ ! -s "release-assets/$file" ]; then
+              echo "::error::Missing or empty release asset: $file"
+              exit 1
+            fi
+          done
 
       - name: Publish latest Release assets
         uses: softprops/action-gh-release@v2
