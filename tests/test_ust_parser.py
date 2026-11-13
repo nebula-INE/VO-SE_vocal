@@ -516,9 +516,6 @@ class TestUstParser(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertAlmostEqual(notes[0]["start_time"], 0.25, places=6)
 
-if __name__ == "__main__":
-    unittest.main()
-
     def test_ust_tie_after_rest_does_not_extend_previous_note(self):
         """A '+' after silence has no adjacent voiced note to continue."""
         from modules.data.ust_parser import UstNote, UstProject
@@ -562,3 +559,6 @@ if __name__ == "__main__":
         self.assertAlmostEqual(
             restored["_ust_trailing_rest_duration_sec"], 0.25, places=6
         )
+
+if __name__ == "__main__":
+    unittest.main()
