@@ -553,6 +553,12 @@ class UstConverter:
                     previous = results[-1]
                     previous_duration = float(previous["duration"])
                     previous.setdefault("_ust_base_duration", previous_duration)
+                    previous.setdefault("_ust_base_portamento", {
+                        "pbs": previous.get("_ust_pbs", ""),
+                        "pbw": previous.get("_ust_pbw", ""),
+                        "pby": previous.get("_ust_pby", ""),
+                        "pbm": previous.get("_ust_pbm", ""),
+                    })
                     tie_vibrato = None
                     if ust_note.vibrato is not None:
                         tie_vibrato = {
