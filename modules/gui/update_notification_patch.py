@@ -10,6 +10,13 @@ from PySide6.QtWidgets import QMessageBox
 logger = logging.getLogger(__name__)
 
 
+def _get_application_instance():
+    """Return QApplication without exposing the global Qt class to test patches."""
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance()
+
+
 def install_update_notification_patch(main_window_class) -> None:
     """Install update methods before MainWindow schedules its startup timer."""
     if getattr(main_window_class, "_vose_update_notification_patch_installed", False):
@@ -28,9 +35,7 @@ def install_update_notification_patch(main_window_class) -> None:
         try:
             from modules.updater.update_checker import UpdateChecker
 
-            from PySide6.QtWidgets import QApplication
-
-            application = QApplication.instance()
+            application = _get_application_instance()
             if application is None:
                 return
 
