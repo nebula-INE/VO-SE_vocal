@@ -23,7 +23,7 @@ LATEST_RELEASE_API = (
 TAG_REF_API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/git/ref/tags"
 COMPARE_API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/compare"
 RELEASE_PAGE_URL = f"https://github.com/{GITHUB_REPOSITORY}/releases/tag/latest"
-REQUEST_TIMEOUT_SECONDS = 6
+REQUEST_TIMEOUT_SECONDS = 3
 
 # release.yml replaces this value with the exact commit SHA used for packaging.
 # Local/source builds do not perform release notifications.
