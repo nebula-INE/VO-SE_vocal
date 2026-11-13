@@ -460,15 +460,16 @@ class TestUstParser(unittest.TestCase):
                     ),
                     pre_utterance=18.0, overlap=7.0,
                 ),
-                UstNote(index=2, length=240, lyric="い", note_num=62, tempo=120.0),
+                UstNote(index=2, length=240, lyric="+", note_num=60, tempo=120.0),
+                UstNote(index=3, length=240, lyric="い", note_num=62, tempo=120.0),
             ],
         )
 
         notes = UstConverter.to_note_dicts(project)
 
         self.assertEqual([note["lyric"] for note in notes], ["あ", "い"])
-        self.assertAlmostEqual(notes[0]["duration"], 1.0, places=6)
-        self.assertAlmostEqual(notes[1]["start_time"], 1.0, places=6)
+        self.assertAlmostEqual(notes[0]["duration"], 1.25, places=6)
+        self.assertAlmostEqual(notes[1]["start_time"], 1.25, places=6)
         self.assertEqual(notes[0]["_ust_pbs"], "0;0")
         self.assertEqual(notes[0]["_ust_pbw"], "50,425,50")
         self.assertEqual(notes[0]["_ust_pby"], "10,50,0")
@@ -493,12 +494,17 @@ class TestUstParser(unittest.TestCase):
         self.assertEqual(tie["vibrato"]["cycle"], 180.0)
         self.assertAlmostEqual(tie["pre_utterance"], 18.0)
         self.assertAlmostEqual(tie["overlap"], 7.0)
+        second_tie = notes[0]["_ust_tie_sections"][1]
+        self.assertFalse(second_tie["flags_present"])
+        self.assertEqual(second_tie["effective_flags"], "g-5")
 
         # Both the base duration and continuation sections survive NoteEvent
         # persistence, because UST metadata is stored as serializable extras.
         from modules.data.data_models import NoteEvent
         restored = NoteEvent.from_dict(notes[0]).to_dict()
-        self.assertEqual(restored["_ust_tie_sections"], [tie])
+        self.assertEqual(
+            restored["_ust_tie_sections"], notes[0]["_ust_tie_sections"]
+        )
         self.assertAlmostEqual(restored["_ust_base_duration"], 0.5)
 
     def test_leading_ust_tie_keeps_timeline_position_without_creating_node(self):
