@@ -25,6 +25,12 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Serialize publication for each ref. A newer push must not race an older run
+# and let stale packages move the stable "latest" tag backwards.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # =============================================================================
   # 1. Python/PySide6 版アプリ ビルド（PyInstaller / 署名 / notarize / DMG）
