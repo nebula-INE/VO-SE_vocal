@@ -491,11 +491,34 @@ class UstConverter:
         previous_shapes = [
             part.strip() for part in str(previous.get("_ust_pbm", "") or "").split(",")
         ] if previous.get("_ust_pbm") else []
-        tied_shapes = [part.strip() for part in str(tied_note.pbm or "").split(",")] if tied_note.pbm else []
+        tied_shapes = [
+            part.strip() for part in str(tied_note.pbm or "").split(",")
+        ] if tied_note.pbm else []
         if previous_shapes or tied_shapes:
-            if not previous_has_curve and offset_ms > 0:
-                previous_shapes = [""]
-            previous["_ust_pbm"] = ",".join(previous_shapes + tied_shapes)
+            previous_width_count = max(0, len(previous_points) - 1) if previous_has_curve else 0
+            tied_width_count = max(0, len(tied_points) - 1)
+
+            # PBM contains one interpolation shape per PBW segment and may
+            # include one extra shape for the final segment to note end. Keep
+            # those indices aligned after adding the bridge between the old
+            # curve and the tied section.
+            previous_segments = previous_shapes[:previous_width_count]
+            previous_segments += [""] * (previous_width_count - len(previous_segments))
+            previous_tail = (
+                previous_shapes[previous_width_count]
+                if len(previous_shapes) > previous_width_count
+                else ""
+            )
+            tied_segments = tied_shapes[:tied_width_count]
+            tied_segments += [""] * (tied_width_count - len(tied_segments))
+            tied_tail = (
+                tied_shapes[tied_width_count]
+                if len(tied_shapes) > tied_width_count
+                else ""
+            )
+            previous["_ust_pbm"] = ",".join(
+                previous_segments + [previous_tail] + tied_segments + [tied_tail]
+            )
 
     @staticmethod
     def to_note_dicts(project: UstProject) -> List[Dict]:
