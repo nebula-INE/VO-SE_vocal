@@ -353,6 +353,16 @@ def test_ust_export_restores_tie_sections_and_section_local_settings(tmp_path, m
     )
     first._ust_tempo = 120.0
     first._ust_base_duration = 0.5
+    first._ust_base_portamento = {
+        "pbs": "0;0",
+        "pbw": "50",
+        "pby": "10",
+        "pbm": "s,j",
+    }
+    first._ust_pbs = "0;0"
+    first._ust_pbw = "50"
+    first._ust_pby = "10"
+    first._ust_pbm = "s,j"
     first._ust_tie_sections = [{
         "length": 480,
         "tempo": 90.0,
@@ -404,7 +414,11 @@ def test_ust_export_restores_tie_sections_and_section_local_settings(tmp_path, m
     assert "PBS=-25;50" in exported
     assert "PBW=60" in exported
     assert "PBY=5" in exported
+    assert "PBM=s,j" in exported
     assert "PBM=r" in exported
+    assert exported.count("PBS=") == 2
+    assert "PBS=0;0" in exported
+    assert "PBS=-25;50" in exported
 
     parsed = UstParser().load(str(output_path))
     notes = UstConverter.to_note_dicts(parsed)
@@ -419,3 +433,13 @@ def test_ust_export_restores_tie_sections_and_section_local_settings(tmp_path, m
     assert restored_tie["vibrato"]["cycle"] == pytest.approx(190.0)
     assert restored_tie["pre_utterance"] == pytest.approx(12.0)
     assert restored_tie["overlap"] == pytest.approx(4.0)
+    assert notes[0]["_ust_base_portamento"] == {
+        "pbs": "0;0",
+        "pbw": "50",
+        "pby": "10",
+        "pbm": "s,j",
+    }
+    # The displayed combined curve is rebuilt once from the original base
+    # curve plus the original '+' curve, rather than exporting the merged
+    # curve and adding the tie curve a second time.
+    assert notes[0]["_ust_pbw"] == "50,425,60"
