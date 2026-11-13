@@ -282,6 +282,7 @@ def test_rendered_wav_preview_uses_background_mixer_start():
     assert 'self._start_audio_mixer_command(' in play_handler
     assert 'play_file(' not in play_handler
 
+
 def test_ust_export_recreates_silent_gaps_without_display_nodes(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
