@@ -113,7 +113,14 @@ class UstNote:
 
     @property
     def is_rest(self) -> bool:
-        return self.lyric.strip().upper() == "R"
+        """Return whether this UST section represents silence/breath, not a piano-roll note."""
+        lyric = self.lyric.strip().lower()
+        if lyric in {
+            "", "r", "r_", "r_0", "[r]", "null",
+            "休", "休符", "pau", "sil", "br", "息", "吸", "吸気", "息吸い",
+        }:
+            return True
+        return bool(re.fullmatch(r"_?(?:br|息|吸)\d*", lyric))
 
 
 @dataclass
@@ -391,75 +398,180 @@ class UstConverter:
     """
 
     @staticmethod
+    def _parse_portamento_points(
+        pbs: str, pbw: str, pby: str, offset_ms: float = 0.0
+    ) -> List[Tuple[float, float]]:
+        """Parse UST PBS/PBW/PBY as (offset_ms, semitone) points."""
+        if not (pbs or pbw or pby):
+            return []
+
+        def number(raw: str, default: float = 0.0) -> float:
+            match = re.search(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", str(raw))
+            if match is None:
+                return default
+            try:
+                value = float(match.group(0))
+            except ValueError:
+                return default
+            return value if math.isfinite(value) else default
+
+        pbs_parts = str(pbs or "").split(";")
+        start_ms = max(-3000.0, min(10000.0, number(pbs_parts[0]) if pbs_parts else 0.0))
+        start_pitch = number(pbs_parts[1]) * 0.1 if len(pbs_parts) > 1 else 0.0
+        start_pitch = max(-24.0, min(24.0, start_pitch))
+        points: List[Tuple[float, float]] = [
+            (offset_ms + start_ms, start_pitch)
+        ]
+
+        widths = [
+            number(part)
+            for part in str(pbw or "").split(",")
+            if part.strip()
+        ]
+        heights = [
+            number(part)
+            for part in str(pby or "").split(",")
+            if part.strip()
+        ]
+        cursor_ms = start_ms
+        for index, raw_height in enumerate(heights):
+            fallback_width = widths[-1] if widths else 50.0
+            width = widths[index] if index < len(widths) else fallback_width
+            cursor_ms += max(1.0, min(5000.0, width))
+            pitch = max(-24.0, min(24.0, raw_height * 0.1))
+            points.append((offset_ms + cursor_ms, pitch))
+        return points
+
+    @staticmethod
+    def _format_ust_number(value: float) -> str:
+        rendered = f"{value:.2f}".rstrip("0").rstrip(".")
+        return rendered or "0"
+
+    @staticmethod
+    def _merge_tied_portamento(
+        previous: Dict, tied_note: UstNote, offset_ms: float
+    ) -> None:
+        """Append a UST '+' section's pitch points to the preceding voiced note."""
+        if not (tied_note.pbs or tied_note.pbw or tied_note.pby):
+            return
+
+        previous_pbs = str(previous.get("_ust_pbs", "") or "")
+        previous_pbw = str(previous.get("_ust_pbw", "") or "")
+        previous_pby = str(previous.get("_ust_pby", "") or "")
+        previous_has_curve = bool(previous_pbs or previous_pbw or previous_pby)
+
+        previous_points = UstConverter._parse_portamento_points(
+            previous_pbs, previous_pbw, previous_pby
+        )
+        if not previous_points:
+            # A neutral point at the original note onset anchors the appended
+            # tie curve; without it PBS would start only at the tie boundary.
+            previous_points = [(0.0, 0.0)]
+        tied_points = UstConverter._parse_portamento_points(
+            tied_note.pbs, tied_note.pbw, tied_note.pby, offset_ms=offset_ms
+        )
+        merged_points = sorted(previous_points + tied_points, key=lambda item: item[0])
+        if not merged_points:
+            return
+
+        first_ms, first_pitch = merged_points[0]
+        widths: List[str] = []
+        heights: List[str] = []
+        previous_ms = first_ms
+        for point_ms, pitch in merged_points[1:]:
+            widths.append(str(max(1, int(round(point_ms - previous_ms)))))
+            heights.append(UstConverter._format_ust_number(pitch * 10.0))
+            previous_ms = point_ms
+
+        previous["_ust_pbs"] = (
+            f"{int(round(first_ms))};{UstConverter._format_ust_number(first_pitch * 10.0)}"
+        )
+        previous["_ust_pbw"] = ",".join(widths)
+        previous["_ust_pby"] = ",".join(heights)
+
+        previous_shapes = [
+            part.strip() for part in str(previous.get("_ust_pbm", "") or "").split(",")
+        ] if previous.get("_ust_pbm") else []
+        tied_shapes = [part.strip() for part in str(tied_note.pbm or "").split(",")] if tied_note.pbm else []
+        if previous_shapes or tied_shapes:
+            if not previous_has_curve and offset_ms > 0:
+                previous_shapes = [""]
+            previous["_ust_pbm"] = ",".join(previous_shapes + tied_shapes)
+
+    @staticmethod
     def to_note_dicts(project: UstProject) -> List[Dict]:
         """
-        UstProject.notes → NoteEvent 辞書リスト に変換。
+        Convert UST sections into drawable/renderable NoteEvent dictionaries.
 
-        休符 ("R") はスキップせず、lyric="R" として保持する。
-        タイムラインの時刻は ticks → 秒 に変換する。
+        Rest/breath sections advance absolute time but do not become piano-roll
+        nodes. A '+' tie section extends the previous voiced note instead of
+        creating a separate node with an unresolvable '+' lyric. Its portamento
+        points are shifted onto the combined note's time axis.
         """
-        results = []
+        results: List[Dict] = []
         current_time_sec = 0.0
 
         for ust_note in project.notes:
-            # ticks → 秒変換 (テンポはノート毎に異なる可能性がある)
             beats = ust_note.length / _TICKS_PER_BEAT
             duration_sec = beats * (60.0 / ust_note.tempo)
+            lyric = str(ust_note.lyric or "").strip()
 
-            # 先行発声: UST 上書き値 > oto.ini (呼び出し元で解決) > デフォルト
-            # ここでは UST 値のみを記録し、oto.ini との最終調整は text_analyzer 側に委ねる
-            pre_ms = ust_note.pre_utterance  # None = oto.ini に委ねる
-            ov_ms  = ust_note.overlap        # None = oto.ini に委ねる
+            if ust_note.is_rest:
+                current_time_sec += duration_sec
+                continue
 
-            # ビブラートカーブの生成
+            if lyric == "+":
+                if results:
+                    previous = results[-1]
+                    previous_duration = float(previous["duration"])
+                    UstConverter._merge_tied_portamento(
+                        previous,
+                        ust_note,
+                        offset_ms=previous_duration * 1000.0,
+                    )
+                    previous["duration"] = previous_duration + duration_sec
+                # A leading '+' has no preceding note to continue, but it still
+                # occupies its UST time slot.
+                current_time_sec += duration_sec
+                continue
+
             vibrato_depth = 0.0
-            vibrato_rate  = 5.5
+            vibrato_rate = 5.5
             if ust_note.vibrato is not None:
                 vibrato_depth = ust_note.vibrato.depth_semitones
-                vibrato_rate  = ust_note.vibrato.rate_hz
+                vibrato_rate = ust_note.vibrato.rate_hz
 
             note_dict: Dict = {
-                # NoteEvent 標準フィールド
-                "note_number":   ust_note.note_num,
-                "start_time":    current_time_sec,
-                "duration":      duration_sec,
-                "lyric":         ust_note.lyric,
-                "velocity":      int(ust_note.intensity * 127.0 / 200.0),  # 0–127 に正規化
+                "note_number": ust_note.note_num,
+                "start_time": current_time_sec,
+                "duration": duration_sec,
+                "lyric": ust_note.lyric,
+                "velocity": int(ust_note.intensity * 127.0 / 200.0),
                 "vibrato_depth": vibrato_depth,
-                "vibrato_rate":  vibrato_rate,
-
-                # 先行発声・オーバーラップ (ms、None なら oto.ini 値を使う)
-                "pre_utterance": pre_ms,
-                "overlap":       ov_ms,
-                # 明示的な0msも「USTが指定した値」として区別できるようにする。
-                # 通常のNoteEventは後方互換のため0.0を持つ場合があるため、
-                # 値だけでは「未指定」と「明示的な0」を区別できない。
-                "_ust_preutterance_explicit": pre_ms is not None,
-                "_ust_overlap_explicit": ov_ms is not None,
-
-                # UST 拡張フィールド (エンジン側が参照可能)
-                # ノート側にFlagsキーが無い場合だけ[#SETTING] Flagsを継承する。
-                # Flags= の明示的な空文字は継承しない。
-                "_ust_flags":      ust_note.flags if ust_note.flags_present else project.flags,
-                "_ust_tempo":      ust_note.tempo,        # ★追加: ノート毎のテンポを保持
+                "vibrato_rate": vibrato_rate,
+                "pre_utterance": ust_note.pre_utterance,
+                "overlap": ust_note.overlap,
+                "_ust_preutterance_explicit": ust_note.pre_utterance is not None,
+                "_ust_overlap_explicit": ust_note.overlap is not None,
+                "_ust_flags": ust_note.flags if ust_note.flags_present else project.flags,
+                "_ust_tempo": ust_note.tempo,
                 "_ust_modulation": ust_note.modulation,
-                "_ust_pbs":        ust_note.pbs,
-                "_ust_pbw":        ust_note.pbw,
-                "_ust_pby":        ust_note.pby,
-                "_ust_pbm":        ust_note.pbm,
-                "_ust_intensity":  ust_note.intensity,
+                "_ust_pbs": ust_note.pbs,
+                "_ust_pbw": ust_note.pbw,
+                "_ust_pby": ust_note.pby,
+                "_ust_pbm": ust_note.pbm,
+                "_ust_intensity": ust_note.intensity,
             }
 
-            # ビブラートオブジェクトも保持
             if ust_note.vibrato is not None:
                 note_dict["_ust_vibrato"] = {
-                    "length":    ust_note.vibrato.length,
-                    "cycle":     ust_note.vibrato.cycle,
-                    "depth":     ust_note.vibrato.depth,
-                    "fade_in":   ust_note.vibrato.fade_in,
-                    "fade_out":  ust_note.vibrato.fade_out,
-                    "phase":     ust_note.vibrato.phase,
-                    "height":    ust_note.vibrato.height,
+                    "length": ust_note.vibrato.length,
+                    "cycle": ust_note.vibrato.cycle,
+                    "depth": ust_note.vibrato.depth,
+                    "fade_in": ust_note.vibrato.fade_in,
+                    "fade_out": ust_note.vibrato.fade_out,
+                    "phase": ust_note.vibrato.phase,
+                    "height": ust_note.vibrato.height,
                 }
 
             results.append(note_dict)
