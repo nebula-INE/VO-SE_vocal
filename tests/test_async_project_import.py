@@ -328,3 +328,94 @@ def test_ust_export_recreates_silent_gaps_without_display_nodes(tmp_path, monkey
     assert notes[1]["duration"] == pytest.approx(1.0)
     assert notes[1]["_ust_tempo"] == pytest.approx(60.0)
 
+
+def test_ust_export_restores_tie_sections_and_section_local_settings(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "tie-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    first = NoteEvent(
+        note_number=60, start_time=0.0, duration=0.5 + (2.0 / 3.0), lyric="あ"
+    )
+    first._ust_tempo = 120.0
+    first._ust_base_duration = 0.5
+    first._ust_tie_sections = [{
+        "length": 480,
+        "tempo": 90.0,
+        "note_num": 60,
+        "intensity": 123.0,
+        "modulation": 17.0,
+        "flags": "g+3",
+        "flags_present": True,
+        "pbs": "-25;50",
+        "pbw": "60",
+        "pby": "5",
+        "pbm": "r",
+        "vibrato": {
+            "length": 70.0,
+            "cycle": 190.0,
+            "depth": 38.0,
+            "fade_in": 11.0,
+            "fade_out": 13.0,
+            "phase": 4.0,
+            "height": 1.0,
+        },
+        "pre_utterance": 12.0,
+        "overlap": 4.0,
+    }]
+    second = NoteEvent(
+        note_number=62,
+        start_time=1.0 + (1.0 / 6.0),
+        duration=0.5,
+        lyric="い",
+    )
+    second._ust_tempo = 90.0
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[first, second]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert "Lyric=+" in exported
+    assert "Tempo=90.00" in exported
+    assert "Intensity=123" in exported
+    assert "Modulation=17" in exported
+    assert "Flags=g+3" in exported
+    assert "VBR=70.0,190.0,38.0,11.0,13.0,4.0,1.0" in exported
+    assert "PreUtterance=12.000" in exported
+    assert "VoiceOverlap=4.000" in exported
+    assert "PBS=-25;50" in exported
+    assert "PBW=60" in exported
+    assert "PBY=5" in exported
+    assert "PBM=r" in exported
+
+    parsed = UstParser().load(str(output_path))
+    notes = UstConverter.to_note_dicts(parsed)
+    assert [note["lyric"] for note in notes] == ["あ", "い"]
+    assert notes[0]["duration"] == pytest.approx(1.0 + (1.0 / 6.0))
+    assert notes[1]["start_time"] == pytest.approx(1.0 + (1.0 / 6.0))
+    restored_tie = notes[0]["_ust_tie_sections"][0]
+    assert restored_tie["length"] == 480
+    assert restored_tie["tempo"] == pytest.approx(90.0)
+    assert restored_tie["intensity"] == pytest.approx(123.0)
+    assert restored_tie["flags"] == "g+3"
+    assert restored_tie["vibrato"]["cycle"] == pytest.approx(190.0)
+    assert restored_tie["pre_utterance"] == pytest.approx(12.0)
+    assert restored_tie["overlap"] == pytest.approx(4.0)
