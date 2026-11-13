@@ -1296,6 +1296,30 @@ class ProjectIOMixin:
                     note_start_sec + max(0.0, duration_sec),
                 )
 
+            # A trailing UST rest has no piano-roll node. Keep its duration
+            # on the last displayed note and recreate it after the note blocks.
+            try:
+                trailing_rest_sec = float(
+                    getattr(notes_list[-1], "_ust_trailing_rest_duration_sec", 0.0)
+                    or 0.0
+                )
+            except (TypeError, ValueError):
+                trailing_rest_sec = 0.0
+            if math.isfinite(trailing_rest_sec) and trailing_rest_sec > 1e-6:
+                rest_tempo = current_tempo or first_note_tempo
+                trailing_ticks = int(round(
+                    trailing_rest_sec * rest_tempo * _TICKS_PER_BEAT / 60.0
+                ))
+                if trailing_ticks > 0:
+                    rest_section_id = f"{section_index:04X}"
+                    lines += [
+                        f"[#{rest_section_id}]",
+                        f"Length={trailing_ticks}",
+                        "Lyric=R",
+                        "NoteNum=60",
+                        "",
+                    ]
+
             lines += ["[#TRACKEND]", ""]
 
             # Shift-JIS で書き出し（UTAU 互換）
