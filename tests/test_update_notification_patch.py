@@ -21,7 +21,6 @@ def test_update_notification_patch_is_installed_before_window_creation():
 
 def test_update_thread_is_owned_by_application_not_window(monkeypatch):
     import sys
-    import types
 
     class FakeSignal:
         def __init__(self):
