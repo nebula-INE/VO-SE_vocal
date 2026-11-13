@@ -439,7 +439,7 @@ class TestUstParser(unittest.TestCase):
 
     def test_ust_tie_extends_previous_node_and_merges_portamento(self):
         """Lyric='+' is a continuation, not an extra displayed node."""
-        from modules.data.ust_parser import UstNote, UstProject
+        from modules.data.ust_parser import UstNote, UstProject, UstVibratoParams
 
         project = UstProject(
             tempo=120.0,
@@ -473,6 +473,10 @@ class TestUstParser(unittest.TestCase):
         self.assertEqual(notes[0]["_ust_pby"], "10,50,0")
         self.assertEqual(notes[0]["_ust_pbm"], "s,j,r,s")
         self.assertAlmostEqual(notes[0]["_ust_base_duration"], 0.5)
+        self.assertEqual(
+            notes[0]["_ust_base_portamento"],
+            {"pbs": "0;0", "pbw": "50", "pby": "10", "pbm": "s,j"},
+        )
         tie = notes[0]["_ust_tie_sections"][0]
         self.assertEqual(tie["length"], 480)
         self.assertAlmostEqual(tie["tempo"], 120.0)
