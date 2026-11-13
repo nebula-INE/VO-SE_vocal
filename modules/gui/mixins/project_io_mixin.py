@@ -1026,6 +1026,7 @@ class ProjectIOMixin:
                 tie_sections = list(
                     getattr(note, "_ust_tie_sections", None) or []
                 )
+                had_tie_metadata = bool(tie_sections)
                 try:
                     base_duration_sec = float(
                         getattr(note, "_ust_base_duration", duration_sec)
@@ -1151,8 +1152,11 @@ class ProjectIOMixin:
 
                     tie_sections = retained_ties
                     primary_duration_sec = base_duration_sec
-                beats = primary_duration_sec / (60.0 / note_tempo)
-                ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
+                if had_tie_metadata:
+                    ticks = base_length_ticks
+                else:
+                    beats = primary_duration_sec / (60.0 / note_tempo)
+                    ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
 
                 note_num = int(getattr(note, "note_number", 60))
                 lyric = str(getattr(note, "lyric", "あ"))
