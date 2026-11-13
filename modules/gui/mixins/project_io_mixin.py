@@ -1291,34 +1291,41 @@ class ProjectIOMixin:
 
                     lines.append("")
 
+                # A rest has no piano-roll node, so its duration is stored on
+                # the preceding note. Emit it here (rather than only after the
+                # last list item) so a subsequently inserted note remains after
+                # the original silence when the project is exported.
+                try:
+                    note_trailing_rest_sec = float(
+                        getattr(note, "_ust_trailing_rest_duration_sec", 0.0) or 0.0
+                    )
+                except (TypeError, ValueError):
+                    note_trailing_rest_sec = 0.0
+                trailing_ticks = 0
+                if math.isfinite(note_trailing_rest_sec) and note_trailing_rest_sec > 1e-6:
+                    rest_tempo = current_tempo or first_note_tempo
+                    trailing_ticks = int(round(
+                        note_trailing_rest_sec * rest_tempo * _TICKS_PER_BEAT / 60.0
+                    ))
+                    if trailing_ticks > 0:
+                        rest_section_id = f"{section_index:04X}"
+                        lines += [
+                            f"[#{rest_section_id}]",
+                            f"Length={trailing_ticks}",
+                            "Lyric=R",
+                            "NoteNum=60",
+                            "",
+                        ]
+                        section_index += 1
+
                 timeline_cursor_sec = max(
                     timeline_cursor_sec,
-                    note_start_sec + max(0.0, duration_sec),
+                    note_start_sec + max(0.0, duration_sec)
+                    + (
+                        trailing_ticks / _TICKS_PER_BEAT
+                        * 60.0 / (current_tempo or first_note_tempo)
+                    ),
                 )
-
-            # A trailing UST rest has no piano-roll node. Keep its duration
-            # on the last displayed note and recreate it after the note blocks.
-            try:
-                trailing_rest_sec = float(
-                    getattr(notes_list[-1], "_ust_trailing_rest_duration_sec", 0.0)
-                    or 0.0
-                )
-            except (TypeError, ValueError):
-                trailing_rest_sec = 0.0
-            if math.isfinite(trailing_rest_sec) and trailing_rest_sec > 1e-6:
-                rest_tempo = current_tempo or first_note_tempo
-                trailing_ticks = int(round(
-                    trailing_rest_sec * rest_tempo * _TICKS_PER_BEAT / 60.0
-                ))
-                if trailing_ticks > 0:
-                    rest_section_id = f"{section_index:04X}"
-                    lines += [
-                        f"[#{rest_section_id}]",
-                        f"Length={trailing_ticks}",
-                        "Lyric=R",
-                        "NoteNum=60",
-                        "",
-                    ]
 
             lines += ["[#TRACKEND]", ""]
 
