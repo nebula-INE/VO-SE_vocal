@@ -65,6 +65,49 @@ class _VoiceGallery:
         self.window.on_voice_changed(display_name, internal_id)
 
 
+class _EffectsPanel:
+    def __init__(self):
+        self.effects = []
+
+    def get_effect_chain(self):
+        return [
+            {
+                "id": item["id"],
+                "type": item["type"],
+                "enabled": item["enabled"],
+                "params": dict(item["params"]),
+            }
+            for item in self.effects
+        ]
+
+    def set_effect_chain(self, chain):
+        self.effects = [
+            {
+                "id": item["id"],
+                "type": item["type"],
+                "enabled": item["enabled"],
+                "params": dict(item["params"]),
+            }
+            for item in chain
+        ]
+
+
+class _AudioMixer:
+    def __init__(self):
+        self.effect_chain = []
+
+    def set_effect_chain(self, chain):
+        self.effect_chain = [
+            {
+                "id": item["id"],
+                "type": item["type"],
+                "enabled": item["enabled"],
+                "params": dict(item["params"]),
+            }
+            for item in chain
+        ]
+
+
 class _ProjectWindow:
     def __init__(self):
         track = _Track("Current")
@@ -81,6 +124,8 @@ class _ProjectWindow:
         self.current_voice_id = "voice-a"
         self.current_voice = "Voice A"
         self.voice_gallery = _VoiceGallery(self)
+        self.effects_panel = _EffectsPanel()
+        self.audio_mixer = _AudioMixer()
         self.character_selector = None
         self.history = None
         self._status_bar = _StatusBar()
@@ -387,3 +432,102 @@ def test_legacy_project_load_uses_lightweight_track_container_clones():
     )[0]
     assert "_clone_track_collection(existing_tracks)" in loader
     assert "deepcopy(existing_tracks)" not in loader
+
+
+
+def test_project_save_persists_the_master_effect_chain(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    window.effects_panel.set_effect_chain([{
+        "id": "compressor-main",
+        "type": "compressor",
+        "enabled": True,
+        "params": {"threshold_db": -21.0, "ratio": 5.0},
+    }])
+    project_path = tmp_path / "effects-project.vose"
+    monkeypatch.setattr(
+        project_io_module.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(project_path), "VO-SE Project (*.vose)"),
+    )
+
+    assert ProjectIOMixin.on_save_project_clicked(window) is True
+    saved = json.loads(project_path.read_text(encoding="utf-8"))
+    assert saved["effect_chain"][0]["type"] == "compressor"
+    assert saved["effect_chain"][0]["params"]["threshold_db"] == -21.0
+    assert saved["effect_chain"][0]["params"]["ratio"] == 5.0
+
+
+def test_project_load_restores_master_effect_chain_into_panel_and_mixer(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    effect_chain = [{
+        "id": "project-eq",
+        "type": "eq",
+        "enabled": True,
+        "params": {"frequency_hz": 2400.0, "gain_db": -3.0, "q": 1.2},
+    }]
+    project_path = tmp_path / "effects-load.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 120.0,
+            "effect_chain": effect_chain,
+            "tracks": [{"name": "Loaded", "type": "vocal", "notes": []}],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.effects_panel.get_effect_chain() == effect_chain
+    assert window.audio_mixer.effect_chain == effect_chain
+
+
+def test_project_load_rejects_invalid_master_effect_before_commit(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    original_tracks = list(window.tracks)
+    project_path = tmp_path / "invalid-effect.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 135.0,
+            "effect_chain": [{
+                "id": "invalid-compressor",
+                "type": "compressor",
+                "enabled": True,
+                "params": {"ratio": 99.0},
+            }],
+            "tracks": [{"name": "Would replace", "type": "vocal", "notes": []}],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is False
+    assert window.tracks == original_tracks
+    assert window.effects_panel.get_effect_chain() == []
+    assert window.audio_mixer.effect_chain == []
+
+
+def test_project_undo_snapshot_restores_master_effect_chain():
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    before_chain = [{
+        "id": "saved-reverb",
+        "type": "reverb",
+        "enabled": True,
+        "params": {
+            "room_size": 0.45,
+            "damping": 0.5,
+            "wet": 0.25,
+            "dry": 0.8,
+            "width": 0.75,
+        },
+    }]
+    window.effects_panel.set_effect_chain(before_chain)
+    before = ProjectIOMixin._capture_project_edit_state(window)
+    window.effects_panel.set_effect_chain([])
+    window.audio_mixer.set_effect_chain([])
+
+    ProjectIOMixin._restore_project_edit_state(window, before)
+
+    assert window.effects_panel.get_effect_chain() == before_chain
+    assert window.audio_mixer.effect_chain == before_chain

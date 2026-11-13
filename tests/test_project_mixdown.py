@@ -304,3 +304,72 @@ def test_project_worker_reports_vocal_render_cancellation_as_cancelled(tmp_path)
     assert not output.exists()
     assert original_note.value == "original"
 
+
+
+def test_project_mixdown_applies_master_reverb_and_writes_the_tail(tmp_path):
+    source = tmp_path / "impulse.wav"
+    impulse = np.zeros((128, 2), dtype=np.float32)
+    impulse[0] = (0.8, 0.8)
+    _write(source, impulse, sample_rate=8000)
+
+    dry_output = tmp_path / "dry.wav"
+    wet_output = tmp_path / "wet.wav"
+    tracks = [_track(source)]
+
+    mixdown_tracks_to_wav(
+        tracks,
+        dry_output,
+        sample_rate=8000,
+        block_size=128,
+    )
+    mixdown_tracks_to_wav(
+        tracks,
+        wet_output,
+        sample_rate=8000,
+        block_size=128,
+        effect_chain=[{
+            "id": "project-reverb",
+            "type": "reverb",
+            "enabled": True,
+            "params": {
+                "room_size": 0.55,
+                "damping": 0.4,
+                "wet": 0.5,
+                "dry": 0.5,
+                "width": 0.8,
+            },
+        }],
+    )
+
+    dry, _ = sf.read(dry_output, dtype="float32", always_2d=True)
+    wet, _ = sf.read(wet_output, dtype="float32", always_2d=True)
+    assert dry.shape == (128, 2)
+    assert wet.shape[0] > dry.shape[0]
+    assert float(np.max(np.abs(wet[128:]))) > 1e-5
+
+
+def test_project_mixdown_disabled_master_effect_is_a_noop(tmp_path):
+    source = tmp_path / "source.wav"
+    audio = np.full((64, 2), 0.25, dtype=np.float32)
+    _write(source, audio, sample_rate=8000)
+
+    plain_output = tmp_path / "plain.wav"
+    disabled_output = tmp_path / "disabled.wav"
+    tracks = [_track(source)]
+    mixdown_tracks_to_wav(tracks, plain_output, sample_rate=8000, block_size=16)
+    mixdown_tracks_to_wav(
+        tracks,
+        disabled_output,
+        sample_rate=8000,
+        block_size=16,
+        effect_chain=[{
+            "id": "disabled-eq",
+            "type": "eq",
+            "enabled": False,
+            "params": {"gain_db": 12.0},
+        }],
+    )
+
+    plain, _ = sf.read(plain_output, dtype="float32", always_2d=True)
+    disabled, _ = sf.read(disabled_output, dtype="float32", always_2d=True)
+    assert np.array_equal(plain, disabled)

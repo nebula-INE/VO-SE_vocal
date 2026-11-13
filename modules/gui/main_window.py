@@ -6214,9 +6214,25 @@ class MainWindow(
 
     @Slot(str, dict)
     def on_effect_parameters_changed(self, effect_id: str, params: dict):
-        """エフェクトパラメータ変更時の処理（エンジンに反映）"""
-        # 例: self.vo_se_engine.update_effect(effect_id, params)
-        self.statusBar().showMessage(f"エフェクト更新: {effect_id}", 2000)
+        """Apply the current master-bus chain to live playback and project mixdown."""
+        from modules.audio.master_effects import normalize_effect_chain
+
+        effects_panel = getattr(self, "effects_panel", None)
+        get_chain = getattr(effects_panel, "get_effect_chain", None)
+        audio_mixer = getattr(self, "audio_mixer", None)
+        set_chain = getattr(audio_mixer, "set_effect_chain", None)
+        try:
+            chain = normalize_effect_chain(
+                get_chain() if callable(get_chain) else []
+            )
+            if callable(set_chain):
+                set_chain(chain, preserve_state=True)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            self.statusBar().showMessage(f"エフェクト設定エラー: {exc}", 5000)
+            return
+        self.statusBar().showMessage(
+            f"マスターバスを更新: {len(chain)} エフェクト", 2000
+        )
     
     @Slot()
     def update_tempo_from_input(self):

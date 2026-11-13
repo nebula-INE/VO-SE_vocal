@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from modules.data.data_models import NoteEvent, PitchEvent
 from modules.data.ust_parser import UstParser, UstConverter
 from modules.data.vsqx_parser import parse_vsqx
+from modules.audio.master_effects import normalize_effect_chain
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +347,7 @@ class _ProjectMixdownWorker(QThread):
         output_path: str,
         mode_flag: int = 0,
         parent=None,
+        effect_chain: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         super().__init__(parent)
         self.engine = engine
@@ -354,6 +356,7 @@ class _ProjectMixdownWorker(QThread):
         self.tempo = float(tempo)
         self.output_path = output_path
         self.mode_flag = int(mode_flag)
+        self.effect_chain = normalize_effect_chain(effect_chain or [])
         self._cancel_event = threading.Event()
 
     def request_cancel(self) -> None:
@@ -450,6 +453,7 @@ class _ProjectMixdownWorker(QThread):
                         "全トラックを共通タイムラインで合成中...",
                     ),
                     cancel_check=self._cancel_event.is_set,
+                    effect_chain=self.effect_chain,
                 )
                 self.completed.emit(result_path)
         except Exception as exc:
@@ -494,6 +498,9 @@ class ProjectIOMixin:
             "current_voice_id": str(getattr(self, "current_voice_id", "NONE") or "NONE"),
             "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
             "current_project_path": str(getattr(self, "current_project_path", "") or ""),
+            "effect_chain": deepcopy(
+                getattr(getattr(self, "effects_panel", None), "get_effect_chain", lambda: [])()
+            ),
         }
 
     def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
@@ -541,6 +548,15 @@ class ProjectIOMixin:
             set_tempo(tempo)
 
         self.current_project_path = str(state.get("current_project_path", "") or "")
+        effect_chain = normalize_effect_chain(state.get("effect_chain", []))
+        effects_panel = getattr(self, "effects_panel", None)
+        set_panel_chain = getattr(effects_panel, "set_effect_chain", None)
+        if callable(set_panel_chain):
+            set_panel_chain(effect_chain)
+        audio_mixer = getattr(self, "audio_mixer", None)
+        set_mixer_chain = getattr(audio_mixer, "set_effect_chain", None)
+        if callable(set_mixer_chain):
+            set_mixer_chain(effect_chain)
         self.current_playback_time = float(state.get("current_playback_time", 0.0))
         set_time = getattr(self, "_set_transport_time", None)
         if callable(set_time):
@@ -1423,6 +1439,7 @@ class ProjectIOMixin:
             saved_voice_name = data.get("current_voice", "")
             if not isinstance(saved_voice_name, str):
                 saved_voice_name = ""
+            restored_effect_chain = normalize_effect_chain(data.get("effect_chain", []))
             if not math.isfinite(tempo) or tempo <= 0.0:
                 raise ValueError("プロジェクトのテンポが不正です。")
             if not math.isfinite(current_time) or current_time < 0.0:
@@ -1597,6 +1614,14 @@ class ProjectIOMixin:
             self.tracks = loaded_tracks
             self.current_track_idx = new_current_idx
             self.current_project_path = os.path.abspath(file_path)
+            effects_panel = getattr(self, "effects_panel", None)
+            set_panel_chain = getattr(effects_panel, "set_effect_chain", None)
+            if callable(set_panel_chain):
+                set_panel_chain(restored_effect_chain)
+            audio_mixer = getattr(self, "audio_mixer", None)
+            set_mixer_chain = getattr(audio_mixer, "set_effect_chain", None)
+            if callable(set_mixer_chain):
+                set_mixer_chain(restored_effect_chain)
 
             timeline = getattr(self, "timeline_widget", None)
             active_notes = self.tracks[self.current_track_idx].notes
@@ -2159,6 +2184,9 @@ class ProjectIOMixin:
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
                 "current_voice_id": current_voice_id,
                 "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
+                "effect_chain": normalize_effect_chain(
+                    getattr(getattr(self, "effects_panel", None), "get_effect_chain", lambda: [])()
+                ),
                 "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
             }
@@ -2495,6 +2523,12 @@ class ProjectIOMixin:
         if not math.isfinite(tempo) or tempo <= 0.0:
             tempo = 120.0
 
+        effects_panel = getattr(self, "effects_panel", None)
+        get_effect_chain = getattr(effects_panel, "get_effect_chain", None)
+        effect_chain = normalize_effect_chain(
+            get_effect_chain() if callable(get_effect_chain) else []
+        )
+
         worker = _ProjectMixdownWorker(
             getattr(self, "vo_se_engine", None),
             track_snapshots,
@@ -2503,6 +2537,7 @@ class ProjectIOMixin:
             file_path,
             mode_flag=1 if LicenseManager.is_pro() else 0,
             parent=self,
+            effect_chain=effect_chain,
         )
         worker.progress.connect(self._on_project_mixdown_progress)
         worker.completed.connect(self._on_project_mixdown_completed)
