@@ -306,19 +306,24 @@ def test_ust_export_recreates_silent_gaps_without_display_nodes(tmp_path, monkey
             tempo=120.0,
             notes_list=[
                 NoteEvent(note_number=60, start_time=0.0, duration=0.5, lyric="あ"),
-                NoteEvent(note_number=62, start_time=1.0, duration=0.5, lyric="い"),
+                NoteEvent(note_number=62, start_time=1.0, duration=1.0, lyric="い"),
             ],
         ),
         statusBar=lambda: FakeStatusBar(),
     )
 
+    window.timeline_widget.notes_list[1]._ust_tempo = 60.0
+
     ProjectIOMixin.export_as_ust(window)
 
     exported = output_path.read_text(encoding="cp932")
     assert "Lyric=R" in exported
+    assert "Tempo=60.00" in exported
 
     parsed = UstParser().load(str(output_path))
     notes = UstConverter.to_note_dicts(parsed)
     assert [note["lyric"] for note in notes] == ["あ", "い"]
     assert notes[1]["start_time"] == pytest.approx(1.0)
+    assert notes[1]["duration"] == pytest.approx(1.0)
+    assert notes[1]["_ust_tempo"] == pytest.approx(60.0)
 
