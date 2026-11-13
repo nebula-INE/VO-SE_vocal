@@ -1087,13 +1087,17 @@ class ProjectIOMixin:
                     lines.append("VBR=" + ",".join(str(v) for v in vbr_vals))
 
                 # ---- ポルタメント ----
+                base_portamento = getattr(note, "_ust_base_portamento", None)
                 for attr, key in [
                     ("_ust_pbs", "PBS"),
                     ("_ust_pbw", "PBW"),
                     ("_ust_pby", "PBY"),
                     ("_ust_pbm", "PBM"),
                 ]:
-                    val = str(getattr(note, attr, ""))
+                    if isinstance(base_portamento, dict):
+                        val = str(base_portamento.get(key.lower(), "") or "")
+                    else:
+                        val = str(getattr(note, attr, ""))
                     if val:
                         lines.append(f"{key}={val}")
 
