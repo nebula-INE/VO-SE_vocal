@@ -634,6 +634,7 @@ class UstConverter:
                 "_ust_preutterance_explicit": ust_note.pre_utterance is not None,
                 "_ust_overlap_explicit": ust_note.overlap is not None,
                 "_ust_flags": ust_note.flags if ust_note.flags_present else project.flags,
+                "_ust_flags_present": ust_note.flags_present,
                 "_ust_tempo": ust_note.tempo,
                 "_ust_length_ticks": ust_note.length,
                 "_ust_modulation": ust_note.modulation,
