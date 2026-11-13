@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from modules.gui.update_notification_patch import install_update_notification_patch
 
 
@@ -75,7 +77,14 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
     assert len(application.aboutToQuit.callbacks) == 1
 
 
-def test_update_check_is_skipped_during_startup_smoke_test(monkeypatch):
+@pytest.mark.parametrize(
+    ("skip_flag", "skip_value"),
+    [
+        ("VOSE_STARTUP_SMOKE_TEST", "1"),
+        ("VOSE_SKIP_UPDATE_CHECK", "true"),
+    ],
+)
+def test_update_check_is_skipped_when_suppressed(monkeypatch, skip_flag, skip_value):
     import sys
 
     from modules.updater import update_checker
@@ -99,7 +108,7 @@ def test_update_check_is_skipped_during_startup_smoke_test(monkeypatch):
 
     def unexpected_worker(parent):
         worker_constructions.append(parent)
-        raise RuntimeError("smoke tests must not start the updater")
+        raise RuntimeError("suppressed checks must not start the updater")
 
     monkeypatch.setattr(
         sys.modules["PySide6.QtWidgets"],
@@ -107,8 +116,9 @@ def test_update_check_is_skipped_during_startup_smoke_test(monkeypatch):
         FakeQApplication,
     )
     monkeypatch.setattr(update_checker, "UpdateChecker", unexpected_worker)
-    monkeypatch.setenv("VOSE_STARTUP_SMOKE_TEST", "1")
+    monkeypatch.delenv("VOSE_STARTUP_SMOKE_TEST", raising=False)
     monkeypatch.delenv("VOSE_SKIP_UPDATE_CHECK", raising=False)
+    monkeypatch.setenv(skip_flag, skip_value)
 
     install_update_notification_patch(FakeWindow)
     window = FakeWindow()
