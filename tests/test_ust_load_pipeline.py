@@ -93,7 +93,7 @@ def _write_ust(path):
     )
 
 
-def test_async_ust_load_updates_timeline_without_rest_or_tie_nodes(tmp_path):
+def test_async_ust_load_updates_timeline_without_rest_or_tie_nodes(tmp_path, qtbot):
     path = tmp_path / "timeline-roundtrip.ust"
     _write_ust(path)
 
@@ -133,6 +133,51 @@ def test_async_ust_load_updates_timeline_without_rest_or_tie_nodes(tmp_path):
     assert window.tracks[0].notes == displayed
     assert window.timeline_widget.tempo == 120.0
     assert "UST 読み込み完了: 2 ノート" in status_bar.messages[-1]
+
+    # Verify the actual desktop piano-roll widget paints both imported notes.
+    # This catches model-to-view regressions that a fake timeline cannot see.
+    from modules.gui.timeline_widget import TimelineWidget
+
+    widget = TimelineWidget()
+    qtbot.addWidget(widget)
+    widget.resize(640, 360)
+    widget.tempo = window.timeline_widget.tempo
+    widget.scroll_y_offset = (
+        (127 - displayed[0].note_number) * widget.key_height_pixels - 100.0
+    )
+    widget.set_notes(displayed)
+    widget.show()
+    qtbot.wait(20)
+
+    image = widget.grab().toImage()
+    assert not image.isNull()
+    assert len(widget._visible_notes()) == 2
+
+    for note in displayed:
+        rect = widget.get_note_rect(note)
+        assert rect.width() > 20.0
+        assert rect.height() > 0.0
+        assert rect.left() >= 0.0
+        assert rect.right() <= widget.width()
+        assert rect.top() >= 0.0
+        assert rect.bottom() <= widget.height()
+
+        # Unselected singing notes are rendered blue. Require actual blue
+        # pixels inside each note body, not merely non-empty geometry.
+        blue_pixels = 0
+        for x in range(int(rect.left() + 4), int(rect.right() - 4)):
+            for y in range(int(rect.top() + 3), int(rect.bottom() - 3)):
+                color = image.pixelColor(x, y)
+                if (
+                    color.blue() > 180
+                    and color.blue() > color.green() * 1.15
+                    and color.blue() > color.red() * 1.8
+                ):
+                    blue_pixels += 1
+                    break
+            if blue_pixels:
+                break
+        assert blue_pixels > 0
 
 
 def test_prefix_map_parser_keeps_empty_tab_column_and_selects_pitch_layer():
