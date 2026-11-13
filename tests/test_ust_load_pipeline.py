@@ -167,7 +167,7 @@ def test_native_prefix_map_parser_keeps_empty_tab_fields_like_python():
         Path(__file__).resolve().parents[1] / "include" / "OtoDatabase.h"
     ).read_text(encoding="utf-8")
     parser = source.split("void loadPrefixMap", 1)[1].split(
-        "void applyPrefixMap", 1
+        "juce::String applyPrefixMap", 1
     )[0]
 
     # Keep this parity guard tied to the production C++ parser, not only the
