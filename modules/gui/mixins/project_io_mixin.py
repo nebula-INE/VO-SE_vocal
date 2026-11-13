@@ -1280,8 +1280,13 @@ class ProjectIOMixin:
                         f"Modulation={float(tie_section.get('modulation', 0.0)):.0f}",
                     ]
 
-                    if tie_section.get("flags_present"):
-                        lines.append(f"Flags={tie_section.get('flags', '')}")
+                    tie_flags = (
+                        tie_section.get("flags", "")
+                        if tie_section.get("flags_present")
+                        else tie_section.get("effective_flags", "")
+                    )
+                    if tie_flags or tie_section.get("flags_present"):
+                        lines.append(f"Flags={tie_flags}")
 
                     tie_vibrato = tie_section.get("vibrato")
                     if isinstance(tie_vibrato, dict):
