@@ -401,5 +401,85 @@ class TestUstParser(unittest.TestCase):
         note2 = NoteEvent.from_dict(roundtrip)
         self.assertEqual(getattr(note2, "_ust_tempo", None), 170.0)
 
+
+    def test_rest_sections_do_not_create_nodes_and_keep_absolute_timing(self):
+        """Rest/breath sections occupy time but must not appear as piano-roll notes."""
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=480, lyric="あ", note_num=60, tempo=120.0),
+                UstNote(index=1, length=240, lyric="R", note_num=60, tempo=120.0),
+                UstNote(index=2, length=240, lyric="休符", note_num=60, tempo=120.0),
+                UstNote(index=3, length=120, lyric="br1", note_num=60, tempo=120.0),
+                UstNote(index=4, length=480, lyric="い", note_num=62, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual([note["lyric"] for note in notes], ["あ", "い"])
+        self.assertAlmostEqual(notes[0]["start_time"], 0.0, places=6)
+        # 480 + 240 + 240 + 120 ticks = 2.25 beats at 120 BPM.
+        self.assertAlmostEqual(notes[1]["start_time"], 1.125, places=6)
+
+    def test_ust_rest_aliases_are_recognized(self):
+        """Common UTAU rest and breath aliases are not treated as voiced nodes."""
+        from modules.data.ust_parser import UstNote
+
+        for lyric in ("R", "r_", "r_0", "[r]", "null", "pau", "sil", "br", "br12",
+                      "休", "休符", "息", "吸", "吸気", "息吸い", "_br2"):
+            with self.subTest(lyric=lyric):
+                note = UstNote(
+                    index=0, length=120, lyric=lyric, note_num=60, tempo=120.0
+                )
+                self.assertTrue(note.is_rest)
+
+    def test_ust_tie_extends_previous_node_and_merges_portamento(self):
+        """Lyric='+' is a continuation, not an extra displayed node."""
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(
+                    index=0, length=480, lyric="あ", note_num=60, tempo=120.0,
+                    pbs="0;0", pbw="50", pby="10",
+                ),
+                UstNote(
+                    index=1, length=480, lyric="+", note_num=60, tempo=120.0,
+                    pbs="-25;50", pbw="50", pby="0",
+                ),
+                UstNote(index=2, length=240, lyric="い", note_num=62, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual([note["lyric"] for note in notes], ["あ", "い"])
+        self.assertAlmostEqual(notes[0]["duration"], 1.0, places=6)
+        self.assertAlmostEqual(notes[1]["start_time"], 1.0, places=6)
+        self.assertEqual(notes[0]["_ust_pbs"], "0;0")
+        self.assertEqual(notes[0]["_ust_pbw"], "50,425,50")
+        self.assertEqual(notes[0]["_ust_pby"], "10,50,0")
+
+    def test_leading_ust_tie_keeps_timeline_position_without_creating_node(self):
+        """A malformed/leading '+' section is skipped but still consumes its duration."""
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=240, lyric="+", note_num=60, tempo=120.0),
+                UstNote(index=1, length=480, lyric="あ", note_num=60, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual(len(notes), 1)
+        self.assertAlmostEqual(notes[0]["start_time"], 0.25, places=6)
+
 if __name__ == "__main__":
     unittest.main()
