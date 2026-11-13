@@ -429,7 +429,8 @@ class TestUstParser(unittest.TestCase):
         from modules.data.ust_parser import UstNote
 
         for lyric in ("R", "r_", "r_0", "[r]", "null", "pau", "sil", "br", "br12",
-                      "休", "休符", "息", "吸", "吸気", "息吸い", "_br2"):
+                      "休", "休符", "息", "吸", "吸気", "息吸い", "_br2",
+                      "・", "-", "ー", "~", "っ", "ッ", "_っ", "_ッ", "っ_", "ッ_"):
             with self.subTest(lyric=lyric):
                 note = UstNote(
                     index=0, length=120, lyric=lyric, note_num=60, tempo=120.0
