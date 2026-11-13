@@ -281,3 +281,44 @@ def test_rendered_wav_preview_uses_background_mixer_start():
     )[0]
     assert 'self._start_audio_mixer_command(' in play_handler
     assert 'play_file(' not in play_handler
+
+def test_ust_export_recreates_silent_gaps_without_display_nodes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "gap-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(
+            tempo=120.0,
+            notes_list=[
+                NoteEvent(note_number=60, start_time=0.0, duration=0.5, lyric="あ"),
+                NoteEvent(note_number=62, start_time=1.0, duration=0.5, lyric="い"),
+            ],
+        ),
+        statusBar=lambda: FakeStatusBar(),
+    )
+
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert "Lyric=R" in exported
+
+    parsed = UstParser().load(str(output_path))
+    notes = UstConverter.to_note_dicts(parsed)
+    assert [note["lyric"] for note in notes] == ["あ", "い"]
+    assert notes[1]["start_time"] == pytest.approx(1.0)
+
