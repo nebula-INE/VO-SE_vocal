@@ -118,9 +118,12 @@ class UstNote:
         if lyric in {
             "", "r", "r_", "r_0", "[r]", "null",
             "休", "休符", "pau", "sil", "br", "息", "吸", "吸気", "息吸い",
+            "・", "-", "ー", "~",
         }:
             return True
-        return bool(re.fullmatch(r"_?(?:br|息|吸)\d*", lyric))
+        if re.fullmatch(r"_?(?:br|息|吸)\d*", lyric):
+            return True
+        return bool(re.fullmatch(r"_?[っッ]+_?", lyric))
 
 
 @dataclass
