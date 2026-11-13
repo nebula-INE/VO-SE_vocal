@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from modules.gui import update_notification_patch
 from modules.gui.update_notification_patch import install_update_notification_patch
 
 
@@ -22,8 +23,6 @@ def test_update_notification_patch_is_installed_before_window_creation():
 
 
 def test_update_thread_is_owned_by_application_not_window(monkeypatch):
-    import sys
-
     class FakeSignal:
         def __init__(self):
             self.callbacks = []
@@ -36,11 +35,6 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
             self.aboutToQuit = FakeSignal()
 
     application = FakeApplication()
-
-    class FakeQApplication:
-        @staticmethod
-        def instance():
-            return application
 
     class FakeWorker:
         def __init__(self, parent):
@@ -58,8 +52,11 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
         def statusBar(self):
             return None
 
-    widgets = sys.modules["PySide6.QtWidgets"]
-    monkeypatch.setattr(widgets, "QApplication", FakeQApplication)
+    monkeypatch.setattr(
+        update_notification_patch,
+        "_get_application_instance",
+        lambda: application,
+    )
     monkeypatch.setattr(
         "modules.updater.update_checker.UpdateChecker",
         FakeWorker,
@@ -85,21 +82,7 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
     ],
 )
 def test_update_check_is_skipped_when_suppressed(monkeypatch, skip_flag, skip_value):
-    import sys
-
     from modules.updater import update_checker
-
-    class FakeSignal:
-        def connect(self, _callback):
-            pass
-
-    class FakeApplication:
-        aboutToQuit = FakeSignal()
-
-    class FakeQApplication:
-        @staticmethod
-        def instance():
-            return FakeApplication()
 
     class FakeWindow:
         pass
@@ -110,11 +93,6 @@ def test_update_check_is_skipped_when_suppressed(monkeypatch, skip_flag, skip_va
         worker_constructions.append(parent)
         raise RuntimeError("suppressed checks must not start the updater")
 
-    monkeypatch.setattr(
-        sys.modules["PySide6.QtWidgets"],
-        "QApplication",
-        FakeQApplication,
-    )
     monkeypatch.setattr(update_checker, "UpdateChecker", unexpected_worker)
     monkeypatch.delenv("VOSE_STARTUP_SMOKE_TEST", raising=False)
     monkeypatch.delenv("VOSE_SKIP_UPDATE_CHECK", raising=False)
