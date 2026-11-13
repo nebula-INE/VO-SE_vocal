@@ -984,7 +984,7 @@ class ProjectIOMixin:
             timeline_cursor_sec = 0.0
             section_index = 0
 
-            for note in notes_list:
+            for note_index, note in enumerate(notes_list):
                 # UST is a sequential format. Recreate gaps as explicit R blocks
                 # because desktop import no longer represents rests as piano-roll
                 # NoteEvents.
@@ -1313,6 +1313,25 @@ class ProjectIOMixin:
                     )
                 except (TypeError, ValueError):
                     note_trailing_rest_sec = 0.0
+                if (
+                    math.isfinite(note_trailing_rest_sec)
+                    and note_trailing_rest_sec > 1e-6
+                    and note_index + 1 < len(notes_list)
+                ):
+                    try:
+                        next_note_start = float(
+                            getattr(notes_list[note_index + 1], "start_time", 0.0)
+                        )
+                    except (TypeError, ValueError):
+                        next_note_start = note_start_sec + duration_sec
+                    available_gap = max(
+                        0.0,
+                        next_note_start - (note_start_sec + duration_sec),
+                    )
+                    note_trailing_rest_sec = min(
+                        note_trailing_rest_sec, available_gap
+                    )
+
                 trailing_ticks = 0
                 if math.isfinite(note_trailing_rest_sec) and note_trailing_rest_sec > 1e-6:
                     rest_tempo = current_tempo or first_note_tempo
