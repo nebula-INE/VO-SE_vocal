@@ -630,9 +630,9 @@ def test_ust_export_restores_trailing_silence_without_display_node(tmp_path, mon
     assert "PreUtterance=0.000" in exported
     assert "VoiceOverlap=0.000" in exported
     assert "Flags=" in exported
-    assert exported.rstrip().endswith("Lyric=R\r\nNoteNum=60") or (
-        "Lyric=R" in exported.split("[#TRACKEND]")[0].split("[#")[-1]
-    )
+    before_track_end = exported.split("[#TRACKEND]", 1)[0]
+    last_section = before_track_end.rsplit("[#", 1)[-1]
+    assert "Lyric=R" in last_section
 
     roundtrip = UstConverter.to_note_dicts(UstParser().load(str(output_path)))
     assert len(roundtrip) == 1
