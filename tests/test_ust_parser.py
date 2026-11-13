@@ -486,7 +486,7 @@ class TestUstParser(unittest.TestCase):
         self.assertAlmostEqual(tie["modulation"], 24.0)
         self.assertEqual(tie["flags"], "g+5")
         self.assertTrue(tie["flags_present"])
-        self.assertEqual(tie["effective_flags"], "g-5")
+        self.assertEqual(tie["effective_flags"], "g+5")
         self.assertEqual(tie["pbs"], "-25;50")
         self.assertEqual(tie["pbw"], "50")
         self.assertEqual(tie["pby"], "0")
