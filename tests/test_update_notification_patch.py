@@ -63,6 +63,7 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
         FakeWorker,
     )
     monkeypatch.delenv("VOSE_SKIP_UPDATE_CHECK", raising=False)
+    monkeypatch.delenv("VOSE_STARTUP_SMOKE_TEST", raising=False)
 
     install_update_notification_patch(FakeWindow)
     window = FakeWindow()
@@ -72,3 +73,45 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
     assert window._update_checker.parent is application
     assert window._update_checker.started is True
     assert len(application.aboutToQuit.callbacks) == 1
+
+
+def test_update_check_is_skipped_during_startup_smoke_test(monkeypatch):
+    from modules.updater import update_checker
+
+    class FakeSignal:
+        def connect(self, _callback):
+            pass
+
+    class FakeApplication:
+        aboutToQuit = FakeSignal()
+
+    class FakeQApplication:
+        @staticmethod
+        def instance():
+            return FakeApplication()
+
+    class FakeWindow:
+        pass
+
+    worker_constructions = []
+
+    def unexpected_worker(parent):
+        worker_constructions.append(parent)
+        raise RuntimeError("smoke tests must not start the updater")
+
+    monkeypatch.setattr(
+        sys.modules["PySide6.QtWidgets"],
+        "QApplication",
+        FakeQApplication,
+    )
+    monkeypatch.setattr(update_checker, "UpdateChecker", unexpected_worker)
+    monkeypatch.setenv("VOSE_STARTUP_SMOKE_TEST", "1")
+    monkeypatch.delenv("VOSE_SKIP_UPDATE_CHECK", raising=False)
+
+    install_update_notification_patch(FakeWindow)
+    window = FakeWindow()
+    window._on_update_result = lambda *_args: None
+    FakeWindow._check_for_updates(window)
+
+    assert worker_constructions == []
+    assert not hasattr(window, "_update_checker")
