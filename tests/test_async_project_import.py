@@ -507,3 +507,70 @@ def test_ust_export_applies_duration_edits_to_final_tie_section(tmp_path, monkey
     notes = UstConverter.to_note_dicts(parsed)
     assert notes[0]["duration"] == pytest.approx(1.0)
     assert notes[1]["start_time"] == pytest.approx(1.0)
+
+
+def test_ust_export_shrinks_base_note_when_tie_duration_is_removed(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "shortened-tie-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    edited = NoteEvent(
+        note_number=60,
+        start_time=0.0,
+        duration=0.25,
+        lyric="あ",
+    )
+    edited._ust_tempo = 120.0
+    edited._ust_base_duration = 0.5
+    edited._ust_base_length_ticks = 480
+    edited._ust_tie_sections = [{
+        "length": 480,
+        "tempo": 90.0,
+        "note_num": 60,
+        "intensity": 100.0,
+        "modulation": 0.0,
+        "flags": "",
+        "flags_present": False,
+        "pbs": "",
+        "pbw": "",
+        "pby": "",
+        "pbm": "",
+        "vibrato": None,
+        "pre_utterance": None,
+        "overlap": None,
+    }]
+    following = NoteEvent(
+        note_number=62, start_time=0.25, duration=0.5, lyric="い"
+    )
+    following._ust_tempo = 120.0
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[edited, following]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert "Lyric=+" not in exported
+
+    parsed = UstParser().load(str(output_path))
+    assert [note.lyric for note in parsed.notes] == ["あ", "い"]
+    assert parsed.notes[0].length == 240
+
+    notes = UstConverter.to_note_dicts(parsed)
+    assert notes[0]["duration"] == pytest.approx(0.25)
+    assert notes[1]["start_time"] == pytest.approx(0.25)
