@@ -72,6 +72,7 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
 ) -> None:
     from modules.audio import vo_se_engine as engine_module
     from modules.audio.vo_se_engine import VO_SE_Engine
+    from modules.audio.vo_se_engine_patch import apply_patch
 
     engine = VO_SE_Engine(voice_lib_dir=str(multi_pitch_voicebank))
     apply_patch(type(engine))
@@ -178,7 +179,6 @@ def test_ust_import_timeline_to_multi_pitch_wav_and_playback(
 
     from modules.audio import vo_se_engine as engine_module
     from modules.audio.vo_se_engine import VO_SE_Engine
-    from modules.audio.vo_se_engine_patch import apply_patch
     from modules.gui.mixins.project_io_mixin import (
         ProjectIOMixin,
         _ExternalProjectLoadWorker,
