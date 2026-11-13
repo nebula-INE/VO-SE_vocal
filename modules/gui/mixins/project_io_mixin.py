@@ -1020,7 +1020,19 @@ class ProjectIOMixin:
 
                 # ---- そのノートのテンポで秒 → ticks へ逆変換 ----
                 duration_sec = float(getattr(note, "duration", 0.5))
-                beats = duration_sec / (60.0 / note_tempo)
+                tie_sections = getattr(note, "_ust_tie_sections", None) or []
+                try:
+                    base_duration_sec = float(
+                        getattr(note, "_ust_base_duration", duration_sec)
+                    )
+                except (TypeError, ValueError):
+                    base_duration_sec = duration_sec
+                if not math.isfinite(base_duration_sec) or base_duration_sec <= 0.0:
+                    base_duration_sec = duration_sec
+                primary_duration_sec = (
+                    base_duration_sec if tie_sections else duration_sec
+                )
+                beats = primary_duration_sec / (60.0 / note_tempo)
                 ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
 
                 note_num = int(getattr(note, "note_number", 60))
@@ -1086,6 +1098,76 @@ class ProjectIOMixin:
                         lines.append(f"{key}={val}")
 
                 lines.append("")
+
+                # Recreate the original sequential '+' sections after the
+                # combined piano-roll note. This preserves section-local tempo,
+                # dynamics, flags, vibrato, portamento, and oto overrides.
+                for tie_section in tie_sections:
+                    if not isinstance(tie_section, dict):
+                        continue
+                    try:
+                        tie_ticks = int(tie_section.get("length", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if tie_ticks <= 0:
+                        continue
+
+                    try:
+                        tie_tempo = float(
+                            tie_section.get("tempo") or current_tempo or first_note_tempo
+                        )
+                    except (TypeError, ValueError):
+                        tie_tempo = current_tempo or first_note_tempo
+                    tie_num = int(tie_section.get("note_num", note_num))
+
+                    tie_section_id = f"{section_index:04X}"
+                    lines += [
+                        f"[#{tie_section_id}]",
+                        f"Length={tie_ticks}",
+                        "Lyric=+",
+                        f"NoteNum={tie_num}",
+                    ]
+                    section_index += 1
+
+                    if tie_tempo != current_tempo:
+                        lines.append(f"Tempo={tie_tempo:.2f}")
+                        current_tempo = tie_tempo
+
+                    tie_pre = tie_section.get("pre_utterance")
+                    tie_overlap = tie_section.get("overlap")
+                    if tie_pre is not None:
+                        lines.append(f"PreUtterance={float(tie_pre):.3f}")
+                    if tie_overlap is not None:
+                        lines.append(f"VoiceOverlap={float(tie_overlap):.3f}")
+
+                    lines += [
+                        f"Intensity={float(tie_section.get('intensity', 100.0)):.0f}",
+                        f"Modulation={float(tie_section.get('modulation', 0.0)):.0f}",
+                    ]
+
+                    if tie_section.get("flags_present"):
+                        lines.append(f"Flags={tie_section.get('flags', '')}")
+
+                    tie_vibrato = tie_section.get("vibrato")
+                    if isinstance(tie_vibrato, dict):
+                        vbr_vals = [
+                            tie_vibrato.get("length", 0),
+                            tie_vibrato.get("cycle", 160),
+                            tie_vibrato.get("depth", 35),
+                            tie_vibrato.get("fade_in", 20),
+                            tie_vibrato.get("fade_out", 20),
+                            tie_vibrato.get("phase", 0),
+                            tie_vibrato.get("height", 0),
+                        ]
+                        lines.append("VBR=" + ",".join(str(value) for value in vbr_vals))
+
+                    for key in ("pbs", "pbw", "pby", "pbm"):
+                        value = str(tie_section.get(key, "") or "")
+                        if value:
+                            lines.append(f"{key.upper()}={value}")
+
+                    lines.append("")
+
                 timeline_cursor_sec = max(
                     timeline_cursor_sec,
                     note_start_sec + max(0.0, duration_sec),
