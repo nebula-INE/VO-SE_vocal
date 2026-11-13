@@ -348,7 +348,7 @@ def test_ust_import_timeline_to_multi_pitch_wav_and_playback(
 
     status_messages = []
 
-    class FakeStatusBar:
+    class FakeExportStatusBar:
         def showMessage(self, message, *_args):
             status_messages.append(str(message))
 
@@ -367,10 +367,10 @@ def test_ust_import_timeline_to_multi_pitch_wav_and_playback(
         render_btn=None,
         render_eta_label=None,
         cancel_render_btn=None,
-        statusBar=lambda: FakeStatusBar(),
+        statusBar=lambda: FakeExportStatusBar(),
         _set_render_controls_enabled=lambda _enabled: None,
     )
-    MainWindow.on_render_success(fake_window, finished[0])
+    MainWindow.on_render_success(cast(Any, fake_window), finished[0])
 
     assert output.is_file()
     assert output.stat().st_size > 44
