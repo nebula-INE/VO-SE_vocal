@@ -557,6 +557,10 @@ class UstConverter:
                     previous = results[-1]
                     previous_duration = float(previous["duration"])
                     previous.setdefault("_ust_base_duration", previous_duration)
+                    previous.setdefault("_ust_base_length_ticks", max(1, int(
+                        round(previous_duration * float(previous.get("_ust_tempo", ust_note.tempo))
+                              * _TICKS_PER_BEAT / 60.0)
+                    )))
                     previous.setdefault("_ust_base_portamento", {
                         "pbs": previous.get("_ust_pbs", ""),
                         "pbw": previous.get("_ust_pbw", ""),
