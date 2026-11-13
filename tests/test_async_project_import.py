@@ -574,3 +574,60 @@ def test_ust_export_shrinks_base_note_when_tie_duration_is_removed(tmp_path, mon
     notes = UstConverter.to_note_dicts(parsed)
     assert notes[0]["duration"] == pytest.approx(0.25)
     assert notes[1]["start_time"] == pytest.approx(0.25)
+
+
+def test_ust_export_restores_trailing_silence_without_display_node(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    source_path = tmp_path / "source-with-trailing-rest.ust"
+    output_path = tmp_path / "trailing-rest-roundtrip.ust"
+    source_path.write_text(
+        "\n".join([
+            "[#SETTING]",
+            "Tempo=120",
+            "[#0000]",
+            "Length=480",
+            "Lyric=あ",
+            "NoteNum=60",
+            "[#0001]",
+            "Length=240",
+            "Lyric=R",
+            "NoteNum=60",
+            "[#TRACKEND]",
+            "",
+        ]),
+        encoding="cp932",
+    )
+    source_project = UstParser().load(str(source_path))
+    note_dict = UstConverter.to_note_dicts(source_project)[0]
+    note = NoteEvent.from_dict(note_dict)
+
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[note]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert exported.rstrip().endswith("Lyric=R\r\nNoteNum=60") or (
+        "Lyric=R" in exported.split("[#TRACKEND]")[0].split("[#")[-1]
+    )
+
+    roundtrip = UstConverter.to_note_dicts(UstParser().load(str(output_path)))
+    assert len(roundtrip) == 1
+    assert roundtrip[0]["_ust_trailing_rest_duration_sec"] == pytest.approx(0.25)
