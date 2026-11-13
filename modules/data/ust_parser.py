@@ -538,6 +538,9 @@ class UstConverter:
         """
         results: List[Dict] = []
         current_time_sec = 0.0
+        # UTAU '+' is a continuation of the immediately preceding voiced/tied
+        # section only. A rest or leading '+' breaks that relationship.
+        can_continue_with_tie = False
 
         for ust_note in project.notes:
             beats = ust_note.length / _TICKS_PER_BEAT
@@ -545,11 +548,12 @@ class UstConverter:
             lyric = str(ust_note.lyric or "").strip()
 
             if ust_note.is_rest:
+                can_continue_with_tie = False
                 current_time_sec += duration_sec
                 continue
 
             if lyric == "+":
-                if results:
+                if results and can_continue_with_tie:
                     previous = results[-1]
                     previous_duration = float(previous["duration"])
                     previous.setdefault("_ust_base_duration", previous_duration)
@@ -596,8 +600,10 @@ class UstConverter:
                         offset_ms=previous_duration * 1000.0,
                     )
                     previous["duration"] = previous_duration + duration_sec
-                # A leading '+' has no preceding note to continue, but it still
-                # occupies its UST time slot.
+                else:
+                    # A leading '+' or a '+' following silence has no adjacent
+                    # voiced section to continue. It still occupies timeline time.
+                    can_continue_with_tie = False
                 current_time_sec += duration_sec
                 continue
 
@@ -641,6 +647,7 @@ class UstConverter:
                 }
 
             results.append(note_dict)
+            can_continue_with_tie = True
             current_time_sec += duration_sec
 
         return results
