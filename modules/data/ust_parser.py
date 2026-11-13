@@ -437,9 +437,12 @@ class UstConverter:
             if part.strip()
         ]
         cursor_ms = start_ms
-        for index, width in enumerate(widths):
-            cursor_ms += max(1.0, min(5000.0, width))
-            raw_height = heights[index] if index < len(heights) else 0.0
+        for index, raw_height in enumerate(heights):
+            # Match the Web UST converter: each PBY value defines one point;
+            # PBW falls back to its last width (or 50 ms) when omitted.
+            fallback_width = widths[-1] if widths else 50.0
+            raw_width = widths[index] if index < len(widths) else fallback_width
+            cursor_ms += max(1.0, min(5000.0, raw_width))
             pitch = max(-24.0, min(24.0, raw_height * 0.1))
             points.append((offset_ms + cursor_ms, pitch))
         return points
