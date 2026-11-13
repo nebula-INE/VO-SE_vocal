@@ -594,6 +594,9 @@ class UstConverter:
                         "modulation": ust_note.modulation,
                         "flags": ust_note.flags,
                         "flags_present": ust_note.flags_present,
+                        "effective_flags": (
+                            ust_note.flags if ust_note.flags_present else project.flags
+                        ),
                         "pbs": ust_note.pbs,
                         "pbw": ust_note.pbw,
                         "pby": ust_note.pby,
