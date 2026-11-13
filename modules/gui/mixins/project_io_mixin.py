@@ -981,29 +981,59 @@ class ProjectIOMixin:
             # 直前に出力した Tempo= を追跡（同じ値を繰り返さないため）
             current_tempo: Optional[float] = first_note_tempo
 
-            for i, note in enumerate(notes_list):
+            timeline_cursor_sec = 0.0
+            section_index = 0
+
+            for note in notes_list:
+                # UST is a sequential format. Recreate gaps as explicit R blocks
+                # because desktop import no longer represents rests as piano-roll
+                # NoteEvents.
+                try:
+                    note_start_sec = float(getattr(note, "start_time", timeline_cursor_sec))
+                except (TypeError, ValueError):
+                    note_start_sec = timeline_cursor_sec
+                if not math.isfinite(note_start_sec) or note_start_sec < 0.0:
+                    note_start_sec = timeline_cursor_sec
+
+                if note_start_sec > timeline_cursor_sec + 1e-6:
+                    rest_tempo = current_tempo or first_note_tempo
+                    gap_sec = note_start_sec - timeline_cursor_sec
+                    gap_ticks = int(round(gap_sec * rest_tempo * _TICKS_PER_BEAT / 60.0))
+                    if gap_ticks > 0:
+                        rest_section_id = f"{section_index:04X}"
+                        lines += [
+                            f"[#{rest_section_id}]",
+                            f"Length={gap_ticks}",
+                            "Lyric=R",
+                            "NoteNum=60",
+                            "",
+                        ]
+                        section_index += 1
+                    # Anchor the next note to its actual absolute position. The
+                    # one-tick rounding above must not accumulate across many gaps.
+                    timeline_cursor_sec = note_start_sec
+
                 # ---- このノート自身のテンポを決定 ----
                 note_tempo = float(
                     getattr(note, "_ust_tempo", None) or default_tempo
                 )
 
                 # ---- そのノートのテンポで秒 → ticks へ逆変換 ----
-                # 各ノートは読み込み時に「そのノートのテンポ」で秒に変換されているので、
-                # 逆変換も同じテンポを使う必要がある。
                 duration_sec = float(getattr(note, "duration", 0.5))
                 beats = duration_sec / (60.0 / note_tempo)
                 ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
 
                 note_num = int(getattr(note, "note_number", 60))
-                lyric    = str(getattr(note, "lyric", "あ"))
+                lyric = str(getattr(note, "lyric", "あ"))
 
-                section_id = f"{i:04X}"
+                section_id = f"{section_index:04X}"
                 lines += [
                     f"[#{section_id}]",
                     f"Length={ticks}",
                     f"Lyric={lyric}",
                     f"NoteNum={note_num}",
                 ]
+                section_index += 1
 
                 # ---- テンポ変化の位置に Tempo= を挿入 ----
                 # UTAU はこの行があればそのノートから先のテンポを上書きする。
@@ -1014,14 +1044,14 @@ class ProjectIOMixin:
 
                 # ---- 先行発声・オーバーラップ ----
                 pre_ms = float(getattr(note, "pre_utterance", 0.0))
-                ov_ms  = float(getattr(note, "overlap",       0.0))
+                ov_ms = float(getattr(note, "overlap", 0.0))
                 if pre_ms != 0.0:
                     lines.append(f"PreUtterance={pre_ms:.3f}")
                 if ov_ms != 0.0:
                     lines.append(f"VoiceOverlap={ov_ms:.3f}")
 
                 # ---- 強度・モジュレーション ----
-                intensity  = float(getattr(note, "_ust_intensity",  100.0))
+                intensity = float(getattr(note, "_ust_intensity", 100.0))
                 modulation = float(getattr(note, "_ust_modulation", 0.0))
                 lines += [f"Intensity={intensity:.0f}", f"Modulation={modulation:.0f}"]
 
@@ -1034,13 +1064,13 @@ class ProjectIOMixin:
                 vib_dict = getattr(note, "_ust_vibrato", None)
                 if isinstance(vib_dict, dict):
                     vbr_vals = [
-                        vib_dict.get("length",   0),
-                        vib_dict.get("cycle",  160),
-                        vib_dict.get("depth",   35),
+                        vib_dict.get("length", 0),
+                        vib_dict.get("cycle", 160),
+                        vib_dict.get("depth", 35),
                         vib_dict.get("fade_in", 20),
-                        vib_dict.get("fade_out",20),
-                        vib_dict.get("phase",    0),
-                        vib_dict.get("height",   0),
+                        vib_dict.get("fade_out", 20),
+                        vib_dict.get("phase", 0),
+                        vib_dict.get("height", 0),
                     ]
                     lines.append("VBR=" + ",".join(str(v) for v in vbr_vals))
 
@@ -1056,6 +1086,10 @@ class ProjectIOMixin:
                         lines.append(f"{key}={val}")
 
                 lines.append("")
+                timeline_cursor_sec = max(
+                    timeline_cursor_sec,
+                    note_start_sec + max(0.0, duration_sec),
+                )
 
             lines += ["[#TRACKEND]", ""]
 
