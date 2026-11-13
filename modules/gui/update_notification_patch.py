@@ -16,9 +16,13 @@ def install_update_notification_patch(main_window_class) -> None:
         return
 
     def _check_for_updates(self) -> None:
-        if os.environ.get("VOSE_SKIP_UPDATE_CHECK", "").lower() in {
-            "1", "true", "yes", "on"
-        }:
+        enabled_values = {"1", "true", "yes", "on"}
+        # Smoke tests validate startup stability, not network access or modal
+        # dialogs. Avoid an external request while their event loop is running.
+        if any(
+            os.environ.get(flag, "").lower() in enabled_values
+            for flag in ("VOSE_SKIP_UPDATE_CHECK", "VOSE_STARTUP_SMOKE_TEST")
+        ):
             return
 
         try:
