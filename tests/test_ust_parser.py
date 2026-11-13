@@ -518,3 +518,24 @@ class TestUstParser(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_ust_tie_after_rest_does_not_extend_previous_note(self):
+        """A '+' after silence has no adjacent voiced note to continue."""
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=480, lyric="あ", note_num=60, tempo=120.0),
+                UstNote(index=1, length=240, lyric="R", note_num=60, tempo=120.0),
+                UstNote(index=2, length=480, lyric="+", note_num=60, tempo=120.0),
+                UstNote(index=3, length=480, lyric="い", note_num=62, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual([note["lyric"] for note in notes], ["あ", "い"])
+        self.assertAlmostEqual(notes[0]["duration"], 0.5, places=6)
+        self.assertAlmostEqual(notes[1]["start_time"], 1.25, places=6)
+        self.assertNotIn("_ust_tie_sections", notes[0])
