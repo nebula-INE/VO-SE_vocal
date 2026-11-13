@@ -539,3 +539,26 @@ if __name__ == "__main__":
         self.assertAlmostEqual(notes[0]["duration"], 0.5, places=6)
         self.assertAlmostEqual(notes[1]["start_time"], 1.25, places=6)
         self.assertNotIn("_ust_tie_sections", notes[0])
+
+    def test_trailing_ust_rest_duration_is_kept_on_last_display_node(self):
+        from modules.data.data_models import NoteEvent
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=480, lyric="あ", note_num=60, tempo=120.0),
+                UstNote(index=1, length=240, lyric="R", note_num=60, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual(len(notes), 1)
+        self.assertAlmostEqual(
+            notes[0]["_ust_trailing_rest_duration_sec"], 0.25, places=6
+        )
+        restored = NoteEvent.from_dict(notes[0]).to_dict()
+        self.assertAlmostEqual(
+            restored["_ust_trailing_rest_duration_sec"], 0.25, places=6
+        )
