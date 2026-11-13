@@ -76,6 +76,8 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
 
 
 def test_update_check_is_skipped_during_startup_smoke_test(monkeypatch):
+    import sys
+
     from modules.updater import update_checker
 
     class FakeSignal:
