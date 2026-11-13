@@ -584,7 +584,7 @@ jobs:
                 --paths modules \
                 --icon="assets/icon.ico" \
                 --hidden-import=modules.gui.main_window \
-            --hidden-import=modules.updater.update_checker \
+                --hidden-import=modules.updater.update_checker \
                 --hidden-import=rtmidi \
                 --hidden-import=mido.backends.rtmidi \
                 --hidden-import=backports \
@@ -613,7 +613,7 @@ jobs:
                 --hidden-import=PySide6.QtWidgets \
                 --hidden-import=PySide6.QtMultimedia \
                 --hidden-import=modules.gui.main_window \
-            --hidden-import=modules.updater.update_checker \
+                --hidden-import=modules.updater.update_checker \
                 --hidden-import=rtmidi \
                 --hidden-import=mido.backends.rtmidi \
                 --hidden-import=backports \
@@ -661,7 +661,7 @@ jobs:
                 --paths modules \
                 --icon="assets/icon.icns" \
                 --hidden-import=modules.gui.main_window \
-            --hidden-import=modules.updater.update_checker \
+                --hidden-import=modules.updater.update_checker \
                 --hidden-import=rtmidi \
                 --hidden-import=mido.backends.rtmidi \
                 --hidden-import=backports \
