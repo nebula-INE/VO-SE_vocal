@@ -1020,7 +1020,12 @@ class ProjectIOMixin:
 
                 # ---- そのノートのテンポで秒 → ticks へ逆変換 ----
                 duration_sec = float(getattr(note, "duration", 0.5))
-                tie_sections = getattr(note, "_ust_tie_sections", None) or []
+                if not math.isfinite(duration_sec) or duration_sec <= 0.0:
+                    duration_sec = 60.0 / (max(note_tempo, 1.0) * _TICKS_PER_BEAT)
+
+                tie_sections = list(
+                    getattr(note, "_ust_tie_sections", None) or []
+                )
                 try:
                     base_duration_sec = float(
                         getattr(note, "_ust_base_duration", duration_sec)
@@ -1029,68 +1034,123 @@ class ProjectIOMixin:
                     base_duration_sec = duration_sec
                 if not math.isfinite(base_duration_sec) or base_duration_sec <= 0.0:
                     base_duration_sec = duration_sec
-                primary_duration_sec = (
-                    base_duration_sec if tie_sections else duration_sec
-                )
-                # If the user resized a combined tie node after import, preserve
-                # that edit by adjusting the final '+' section. Untouched nodes
-                # retain every original tick length exactly.
+
+                try:
+                    base_length_ticks = int(
+                        getattr(
+                            note,
+                            "_ust_base_length_ticks",
+                            max(1, round(
+                                base_duration_sec * note_tempo
+                                * _TICKS_PER_BEAT / 60.0
+                            )),
+                        )
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    base_length_ticks = max(1, round(
+                        base_duration_sec * note_tempo
+                        * _TICKS_PER_BEAT / 60.0
+                    ))
+                base_length_ticks = max(1, base_length_ticks)
+
+                primary_duration_sec = duration_sec
                 if tie_sections:
-                    valid_tie_indices = []
-                    for tie_index, tie_section in enumerate(tie_sections):
-                        if not isinstance(tie_section, dict):
-                            continue
-                        try:
-                            if int(tie_section.get("length", 0)) > 0:
-                                valid_tie_indices.append(tie_index)
-                        except (TypeError, ValueError):
-                            continue
-                    if valid_tie_indices:
-                        last_tie_index = valid_tie_indices[-1]
-                        last_tie = tie_sections[last_tie_index]
-                        try:
+                    # Keep the original UST segment boundaries for untouched
+                    # notes. When the user resizes a combined node, consume or
+                    # extend the continuation sections from the end so export
+                    # duration still matches the edited piano-roll duration.
+                    remaining_duration = duration_sec - base_duration_sec
+                    retained_ties = []
+
+                    if remaining_duration > 1e-6:
+                        for tie_section in tie_sections:
+                            if not isinstance(tie_section, dict):
+                                continue
+                            try:
+                                tie_ticks = int(tie_section.get("length", 0))
+                                tie_tempo = float(
+                                    tie_section.get("tempo") or note_tempo
+                                )
+                            except (TypeError, ValueError, OverflowError):
+                                continue
+                            if (
+                                tie_ticks <= 0
+                                or not math.isfinite(tie_tempo)
+                                or tie_tempo <= 0.0
+                            ):
+                                continue
+
+                            section_duration = (
+                                tie_ticks / _TICKS_PER_BEAT * 60.0 / tie_tempo
+                            )
+                            if remaining_duration >= section_duration - 1e-6:
+                                retained_ties.append(dict(tie_section))
+                                remaining_duration = max(
+                                    0.0, remaining_duration - section_duration
+                                )
+                                continue
+
+                            if remaining_duration > 1e-6:
+                                adjusted_tie = dict(tie_section)
+                                adjusted_tie["length"] = max(
+                                    1,
+                                    int(round(
+                                        remaining_duration * tie_tempo
+                                        * _TICKS_PER_BEAT / 60.0
+                                    )),
+                                )
+                                retained_ties.append(adjusted_tie)
+                            remaining_duration = 0.0
+                            break
+
+                        if remaining_duration > 1e-6 and retained_ties:
+                            # The edited node is longer than all original tie
+                            # sections; extend the final section using its tempo.
+                            last_tie = dict(retained_ties[-1])
                             last_tie_tempo = float(
                                 last_tie.get("tempo") or note_tempo
                             )
-                            prefix_duration = base_duration_sec
-                            for tie_index in valid_tie_indices[:-1]:
-                                section = tie_sections[tie_index]
-                                section_tempo = float(
-                                    section.get("tempo") or note_tempo
-                                )
-                                prefix_duration += (
-                                    int(section["length"])
-                                    / _TICKS_PER_BEAT
-                                    * 60.0
-                                    / section_tempo
-                                )
-                            remaining_duration = duration_sec - prefix_duration
-                            if (
-                                math.isfinite(last_tie_tempo)
-                                and last_tie_tempo > 0.0
-                                and remaining_duration > 0.0
-                                and abs(remaining_duration - (
-                                    int(last_tie["length"])
-                                    / _TICKS_PER_BEAT
-                                    * 60.0
-                                    / last_tie_tempo
-                                )) > 1e-6
-                            ):
-                                adjusted_tie_sections = list(tie_sections)
-                                adjusted_last_tie = dict(last_tie)
-                                adjusted_last_tie["length"] = max(
-                                    1,
-                                    int(round(
-                                        remaining_duration
-                                        * last_tie_tempo
-                                        * _TICKS_PER_BEAT
-                                        / 60.0
-                                    )),
-                                )
-                                adjusted_tie_sections[last_tie_index] = adjusted_last_tie
-                                tie_sections = adjusted_tie_sections
-                        except (KeyError, TypeError, ValueError, OverflowError):
-                            pass
+                            additional_ticks = max(
+                                0,
+                                int(round(
+                                    remaining_duration * last_tie_tempo
+                                    * _TICKS_PER_BEAT / 60.0
+                                )),
+                            )
+                            last_tie["length"] = int(last_tie["length"]) + additional_ticks
+                            retained_ties[-1] = last_tie
+                        elif remaining_duration > 1e-6 and not retained_ties:
+                            # No valid continuation section remains; grow the
+                            # base note itself rather than silently losing time.
+                            base_length_ticks = max(
+                                1,
+                                int(round(
+                                    duration_sec * note_tempo
+                                    * _TICKS_PER_BEAT / 60.0
+                                )),
+                            )
+                            base_duration_sec = (
+                                base_length_ticks / _TICKS_PER_BEAT
+                                * 60.0 / note_tempo
+                            )
+                    else:
+                        # Shrinking to the base note (or shorter) drops all ties
+                        # and shortens the base block instead of exporting a
+                        # longer note than the edited timeline node.
+                        base_length_ticks = max(
+                            1,
+                            int(round(
+                                duration_sec * note_tempo
+                                * _TICKS_PER_BEAT / 60.0
+                            )),
+                        )
+                        base_duration_sec = (
+                            base_length_ticks / _TICKS_PER_BEAT
+                            * 60.0 / note_tempo
+                        )
+
+                    tie_sections = retained_ties
+                    primary_duration_sec = base_duration_sec
                 beats = primary_duration_sec / (60.0 / note_tempo)
                 ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
 
