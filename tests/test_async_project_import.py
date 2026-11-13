@@ -817,5 +817,6 @@ def test_ust_export_preserves_project_flags_on_tie_without_local_flags(
     restored = UstConverter.to_note_dicts(UstParser().load(str(output_path)))[0]
     assert restored["_ust_flags"] == "g-5"
     tie = restored["_ust_tie_sections"][0]
-    assert tie["flags_present"] is False
+    assert tie["flags_present"] is True
+    assert tie["flags"] == "g-5"
     assert tie["effective_flags"] == "g-5"
