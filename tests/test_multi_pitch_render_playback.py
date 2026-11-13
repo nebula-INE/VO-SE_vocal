@@ -72,7 +72,6 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
 ) -> None:
     from modules.audio import vo_se_engine as engine_module
     from modules.audio.vo_se_engine import VO_SE_Engine
-    from modules.audio.vo_se_engine_patch import apply_patch
 
     engine = VO_SE_Engine(voice_lib_dir=str(multi_pitch_voicebank))
     apply_patch(type(engine))
@@ -288,8 +287,6 @@ def test_ust_import_timeline_to_multi_pitch_wav_and_playback(
     # Now send the exact NoteEvents produced by the UST import path through the
     # actual C++ core. The two notes must pick separate prefix.map pitch layers.
     engine = VO_SE_Engine(voice_lib_dir=str(multi_pitch_voicebank))
-    apply_patch(type(engine))
-    engine.refresh_voice_library_v2()
 
     native_lib = engine.lib
     assert native_lib is not None, "native VO-SE Core library is required for this integration test"
@@ -318,21 +315,67 @@ def test_ust_import_timeline_to_multi_pitch_wav_and_playback(
         "Tension": [],
         "Breath": [],
     }
+    temporary_output = tmp_path / ".ust_import_native_render.tmp.wav"
     output = tmp_path / "ust_import_native_render.wav"
-    rendered = engine.export_to_wav_v2(
+
+    # Exercise the same QRunnable and GUI completion callback as the desktop
+    # export command, including the final temporary-file -> user-path replace.
+    from modules.gui import main_window as main_window_module
+    from modules.gui.main_window import MainWindow, SynthesisWorker
+
+    finished = []
+    errors = []
+    worker = SynthesisWorker(
+        engine,
         notes,
-        params,
-        str(output),
+        str(temporary_output),
+        is_pro=False,
+        parameters=params,
         tempo_bpm=window.timeline_widget.tempo,
     )
+    worker.signals.finished.connect(finished.append)
+    worker.signals.error.connect(errors.append)
+    worker.run()
 
-    assert rendered == str(output.resolve())
-    assert output.is_file()
-    assert output.stat().st_size > 44
+    assert errors == []
+    assert len(finished) == 1
+    assert temporary_output.is_file()
+    assert temporary_output.stat().st_size > 44
     assert captured_paths == [
         str(multi_pitch_voicebank / "a_C4.wav"),
         str(multi_pitch_voicebank / "a_F4.wav"),
     ]
+
+    status_messages = []
+
+    class FakeStatusBar:
+        def showMessage(self, message, *_args):
+            status_messages.append(str(message))
+
+    class FakeMessageBox:
+        @staticmethod
+        def information(*_args):
+            return None
+
+    monkeypatch.setattr(main_window_module, "QMessageBox", FakeMessageBox)
+    fake_window = SimpleNamespace(
+        _render_target_path=str(output),
+        _render_temp_path=str(temporary_output),
+        _render_play_after_success=False,
+        current_worker=worker,
+        progress_bar=None,
+        render_btn=None,
+        render_eta_label=None,
+        cancel_render_btn=None,
+        statusBar=lambda: FakeStatusBar(),
+        _set_render_controls_enabled=lambda _enabled: None,
+    )
+    MainWindow.on_render_success(fake_window, finished[0])
+
+    assert output.is_file()
+    assert output.stat().st_size > 44
+    assert not temporary_output.exists()
+    assert any("WAV書き出し完了" in message for message in status_messages)
 
     import soundfile as sf
 
