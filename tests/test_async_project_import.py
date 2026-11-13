@@ -631,3 +631,63 @@ def test_ust_export_restores_trailing_silence_without_display_node(tmp_path, mon
     roundtrip = UstConverter.to_note_dicts(UstParser().load(str(output_path)))
     assert len(roundtrip) == 1
     assert roundtrip[0]["_ust_trailing_rest_duration_sec"] == pytest.approx(0.25)
+
+
+def test_ust_export_keeps_preserved_rest_before_a_later_inserted_note(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    source_path = tmp_path / "source-with-middle-rest.ust"
+    output_path = tmp_path / "middle-rest-roundtrip.ust"
+    source_path.write_text(
+        "\n".join([
+            "[#SETTING]",
+            "Tempo=120",
+            "[#0000]",
+            "Length=480",
+            "Lyric=あ",
+            "NoteNum=60",
+            "[#0001]",
+            "Length=240",
+            "Lyric=R",
+            "NoteNum=60",
+            "[#TRACKEND]",
+            "",
+        ]),
+        encoding="cp932",
+    )
+    original_note = NoteEvent.from_dict(
+        UstConverter.to_note_dicts(UstParser().load(str(source_path)))[0]
+    )
+    later_note = NoteEvent(
+        note_number=62, start_time=0.75, duration=0.5, lyric="い"
+    )
+    later_note._ust_tempo = 120.0
+
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(
+            tempo=120.0, notes_list=[original_note, later_note]
+        ),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    parsed_notes = UstConverter.to_note_dicts(
+        UstParser().load(str(output_path))
+    )
+    assert [note["lyric"] for note in parsed_notes] == ["あ", "い"]
+    assert parsed_notes[1]["start_time"] == pytest.approx(0.75)
