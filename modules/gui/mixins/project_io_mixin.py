@@ -1174,11 +1174,19 @@ class ProjectIOMixin:
                     current_tempo = note_tempo
 
                 # ---- 先行発声・オーバーラップ ----
-                pre_ms = float(getattr(note, "pre_utterance", 0.0))
-                ov_ms = float(getattr(note, "overlap", 0.0))
-                if pre_ms != 0.0:
+                pre_raw = getattr(note, "pre_utterance", 0.0)
+                overlap_raw = getattr(note, "overlap", 0.0)
+                pre_ms = float(pre_raw) if pre_raw is not None else 0.0
+                ov_ms = float(overlap_raw) if overlap_raw is not None else 0.0
+                if (
+                    pre_ms != 0.0
+                    or bool(getattr(note, "_ust_preutterance_explicit", False))
+                ):
                     lines.append(f"PreUtterance={pre_ms:.3f}")
-                if ov_ms != 0.0:
+                if (
+                    ov_ms != 0.0
+                    or bool(getattr(note, "_ust_overlap_explicit", False))
+                ):
                     lines.append(f"VoiceOverlap={ov_ms:.3f}")
 
                 # ---- 強度・モジュレーション ----
@@ -1188,7 +1196,7 @@ class ProjectIOMixin:
 
                 # ---- フラグ ----
                 flags = str(getattr(note, "_ust_flags", ""))
-                if flags:
+                if flags or bool(getattr(note, "_ust_flags_present", False)):
                     lines.append(f"Flags={flags}")
 
                 # ---- ビブラート ----
