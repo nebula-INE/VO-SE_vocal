@@ -10,6 +10,8 @@ on:
       - "requirements-training.txt"
       - ".github/workflows/release.yml"
       - ".github/workflows/windows-pytest.yml"
+      - "assets/src/**"
+      - "include/**"
   workflow_dispatch:
 
 permissions:
@@ -77,6 +79,9 @@ jobs:
 
       # Build the real native renderer in the same Windows job so the opt-in
       # integration tests can verify a complete UST -> NoteEvent -> WAV path.
+      - name: Set up MSVC for native render integration
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Build VO-SE Core DLL for native render integration
         shell: bash
         env:
