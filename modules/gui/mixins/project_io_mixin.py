@@ -1032,6 +1032,65 @@ class ProjectIOMixin:
                 primary_duration_sec = (
                     base_duration_sec if tie_sections else duration_sec
                 )
+                # If the user resized a combined tie node after import, preserve
+                # that edit by adjusting the final '+' section. Untouched nodes
+                # retain every original tick length exactly.
+                if tie_sections:
+                    valid_tie_indices = []
+                    for tie_index, tie_section in enumerate(tie_sections):
+                        if not isinstance(tie_section, dict):
+                            continue
+                        try:
+                            if int(tie_section.get("length", 0)) > 0:
+                                valid_tie_indices.append(tie_index)
+                        except (TypeError, ValueError):
+                            continue
+                    if valid_tie_indices:
+                        last_tie_index = valid_tie_indices[-1]
+                        last_tie = tie_sections[last_tie_index]
+                        try:
+                            last_tie_tempo = float(
+                                last_tie.get("tempo") or note_tempo
+                            )
+                            prefix_duration = base_duration_sec
+                            for tie_index in valid_tie_indices[:-1]:
+                                section = tie_sections[tie_index]
+                                section_tempo = float(
+                                    section.get("tempo") or note_tempo
+                                )
+                                prefix_duration += (
+                                    int(section["length"])
+                                    / _TICKS_PER_BEAT
+                                    * 60.0
+                                    / section_tempo
+                                )
+                            remaining_duration = duration_sec - prefix_duration
+                            if (
+                                math.isfinite(last_tie_tempo)
+                                and last_tie_tempo > 0.0
+                                and remaining_duration > 0.0
+                                and abs(remaining_duration - (
+                                    int(last_tie["length"])
+                                    / _TICKS_PER_BEAT
+                                    * 60.0
+                                    / last_tie_tempo
+                                )) > 1e-6
+                            ):
+                                adjusted_tie_sections = list(tie_sections)
+                                adjusted_last_tie = dict(last_tie)
+                                adjusted_last_tie["length"] = max(
+                                    1,
+                                    int(round(
+                                        remaining_duration
+                                        * last_tie_tempo
+                                        * _TICKS_PER_BEAT
+                                        / 60.0
+                                    )),
+                                )
+                                adjusted_tie_sections[last_tie_index] = adjusted_last_tie
+                                tie_sections = adjusted_tie_sections
+                        except (KeyError, TypeError, ValueError, OverflowError):
+                            pass
                 beats = primary_duration_sec / (60.0 / note_tempo)
                 ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
 
