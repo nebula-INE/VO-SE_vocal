@@ -65,6 +65,7 @@ def test_update_thread_is_owned_by_application_not_window(monkeypatch):
     )
     monkeypatch.delenv("VOSE_SKIP_UPDATE_CHECK", raising=False)
 
+    install_update_notification_patch(FakeWindow)
     window = FakeWindow()
     window._on_update_result = lambda *_args: None
     FakeWindow._check_for_updates(window)
