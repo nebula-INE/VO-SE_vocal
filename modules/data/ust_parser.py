@@ -572,8 +572,8 @@ class UstConverter:
                         }
                     # Keep the original continuation section as serializable
                     # metadata. The piano roll still receives one combined node,
-                    # while UST export can reconstruct the exact section boundary
-                    # and its section-local settings.
+                    # while UST export can reconstruct the original section
+                    # boundary and the section-local fields parsed by this module.
                     previous.setdefault("_ust_tie_sections", []).append({
                         "length": ust_note.length,
                         "tempo": ust_note.tempo,
