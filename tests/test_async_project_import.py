@@ -594,6 +594,9 @@ def test_ust_export_restores_trailing_silence_without_display_node(tmp_path, mon
             "Length=480",
             "Lyric=あ",
             "NoteNum=60",
+            "PreUtterance=0",
+            "VoiceOverlap=0",
+            "Flags=",
             "[#0001]",
             "Length=240",
             "Lyric=R",
@@ -624,6 +627,9 @@ def test_ust_export_restores_trailing_silence_without_display_node(tmp_path, mon
     ProjectIOMixin.export_as_ust(window)
 
     exported = output_path.read_text(encoding="cp932")
+    assert "PreUtterance=0.000" in exported
+    assert "VoiceOverlap=0.000" in exported
+    assert "Flags=" in exported
     assert exported.rstrip().endswith("Lyric=R\r\nNoteNum=60") or (
         "Lyric=R" in exported.split("[#TRACKEND]")[0].split("[#")[-1]
     )
