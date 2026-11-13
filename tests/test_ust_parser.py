@@ -443,6 +443,7 @@ class TestUstParser(unittest.TestCase):
 
         project = UstProject(
             tempo=120.0,
+            flags="g-5",
             notes=[
                 UstNote(
                     index=0, length=480, lyric="あ", note_num=60, tempo=120.0,
@@ -484,6 +485,7 @@ class TestUstParser(unittest.TestCase):
         self.assertAlmostEqual(tie["modulation"], 24.0)
         self.assertEqual(tie["flags"], "g+5")
         self.assertTrue(tie["flags_present"])
+        self.assertEqual(tie["effective_flags"], "g-5")
         self.assertEqual(tie["pbs"], "-25;50")
         self.assertEqual(tie["pbw"], "50")
         self.assertEqual(tie["pby"], "0")
