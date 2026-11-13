@@ -27,6 +27,17 @@ def install_update_notification_patch(main_window_class) -> None:
             checker = UpdateChecker(self)
             checker.result_ready.connect(self._on_update_result)
             self._update_checker = checker
+
+            # Keep Qt from destroying a still-running QThread during application
+            # shutdown. The request has a short network timeout, so this wait is
+            # bounded to the update check's lifetime.
+            from PySide6.QtWidgets import QApplication
+
+            application = QApplication.instance()
+            if application is not None:
+                application.aboutToQuit.connect(
+                    lambda checker=checker: checker.wait()
+                )
             checker.start()
         except Exception:
             logger.debug("Could not start VO-SE update check", exc_info=True)
