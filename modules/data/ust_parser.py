@@ -558,8 +558,12 @@ class UstConverter:
                     previous_duration = float(previous["duration"])
                     previous.setdefault("_ust_base_duration", previous_duration)
                     previous.setdefault("_ust_base_length_ticks", max(1, int(
-                        round(previous_duration * float(previous.get("_ust_tempo", ust_note.tempo))
-                              * _TICKS_PER_BEAT / 60.0)
+                        previous.get(
+                            "_ust_length_ticks",
+                            round(previous_duration * float(
+                                previous.get("_ust_tempo", ust_note.tempo)
+                            ) * _TICKS_PER_BEAT / 60.0),
+                        )
                     )))
                     previous.setdefault("_ust_base_portamento", {
                         "pbs": previous.get("_ust_pbs", ""),
@@ -631,6 +635,7 @@ class UstConverter:
                 "_ust_overlap_explicit": ust_note.overlap is not None,
                 "_ust_flags": ust_note.flags if ust_note.flags_present else project.flags,
                 "_ust_tempo": ust_note.tempo,
+                "_ust_length_ticks": ust_note.length,
                 "_ust_modulation": ust_note.modulation,
                 "_ust_pbs": ust_note.pbs,
                 "_ust_pbw": ust_note.pbw,
