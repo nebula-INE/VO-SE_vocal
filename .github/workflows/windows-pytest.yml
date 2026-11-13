@@ -10,6 +10,8 @@ on:
       - "requirements-training.txt"
       - ".github/workflows/release.yml"
       - ".github/workflows/windows-pytest.yml"
+      - "assets/src/**"
+      - "include/**"
   workflow_dispatch:
 
 permissions:
@@ -73,6 +75,56 @@ jobs:
             --cov-report=term \
             -n 2 \
             -o faulthandler_timeout=180
+
+
+      # Build the real native renderer in the same Windows job so the opt-in
+      # integration tests can verify a complete UST -> NoteEvent -> WAV path.
+      - name: Set up MSVC for native render integration
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build VO-SE Core DLL for native render integration
+        shell: bash
+        env:
+          MSYS_NO_PATHCONV: "1"
+          MSYS2_ARG_CONV_EXCL: "*"
+        run: |
+          set -euo pipefail
+          mkdir -p bin src/world build/windows-world
+          cp assets/src/*.cpp src/
+          cp assets/src/world/*.cpp src/world/
+          cp include/world/*.h src/world/
+          cp include/*.h src/
+
+          test -s src/vose_core.cpp
+          test -s src/vose_streaming_final.cpp
+          compgen -G 'src/world/*.cpp' > /dev/null
+          compgen -G 'src/world/*.h' > /dev/null
+
+          world_objects=()
+          for source in src/world/*.cpp; do
+            object="build/windows-world/$(basename "${source%.cpp}").obj"
+            cl.exe /nologo /std:c++17 /EHsc /O2 /D_USE_MATH_DEFINES \
+              /I src /I include /I src/world /c "$source" "/Fo$object"
+            world_objects+=("$object")
+          done
+
+          cl.exe /nologo /std:c++17 /EHsc /O2 /LD /D_USE_MATH_DEFINES \
+            /Fe:bin/vose_core.dll \
+            src/vose_core.cpp src/vose_streaming_final.cpp "${world_objects[@]}" \
+            /I src /I include /I src/world /link
+          test -s bin/vose_core.dll
+
+      - name: Verify imported UST -> native WAV -> playback
+        shell: bash
+        timeout-minutes: 20
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_MEDIA_BACKEND: ffmpeg
+          VOSE_RUN_NATIVE_RENDER_TEST: "1"
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          set -euo pipefail
+          python -m pytest tests/test_multi_pitch_render_playback.py -v -m integration --maxfail=1
 
       - name: Upload coverage report
         if: always() && hashFiles('coverage.xml') != ''
