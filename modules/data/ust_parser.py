@@ -659,6 +659,15 @@ class UstConverter:
             can_continue_with_tie = True
             current_time_sec += duration_sec
 
+        if results:
+            last_note = results[-1]
+            last_note_end = (
+                float(last_note["start_time"]) + float(last_note["duration"])
+            )
+            trailing_rest_sec = max(0.0, current_time_sec - last_note_end)
+            if trailing_rest_sec > 1e-6:
+                last_note["_ust_trailing_rest_duration_sec"] = trailing_rest_sec
+
         return results
 
     @staticmethod
