@@ -1251,7 +1251,7 @@ jobs:
             fi
           done
 
-      - name: Publish latest Release assets
+      - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
           # Main-branch builds refresh the stable channel. Version tags publish
