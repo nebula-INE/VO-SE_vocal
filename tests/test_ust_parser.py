@@ -450,7 +450,14 @@ class TestUstParser(unittest.TestCase):
                 ),
                 UstNote(
                     index=1, length=480, lyric="+", note_num=60, tempo=120.0,
+                    intensity=135.0, modulation=24.0,
+                    flags="g+5", flags_present=True,
                     pbs="-25;50", pbw="50", pby="0", pbm="r,s",
+                    vibrato=UstVibratoParams(
+                        length=75.0, cycle=180.0, depth=42.0,
+                        fade_in=10.0, fade_out=15.0, phase=5.0, height=2.0,
+                    ),
+                    pre_utterance=18.0, overlap=7.0,
                 ),
                 UstNote(index=2, length=240, lyric="い", note_num=62, tempo=120.0),
             ],
@@ -465,6 +472,28 @@ class TestUstParser(unittest.TestCase):
         self.assertEqual(notes[0]["_ust_pbw"], "50,425,50")
         self.assertEqual(notes[0]["_ust_pby"], "10,50,0")
         self.assertEqual(notes[0]["_ust_pbm"], "s,j,r,s")
+        self.assertAlmostEqual(notes[0]["_ust_base_duration"], 0.5)
+        tie = notes[0]["_ust_tie_sections"][0]
+        self.assertEqual(tie["length"], 480)
+        self.assertAlmostEqual(tie["tempo"], 120.0)
+        self.assertAlmostEqual(tie["intensity"], 135.0)
+        self.assertAlmostEqual(tie["modulation"], 24.0)
+        self.assertEqual(tie["flags"], "g+5")
+        self.assertTrue(tie["flags_present"])
+        self.assertEqual(tie["pbs"], "-25;50")
+        self.assertEqual(tie["pbw"], "50")
+        self.assertEqual(tie["pby"], "0")
+        self.assertEqual(tie["pbm"], "r,s")
+        self.assertEqual(tie["vibrato"]["cycle"], 180.0)
+        self.assertAlmostEqual(tie["pre_utterance"], 18.0)
+        self.assertAlmostEqual(tie["overlap"], 7.0)
+
+        # Both the base duration and continuation sections survive NoteEvent
+        # persistence, because UST metadata is stored as serializable extras.
+        from modules.data.data_models import NoteEvent
+        restored = NoteEvent.from_dict(notes[0]).to_dict()
+        self.assertEqual(restored["_ust_tie_sections"], [tie])
+        self.assertAlmostEqual(restored["_ust_base_duration"], 0.5)
 
     def test_leading_ust_tie_keeps_timeline_position_without_creating_node(self):
         """A malformed/leading '+' section is skipped but still consumes its duration."""
