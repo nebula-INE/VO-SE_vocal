@@ -981,29 +981,194 @@ class ProjectIOMixin:
             # 直前に出力した Tempo= を追跡（同じ値を繰り返さないため）
             current_tempo: Optional[float] = first_note_tempo
 
-            for i, note in enumerate(notes_list):
+            timeline_cursor_sec = 0.0
+            section_index = 0
+
+            for note_index, note in enumerate(notes_list):
+                # UST is a sequential format. Recreate gaps as explicit R blocks
+                # because desktop import no longer represents rests as piano-roll
+                # NoteEvents.
+                try:
+                    note_start_sec = float(getattr(note, "start_time", timeline_cursor_sec))
+                except (TypeError, ValueError):
+                    note_start_sec = timeline_cursor_sec
+                if not math.isfinite(note_start_sec) or note_start_sec < 0.0:
+                    note_start_sec = timeline_cursor_sec
+
+                if note_start_sec > timeline_cursor_sec + 1e-6:
+                    rest_tempo = current_tempo or first_note_tempo
+                    gap_sec = note_start_sec - timeline_cursor_sec
+                    gap_ticks = int(round(gap_sec * rest_tempo * _TICKS_PER_BEAT / 60.0))
+                    if gap_ticks > 0:
+                        rest_section_id = f"{section_index:04X}"
+                        lines += [
+                            f"[#{rest_section_id}]",
+                            f"Length={gap_ticks}",
+                            "Lyric=R",
+                            "NoteNum=60",
+                            "",
+                        ]
+                        section_index += 1
+                    # Anchor the next note to its actual absolute position. The
+                    # one-tick rounding above must not accumulate across many gaps.
+                    timeline_cursor_sec = note_start_sec
+
                 # ---- このノート自身のテンポを決定 ----
                 note_tempo = float(
                     getattr(note, "_ust_tempo", None) or default_tempo
                 )
 
                 # ---- そのノートのテンポで秒 → ticks へ逆変換 ----
-                # 各ノートは読み込み時に「そのノートのテンポ」で秒に変換されているので、
-                # 逆変換も同じテンポを使う必要がある。
                 duration_sec = float(getattr(note, "duration", 0.5))
-                beats = duration_sec / (60.0 / note_tempo)
-                ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
+                if not math.isfinite(duration_sec) or duration_sec <= 0.0:
+                    duration_sec = 60.0 / (max(note_tempo, 1.0) * _TICKS_PER_BEAT)
+
+                tie_sections = list(
+                    getattr(note, "_ust_tie_sections", None) or []
+                )
+                had_tie_metadata = bool(tie_sections)
+                try:
+                    base_duration_sec = float(
+                        getattr(note, "_ust_base_duration", duration_sec)
+                    )
+                except (TypeError, ValueError):
+                    base_duration_sec = duration_sec
+                if not math.isfinite(base_duration_sec) or base_duration_sec <= 0.0:
+                    base_duration_sec = duration_sec
+
+                try:
+                    base_length_ticks = int(
+                        getattr(
+                            note,
+                            "_ust_base_length_ticks",
+                            max(1, round(
+                                base_duration_sec * note_tempo
+                                * _TICKS_PER_BEAT / 60.0
+                            )),
+                        )
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    base_length_ticks = max(1, round(
+                        base_duration_sec * note_tempo
+                        * _TICKS_PER_BEAT / 60.0
+                    ))
+                base_length_ticks = max(1, base_length_ticks)
+
+                primary_duration_sec = duration_sec
+                if tie_sections:
+                    # Keep the original UST segment boundaries for untouched
+                    # notes. When the user resizes a combined node, consume or
+                    # extend the continuation sections from the end so export
+                    # duration still matches the edited piano-roll duration.
+                    remaining_duration = duration_sec - base_duration_sec
+                    retained_ties = []
+
+                    if remaining_duration > 1e-6:
+                        for tie_section in tie_sections:
+                            if not isinstance(tie_section, dict):
+                                continue
+                            try:
+                                tie_ticks = int(tie_section.get("length", 0))
+                                tie_tempo = float(
+                                    tie_section.get("tempo") or note_tempo
+                                )
+                            except (TypeError, ValueError, OverflowError):
+                                continue
+                            if (
+                                tie_ticks <= 0
+                                or not math.isfinite(tie_tempo)
+                                or tie_tempo <= 0.0
+                            ):
+                                continue
+
+                            section_duration = (
+                                tie_ticks / _TICKS_PER_BEAT * 60.0 / tie_tempo
+                            )
+                            if remaining_duration >= section_duration - 1e-6:
+                                retained_ties.append(dict(tie_section))
+                                remaining_duration = max(
+                                    0.0, remaining_duration - section_duration
+                                )
+                                continue
+
+                            if remaining_duration > 1e-6:
+                                adjusted_tie = dict(tie_section)
+                                adjusted_tie["length"] = max(
+                                    1,
+                                    int(round(
+                                        remaining_duration * tie_tempo
+                                        * _TICKS_PER_BEAT / 60.0
+                                    )),
+                                )
+                                retained_ties.append(adjusted_tie)
+                            remaining_duration = 0.0
+                            break
+
+                        if remaining_duration > 1e-6 and retained_ties:
+                            # The edited node is longer than all original tie
+                            # sections; extend the final section using its tempo.
+                            last_tie = dict(retained_ties[-1])
+                            last_tie_tempo = float(
+                                last_tie.get("tempo") or note_tempo
+                            )
+                            additional_ticks = max(
+                                0,
+                                int(round(
+                                    remaining_duration * last_tie_tempo
+                                    * _TICKS_PER_BEAT / 60.0
+                                )),
+                            )
+                            last_tie["length"] = int(last_tie["length"]) + additional_ticks
+                            retained_ties[-1] = last_tie
+                        elif remaining_duration > 1e-6 and not retained_ties:
+                            # No valid continuation section remains; grow the
+                            # base note itself rather than silently losing time.
+                            base_length_ticks = max(
+                                1,
+                                int(round(
+                                    duration_sec * note_tempo
+                                    * _TICKS_PER_BEAT / 60.0
+                                )),
+                            )
+                            base_duration_sec = (
+                                base_length_ticks / _TICKS_PER_BEAT
+                                * 60.0 / note_tempo
+                            )
+                    else:
+                        # Shrinking to the base note (or shorter) drops all ties
+                        # and shortens the base block instead of exporting a
+                        # longer note than the edited timeline node.
+                        base_length_ticks = max(
+                            1,
+                            int(round(
+                                duration_sec * note_tempo
+                                * _TICKS_PER_BEAT / 60.0
+                            )),
+                        )
+                        base_duration_sec = (
+                            base_length_ticks / _TICKS_PER_BEAT
+                            * 60.0 / note_tempo
+                        )
+
+                    tie_sections = retained_ties
+                    primary_duration_sec = base_duration_sec
+                if had_tie_metadata:
+                    ticks = base_length_ticks
+                else:
+                    beats = primary_duration_sec / (60.0 / note_tempo)
+                    ticks = max(1, int(round(beats * _TICKS_PER_BEAT)))
 
                 note_num = int(getattr(note, "note_number", 60))
-                lyric    = str(getattr(note, "lyric", "あ"))
+                lyric = str(getattr(note, "lyric", "あ"))
 
-                section_id = f"{i:04X}"
+                section_id = f"{section_index:04X}"
                 lines += [
                     f"[#{section_id}]",
                     f"Length={ticks}",
                     f"Lyric={lyric}",
                     f"NoteNum={note_num}",
                 ]
+                section_index += 1
 
                 # ---- テンポ変化の位置に Tempo= を挿入 ----
                 # UTAU はこの行があればそのノートから先のテンポを上書きする。
@@ -1013,49 +1178,190 @@ class ProjectIOMixin:
                     current_tempo = note_tempo
 
                 # ---- 先行発声・オーバーラップ ----
-                pre_ms = float(getattr(note, "pre_utterance", 0.0))
-                ov_ms  = float(getattr(note, "overlap",       0.0))
-                if pre_ms != 0.0:
+                pre_raw = getattr(note, "pre_utterance", 0.0)
+                overlap_raw = getattr(note, "overlap", 0.0)
+                pre_ms = float(pre_raw) if pre_raw is not None else 0.0
+                ov_ms = float(overlap_raw) if overlap_raw is not None else 0.0
+                if (
+                    pre_ms != 0.0
+                    or bool(getattr(note, "_ust_preutterance_explicit", False))
+                ):
                     lines.append(f"PreUtterance={pre_ms:.3f}")
-                if ov_ms != 0.0:
+                if (
+                    ov_ms != 0.0
+                    or bool(getattr(note, "_ust_overlap_explicit", False))
+                ):
                     lines.append(f"VoiceOverlap={ov_ms:.3f}")
 
                 # ---- 強度・モジュレーション ----
-                intensity  = float(getattr(note, "_ust_intensity",  100.0))
+                intensity = float(getattr(note, "_ust_intensity", 100.0))
                 modulation = float(getattr(note, "_ust_modulation", 0.0))
                 lines += [f"Intensity={intensity:.0f}", f"Modulation={modulation:.0f}"]
 
                 # ---- フラグ ----
                 flags = str(getattr(note, "_ust_flags", ""))
-                if flags:
+                if flags or bool(getattr(note, "_ust_flags_present", False)):
                     lines.append(f"Flags={flags}")
 
                 # ---- ビブラート ----
                 vib_dict = getattr(note, "_ust_vibrato", None)
                 if isinstance(vib_dict, dict):
                     vbr_vals = [
-                        vib_dict.get("length",   0),
-                        vib_dict.get("cycle",  160),
-                        vib_dict.get("depth",   35),
+                        vib_dict.get("length", 0),
+                        vib_dict.get("cycle", 160),
+                        vib_dict.get("depth", 35),
                         vib_dict.get("fade_in", 20),
-                        vib_dict.get("fade_out",20),
-                        vib_dict.get("phase",    0),
-                        vib_dict.get("height",   0),
+                        vib_dict.get("fade_out", 20),
+                        vib_dict.get("phase", 0),
+                        vib_dict.get("height", 0),
                     ]
                     lines.append("VBR=" + ",".join(str(v) for v in vbr_vals))
 
                 # ---- ポルタメント ----
+                base_portamento = getattr(note, "_ust_base_portamento", None)
                 for attr, key in [
                     ("_ust_pbs", "PBS"),
                     ("_ust_pbw", "PBW"),
                     ("_ust_pby", "PBY"),
                     ("_ust_pbm", "PBM"),
                 ]:
-                    val = str(getattr(note, attr, ""))
+                    if isinstance(base_portamento, dict):
+                        val = str(base_portamento.get(key.lower(), "") or "")
+                    else:
+                        val = str(getattr(note, attr, ""))
                     if val:
                         lines.append(f"{key}={val}")
 
                 lines.append("")
+
+                # Recreate the original sequential '+' sections after the
+                # combined piano-roll note. This preserves section-local tempo,
+                # dynamics, flags, vibrato, portamento, and oto overrides.
+                for tie_section in tie_sections:
+                    if not isinstance(tie_section, dict):
+                        continue
+                    try:
+                        tie_ticks = int(tie_section.get("length", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if tie_ticks <= 0:
+                        continue
+
+                    try:
+                        tie_tempo = float(
+                            tie_section.get("tempo") or current_tempo or first_note_tempo
+                        )
+                    except (TypeError, ValueError):
+                        tie_tempo = current_tempo or first_note_tempo
+                    tie_num = int(tie_section.get("note_num", note_num))
+
+                    tie_section_id = f"{section_index:04X}"
+                    lines += [
+                        f"[#{tie_section_id}]",
+                        f"Length={tie_ticks}",
+                        "Lyric=+",
+                        f"NoteNum={tie_num}",
+                    ]
+                    section_index += 1
+
+                    if tie_tempo != current_tempo:
+                        lines.append(f"Tempo={tie_tempo:.2f}")
+                        current_tempo = tie_tempo
+
+                    tie_pre = tie_section.get("pre_utterance")
+                    tie_overlap = tie_section.get("overlap")
+                    if tie_pre is not None:
+                        lines.append(f"PreUtterance={float(tie_pre):.3f}")
+                    if tie_overlap is not None:
+                        lines.append(f"VoiceOverlap={float(tie_overlap):.3f}")
+
+                    lines += [
+                        f"Intensity={float(tie_section.get('intensity', 100.0)):.0f}",
+                        f"Modulation={float(tie_section.get('modulation', 0.0)):.0f}",
+                    ]
+
+                    tie_flags = (
+                        tie_section.get("flags", "")
+                        if tie_section.get("flags_present")
+                        else tie_section.get("effective_flags", "")
+                    )
+                    if tie_flags or tie_section.get("flags_present"):
+                        lines.append(f"Flags={tie_flags}")
+
+                    tie_vibrato = tie_section.get("vibrato")
+                    if isinstance(tie_vibrato, dict):
+                        vbr_vals = [
+                            tie_vibrato.get("length", 0),
+                            tie_vibrato.get("cycle", 160),
+                            tie_vibrato.get("depth", 35),
+                            tie_vibrato.get("fade_in", 20),
+                            tie_vibrato.get("fade_out", 20),
+                            tie_vibrato.get("phase", 0),
+                            tie_vibrato.get("height", 0),
+                        ]
+                        lines.append("VBR=" + ",".join(str(value) for value in vbr_vals))
+
+                    for key in ("pbs", "pbw", "pby", "pbm"):
+                        value = str(tie_section.get(key, "") or "")
+                        if value:
+                            lines.append(f"{key.upper()}={value}")
+
+                    lines.append("")
+
+                # A rest has no piano-roll node, so its duration is stored on
+                # the preceding note. Emit it here (rather than only after the
+                # last list item) so a subsequently inserted note remains after
+                # the original silence when the project is exported.
+                try:
+                    note_trailing_rest_sec = float(
+                        getattr(note, "_ust_trailing_rest_duration_sec", 0.0) or 0.0
+                    )
+                except (TypeError, ValueError):
+                    note_trailing_rest_sec = 0.0
+                if (
+                    math.isfinite(note_trailing_rest_sec)
+                    and note_trailing_rest_sec > 1e-6
+                    and note_index + 1 < len(notes_list)
+                ):
+                    try:
+                        next_note_start = float(
+                            getattr(notes_list[note_index + 1], "start_time", 0.0)
+                        )
+                    except (TypeError, ValueError):
+                        next_note_start = note_start_sec + duration_sec
+                    available_gap = max(
+                        0.0,
+                        next_note_start - (note_start_sec + duration_sec),
+                    )
+                    note_trailing_rest_sec = min(
+                        note_trailing_rest_sec, available_gap
+                    )
+
+                trailing_ticks = 0
+                if math.isfinite(note_trailing_rest_sec) and note_trailing_rest_sec > 1e-6:
+                    rest_tempo = current_tempo or first_note_tempo
+                    trailing_ticks = int(round(
+                        note_trailing_rest_sec * rest_tempo * _TICKS_PER_BEAT / 60.0
+                    ))
+                    if trailing_ticks > 0:
+                        rest_section_id = f"{section_index:04X}"
+                        lines += [
+                            f"[#{rest_section_id}]",
+                            f"Length={trailing_ticks}",
+                            "Lyric=R",
+                            "NoteNum=60",
+                            "",
+                        ]
+                        section_index += 1
+
+                timeline_cursor_sec = max(
+                    timeline_cursor_sec,
+                    note_start_sec + max(0.0, duration_sec)
+                    + (
+                        trailing_ticks / _TICKS_PER_BEAT
+                        * 60.0 / (current_tempo or first_note_tempo)
+                    ),
+                )
 
             lines += ["[#TRACKEND]", ""]
 

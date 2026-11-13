@@ -401,5 +401,172 @@ class TestUstParser(unittest.TestCase):
         note2 = NoteEvent.from_dict(roundtrip)
         self.assertEqual(getattr(note2, "_ust_tempo", None), 170.0)
 
+
+    def test_rest_sections_do_not_create_nodes_and_keep_absolute_timing(self):
+        """Rest/breath sections occupy time but must not appear as piano-roll notes."""
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=480, lyric="あ", note_num=60, tempo=120.0),
+                UstNote(index=1, length=240, lyric="R", note_num=60, tempo=120.0),
+                UstNote(index=2, length=240, lyric="休符", note_num=60, tempo=120.0),
+                UstNote(index=3, length=120, lyric="br1", note_num=60, tempo=120.0),
+                UstNote(index=4, length=480, lyric="い", note_num=62, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual([note["lyric"] for note in notes], ["あ", "い"])
+        self.assertAlmostEqual(notes[0]["start_time"], 0.0, places=6)
+        # 480 + 240 + 240 + 120 ticks = 2.25 beats at 120 BPM.
+        self.assertAlmostEqual(notes[1]["start_time"], 1.125, places=6)
+
+    def test_ust_rest_aliases_are_recognized(self):
+        """Common UTAU rest and breath aliases are not treated as voiced nodes."""
+        from modules.data.ust_parser import UstNote
+
+        for lyric in ("R", "r_", "r_0", "[r]", "null", "pau", "sil", "br", "br12",
+                      "休", "休符", "息", "吸", "吸気", "息吸い", "_br2",
+                      "・", "-", "ー", "~", "っ", "ッ", "_っ", "_ッ", "っ_", "ッ_"):
+            with self.subTest(lyric=lyric):
+                note = UstNote(
+                    index=0, length=120, lyric=lyric, note_num=60, tempo=120.0
+                )
+                self.assertTrue(note.is_rest)
+
+    def test_ust_tie_extends_previous_node_and_merges_portamento(self):
+        """Lyric='+' is a continuation, not an extra displayed node."""
+        from modules.data.ust_parser import UstNote, UstProject, UstVibratoParams
+
+        project = UstProject(
+            tempo=120.0,
+            flags="g-5",
+            notes=[
+                UstNote(
+                    index=0, length=480, lyric="あ", note_num=60, tempo=120.0,
+                    pbs="0;0", pbw="50", pby="10", pbm="s,j",
+                ),
+                UstNote(
+                    index=1, length=480, lyric="+", note_num=60, tempo=120.0,
+                    intensity=135.0, modulation=24.0,
+                    flags="g+5", flags_present=True,
+                    pbs="-25;50", pbw="50", pby="0", pbm="r,s",
+                    vibrato=UstVibratoParams(
+                        length=75.0, cycle=180.0, depth=42.0,
+                        fade_in=10.0, fade_out=15.0, phase=5.0, height=2.0,
+                    ),
+                    pre_utterance=18.0, overlap=7.0,
+                ),
+                UstNote(index=2, length=240, lyric="+", note_num=60, tempo=120.0),
+                UstNote(index=3, length=240, lyric="い", note_num=62, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual([note["lyric"] for note in notes], ["あ", "い"])
+        self.assertAlmostEqual(notes[0]["duration"], 1.25, places=6)
+        self.assertAlmostEqual(notes[1]["start_time"], 1.25, places=6)
+        self.assertEqual(notes[0]["_ust_pbs"], "0;0")
+        self.assertEqual(notes[0]["_ust_pbw"], "50,425,50")
+        self.assertEqual(notes[0]["_ust_pby"], "10,50,0")
+        self.assertEqual(notes[0]["_ust_pbm"], "s,j,r,s")
+        self.assertAlmostEqual(notes[0]["_ust_base_duration"], 0.5)
+        self.assertEqual(
+            notes[0]["_ust_base_portamento"],
+            {"pbs": "0;0", "pbw": "50", "pby": "10", "pbm": "s,j"},
+        )
+        tie = notes[0]["_ust_tie_sections"][0]
+        self.assertEqual(tie["length"], 480)
+        self.assertAlmostEqual(tie["tempo"], 120.0)
+        self.assertAlmostEqual(tie["intensity"], 135.0)
+        self.assertAlmostEqual(tie["modulation"], 24.0)
+        self.assertEqual(tie["flags"], "g+5")
+        self.assertTrue(tie["flags_present"])
+        self.assertEqual(tie["effective_flags"], "g+5")
+        self.assertEqual(tie["pbs"], "-25;50")
+        self.assertEqual(tie["pbw"], "50")
+        self.assertEqual(tie["pby"], "0")
+        self.assertEqual(tie["pbm"], "r,s")
+        self.assertEqual(tie["vibrato"]["cycle"], 180.0)
+        self.assertAlmostEqual(tie["pre_utterance"], 18.0)
+        self.assertAlmostEqual(tie["overlap"], 7.0)
+        second_tie = notes[0]["_ust_tie_sections"][1]
+        self.assertFalse(second_tie["flags_present"])
+        self.assertEqual(second_tie["effective_flags"], "g-5")
+
+        # Both the base duration and continuation sections survive NoteEvent
+        # persistence, because UST metadata is stored as serializable extras.
+        from modules.data.data_models import NoteEvent
+        restored = NoteEvent.from_dict(notes[0]).to_dict()
+        self.assertEqual(
+            restored["_ust_tie_sections"], notes[0]["_ust_tie_sections"]
+        )
+        self.assertAlmostEqual(restored["_ust_base_duration"], 0.5)
+
+    def test_leading_ust_tie_keeps_timeline_position_without_creating_node(self):
+        """A malformed/leading '+' section is skipped but still consumes its duration."""
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=240, lyric="+", note_num=60, tempo=120.0),
+                UstNote(index=1, length=480, lyric="あ", note_num=60, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual(len(notes), 1)
+        self.assertAlmostEqual(notes[0]["start_time"], 0.25, places=6)
+
+    def test_ust_tie_after_rest_does_not_extend_previous_note(self):
+        """A '+' after silence has no adjacent voiced note to continue."""
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=480, lyric="あ", note_num=60, tempo=120.0),
+                UstNote(index=1, length=240, lyric="R", note_num=60, tempo=120.0),
+                UstNote(index=2, length=480, lyric="+", note_num=60, tempo=120.0),
+                UstNote(index=3, length=480, lyric="い", note_num=62, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual([note["lyric"] for note in notes], ["あ", "い"])
+        self.assertAlmostEqual(notes[0]["duration"], 0.5, places=6)
+        self.assertAlmostEqual(notes[1]["start_time"], 1.25, places=6)
+        self.assertNotIn("_ust_tie_sections", notes[0])
+
+    def test_trailing_ust_rest_duration_is_kept_on_last_display_node(self):
+        from modules.data.data_models import NoteEvent
+        from modules.data.ust_parser import UstNote, UstProject
+
+        project = UstProject(
+            tempo=120.0,
+            notes=[
+                UstNote(index=0, length=480, lyric="あ", note_num=60, tempo=120.0),
+                UstNote(index=1, length=240, lyric="R", note_num=60, tempo=120.0),
+            ],
+        )
+
+        notes = UstConverter.to_note_dicts(project)
+
+        self.assertEqual(len(notes), 1)
+        self.assertAlmostEqual(
+            notes[0]["_ust_trailing_rest_duration_sec"], 0.25, places=6
+        )
+        restored = NoteEvent.from_dict(notes[0]).to_dict()
+        self.assertAlmostEqual(
+            restored["_ust_trailing_rest_duration_sec"], 0.25, places=6
+        )
+
 if __name__ == "__main__":
     unittest.main()

@@ -281,3 +281,542 @@ def test_rendered_wav_preview_uses_background_mixer_start():
     )[0]
     assert 'self._start_audio_mixer_command(' in play_handler
     assert 'play_file(' not in play_handler
+
+
+def test_ust_export_recreates_silent_gaps_without_display_nodes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "gap-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(
+            tempo=120.0,
+            notes_list=[
+                NoteEvent(note_number=60, start_time=0.0, duration=0.5, lyric="あ"),
+                NoteEvent(note_number=62, start_time=1.0, duration=1.0, lyric="い"),
+            ],
+        ),
+        statusBar=lambda: FakeStatusBar(),
+    )
+
+    window.timeline_widget.notes_list[1]._ust_tempo = 60.0
+
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert "Lyric=R" in exported
+    assert "Tempo=60.00" in exported
+
+    parsed = UstParser().load(str(output_path))
+    notes = UstConverter.to_note_dicts(parsed)
+    assert [note["lyric"] for note in notes] == ["あ", "い"]
+    assert notes[1]["start_time"] == pytest.approx(1.0)
+    assert notes[1]["duration"] == pytest.approx(1.0)
+    assert notes[1]["_ust_tempo"] == pytest.approx(60.0)
+
+
+def test_ust_export_restores_tie_sections_and_section_local_settings(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "tie-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    first = NoteEvent(
+        note_number=60, start_time=0.0, duration=0.5 + (2.0 / 3.0), lyric="あ"
+    )
+    first._ust_tempo = 120.0
+    first._ust_base_duration = 0.5
+    first._ust_base_portamento = {
+        "pbs": "0;0",
+        "pbw": "50",
+        "pby": "10",
+        "pbm": "s,j",
+    }
+    first._ust_pbs = "0;0"
+    first._ust_pbw = "50"
+    first._ust_pby = "10"
+    first._ust_pbm = "s,j"
+    first._ust_tie_sections = [{
+        "length": 480,
+        "tempo": 90.0,
+        "note_num": 60,
+        "intensity": 123.0,
+        "modulation": 17.0,
+        "flags": "g+3",
+        "flags_present": True,
+        "pbs": "-25;50",
+        "pbw": "60",
+        "pby": "5",
+        "pbm": "r",
+        "vibrato": {
+            "length": 70.0,
+            "cycle": 190.0,
+            "depth": 38.0,
+            "fade_in": 11.0,
+            "fade_out": 13.0,
+            "phase": 4.0,
+            "height": 1.0,
+        },
+        "pre_utterance": 12.0,
+        "overlap": 4.0,
+    }]
+    second = NoteEvent(
+        note_number=62,
+        start_time=1.0 + (1.0 / 6.0),
+        duration=0.5,
+        lyric="い",
+    )
+    second._ust_tempo = 90.0
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[first, second]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert "Lyric=+" in exported
+    assert "Tempo=90.00" in exported
+    assert "Intensity=123" in exported
+    assert "Modulation=17" in exported
+    assert "Flags=g+3" in exported
+    assert "VBR=70.0,190.0,38.0,11.0,13.0,4.0,1.0" in exported
+    assert "PreUtterance=12.000" in exported
+    assert "VoiceOverlap=4.000" in exported
+    assert "PBS=-25;50" in exported
+    assert "PBW=60" in exported
+    assert "PBY=5" in exported
+    assert "PBM=s,j" in exported
+    assert "PBM=r" in exported
+    assert exported.count("PBS=") == 2
+    assert "PBS=0;0" in exported
+    assert "PBS=-25;50" in exported
+
+    parsed = UstParser().load(str(output_path))
+    notes = UstConverter.to_note_dicts(parsed)
+    assert [note["lyric"] for note in notes] == ["あ", "い"]
+    assert notes[0]["duration"] == pytest.approx(1.0 + (1.0 / 6.0))
+    assert notes[1]["start_time"] == pytest.approx(1.0 + (1.0 / 6.0))
+    restored_tie = notes[0]["_ust_tie_sections"][0]
+    assert restored_tie["length"] == 480
+    assert restored_tie["tempo"] == pytest.approx(90.0)
+    assert restored_tie["intensity"] == pytest.approx(123.0)
+    assert restored_tie["flags"] == "g+3"
+    assert restored_tie["vibrato"]["cycle"] == pytest.approx(190.0)
+    assert restored_tie["pre_utterance"] == pytest.approx(12.0)
+    assert restored_tie["overlap"] == pytest.approx(4.0)
+    assert notes[0]["_ust_base_portamento"] == {
+        "pbs": "0;0",
+        "pbw": "50",
+        "pby": "10",
+        "pbm": "s,j",
+    }
+    # The displayed combined curve is rebuilt once from the original base
+    # curve plus the original '+' curve, rather than exporting the merged
+    # curve and adding the tie curve a second time.
+    assert notes[0]["_ust_pbw"] == "50,425,60"
+
+
+def test_ust_export_applies_duration_edits_to_final_tie_section(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "edited-tie-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    edited = NoteEvent(
+        note_number=60,
+        start_time=0.0,
+        duration=1.0,
+        lyric="あ",
+    )
+    edited._ust_tempo = 120.0
+    edited._ust_base_duration = 0.5
+    edited._ust_tie_sections = [{
+        "length": 480,
+        "tempo": 90.0,
+        "note_num": 60,
+        "intensity": 100.0,
+        "modulation": 0.0,
+        "flags": "",
+        "flags_present": False,
+        "pbs": "",
+        "pbw": "",
+        "pby": "",
+        "pbm": "",
+        "vibrato": None,
+        "pre_utterance": None,
+        "overlap": None,
+    }]
+    following = NoteEvent(
+        note_number=62, start_time=1.0, duration=0.5, lyric="い"
+    )
+    following._ust_tempo = 90.0
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[edited, following]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    parsed = UstParser().load(str(output_path))
+    sections = [note for note in parsed.notes if note.lyric == "+"]
+    assert len(sections) == 1
+    assert sections[0].length == 360
+
+    notes = UstConverter.to_note_dicts(parsed)
+    assert notes[0]["duration"] == pytest.approx(1.0)
+    assert notes[1]["start_time"] == pytest.approx(1.0)
+
+
+def test_ust_export_shrinks_base_note_when_tie_duration_is_removed(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "shortened-tie-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    edited = NoteEvent(
+        note_number=60,
+        start_time=0.0,
+        duration=0.25,
+        lyric="あ",
+    )
+    edited._ust_tempo = 120.0
+    edited._ust_base_duration = 0.5
+    edited._ust_base_length_ticks = 480
+    edited._ust_tie_sections = [{
+        "length": 480,
+        "tempo": 90.0,
+        "note_num": 60,
+        "intensity": 100.0,
+        "modulation": 0.0,
+        "flags": "",
+        "flags_present": False,
+        "pbs": "",
+        "pbw": "",
+        "pby": "",
+        "pbm": "",
+        "vibrato": None,
+        "pre_utterance": None,
+        "overlap": None,
+    }]
+    following = NoteEvent(
+        note_number=62, start_time=0.25, duration=0.5, lyric="い"
+    )
+    following._ust_tempo = 120.0
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[edited, following]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert "Lyric=+" not in exported
+
+    parsed = UstParser().load(str(output_path))
+    assert [note.lyric for note in parsed.notes] == ["あ", "い"]
+    assert parsed.notes[0].length == 240
+
+    notes = UstConverter.to_note_dicts(parsed)
+    assert notes[0]["duration"] == pytest.approx(0.25)
+    assert notes[1]["start_time"] == pytest.approx(0.25)
+
+
+def test_ust_export_restores_trailing_silence_without_display_node(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    source_path = tmp_path / "source-with-trailing-rest.ust"
+    output_path = tmp_path / "trailing-rest-roundtrip.ust"
+    source_path.write_text(
+        "\n".join([
+            "[#SETTING]",
+            "Tempo=120",
+            "[#0000]",
+            "Length=480",
+            "Lyric=あ",
+            "NoteNum=60",
+            "PreUtterance=0",
+            "VoiceOverlap=0",
+            "Flags=",
+            "[#0001]",
+            "Length=240",
+            "Lyric=R",
+            "NoteNum=60",
+            "[#TRACKEND]",
+            "",
+        ]),
+        encoding="cp932",
+    )
+    source_project = UstParser().load(str(source_path))
+    note_dict = UstConverter.to_note_dicts(source_project)[0]
+    note = NoteEvent.from_dict(note_dict)
+
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[note]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert "PreUtterance=0.000" in exported
+    assert "VoiceOverlap=0.000" in exported
+    assert "Flags=" in exported
+    before_track_end = exported.split("[#TRACKEND]", 1)[0]
+    last_section = before_track_end.rsplit("[#", 1)[-1]
+    assert "Lyric=R" in last_section
+
+    roundtrip = UstConverter.to_note_dicts(UstParser().load(str(output_path)))
+    assert len(roundtrip) == 1
+    assert roundtrip[0]["_ust_trailing_rest_duration_sec"] == pytest.approx(0.25)
+
+
+def test_ust_export_keeps_preserved_rest_before_a_later_inserted_note(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    source_path = tmp_path / "source-with-middle-rest.ust"
+    output_path = tmp_path / "middle-rest-roundtrip.ust"
+    source_path.write_text(
+        "\n".join([
+            "[#SETTING]",
+            "Tempo=120",
+            "[#0000]",
+            "Length=480",
+            "Lyric=あ",
+            "NoteNum=60",
+            "[#0001]",
+            "Length=240",
+            "Lyric=R",
+            "NoteNum=60",
+            "[#TRACKEND]",
+            "",
+        ]),
+        encoding="cp932",
+    )
+    original_note = NoteEvent.from_dict(
+        UstConverter.to_note_dicts(UstParser().load(str(source_path)))[0]
+    )
+    later_note = NoteEvent(
+        note_number=62, start_time=0.75, duration=0.5, lyric="い"
+    )
+    later_note._ust_tempo = 120.0
+
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(
+            tempo=120.0, notes_list=[original_note, later_note]
+        ),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    parsed_notes = UstConverter.to_note_dicts(
+        UstParser().load(str(output_path))
+    )
+    assert [note["lyric"] for note in parsed_notes] == ["あ", "い"]
+    assert parsed_notes[1]["start_time"] == pytest.approx(0.75)
+
+
+def test_ust_export_shortens_preserved_rest_when_later_note_moves_into_it(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    source_path = tmp_path / "source-with-trailing-rest-edit.ust"
+    output_path = tmp_path / "trailing-rest-edit-roundtrip.ust"
+    source_path.write_text(
+        "\n".join([
+            "[#SETTING]",
+            "Tempo=120",
+            "[#0000]",
+            "Length=480",
+            "Lyric=あ",
+            "NoteNum=60",
+            "[#0001]",
+            "Length=240",
+            "Lyric=R",
+            "NoteNum=60",
+            "[#TRACKEND]",
+            "",
+        ]),
+        encoding="cp932",
+    )
+    original_note = NoteEvent.from_dict(
+        UstConverter.to_note_dicts(UstParser().load(str(source_path)))[0]
+    )
+    moved_note = NoteEvent(
+        note_number=62, start_time=0.6, duration=0.5, lyric="い"
+    )
+    moved_note._ust_tempo = 120.0
+
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(
+            tempo=120.0, notes_list=[original_note, moved_note]
+        ),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    roundtrip = UstConverter.to_note_dicts(
+        UstParser().load(str(output_path))
+    )
+    assert [note["lyric"] for note in roundtrip] == ["あ", "い"]
+    assert roundtrip[1]["start_time"] == pytest.approx(0.6)
+
+
+def test_ust_export_preserves_project_flags_on_tie_without_local_flags(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    source_path = tmp_path / "project-flags-with-tie.ust"
+    output_path = tmp_path / "project-flags-tie-roundtrip.ust"
+    source_path.write_text(
+        "\n".join([
+            "[#SETTING]",
+            "Tempo=120",
+            "Flags=g-5",
+            "[#0000]",
+            "Length=480",
+            "Lyric=あ",
+            "NoteNum=60",
+            "[#0001]",
+            "Length=480",
+            "Lyric=+",
+            "NoteNum=60",
+            "[#TRACKEND]",
+            "",
+        ]),
+        encoding="cp932",
+    )
+    source = UstParser().load(str(source_path))
+    converted = UstConverter.to_note_dicts(source)[0]
+    note = NoteEvent.from_dict(converted)
+
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[note]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    exported = output_path.read_text(encoding="cp932")
+    assert exported.count("Flags=g-5") == 2
+
+    restored = UstConverter.to_note_dicts(UstParser().load(str(output_path)))[0]
+    assert restored["_ust_flags"] == "g-5"
+    tie = restored["_ust_tie_sections"][0]
+    assert tie["flags_present"] is True
+    assert tie["flags"] == "g-5"
+    assert tie["effective_flags"] == "g-5"
