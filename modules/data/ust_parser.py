@@ -552,6 +552,38 @@ class UstConverter:
                 if results:
                     previous = results[-1]
                     previous_duration = float(previous["duration"])
+                    previous.setdefault("_ust_base_duration", previous_duration)
+                    tie_vibrato = None
+                    if ust_note.vibrato is not None:
+                        tie_vibrato = {
+                            "length": ust_note.vibrato.length,
+                            "cycle": ust_note.vibrato.cycle,
+                            "depth": ust_note.vibrato.depth,
+                            "fade_in": ust_note.vibrato.fade_in,
+                            "fade_out": ust_note.vibrato.fade_out,
+                            "phase": ust_note.vibrato.phase,
+                            "height": ust_note.vibrato.height,
+                        }
+                    # Keep the original continuation section as serializable
+                    # metadata. The piano roll still receives one combined node,
+                    # while UST export can reconstruct the exact section boundary
+                    # and its section-local settings.
+                    previous.setdefault("_ust_tie_sections", []).append({
+                        "length": ust_note.length,
+                        "tempo": ust_note.tempo,
+                        "note_num": ust_note.note_num,
+                        "intensity": ust_note.intensity,
+                        "modulation": ust_note.modulation,
+                        "flags": ust_note.flags,
+                        "flags_present": ust_note.flags_present,
+                        "pbs": ust_note.pbs,
+                        "pbw": ust_note.pbw,
+                        "pby": ust_note.pby,
+                        "pbm": ust_note.pbm,
+                        "vibrato": tie_vibrato,
+                        "pre_utterance": ust_note.pre_utterance,
+                        "overlap": ust_note.overlap,
+                    })
                     UstConverter._merge_tied_portamento(
                         previous,
                         ust_note,
