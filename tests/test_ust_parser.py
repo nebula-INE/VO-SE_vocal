@@ -445,11 +445,11 @@ class TestUstParser(unittest.TestCase):
             notes=[
                 UstNote(
                     index=0, length=480, lyric="あ", note_num=60, tempo=120.0,
-                    pbs="0;0", pbw="50", pby="10",
+                    pbs="0;0", pbw="50", pby="10", pbm="s,j",
                 ),
                 UstNote(
                     index=1, length=480, lyric="+", note_num=60, tempo=120.0,
-                    pbs="-25;50", pbw="50", pby="0",
+                    pbs="-25;50", pbw="50", pby="0", pbm="r,s",
                 ),
                 UstNote(index=2, length=240, lyric="い", note_num=62, tempo=120.0),
             ],
@@ -463,6 +463,7 @@ class TestUstParser(unittest.TestCase):
         self.assertEqual(notes[0]["_ust_pbs"], "0;0")
         self.assertEqual(notes[0]["_ust_pbw"], "50,425,50")
         self.assertEqual(notes[0]["_ust_pby"], "10,50,0")
+        self.assertEqual(notes[0]["_ust_pbm"], "s,j,r,s")
 
     def test_leading_ust_tie_keeps_timeline_position_without_creating_node(self):
         """A malformed/leading '+' section is skipped but still consumes its duration."""
