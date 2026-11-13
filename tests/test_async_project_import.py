@@ -443,3 +443,67 @@ def test_ust_export_restores_tie_sections_and_section_local_settings(tmp_path, m
     # curve plus the original '+' curve, rather than exporting the merged
     # curve and adding the tie curve a second time.
     assert notes[0]["_ust_pbw"] == "50,425,60"
+
+
+def test_ust_export_applies_duration_edits_to_final_tie_section(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.data_models import NoteEvent
+    from modules.data.ust_parser import UstConverter, UstParser
+    from modules.gui.mixins import project_io_mixin
+    from modules.gui.mixins.project_io_mixin import ProjectIOMixin
+
+    output_path = tmp_path / "edited-tie-roundtrip.ust"
+    monkeypatch.setattr(
+        project_io_mixin.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(output_path), "UTAU プロジェクト (*.ust)"),
+    )
+
+    class FakeStatusBar:
+        def showMessage(self, *_args, **_kwargs):
+            pass
+
+    edited = NoteEvent(
+        note_number=60,
+        start_time=0.0,
+        duration=1.0,
+        lyric="あ",
+    )
+    edited._ust_tempo = 120.0
+    edited._ust_base_duration = 0.5
+    edited._ust_tie_sections = [{
+        "length": 480,
+        "tempo": 90.0,
+        "note_num": 60,
+        "intensity": 100.0,
+        "modulation": 0.0,
+        "flags": "",
+        "flags_present": False,
+        "pbs": "",
+        "pbw": "",
+        "pby": "",
+        "pbm": "",
+        "vibrato": None,
+        "pre_utterance": None,
+        "overlap": None,
+    }]
+    following = NoteEvent(
+        note_number=62, start_time=1.0, duration=0.5, lyric="い"
+    )
+    following._ust_tempo = 90.0
+
+    window = SimpleNamespace(
+        timeline_widget=SimpleNamespace(tempo=120.0, notes_list=[edited, following]),
+        statusBar=lambda: FakeStatusBar(),
+    )
+    ProjectIOMixin.export_as_ust(window)
+
+    parsed = UstParser().load(str(output_path))
+    sections = [note for note in parsed.notes if note.lyric == "+"]
+    assert len(sections) == 1
+    assert sections[0].length == 360
+
+    notes = UstConverter.to_note_dicts(parsed)
+    assert notes[0]["duration"] == pytest.approx(1.0)
+    assert notes[1]["start_time"] == pytest.approx(1.0)
