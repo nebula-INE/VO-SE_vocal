@@ -439,7 +439,7 @@ set -eu
 parent_pid="$1"
 staged_file="$2"
 target_file="$3"
-backup_file="$target_file.vose-backup-$"
+backup_file="$target_file.vose-backup-$parent_pid"
 success=0
 restore_and_restart() {
     status=$?
