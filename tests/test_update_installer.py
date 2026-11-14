@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import stat
 import tarfile
 import zipfile
@@ -24,7 +25,8 @@ def test_linux_portable_archive_extracts_only_expected_binary(tmp_path):
 
     assert result == destination
     assert destination.read_bytes() == payload
-    assert destination.stat().st_mode & 0o777 == 0o755
+    if os.name != "nt":
+        assert destination.stat().st_mode & 0o777 == 0o755
 
 
 def test_linux_portable_archive_rejects_extra_or_traversal_members(tmp_path):
