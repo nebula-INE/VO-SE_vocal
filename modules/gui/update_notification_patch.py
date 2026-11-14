@@ -124,14 +124,16 @@ def install_update_notification_patch(main_window_class) -> None:
 
         application = _get_application_instance()
         if application is not None:
-            def stop_update_download(worker=worker) -> None:
-                worker.cancel()
-                worker.wait()
-
-            application.aboutToQuit.connect(stop_update_download)
+            application.aboutToQuit.connect(self._stop_update_download)
 
         progress.show()
         worker.start()
+
+    def _stop_update_download(self) -> None:
+        worker = getattr(self, "_update_download_worker", None)
+        if worker is not None:
+            worker.cancel()
+            worker.wait()
 
     def _on_update_worker_finished(self) -> None:
         self._update_download_worker = None
@@ -213,6 +215,7 @@ def install_update_notification_patch(main_window_class) -> None:
     main_window_class._on_update_result = _on_update_result
     main_window_class._show_update_dialog = _show_update_dialog
     main_window_class._start_update_download = _start_update_download
+    main_window_class._stop_update_download = _stop_update_download
     main_window_class._on_update_worker_finished = _on_update_worker_finished
     main_window_class._on_update_download_progress = _on_update_download_progress
     main_window_class._on_update_download_completed = _on_update_download_completed
