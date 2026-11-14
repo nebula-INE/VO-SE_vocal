@@ -10,7 +10,7 @@ import tarfile
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Any
 
 from modules.updater.update_manager import get_update_cache_dir, is_deb_installation
 
@@ -55,7 +55,7 @@ def _write_helper(name: str, content: str) -> Path:
 
 
 def _start_detached(command: list[str]) -> None:
-    options: dict[str, object] = {
+    options: dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
