@@ -386,12 +386,14 @@ target_app="$3"
 while kill -0 "$parent_pid" 2>/dev/null; do
     sleep 0.5
 done
-pkexec /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install --reinstall -y "$deb_file"
-status=$?
-if [ "$status" -eq 0 ]; then
+if pkexec /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install --reinstall -y "$deb_file"; then
     nohup "$target_app" >/dev/null 2>&1 &
+else
+    status=$?
+    # Cancellation or package-manager failure must leave the old app usable.
+    nohup "$target_app" >/dev/null 2>&1 &
+    exit "$status"
 fi
-exit "$status"
 """,
     )
     _start_detached(
@@ -408,6 +410,11 @@ def _schedule_linux_portable_update(downloaded: Path) -> str:
         raise UpdateInstallError("Linux向け更新アーカイブ名が一致しません。")
 
     target = Path(os.path.abspath(sys.executable))
+    if target.is_symlink():
+        raise UpdateInstallError(
+            "シンボリックリンク経由の起動では安全に置き換えできません。"
+            "Releaseページから手動更新してください。"
+        )
     if not target.is_file():
         raise UpdateInstallError("現在のLinux実行ファイルを特定できません。")
     _probe_writable_directory(target.parent)
