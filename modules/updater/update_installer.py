@@ -92,7 +92,12 @@ def _validate_macos_update_zip(archive_path: Path) -> None:
             member = PurePosixPath(name)
             if member.is_absolute() or ".." in member.parts:
                 raise UpdateInstallError("macOS更新ZIPに不正なパスが含まれています。")
-            if not member.parts or member.parts[0] != MAC_APP_NAME:
+            # Apple ditto may place archived resource-fork metadata in
+            # __MACOSX/. Keep validating every path, but do not treat these
+            # metadata entries as additional application payload.
+            if member.parts[0] == "__MACOSX":
+                continue
+            if member.parts[0] != MAC_APP_NAME:
                 raise UpdateInstallError("macOS更新ZIPのアプリ構成が不正です。")
 
             if name.rstrip("/") == f"{MAC_APP_NAME}/{MAC_BINARY_RELATIVE.as_posix()}":
@@ -123,8 +128,9 @@ def _find_macos_app_bundle(executable: Path) -> Path:
         if parent.suffix == ".app":
             if parent.name == MAC_APP_NAME and parent.is_dir():
                 return parent
-            if parent.is_dir():
-                return parent
+            raise UpdateInstallError(
+                f"VO-SE Proのアプリバンドル名が想定と異なります: {parent.name}"
+            )
     raise UpdateInstallError(
         "現在の実行ファイルがmacOSアプリバンドル内にありません。"
     )
@@ -193,7 +199,7 @@ try {
     $backupFile = "$TargetFile.vose-backup"
     Copy-Item -LiteralPath $StagedFile -Destination $newFile -Force
     if (Test-Path -LiteralPath $backupFile) {
-        Remove-Item -LiteralPath $backupFile -Force
+        throw "A previous update backup exists; refusing to overwrite it."
     }
     Move-Item -LiteralPath $TargetFile -Destination $backupFile
     try {
@@ -277,6 +283,20 @@ def _schedule_macos_update(downloaded: Path) -> str:
     if not staged_binary.is_file():
         shutil.rmtree(stage_dir, ignore_errors=True)
         raise UpdateInstallError("展開したmacOSアプリの実行ファイルがありません。")
+    try:
+        subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(staged_app)],
+            check=True,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+        raise UpdateInstallError(
+            f"macOS更新アプリのコード署名を検証できません: {exc}"
+        ) from exc
 
     helper = _write_helper(
         "apply-update-macos.sh",
@@ -309,7 +329,7 @@ binary="$target_app/Contents/MacOS/VO-SE_vocal_Mac"
 if /bin/ps -axo command= | /usr/bin/grep -F "$binary" | /usr/bin/grep -v grep >/dev/null 2>&1; then
     rm -rf "$backup_app"
 fi
-rmdir "$(dirname "$staged_app")" 2>/dev/null || true
+rm -rf "$(dirname "$staged_app")"
 """,
     )
     backup_app = app_bundle.with_name(f"{app_bundle.name}.vose-backup-{os.getpid()}")
