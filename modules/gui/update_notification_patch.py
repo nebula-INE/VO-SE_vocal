@@ -123,9 +123,11 @@ def install_update_notification_patch(main_window_class) -> None:
 
         application = _get_application_instance()
         if application is not None:
-            application.aboutToQuit.connect(
-                lambda worker=worker: worker.wait()
-            )
+            def stop_update_download(worker=worker) -> None:
+                worker.cancel()
+                worker.wait()
+
+            application.aboutToQuit.connect(stop_update_download)
 
         progress.show()
         worker.start()
