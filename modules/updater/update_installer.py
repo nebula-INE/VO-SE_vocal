@@ -232,6 +232,17 @@ try {
     }
 }
 catch {
+    # A failed update must not leave the user with a closed application.
+    try {
+        $processName = [System.IO.Path]::GetFileNameWithoutExtension($TargetFile)
+        $running = Get-Process -Name $processName -ErrorAction SilentlyContinue
+        if (-not $running -and (Test-Path -LiteralPath $TargetFile)) {
+            Start-Process -FilePath $TargetFile
+        }
+    }
+    catch {
+        # Preserve the original update failure in the log below.
+    }
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $_ | Out-File -FilePath $logFile -Encoding utf8
     exit 1
@@ -428,26 +439,42 @@ set -eu
 parent_pid="$1"
 staged_file="$2"
 target_file="$3"
+backup_file="$target_file.vose-backup-$"
+success=0
+restore_and_restart() {
+    status=$?
+    trap - EXIT
+    if [ "$success" -ne 1 ]; then
+        if [ -e "$backup_file" ]; then
+            rm -f "$target_file"
+            mv "$backup_file" "$target_file"
+        fi
+        if [ -x "$target_file" ]; then
+            nohup "$target_file" >/dev/null 2>&1 &
+        fi
+    fi
+    exit "$status"
+}
+trap restore_and_restart EXIT
 while kill -0 "$parent_pid" 2>/dev/null; do
     sleep 0.5
 done
 new_file="$target_file.vose-new"
-backup_file="$target_file.vose-backup-$$"
 cp "$staged_file" "$new_file"
 chmod 755 "$new_file"
 mv "$target_file" "$backup_file"
-if ! mv "$new_file" "$target_file"; then
-    mv "$backup_file" "$target_file"
-    exit 1
-fi
+mv "$new_file" "$target_file"
 nohup "$target_file" >/dev/null 2>&1 &
 new_pid=$!
 sleep 5
 if kill -0 "$new_pid" 2>/dev/null; then
-    rm -f "$backup_file" "$staged_file"
+    success=1
+    rm -f "$backup_file" "$staged_file" || true
 else
     rm -f "$target_file"
     mv "$backup_file" "$target_file"
+    nohup "$target_file" >/dev/null 2>&1 &
+    success=1
 fi
 """,
     )
