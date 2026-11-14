@@ -197,10 +197,10 @@ try {
     }
     $newFile = "$TargetFile.vose-new"
     $backupFile = "$TargetFile.vose-backup"
-    Copy-Item -LiteralPath $StagedFile -Destination $newFile -Force
     if (Test-Path -LiteralPath $backupFile) {
         throw "A previous update backup exists; refusing to overwrite it."
     }
+    Copy-Item -LiteralPath $StagedFile -Destination $newFile -Force
     Move-Item -LiteralPath $TargetFile -Destination $backupFile
     try {
         Move-Item -LiteralPath $newFile -Destination $TargetFile
@@ -328,6 +328,12 @@ sleep 10
 binary="$target_app/Contents/MacOS/VO-SE_vocal_Mac"
 if /bin/ps -axo command= | /usr/bin/grep -F "$binary" | /usr/bin/grep -v grep >/dev/null 2>&1; then
     rm -rf "$backup_app"
+else
+    rm -rf "$target_app"
+    mv "$backup_app" "$target_app"
+    /usr/bin/open -a "$target_app" || true
+    rm -rf "$(dirname "$staged_app")"
+    exit 1
 fi
 rm -rf "$(dirname "$staged_app")"
 """,
