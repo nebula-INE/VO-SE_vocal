@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import shutil
 import stat
 import subprocess
@@ -106,7 +107,7 @@ def _validate_macos_update_zip(archive_path: Path) -> None:
                 if not link_target or link_target.startswith("/"):
                     raise UpdateInstallError("macOS更新ZIPに外部参照のリンクがあります。")
                 resolved = PurePosixPath(
-                    os.path.normpath(
+                    posixpath.normpath(
                         str(member.parent / PurePosixPath(link_target))
                     )
                 )
