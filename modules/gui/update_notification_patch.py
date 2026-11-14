@@ -110,30 +110,28 @@ def install_update_notification_patch(main_window_class) -> None:
         progress.setAutoReset(False)
         progress.setValue(0)
 
-        worker = UpdateDownloadWorker(self)
+        application = _get_application_instance()
+        if application is None:
+            raise RuntimeError("QApplication is not available for the update download.")
+
+        # Keep the QThread alive even if the user closes the main window.
+        worker = UpdateDownloadWorker(application)
         worker.progress.connect(self._on_update_download_progress)
         worker.completed.connect(self._on_update_download_completed)
         worker.failed.connect(self._on_update_download_failed)
         worker.cancelled.connect(self._on_update_download_cancelled)
         worker.finished.connect(self._on_update_worker_finished)
-        worker.finished.connect(worker.deleteLater)
         progress.canceled.connect(worker.cancel)
 
         self._update_download_progress = progress
         self._update_download_worker = worker
 
-        application = _get_application_instance()
-        if application is not None:
-            application.aboutToQuit.connect(self._stop_update_download)
+        application.aboutToQuit.connect(
+            lambda worker=worker: (worker.cancel(), worker.wait())
+        )
 
         progress.show()
         worker.start()
-
-    def _stop_update_download(self) -> None:
-        worker = getattr(self, "_update_download_worker", None)
-        if worker is not None:
-            worker.cancel()
-            worker.wait()
 
     def _on_update_worker_finished(self) -> None:
         self._update_download_worker = None
@@ -215,7 +213,6 @@ def install_update_notification_patch(main_window_class) -> None:
     main_window_class._on_update_result = _on_update_result
     main_window_class._show_update_dialog = _show_update_dialog
     main_window_class._start_update_download = _start_update_download
-    main_window_class._stop_update_download = _stop_update_download
     main_window_class._on_update_worker_finished = _on_update_worker_finished
     main_window_class._on_update_download_progress = _on_update_download_progress
     main_window_class._on_update_download_completed = _on_update_download_completed
