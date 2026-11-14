@@ -43,6 +43,22 @@ def test_linux_portable_archive_rejects_extra_or_traversal_members(tmp_path):
         )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Creating symbolic links may require elevated Windows privileges")
+def test_linux_portable_update_rejects_symlink_launch_path(monkeypatch, tmp_path):
+    target = tmp_path / "installed-app"
+    target.write_bytes(b"app")
+    launcher = tmp_path / "launcher"
+    launcher.symlink_to(target)
+
+    monkeypatch.setattr(update_installer.sys, "platform", "linux")
+    monkeypatch.setattr(update_installer.sys, "executable", str(launcher))
+
+    with pytest.raises(update_installer.UpdateInstallError, match="シンボリックリンク"):
+        update_installer._schedule_linux_portable_update(
+            tmp_path / "VO-SE_vocal_Linux_x86_64.tar.gz"
+        )
+
+
 def test_macos_update_zip_requires_expected_app_bundle(tmp_path):
     archive_path = tmp_path / "mac-update.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
