@@ -327,11 +327,6 @@ parent_pid="$1"
 target_app="$2"
 staged_app="$3"
 backup_app="$4"
-if [ -e "$backup_app" ]; then
-    echo "Previous update backup already exists; refusing to overwrite it." >&2
-    /usr/bin/open -a "$target_app" || true
-    exit 1
-fi
 success=0
 restore_and_restart() {
     status=$?
@@ -356,6 +351,12 @@ while kill -0 "$parent_pid" 2>/dev/null; do
     fi
     sleep 0.5
 done
+if [ -e "$backup_app" ]; then
+    echo "Previous update backup already exists; refusing to overwrite it." >&2
+    success=1
+    /usr/bin/open -a "$target_app" || true
+    exit 1
+fi
 mv "$target_app" "$backup_app"
 mv "$staged_app" "$target_app"
 /usr/bin/open -a "$target_app"
