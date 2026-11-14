@@ -249,7 +249,9 @@ def _schedule_macos_update(downloaded: Path) -> str:
     _probe_writable_directory(app_bundle.parent)
     _validate_macos_update_zip(downloaded)
 
-    stage_dir = get_update_cache_dir() / f"mac-update-{os.getpid()}"
+    # Extract beside the installed app so the final directory rename stays on
+    # the same filesystem and remains atomic.
+    stage_dir = app_bundle.parent / f".vose-update-stage-{os.getpid()}"
     if stage_dir.exists():
         shutil.rmtree(stage_dir)
     stage_dir.mkdir(parents=True)
@@ -306,6 +308,7 @@ binary="$target_app/Contents/MacOS/VO-SE_vocal_Mac"
 if /bin/ps -axo command= | /usr/bin/grep -F "$binary" | /usr/bin/grep -v grep >/dev/null 2>&1; then
     rm -rf "$backup_app"
 fi
+rmdir "$(dirname "$staged_app")" 2>/dev/null || true
 """,
     )
     backup_app = app_bundle.with_name(f"{app_bundle.name}.vose-backup-{os.getpid()}")
