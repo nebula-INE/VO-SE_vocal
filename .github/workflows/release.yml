@@ -1093,7 +1093,8 @@ jobs:
 
           # --- 4. ZIP作成 ---
           echo "🗜️ Creating update ZIP..."
-          (cd dist && zip -ry "../${ZIP_FILE}" VO-SE_vocal_Mac.app)
+          # ditto preserves macOS resource forks and extended attributes in ZIPs.
+          ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_FILE"
 
           echo "✅ パッケージング完了: ${DMG_FILE} と ${ZIP_FILE}"
 
