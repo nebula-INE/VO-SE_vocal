@@ -62,9 +62,15 @@ def is_deb_installation(executable: str | os.PathLike[str] | None = None) -> boo
     """Return True only for the exact path installed by our Debian package."""
     if sys.platform != "linux" and executable is None:
         return False
-    path = Path(executable or sys.executable)
+    raw_path = os.fspath(executable or sys.executable)
     try:
-        return path.resolve() == Path("/opt/vo-se-vocal/VO-SE_vocal_Linux")
+        # Resolve symlinks on POSIX systems; keep lexical POSIX paths in tests
+        # that simulate Linux while running on Windows.
+        if os.name != "nt":
+            raw_path = str(Path(raw_path).resolve())
+        return Path(raw_path.replace("\\", "/")).as_posix() == (
+            "/opt/vo-se-vocal/VO-SE_vocal_Linux"
+        )
     except OSError:
         return False
 
