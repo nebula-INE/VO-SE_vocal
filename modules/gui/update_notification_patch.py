@@ -115,6 +115,7 @@ def install_update_notification_patch(main_window_class) -> None:
         worker.completed.connect(self._on_update_download_completed)
         worker.failed.connect(self._on_update_download_failed)
         worker.cancelled.connect(self._on_update_download_cancelled)
+        worker.finished.connect(self._on_update_worker_finished)
         worker.finished.connect(worker.deleteLater)
         progress.canceled.connect(worker.cancel)
 
@@ -131,6 +132,9 @@ def install_update_notification_patch(main_window_class) -> None:
 
         progress.show()
         worker.start()
+
+    def _on_update_worker_finished(self) -> None:
+        self._update_download_worker = None
 
     def _on_update_download_progress(self, percent: int, label: str) -> None:
         progress = getattr(self, "_update_download_progress", None)
@@ -209,6 +213,7 @@ def install_update_notification_patch(main_window_class) -> None:
     main_window_class._on_update_result = _on_update_result
     main_window_class._show_update_dialog = _show_update_dialog
     main_window_class._start_update_download = _start_update_download
+    main_window_class._on_update_worker_finished = _on_update_worker_finished
     main_window_class._on_update_download_progress = _on_update_download_progress
     main_window_class._on_update_download_completed = _on_update_download_completed
     main_window_class._on_update_download_failed = _on_update_download_failed
