@@ -327,36 +327,51 @@ parent_pid="$1"
 target_app="$2"
 staged_app="$3"
 backup_app="$4"
-while kill -0 "$parent_pid" 2>/dev/null; do
-    sleep 0.5
-done
 if [ -e "$backup_app" ]; then
     echo "Previous update backup already exists; refusing to overwrite it." >&2
-    exit 1
-fi
-mv "$target_app" "$backup_app"
-if ! mv "$staged_app" "$target_app"; then
-    mv "$backup_app" "$target_app"
-    exit 1
-fi
-if ! /usr/bin/open -a "$target_app"; then
-    rm -rf "$target_app"
-    mv "$backup_app" "$target_app"
     /usr/bin/open -a "$target_app" || true
     exit 1
 fi
+success=0
+restore_and_restart() {
+    status=$?
+    trap - EXIT
+    if [ "$success" -ne 1 ]; then
+        if [ -e "$backup_app" ]; then
+            rm -rf "$target_app"
+            mv "$backup_app" "$target_app"
+        fi
+        if [ -d "$target_app" ]; then
+            /usr/bin/open -a "$target_app" || true
+        fi
+    fi
+    exit "$status"
+}
+trap restore_and_restart EXIT
+deadline=$(($(date +%s) + 180))
+while kill -0 "$parent_pid" 2>/dev/null; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "VO-SE did not exit before the update timeout." >&2
+        exit 1
+    fi
+    sleep 0.5
+done
+mv "$target_app" "$backup_app"
+mv "$staged_app" "$target_app"
+/usr/bin/open -a "$target_app"
 sleep 10
 binary="$target_app/Contents/MacOS/VO-SE_vocal_Mac"
 if /bin/ps -axo command= | /usr/bin/grep -F "$binary" | /usr/bin/grep -v grep >/dev/null 2>&1; then
-    rm -rf "$backup_app"
+    success=1
+    rm -rf "$backup_app" "$(dirname "$staged_app")" || true
 else
     rm -rf "$target_app"
     mv "$backup_app" "$target_app"
     /usr/bin/open -a "$target_app" || true
+    success=1
     rm -rf "$(dirname "$staged_app")"
     exit 1
 fi
-rm -rf "$(dirname "$staged_app")"
 """,
     )
     backup_app = app_bundle.with_name(f"{app_bundle.name}.vose-backup-{os.getpid()}")
