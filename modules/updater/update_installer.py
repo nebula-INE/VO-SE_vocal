@@ -20,6 +20,9 @@ MAC_APP_NAME = "VO-SE_vocal_Mac.app"
 MAC_BINARY_RELATIVE = Path("Contents") / "MacOS" / "VO-SE_vocal_Mac"
 LINUX_BINARY_NAME = "VO-SE_vocal_Linux"
 WINDOWS_ASSET_NAME = "VO-SE_vocal_Win.exe"
+MAX_ARCHIVE_MEMBERS = 100_000
+MAX_MACOS_UNPACKED_BYTES = 3 * 1024 * 1024 * 1024
+MAX_LINUX_BINARY_BYTES = 1024 * 1024 * 1024
 
 
 class UpdateInstallError(RuntimeError):
@@ -85,7 +88,13 @@ def _validate_macos_update_zip(archive_path: Path) -> None:
 
     found_main_binary = False
     with archive:
-        for info in archive.infolist():
+        infos = archive.infolist()
+        if len(infos) > MAX_ARCHIVE_MEMBERS:
+            raise UpdateInstallError("macOS更新ZIPのファイル数が上限を超えています。")
+        total_unpacked = sum(info.file_size for info in infos)
+        if total_unpacked > MAX_MACOS_UNPACKED_BYTES:
+            raise UpdateInstallError("macOS更新ZIPの展開サイズが上限を超えています。")
+        for info in infos:
             name = info.filename
             if not name:
                 continue
@@ -150,6 +159,7 @@ def _extract_linux_portable(archive_path: Path, destination: Path) -> Path:
             or len(expected) != 1
             or not expected[0].isreg()
             or expected[0].size <= 0
+            or expected[0].size > MAX_LINUX_BINARY_BYTES
         ):
             raise UpdateInstallError(
                 "Linux更新アーカイブの内容が想定と異なります。適用を中止しました。"
