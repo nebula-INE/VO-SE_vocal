@@ -86,6 +86,31 @@ def test_macos_update_zip_rejects_symlink_outside_app_bundle(tmp_path):
         update_installer._validate_macos_update_zip(archive_path)
 
 
+def test_macos_update_zip_allows_ditto_resource_fork_metadata(tmp_path):
+    archive_path = tmp_path / "mac-with-resource-forks.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            f"{update_installer.MAC_APP_NAME}/Contents/MacOS/VO-SE_vocal_Mac",
+            b"app binary",
+        )
+        archive.writestr(
+            "__MACOSX/VO-SE_vocal_Mac.app/._Info.plist",
+            b"resource fork metadata",
+        )
+
+    update_installer._validate_macos_update_zip(archive_path)
+
+
+def test_find_macos_bundle_rejects_unrelated_app_bundle(tmp_path):
+    app = tmp_path / "Other.app"
+    executable = app / "Contents" / "MacOS" / "other"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"test")
+
+    with pytest.raises(update_installer.UpdateInstallError, match="名前が想定と異なります"):
+        update_installer._find_macos_app_bundle(executable)
+
+
 def test_macos_update_zip_rejects_wrong_bundle_name(tmp_path):
     archive_path = tmp_path / "wrong-app.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
