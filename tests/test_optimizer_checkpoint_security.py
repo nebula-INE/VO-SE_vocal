@@ -1,5 +1,6 @@
 import os
 import pickle
+import pytest
 from pathlib import Path
 
 from modules.tools.batch_voice_optimizer import OtoPredictor
@@ -13,6 +14,7 @@ class _UnpickleCommand:
         return (os.mkdir, (str(self.marker),))
 
 
+@pytest.mark.smoke
 def test_optimizer_pickle_requires_explicit_trust_opt_in(tmp_path, monkeypatch):
     marker = tmp_path / "pickle-executed"
     checkpoint = tmp_path / "untrusted-model.pkl"
