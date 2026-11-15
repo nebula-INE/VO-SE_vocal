@@ -39,6 +39,10 @@ export function validateZipEntryPath(rawName) {
   const normalized = rawName.replace(/\\/g, '/');
   if (normalized.startsWith('/') || path.posix.isAbsolute(normalized) ||
       path.win32.isAbsolute(normalized) || WINDOWS_DRIVE_PREFIX.test(normalized)) return null;
+  const rawSegments = normalized.split('/');
+  if (rawSegments.some((segment) =>
+    /[<>:"|?*]/.test(segment) || segment.endsWith('.') || segment.endsWith(' ')
+  )) return null;
   const isDirectory = normalized.endsWith('/');
   const segments = normalized.split('/');
   if (segments.some((segment) => segment === '..')) return null;
@@ -53,7 +57,7 @@ export function normalizeRequestHostname(hostHeader) {
     const closingBracket = value.indexOf(']');
     return closingBracket > 0 ? value.slice(1, closingBracket) : '';
   }
-  return value.replace(/:\\d+$/, '');
+  return value.replace(/:\d+$/, '');
 }
 
 export function isAllowedRequestOrigin(origin, port, extraOrigins = [], allowNullOrigin = false) {
