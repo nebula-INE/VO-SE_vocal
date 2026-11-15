@@ -15,7 +15,7 @@ restricted to loopback names unless explicit values are listed in
 ## Voicebank archives and paths
 
 Uploads are limited to 600 MiB. Chunked uploads are limited to 10 MiB per chunk
-and 60 chunks. ZIP extraction rejects traversal/absolute paths, more than
+and 300 chunks. ZIP extraction rejects traversal/absolute paths, more than
 100,000 entries, any member larger than 2 GiB, and total extracted content
 larger than 2 GiB. Archives are staged before replacing an existing voicebank.
 
