@@ -489,7 +489,7 @@ function extractWithYauzl(zipPath, targetDir) {
             throw new Error(`ZIP内のシンボリックリンクは許可されていません: ${rawName}`);
           }
 
-          const isDirectory = /[\\\\/]$/.test(rawName) || (unixMode & 0xf000) === 0x4000;
+          const isDirectory = rawName.endsWith('/') || rawName.endsWith(String.fromCharCode(92)) || (unixMode & 0xf000) === 0x4000;
           if (isDirectory) {
             await fs.promises.mkdir(entryPath, { recursive: true });
             zipfile.readEntry();
@@ -2049,7 +2049,7 @@ app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
     !Number.isSafeInteger(chunkIndex) ||
     !Number.isSafeInteger(totalChunks) ||
     totalChunks < 1 ||
-    totalChunks > 2000 ||
+    totalChunks > 300 ||
     chunkIndex < 0 ||
     chunkIndex >= totalChunks
   ) {
