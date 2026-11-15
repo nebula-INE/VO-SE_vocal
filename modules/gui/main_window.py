@@ -1910,7 +1910,7 @@ class _VocalPlaybackPreparationThread(QThread):
         try:
             from modules.audio.vo_se_engine import VO_SE_Engine
             needs_render = any(job["notes"] for job in self.jobs)
-            export_v2 = getattr(self.engine, "export_to_wav_v2", None)
+            export_v2 = None
             if needs_render:
                 if not isinstance(self.engine, VO_SE_Engine):
                     engine_type = type(self.engine).__name__
