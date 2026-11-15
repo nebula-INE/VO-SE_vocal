@@ -70,7 +70,7 @@ app.use((req, res, next) => {
 
 const MAX_UPLOAD_BYTES = 600 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 10 * 1024 * 1024;
-const MAX_UPLOAD_CHUNKS = 60;
+const MAX_UPLOAD_CHUNKS = 300;
 const MAX_ZIP_ENTRIES = 100_000;
 const MAX_ZIP_MEMBER_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_ZIP_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
