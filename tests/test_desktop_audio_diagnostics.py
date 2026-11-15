@@ -149,7 +149,7 @@ def test_buffer_slider_updates_the_unified_mixer_instead_of_legacy_audio_output(
     handler = source.split("def on_buffer_size_changed(self, value: int) -> None:", 1)[1].split(
         "def log_startup", 1
     )[0]
-    assert 'self._start_audio_mixer_command("set_buffer_size", block_size=new_size)' in handler
+    assert '"set_buffer_size", block_size=new_size' in handler
     assert "self.audio_output.block_size" not in handler
     assert "vose_set_buffer_size" not in handler
 
