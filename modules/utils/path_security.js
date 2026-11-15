@@ -8,7 +8,7 @@ export function normalizeChildName(value, maxLength = 100) {
   const name = value.trim();
   if (!name || name.length > maxLength || name === '.' || name === '..' ||
       name.includes('/') || name.includes('\\') || CONTROL_CHARACTERS.test(name) ||
-      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\. *)?$/i.test(name)) return null;
+      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(name)) return null;
   return name;
 }
 
