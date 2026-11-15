@@ -141,3 +141,19 @@ def test_rendered_preview_pause_resume_keeps_preview_track_snapshot():
     assert "self._playback_preview_mode = False" in source.split(
         "def _complete_playback_stop_ui", 1
     )[1].split("def _on_vocal_playback_prepare_thread_finished", 1)[0]
+
+
+
+def test_buffer_slider_updates_the_unified_mixer_instead_of_legacy_audio_output():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    handler = source.split("def on_buffer_size_changed(self, value: int) -> None:", 1)[1].split(
+        "def log_startup", 1
+    )[0]
+    assert 'self._start_audio_mixer_command("set_buffer_size", block_size=new_size)' in handler
+    assert "self.audio_output.block_size" not in handler
+    assert "vose_set_buffer_size" not in handler
+
+    worker = source.split("class _AudioMixerCommandThread", 1)[1].split(
+        "class MainWindow", 1
+    )[0]
+    assert "self.mixer.set_block_size(self.block_size)" in worker
