@@ -8,8 +8,9 @@ Do not expose this single-user API server to the public Internet: it does not
 provide user authentication.
 
 Cross-origin browser access is disabled unless exact origins are listed in the
-comma-separated `VOSE_ALLOWED_ORIGINS` environment variable. CORS is not
-authentication or a network access-control boundary.
+comma-separated `VOSE_ALLOWED_ORIGINS` environment variable. Host headers are
+restricted to loopback names unless explicit values are listed in
+`VOSE_ALLOWED_HOSTS`. CORS and Host validation are not authentication.
 
 ## Voicebank archives and paths
 
