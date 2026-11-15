@@ -30,7 +30,7 @@ concurrency:
 jobs:
   package-linux-runtime:
     name: Build and inspect Linux runtime bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:
       QT_QPA_PLATFORM: offscreen
@@ -47,6 +47,12 @@ jobs:
           python-version: "3.10"
           cache: pip
 
+      - name: Record Linux compatibility baseline
+        run: |
+          set -euo pipefail
+          echo "Linux validation baseline: $(getconf GNU_LIBC_VERSION)"
+          ldd --version | head -n 1
+
       - name: Install system dependencies
         run: |
           set -euo pipefail
@@ -56,7 +62,7 @@ jobs:
             libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 \
             libxcb-cursor0 libxrender1 libxi6 libsm6 libxext6 \
             libfontconfig1 libdbus-1-3 libglib2.0-0 libpulse0 \
-            libasound2t64 libportaudio2
+            libasound2 libportaudio2
 
       - name: Install runtime dependencies only
         run: |
