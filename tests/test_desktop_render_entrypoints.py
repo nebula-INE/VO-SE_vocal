@@ -300,3 +300,29 @@ def test_direct_playback_renderer_initializes_vose_export_before_lookup():
     assert renderer.index("ensure_desktop_export_ready") < renderer.index(
         'getattr(self.vo_se_engine, "export_to_wav_v2", None)'
     )
+
+
+
+def test_playback_reports_engine_initialization_state_before_native_render():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    worker = source.split("class _VocalPlaybackPreparationThread", 1)[1].split(
+        "class MainWindow", 1
+    )[0]
+    assert "if needs_render:" in worker
+    assert "ボーカル再生エンジンが初期化されていません。" in worker
+    assert "ensure_desktop_export_ready(self.engine)" in worker
+
+    play_handler = source.split("def on_play_pause_toggled(self):", 1)[1].split(
+        "def on_record_toggled", 1
+    )[0]
+    assert "ボーカルエンジンを初期化中です。" in play_handler
+
+
+def test_performance_mode_changes_mixer_buffer_without_legacy_native_symbols():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    handler = source.split("def toggle_performance(self, checked):", 1)[1].split(
+        "def ", 1
+    )[0]
+    assert "slider.setValue" in handler
+    assert "vose_set_buffer_size" not in handler
+    assert "vose_set_performance_mode" not in handler

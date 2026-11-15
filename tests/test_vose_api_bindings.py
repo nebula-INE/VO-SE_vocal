@@ -4,6 +4,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from modules.ffi.vose_api import _bind, bind_all
+from modules.ffi.vose_types import (
+    COtoEntry,
+    CNoteEvent,
+    note_event_abi_signature,
+    oto_entry_abi_signature,
+)
 
 
 class _StubFunction:
@@ -24,6 +30,8 @@ def test_bind_all_silently_accepts_missing_legacy_process_voice(caplog):
         "execute_render_cancelable",
         "set_vocal_timeline",
         "get_engine_version",
+        "get_note_event_abi",
+        "get_oto_entry_abi",
         "clear_engine_cache",
         "init_official_engine",
         "set_bigvgan_model",
@@ -36,6 +44,10 @@ def test_bind_all_silently_accepts_missing_legacy_process_voice(caplog):
     assert "process_voice" not in caplog.text
     assert lib.execute_render.argtypes[1] is ctypes.c_int
     assert lib.execute_render.restype is None
+    assert lib.get_note_event_abi.argtypes == []
+    assert lib.get_note_event_abi.restype is ctypes.c_uint64
+    assert lib.get_oto_entry_abi.argtypes == []
+    assert lib.get_oto_entry_abi.restype is ctypes.c_uint64
 
 
 def test_bind_warns_for_missing_symbols_by_default(caplog):
@@ -55,6 +67,8 @@ def test_bind_all_preserves_legacy_process_voice_signature_when_exported():
         "execute_render_cancelable",
         "set_vocal_timeline",
         "get_engine_version",
+        "get_note_event_abi",
+        "get_oto_entry_abi",
         "clear_engine_cache",
         "init_official_engine",
         "set_bigvgan_model",
@@ -70,3 +84,25 @@ def test_bind_all_preserves_legacy_process_voice_signature_when_exported():
         ctypes.POINTER(ctypes.c_float),
     ]
     assert lib.process_voice.restype is None
+
+
+
+def test_python_note_event_abi_fingerprint_matches_native_contract():
+    assert ctypes.sizeof(CNoteEvent) == 128
+    assert CNoteEvent.start_time_ms.offset == 104
+    assert CNoteEvent.preutterance_ms.offset == 112
+    assert CNoteEvent.overlap_ms.offset == 120
+    assert note_event_abi_signature() == (
+        (128 << 48) | (104 << 32) | (112 << 16) | 120
+    )
+
+
+
+def test_python_oto_entry_abi_fingerprint_matches_native_contract():
+    assert ctypes.sizeof(COtoEntry) == 632
+    assert COtoEntry.wav_path.offset == 80
+    assert COtoEntry.offset.offset == 592
+    assert COtoEntry.overlap.offset == 624
+    assert oto_entry_abi_signature() == (
+        (632 << 48) | (80 << 32) | (592 << 16) | 624
+    )

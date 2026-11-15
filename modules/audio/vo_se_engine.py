@@ -229,7 +229,15 @@ class VO_SE_Engine:
         を防ぐため、指定ファイルを読み込めなければ明示的に失敗させる。
         """
         from modules.ffi.vose_api import load_engine, get_last_load_error
+        from modules.ffi.vose_types import (
+            note_event_abi_signature,
+            oto_entry_abi_signature,
+        )
 
+        expected_abis = {
+            "get_note_event_abi": note_event_abi_signature(),
+            "get_oto_entry_abi": oto_entry_abi_signature(),
+        }
         base_dir = os.path.dirname(__file__)
         override_path = os.environ.get("VOSE_CORE_LIBRARY")
 
@@ -283,7 +291,28 @@ class VO_SE_Engine:
             lib = load_engine(search_dirs=search_dirs)
 
         if lib is not None:
-            print("○ Engine Core Connected via unified FFI loader")
+            for symbol_name, expected_abi in expected_abis.items():
+                abi_probe = getattr(lib, symbol_name, None)
+                if not callable(abi_probe):
+                    raise RuntimeError(
+                        "ロードしたVO-SE CoreにABI確認APIがありません: "
+                        f"{symbol_name}。古いネイティブライブラリの可能性があるため、"
+                        "現在のソースからC++エンジンを再ビルドしてください。"
+                    )
+                # ctypes symbols are dynamically typed at runtime; narrow
+                # the callable signature explicitly for Pyright and keep the
+                # C ABI return type contract visible at the call site.
+                typed_abi_probe = cast(Callable[[], int], abi_probe)
+                actual_abi = typed_abi_probe()
+                if actual_abi != expected_abi:
+                    raise RuntimeError(
+                        f"VO-SE Core ABI mismatch ({symbol_name}): "
+                        f"Python expects 0x{expected_abi:016x}, "
+                        f"native library reports 0x{actual_abi:016x}. "
+                        "再生・レンダリングを安全に停止しました。"
+                        "現在のソースからC++エンジンを再ビルドしてください。"
+                    )
+            print("○ Engine Core Connected via unified FFI loader (ABI verified)")
         return lib
 
     @staticmethod

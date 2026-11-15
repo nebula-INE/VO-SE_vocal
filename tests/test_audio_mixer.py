@@ -315,3 +315,84 @@ def test_play_reports_when_no_default_output_device_is_available(monkeypatch):
         assert "既定の音声出力デバイスを取得できません" in str(exc)
     else:
         raise AssertionError("missing output device must be reported")
+
+
+
+def test_desktop_audio_mixer_default_matches_visible_buffer_setting():
+    mixer = AudioMixer(sample_rate=44100)
+    assert mixer.block_size == 256
+
+
+def test_set_block_size_restarts_active_stream_and_preserves_position(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    created_streams = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.blocksize = kwargs["blocksize"]
+            self.callback = kwargs["callback"]
+            self.channels = kwargs["channels"]
+            self.active = False
+            created_streams.append(self)
+
+        def start(self):
+            self.active = True
+
+        def stop(self):
+            self.active = False
+
+        def close(self):
+            self.active = False
+
+    class FakeSoundDevice:
+        CallbackStop = RuntimeError
+
+        @staticmethod
+        def query_devices(kind=None):
+            assert kind == "output"
+            return {
+                "name": "Test Output",
+                "max_output_channels": 2,
+                "default_samplerate": 64.0,
+            }
+
+        @staticmethod
+        def OutputStream(**kwargs):
+            return FakeStream(**kwargs)
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer(sample_rate=64, block_size=64)
+    track = _track()
+    _install_memory_sources(
+        mixer,
+        (track, np.ones((512, 2), dtype=np.float32)),
+    )
+
+    mixer.play(0.0)
+    first_stream = created_streams[0]
+    callback_output = np.zeros((32, 2), dtype=np.float32)
+    first_stream.callback(callback_output, 32, None, None)
+    assert mixer.position_sec == 0.5
+
+    assert mixer.set_block_size(128) == 128
+    assert len(created_streams) == 2
+    assert first_stream.active is False
+    assert created_streams[1].active is True
+    assert created_streams[1].blocksize == 128
+    assert mixer.position_sec == 0.5
+
+    mixer.stop()
+
+
+def test_set_block_size_rejects_unsupported_sizes_without_touching_stream():
+    mixer = AudioMixer(sample_rate=44100, block_size=256)
+
+    try:
+        mixer.set_block_size(1000)
+    except ValueError as exc:
+        assert "Unsupported audio block size" in str(exc)
+    else:
+        raise AssertionError("unsupported block size must be rejected")
+
+    assert mixer.block_size == 256

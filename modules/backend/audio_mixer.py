@@ -38,10 +38,12 @@ class _TrackSource:
 class AudioMixer:
     """Callback-based stereo mixer with bounded, background audio streaming."""
 
+    SUPPORTED_BLOCK_SIZES = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+
     def __init__(
         self,
         sample_rate: int = 44100,
-        block_size: int = 1024,
+        block_size: int = 256,
         queue_blocks: int = 8,
     ) -> None:
         self.sample_rate = int(sample_rate)
@@ -50,6 +52,7 @@ class AudioMixer:
             raise ValueError("sample_rate and block_size must be positive")
 
         self._lock = threading.RLock()
+        self._transport_lock = threading.RLock()
         self._stream: Any = None
         self._tracks: list[Any] = []
         self._sources: Dict[int, _TrackSource] = {}
@@ -85,6 +88,41 @@ class AudioMixer:
     def position_sec(self) -> float:
         with self._lock:
             return self._position / float(self.sample_rate)
+
+    def set_block_size(self, block_size: int) -> int:
+        """Safely change PortAudio's block size, preserving active playback position."""
+        try:
+            requested_size = int(block_size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("block_size must be an integer") from exc
+        if requested_size not in self.SUPPORTED_BLOCK_SIZES:
+            raise ValueError(
+                "Unsupported audio block size: "
+                f"{requested_size}; expected one of {self.SUPPORTED_BLOCK_SIZES}"
+            )
+
+        with self._transport_lock:
+            old_size = self.block_size
+            if requested_size == old_size:
+                return old_size
+
+            was_playing = self.is_playing
+            was_started = self._stream is not None or self._producer_thread is not None
+            position_sec = self.position_sec
+
+            # A PortAudio stream's block size is immutable after construction.
+            # Stop its callback first, then join the producer before clearing queues.
+            if was_started:
+                self._shutdown_playback(reset_position=False)
+
+            self.block_size = requested_size
+            if was_playing:
+                try:
+                    self.play(position_sec)
+                except Exception:
+                    self.block_size = old_size
+                    raise
+            return requested_size
 
     def get_diagnostics(self) -> dict[str, Any]:
         """Return thread-safe playback diagnostics for the GUI and support logs."""
@@ -341,18 +379,27 @@ class AudioMixer:
     def _shutdown_playback(self, reset_position: bool) -> None:
         self._producer_stop.set()
         stream = self._stream
-        self._stream = None
-        stream_error: Exception | None = None
         if stream is not None:
             try:
                 stream.stop()
-            except Exception as exc:
-                stream_error = exc
+            except Exception:
+                # stop() can report an already-stopped device; close() below
+                # is still attempted and is the authoritative release step.
+                pass
             try:
                 stream.close()
             except Exception as exc:
-                if stream_error is None:
-                    stream_error = exc
+                # Keep the stream referenced if close failed: its callback may
+                # still be running and dereference this mixer.
+                self._stream = stream
+                raise RuntimeError(
+                    f"Audio stream could not be closed safely: {exc}"
+                ) from exc
+
+            # PortAudio stream state properties are not queried after close:
+            # some backends reject any access once their native handle is null.
+            # A successful close guarantees the callback has been detached.
+            self._stream = None
 
         producer = self._producer_thread
         if producer is not None and producer is not threading.current_thread():
@@ -368,8 +415,6 @@ class AudioMixer:
         with self._lock:
             if reset_position:
                 self._position = 0
-        if stream_error is not None:
-            raise RuntimeError(f"Audio stream shutdown failed: {stream_error}") from stream_error
 
     def _reset_stream_buffers(self) -> None:
         while True:

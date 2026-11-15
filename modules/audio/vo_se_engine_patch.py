@@ -25,6 +25,7 @@ import math
 import os
 import ctypes
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 import re
 
@@ -41,6 +42,11 @@ from modules.audio.cvvc_resolver import CvvcResolver
 from modules.data.ust_parser import UstParser, UstConverter, UstVibratoParams
 
 logger = logging.getLogger(__name__)
+
+# The native renderer owns process-wide OTO/cache state. Per-engine locks are
+# insufficient when a secondary launcher or a voice-bank switch uses another
+# VO_SE_Engine instance in the same process.
+_NATIVE_ENGINE_LOCK = threading.RLock()
 
 
 def build_vibrato_curves(
@@ -165,7 +171,7 @@ def build_portamento_curve(
     return np.asarray(curve_list, dtype=np.float64) * 100.0
 
 
-def _refresh_voice_library_v2(self) -> None:
+def _refresh_voice_library_v2_unlocked(self) -> None:
     """VcvResolver を再初期化しながら音源フォルダを再スキャンする。"""
     self.oto_map = {}
 
@@ -229,6 +235,12 @@ def _refresh_voice_library_v2(self) -> None:
         len(self.oto_map),
         self.oto_parser.has_vcv(),
     )
+
+
+def _refresh_voice_library_v2(self) -> None:
+    """Serialize native OTO database replacement against every active render."""
+    with _NATIVE_ENGINE_LOCK:
+        _refresh_voice_library_v2_unlocked(self)
 
 
 def _note_duration_frames(note, frame_period_ms: float = 5.0) -> int:
@@ -692,7 +704,7 @@ def _export_to_wav_v2(
     if lock is None:
         lock = self.__dict__.setdefault("_render_lock", threading.RLock())
 
-    with lock:
+    with _NATIVE_ENGINE_LOCK, lock:
         return render_wav_atomically(
             file_path,
             lambda temporary_path: _render_to_wav_v2(
@@ -724,9 +736,12 @@ def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
         else:
             voice_dir = os.path.abspath(voice_dir)
         if os.path.isdir(voice_dir):
-            self.voice_lib_path = voice_dir
-            self._ust_voice_dir = voice_dir
-            _refresh_voice_library_v2(self)
+            # Keep Python's active voice-root fields and the process-wide OTO
+            # replacement in the same critical section as native rendering.
+            with _NATIVE_ENGINE_LOCK:
+                self.voice_lib_path = voice_dir
+                self._ust_voice_dir = voice_dir
+                _refresh_voice_library_v2_unlocked(self)
         else:
             logger.warning("UST VoiceDir が見つかりません: %s", voice_dir)
 
