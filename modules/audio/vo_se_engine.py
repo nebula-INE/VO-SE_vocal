@@ -229,7 +229,9 @@ class VO_SE_Engine:
         を防ぐため、指定ファイルを読み込めなければ明示的に失敗させる。
         """
         from modules.ffi.vose_api import load_engine, get_last_load_error
+        from modules.ffi.vose_types import note_event_abi_signature
 
+        expected_abi = note_event_abi_signature()
         base_dir = os.path.dirname(__file__)
         override_path = os.environ.get("VOSE_CORE_LIBRARY")
 
@@ -283,7 +285,23 @@ class VO_SE_Engine:
             lib = load_engine(search_dirs=search_dirs)
 
         if lib is not None:
-            print("○ Engine Core Connected via unified FFI loader")
+            abi_probe = getattr(lib, "get_note_event_abi", None)
+            if not callable(abi_probe):
+                raise RuntimeError(
+                    "ロードしたVO-SE CoreにABI確認APIがありません。"
+                    "古いネイティブライブラリの可能性があるため、"
+                    "現在のソースからC++エンジンを再ビルドしてください。"
+                )
+            actual_abi = int(abi_probe())
+            if actual_abi != expected_abi:
+                raise RuntimeError(
+                    "VO-SE Core ABI mismatch: "
+                    f"Python expects 0x{expected_abi:016x}, "
+                    f"native library reports 0x{actual_abi:016x}. "
+                    "再生・レンダリングを安全に停止しました。"
+                    "現在のソースからC++エンジンを再ビルドしてください。"
+                )
+            print("○ Engine Core Connected via unified FFI loader (ABI verified)")
         return lib
 
     @staticmethod
