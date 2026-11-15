@@ -1846,8 +1846,18 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
 // Render Song Notes with Voicebank Mapping API (Pure Native)
 app.post('/api/py/render-notes', async (req, res) => {
   const { notes, voicebank } = req.body || {};
-  if (!Array.isArray(notes) || notes.length > 10000) {
-    return res.status(400).json({ success: false, error: 'Invalid notes array or too many notes' });
+  if (!Array.isArray(notes) || notes.length > 10000 ||
+      !notes.every((note) => {
+        if (!note || typeof note !== 'object' || Array.isArray(note)) return false;
+        const tick = Number(note.tick ?? 0);
+        const length = Number(note.length ?? 480);
+        const noteNum = Number(note.noteNum ?? 60);
+        return Number.isFinite(tick) && tick >= 0 &&
+          Number.isFinite(length) && length > 0 && length <= 1_000_000 &&
+          Number.isFinite(noteNum) && noteNum >= 0 && noteNum <= 127 &&
+          (note.lyric === undefined || (typeof note.lyric === 'string' && note.lyric.length <= 512));
+      })) {
+    return res.status(400).json({ success: false, error: 'Invalid notes array or note data' });
   }
 
   const safeVoicebankName = voicebank ? normalizeChildName(voicebank) : null;
@@ -2185,17 +2195,10 @@ app.post('/api/py/upload-voicebank-stream', async (req, res) => {
   try {
     fs.mkdirSync(voicebanksDir, { recursive: true });
 
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-      // express.raw が既にバッファ化済み（小さいZIP向けの保険経路）
-      fs.writeFileSync(tmpZipPath, req.body);
-      await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
-    } else {
-      // ★修正: chunks配列に貯めず、リクエストストリームを直接
-      //         ディスクへパイプする（RAM上に全量保持しない）
-      const writeStream = fs.createWriteStream(tmpZipPath, { flags: 'wx' });
-      await pipeline(req, createSizeLimitTransform(MAX_UPLOAD_BYTES), writeStream);
-      await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
-    }
+    // Stream directly to disk; no request-body parser buffers archive bytes.
+    const writeStream = fs.createWriteStream(tmpZipPath, { flags: 'wx' });
+    await pipeline(req, createSizeLimitTransform(MAX_UPLOAD_BYTES), writeStream);
+    await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
   } catch (err) {
     fs.unlink(tmpZipPath, () => {});
     if (!res.headersSent) {
@@ -2237,8 +2240,14 @@ app.post('/api/py/upload-voicebank', async (req, res) => {
 
 // VOSE Engine Render Endpoint (API Bridge)
 app.post('/api/py/render-wav', async (req, res) => {
-  const { notes, voicebank, tempo } = req.body;
-  if (!Array.isArray(notes) || notes.length === 0 || notes.length > 10000) {
+  const { notes, voicebank, tempo } = req.body || {};
+  if (!Array.isArray(notes) || notes.length === 0 || notes.length > 10000 ||
+      !notes.every((note) =>
+        note && typeof note === 'object' && !Array.isArray(note) &&
+        Number.isFinite(Number(note.tick)) && Number(note.tick) >= 0 &&
+        Number.isFinite(Number(note.length)) && Number(note.length) > 0 && Number(note.length) <= 1_000_000 &&
+        Number.isFinite(Number(note.noteNum)) && Number(note.noteNum) >= 0 && Number(note.noteNum) <= 127
+      )) {
     return res.status(400).json({ success: false, error: 'Invalid or excessive notes array' });
   }
   const validTempo = Number.isFinite(Number(tempo)) && Number(tempo) >= 20 && Number(tempo) <= 400;
@@ -2270,6 +2279,9 @@ app.post('/api/py/render-wav', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Requested render exceeds the 10-minute limit' });
     }
     const numSamples = Math.floor(sampleRate * durationSec);
+    if (numSamples * notes.length > 25_000_000) {
+      return res.status(413).json({ success: false, error: 'Render request exceeds the processing budget' });
+    }
     const buffer = Buffer.alloc(44 + numSamples * 2);
     
     // RIFF Header
