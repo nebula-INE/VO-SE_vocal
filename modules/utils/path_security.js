@@ -46,3 +46,24 @@ export function validateZipEntryPath(rawName) {
   if (!safeSegments.length) return null;
   return safeSegments.join('/') + (isDirectory ? '/' : '');
 }
+
+export function normalizeRequestHostname(hostHeader) {
+  const value = String(hostHeader || '').trim().toLowerCase();
+  if (value.startsWith('[')) {
+    const closingBracket = value.indexOf(']');
+    return closingBracket > 0 ? value.slice(1, closingBracket) : '';
+  }
+  return value.replace(/:\\d+$/, '');
+}
+
+export function isAllowedRequestOrigin(origin, port, extraOrigins = [], allowNullOrigin = false) {
+  if (!origin) return true;
+  if (origin === 'null') return allowNullOrigin;
+  const allowed = new Set([
+    `http://localhost:${port}`,
+    `http://127.0.0.1:${port}`,
+    `http://[::1]:${port}`,
+    ...extraOrigins
+  ]);
+  return allowed.has(origin);
+}
