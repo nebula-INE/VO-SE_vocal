@@ -16,11 +16,13 @@ test('voicebank names reject traversal, separators and reserved device names', (
   assert.equal(normalizeChildName('..'), null);
   assert.equal(normalizeChildName('folder\\bank'), null);
   assert.equal(normalizeChildName('CON'), null);
+  assert.equal(normalizeChildName('CON.txt'), null);
+  assert.equal(normalizeChildName('invalid:name'), null);
   assert.equal(normalizeChildName(''), null);
 });
 
 test('upload IDs are bounded opaque path-safe tokens', () => {
-  assert.equal(normalizeUploadId('upload_01-abc'), 'upload_01-abc');
+  assert.equal(normalizeUploadId('up_1700000000000_abc1234'), 'up_1700000000000_abc1234');
   assert.equal(normalizeUploadId('../outside'), null);
   assert.equal(normalizeUploadId('x'.repeat(129)), null);
 });
