@@ -11,7 +11,7 @@ MainWindow から以下の音源関連メソッドを分離:
 from __future__ import annotations
 
 import os
-import pickle
+import json
 from typing import Any, Dict
 
 from PySide6.QtCore import Slot
@@ -144,8 +144,17 @@ class VoiceManagementMixin:
 
                 alias = parts[0].strip() if parts and parts[0].strip() else os.path.splitext(wav_file)[0]
 
+                root_path = os.path.realpath(voice_path)
+                normalized_wav = wav_file.replace("\\\\", os.sep).replace("/", os.sep)
+                resolved_wav = os.path.realpath(os.path.join(root_path, normalized_wav))
+                try:
+                    if os.path.commonpath([root_path, resolved_wav]) != root_path:
+                        continue
+                except ValueError:
+                    continue
+
                 oto_map[alias] = {
-                    "wav_path": os.path.join(voice_path, wav_file),
+                    "wav_path": resolved_wav,
                     "offset": self.safe_to_float(parts[1]) if len(parts) > 1 else 0.0,
                     "consonant": self.safe_to_float(parts[2]) if len(parts) > 2 else 0.0,
                     "blank": self.safe_to_float(parts[3]) if len(parts) > 3 else 0.0,
@@ -349,25 +358,44 @@ class VoiceManagementMixin:
     # ------------------------------------------------------------------
 
     def get_cached_oto(self: Any, voice_path: str) -> dict:
-        """原音設定のキャッシュ管理。pickleによる高速化"""
+        """原音設定のJSONキャッシュ。音源同梱データからpickleを実行しない。"""
         cache_path = os.path.join(voice_path, "oto_cache.vose")
         ini_path = os.path.join(voice_path, "oto.ini")
 
         if os.path.exists(cache_path) and os.path.exists(ini_path):
             try:
                 if os.path.getmtime(cache_path) > os.path.getmtime(ini_path):
-                    with open(cache_path, "rb") as f:
-                        data = pickle.load(f)
-                        if data:
-                            return data
-            except (pickle.UnpicklingError, EOFError, AttributeError, ImportError):
+                    with open(cache_path, "r", encoding="utf-8") as cache_file:
+                        data = json.load(cache_file)
+                    if isinstance(data, dict) and all(
+                        isinstance(alias, str)
+                        and isinstance(entry, dict)
+                        and isinstance(entry.get("wav_path"), str)
+                        and all(
+                            isinstance(entry.get(key, 0.0), (int, float))
+                            for key in ("offset", "consonant", "blank", "preutterance", "overlap")
+                        )
+                        for alias, entry in data.items()
+                    ):
+                        return data
+            except (OSError, ValueError, TypeError):
+                # Legacy pickle caches and corrupt files are ignored and rebuilt.
                 pass
 
         oto_data = self.parse_oto_ini(voice_path)
+        temp_path = cache_path + ".tmp"
         try:
-            with open(cache_path, "wb") as f:
-                pickle.dump(oto_data, f)
-        except Exception as e:
+            with open(temp_path, "w", encoding="utf-8") as cache_file:
+                json.dump(oto_data, cache_file, ensure_ascii=False, allow_nan=False)
+                cache_file.flush()
+                os.fsync(cache_file.fileno())
+            os.replace(temp_path, cache_path)
+        except (OSError, TypeError, ValueError) as e:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
             print(f"DEBUG: Cache save failed: {e}")
 
         return oto_data
