@@ -145,7 +145,7 @@ class VoiceManagementMixin:
                 alias = parts[0].strip() if parts and parts[0].strip() else os.path.splitext(wav_file)[0]
 
                 root_path = os.path.realpath(voice_path)
-                normalized_wav = wav_file.replace("\\\\", os.sep).replace("/", os.sep)
+                normalized_wav = wav_file.replace("\\", os.sep).replace("/", os.sep)
                 resolved_wav = os.path.realpath(os.path.join(root_path, normalized_wav))
                 try:
                     if os.path.commonpath([root_path, resolved_wav]) != root_path:
