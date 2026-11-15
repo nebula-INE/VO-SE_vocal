@@ -25,6 +25,7 @@ def mixdown_tracks_to_wav(
     block_size: int = 65536,
     progress_callback: Callable[[int], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    effect_chain: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render all supplied project tracks to one stereo PCM-24 WAV.
 
@@ -59,6 +60,8 @@ def mixdown_tracks_to_wav(
 
     mixer = AudioMixer(sample_rate=output_rate, block_size=block_frames)
     mixer.set_tracks(track_list)
+    if effect_chain is not None:
+        mixer.set_effect_chain(effect_chain)
 
     if mixer.last_load_errors:
         details = "\n".join(mixer.last_load_errors)

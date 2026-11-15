@@ -14,6 +14,8 @@ from typing import Any, Dict, Iterable
 
 import numpy as np
 
+from modules.audio.master_effects import MasterEffectsProcessor, normalize_effect_chain
+
 try:
     import sounddevice as sd
 except Exception:
@@ -54,7 +56,9 @@ class AudioMixer:
         self._tracks: list[Any] = []
         self._sources: Dict[int, _TrackSource] = {}
         self._position = 0
+        self._track_total_frames = 0
         self._total_frames = 0
+        self._effects = MasterEffectsProcessor(self.sample_rate)
 
         self._blocks: queue.Queue[np.ndarray] = queue.Queue(
             maxsize=max(2, int(queue_blocks))
@@ -100,6 +104,8 @@ class AudioMixer:
                 "last_load_errors": list(self.last_load_errors),
                 "last_playback_errors": list(self.last_playback_errors),
                 "queued_blocks": self._blocks.qsize(),
+                "enabled_effects": sum(1 for item in self._effects.get_chain() if item["enabled"]),
+                "effect_tail_frames": self._effects.tail_frames,
             }
 
     def _probe_output_device(self) -> None:
@@ -184,9 +190,10 @@ class AudioMixer:
         with self._lock:
             self._tracks = new_tracks
             self._sources = sources
-            self._total_frames = max(
+            self._track_total_frames = max(
                 source.output_frames for source in sources.values()
             )
+            self._total_frames = self._track_total_frames + self._effects.tail_frames
             self.last_load_errors = load_errors
             self.last_playback_errors = []
 
@@ -201,10 +208,28 @@ class AudioMixer:
                 for track_id, source in self._sources.items()
                 if track_id in new_ids
             }
-            self._total_frames = max(
+            self._track_total_frames = max(
                 (source.output_frames for source in self._sources.values()),
                 default=0,
             )
+            self._total_frames = self._track_total_frames + self._effects.tail_frames
+
+    def set_effect_chain(self, chain: Any, *, preserve_state: bool = False) -> None:
+        """Replace master parameters without touching tracks or the vocal renderer.
+
+        Live parameter drags preserve reverb and compressor histories for matching
+        effect IDs; loading a different project or seeking can request a reset.
+        """
+        normalized = normalize_effect_chain(chain)
+        with self._lock:
+            self._effects.set_chain(normalized, preserve_state=preserve_state)
+            self._total_frames = self._track_total_frames + self._effects.tail_frames
+            self._position = min(self._position, self._total_frames)
+
+    def get_effect_chain(self) -> list[dict[str, Any]]:
+        """Return a detached snapshot of the current master chain."""
+        with self._lock:
+            return self._effects.get_chain()
 
     def play(self, start_sec: float | None = None) -> None:
         """Start playback at start_sec, or resume from the current position."""
@@ -214,6 +239,8 @@ class AudioMixer:
 
         self._shutdown_playback(reset_position=False)
         with self._lock:
+            if start_sec is not None or self._position == 0:
+                self._effects.reset()
             if not self._sources:
                 raise RuntimeError("No audio tracks are loaded")
             if start_sec is not None:
@@ -297,7 +324,8 @@ class AudioMixer:
                     data=stereo,
                 )
             }
-            self._total_frames = len(stereo)
+            self._track_total_frames = len(stereo)
+            self._total_frames = self._track_total_frames + self._effects.tail_frames
             self.last_load_errors = []
             self.last_playback_errors = []
         self.play(start_sec)
@@ -331,12 +359,15 @@ class AudioMixer:
                 max(0, int(float(position_ms) * self.sample_rate / 1000.0)),
                 self._total_frames,
             )
+            self._effects.reset()
         if was_playing:
             self.play()
 
     def stop(self) -> None:
-        """Stop playback and reset the transport position."""
+        """Stop playback and reset the transport and effect histories."""
         self._shutdown_playback(reset_position=True)
+        with self._lock:
+            self._effects.reset()
 
     def _shutdown_playback(self, reset_position: bool) -> None:
         self._producer_stop.set()
@@ -440,6 +471,7 @@ class AudioMixer:
         with self._lock:
             tracks = list(self._tracks)
             active_sources = dict(self._sources) if sources is None else sources
+            effects = self._effects
         active_readers = readers or {}
         failed = failed_sources if failed_sources is not None else set()
         mix = np.zeros((frames, 2), dtype=np.float32)
@@ -482,8 +514,9 @@ class AudioMixer:
             mix[: len(chunk), 0] += chunk[:, 0] * gain * left_gain
             mix[: len(chunk), 1] += chunk[:, 1] * gain * right_gain
 
-        np.clip(mix, -1.0, 1.0, out=mix)
-        return mix
+        processed = effects.process(mix)
+        np.clip(processed, -1.0, 1.0, out=processed)
+        return processed
 
     def _read_file_block(
         self,
