@@ -15,14 +15,14 @@ import {
 
 test('voicebank names reject path separators, traversal and control characters', () => {
   assert.equal(normalizeVoicebankName('つくよみちゃん'), 'つくよみちゃん');
-  for (const value of ['../outside', '..', '.', 'a/b', 'a\\\\b', 'C:escape', 'bad\\0name']) {
+  for (const value of ['../outside', '..', '.', 'a/b', 'a\\b', 'C:escape', 'bad\0name']) {
     assert.throws(() => normalizeVoicebankName(value));
   }
 });
 
 test('upload names use only the final filename component', () => {
   assert.equal(voicebankNameFromFilename('../../voices/つくよみちゃん.zip'), 'つくよみちゃん');
-  assert.equal(voicebankNameFromFilename('C:\\\\fakepath\\\\bank.zip'), 'bank');
+  assert.equal(voicebankNameFromFilename('C:\\fakepath\\bank.zip'), 'bank');
   assert.throws(() => voicebankNameFromFilename('folder/..zip'));
 });
 
@@ -78,8 +78,9 @@ test('realpath checks reject symlinks that escape a voicebank root', (t) => {
 
 test('server never shells out for ZIP extraction or reports fake test success', () => {
   const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /exec\\s*\\(/);
-  assert.doesNotMatch(source, /extractAllTo\\s*\\(/);
-  assert.match(source, /res\\.status\\(501\\)\\.json/);
-  assert.match(source, /process\\.env\\.HOST \\|\\| '127\\.0\\.0\\.1'/);
+  assert.equal(source.includes('exec('), false);
+  assert.equal(source.includes('extractAllTo('), false);
+  assert.equal(source.includes('res.status(501).json'), true);
+  assert.equal(source.includes("process.env.HOST || '127.0.0.1'"), true);
+  assert.equal(source.includes('MAX_ZIP_TOTAL_BYTES'), true);
 });

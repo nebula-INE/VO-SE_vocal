@@ -23,7 +23,7 @@ class ZipHandler:
                 or bank_name in {".", ".."}
                 or os.sep in bank_name
                 or (os.altsep and os.altsep in bank_name)
-                or "\\x00" in bank_name
+                or "\x00" in bank_name
             ):
                 raise ValueError("不正な音源名です。")
 

@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import { pipeline } from 'stream/promises';
+import { Transform } from 'stream';
 import yauzl from 'yauzl';
 import multer from 'multer';
 import {
@@ -208,7 +209,7 @@ async function parseOtoIniFull(dirPath) {
           const entryObj = {
             alias,
             filename,
-            wav_path: path.join(currentDir, filename),
+            wav_path: resolvePathInside(dirPath, filename, currentDir),
             left_blank,
             fixed_range,
             right_blank,
@@ -333,6 +334,7 @@ class VoicebankRegistryEngine {
 
     const indexed = {
       mtime: latestMtime,
+      voicebankRoot: fs.realpathSync(vbPath),
       aliasCount: parsed.aliasCount,
       hasVcv: parsed.hasVcv,
       aliasesPreview: parsed.aliases,
@@ -429,6 +431,22 @@ function decodeZipFilename(bufOrStr) {
 const MAX_ZIP_ENTRIES = 100_000;
 const MAX_ZIP_MEMBER_BYTES = 2 * 1024 ** 3;
 const MAX_ZIP_TOTAL_BYTES = 8 * 1024 ** 3;
+const MAX_UPLOAD_BYTES = 600 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
+
+function createByteLimitTransform(maxBytes, message) {
+  let totalBytes = 0;
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        callback(new Error(message));
+        return;
+      }
+      callback(null, chunk);
+    }
+  });
+}
 
 function extractWithYauzl(zipPath, targetDir) {
   return new Promise((resolve, reject) => {
@@ -611,28 +629,31 @@ app.get('/api/py/voicebanks', async (req, res) => {
 
 // Detailed Inspection & OTO entries API
 app.get('/api/py/voicebank-details', async (req, res) => {
-  const vbName = req.query.name;
-  if (!vbName) return res.status(400).json({ success: false, error: 'Voicebank name required' });
-
-  const vbPath = path.join(__dirname, 'temp', 'voicebanks', vbName);
-  if (!fs.existsSync(vbPath)) {
-    return res.status(404).json({ success: false, error: `音源「${vbName}」が見つかりません。` });
+  const resolved = resolveVoicebankPath(req.query.name);
+  if (!resolved) {
+    return res.status(404).json({ success: false, error: 'Voicebank not found' });
   }
 
   const query = (req.query.q || '').toString().trim();
-  const limitVal = parseInt(req.query.limit) || 150;
+  const limitVal = parseInt(req.query.limit, 10) || 150;
 
   try {
-    const searchResult = await vbRegistry.search(vbName, vbPath, query, limitVal);
+    const searchResult = await vbRegistry.search(
+      resolved.resolvedName,
+      resolved.resolvedPath,
+      query,
+      limitVal
+    );
+    const entries = searchResult.entries.map(({ wav_path, ...entry }) => entry);
     res.json({
       success: true,
-      name: vbName,
+      name: resolved.resolvedName,
       aliasCount: searchResult.aliasCount,
       hasVcv: searchResult.hasVcv,
-      entries: searchResult.entries
+      entries
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Voicebank details could not be read safely' });
   }
 });
 
@@ -1287,7 +1308,7 @@ vbRegistry.warmBaseMidiCache = (indexed) => {
     const end = Math.min(entries.length, i + WARM_BATCH_SIZE);
     for (; i < end; i++) {
       const e = entries[i];
-      if (!e || !e.wav_path) continue;
+      if (!e || !e.wav_path || !isRealPathInside(indexed.voicebankRoot, e.wav_path)) continue;
       try {
         detectWavBaseMidi(e.wav_path, e.alias, e.filename);
       } catch (err) {
@@ -1739,10 +1760,10 @@ app.get('/api/py/voicebank-alias-info', async (req, res) => {
   let entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
   
   if (entry) {
-    return res.json({ success: true, entry });
-  } else {
-    return res.status(404).json({ success: false, error: 'Alias not found' });
+    const { wav_path, ...publicEntry } = entry;
+    return res.json({ success: true, entry: publicEntry });
   }
+  return res.status(404).json({ success: false, error: 'Alias not found' });
 });
 
 app.get('/api/py/voicebank-sample', async (req, res) => {
@@ -1764,16 +1785,14 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
     (!fs.existsSync(wavFile) || !isRealPathInside(resolvedPath, wavFile)) &&
     entry.filename
   ) {
-    wavFile = resolveWavFilePath(path.dirname(wavFile), entry.filename, resolvedPath);
+    wavFile = resolveWavFilePath(wavFile ? path.dirname(wavFile) : resolvedPath, entry.filename, resolvedPath);
   }
 
-  if (
-    !entry ||
-    !wavFile ||
-    !fs.existsSync(wavFile) ||
-    !isRealPathInside(resolvedPath, wavFile) ||
-    !fs.statSync(wavFile).isFile()
-  ) {
+  let sampleIsSafe = false;
+  if (entry && wavFile && isRealPathInside(resolvedPath, wavFile)) {
+    try { sampleIsSafe = fs.statSync(wavFile).isFile(); } catch {}
+  }
+  if (!sampleIsSafe) {
     return res.status(404).json({ success: false, error: `Sample WAV for alias "${alias}" not found` });
   }
 
@@ -1816,7 +1835,7 @@ app.post('/api/py/render-notes', async (req, res) => {
       if (fs.existsSync(entry.wav_path) && isRealPathInside(vbPath, entry.wav_path)) {
         resolvedWavPath = entry.wav_path;
       } else if (entry.filename && vbPath) {
-        resolvedWavPath = resolveWavFilePath(path.dirname(entry.wav_path), entry.filename, vbPath);
+        resolvedWavPath = resolveWavFilePath(entry.wav_path ? path.dirname(entry.wav_path) : vbPath, entry.filename, vbPath);
       }
       if (resolvedWavPath && (!fs.existsSync(resolvedWavPath) || !isRealPathInside(vbPath, resolvedWavPath))) {
         resolvedWavPath = null;
@@ -1928,7 +1947,7 @@ async function processZipStreamToDir(zipPath, requestedTargetDir, baseName, res)
         aliasCount: indexed ? indexed.aliasCount : 0,
         hasVcv: indexed ? indexed.hasVcv : false,
         aliases: indexed ? indexed.aliasesPreview : [],
-        entries: indexed ? indexed.entries.slice(0, 100) : []
+        entries: indexed ? indexed.entries.slice(0, 100).map(({ wav_path, ...entry }) => entry) : []
       }
     });
   } catch (err) {
@@ -2052,11 +2071,14 @@ app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
 
   try {
     fs.mkdirSync(chunksDir, { recursive: true });
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+    if (Buffer.isBuffer(req.body)) {
+      if (req.body.length > MAX_CHUNK_BYTES) {
+        return res.status(413).json({ success: false, error: 'Upload chunk exceeds the 2 MiB limit' });
+      }
       fs.writeFileSync(chunkFilePath, req.body);
     } else {
-      const writeStream = fs.createWriteStream(chunkFilePath, { flags: 'w' });
-      await pipeline(req, writeStream);
+      const writeStream = fs.createWriteStream(chunkFilePath, { flags: 'wx' });
+      await pipeline(req, createByteLimitTransform(MAX_CHUNK_BYTES, 'Upload chunk exceeds the 2 MiB limit'), writeStream);
     }
 
     const receivedCount = fs.readdirSync(chunksDir).filter((file) => /^part_\d+$/.test(file)).length;
@@ -2080,6 +2102,9 @@ app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
         assembledStream.once('finish', resolve);
         assembledStream.once('error', reject);
       });
+      if (fs.statSync(assembledZipPath).size > MAX_UPLOAD_BYTES) {
+        throw new Error('Voicebank ZIP exceeds the 600 MiB upload limit');
+      }
     } catch (error) {
       assembledStream.destroy();
       throw error;
@@ -2111,11 +2136,14 @@ app.post('/api/py/upload-voicebank-stream', async (req, res) => {
 
   try {
     fs.mkdirSync(voicebanksDir, { recursive: true });
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+    if (Buffer.isBuffer(req.body)) {
+      if (req.body.length > MAX_UPLOAD_BYTES) {
+        return res.status(413).json({ success: false, error: 'Voicebank ZIP exceeds the 600 MiB upload limit' });
+      }
       fs.writeFileSync(tmpZipPath, req.body);
     } else {
       const writeStream = fs.createWriteStream(tmpZipPath, { flags: 'wx' });
-      await pipeline(req, writeStream);
+      await pipeline(req, createByteLimitTransform(MAX_UPLOAD_BYTES, 'Voicebank ZIP exceeds the 600 MiB upload limit'), writeStream);
     }
     await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
   } catch (err) {
@@ -2146,6 +2174,9 @@ app.post('/api/py/upload-voicebank', async (req, res) => {
     // base64ルートは呼び出し側の都合上避けられないが、
     // デコード後は即ディスクに書き出し、以降はストリーミング解凍に合流させる
     const buffer = Buffer.from(fileData, 'base64');
+    if (buffer.length > MAX_UPLOAD_BYTES) {
+      return res.status(413).json({ success: false, error: 'Voicebank ZIP exceeds the 600 MiB upload limit' });
+    }
     fs.writeFileSync(tmpZipPath, buffer);
     await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
   } catch (err) {
