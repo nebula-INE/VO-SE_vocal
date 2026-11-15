@@ -381,32 +381,25 @@ class AudioMixer:
         stream = self._stream
         if stream is not None:
             stop_error: Exception | None = None
-            close_error: Exception | None = None
             try:
                 stream.stop()
             except Exception as exc:
+                # stop() can report an already-stopped device; close() below
+                # is still attempted and is the authoritative release step.
                 stop_error = exc
             try:
                 stream.close()
             except Exception as exc:
-                close_error = exc
-
-            try:
-                stream_still_active = bool(getattr(stream, "active", False))
-            except Exception as exc:
-                stream_still_active = True
-                if close_error is None:
-                    close_error = exc
-
-            # Never drop the last reference to a stream whose callback may
-            # still be running: it can continue dereferencing this mixer.
-            if stream_still_active or close_error is not None:
+                # Keep the stream referenced if close failed: its callback may
+                # still be running and dereference this mixer.
                 self._stream = stream
-                detail = close_error or stop_error
                 raise RuntimeError(
-                    "Audio stream could not be closed safely"
-                    + (f": {detail}" if detail is not None else "")
-                ) from detail
+                    f"Audio stream could not be closed safely: {exc}"
+                ) from exc
+
+            # PortAudio stream state properties are not queried after close:
+            # some backends reject any access once their native handle is null.
+            # A successful close guarantees the callback has been detached.
             self._stream = None
 
         producer = self._producer_thread
