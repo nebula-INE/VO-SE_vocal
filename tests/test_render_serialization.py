@@ -56,3 +56,49 @@ def test_apply_patch_serializes_atomic_v2_render_calls(monkeypatch, tmp_path):
     assert results == [str(destination)] * 8
     assert state["max_active"] == 1
     assert destination.read_bytes() == b"test-wav"
+
+
+
+def test_load_ust_project_replaces_voice_root_under_native_render_lock(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    voice_dir = tmp_path / "voicebank"
+    voice_dir.mkdir()
+
+    class FakeParser:
+        def load(self, path):
+            return SimpleNamespace(voice_dir=str(voice_dir), tempo=120.0)
+
+    class FakeEngine:
+        def __init__(self):
+            object.__setattr__(self, "voice_lib_path", str(tmp_path / "old"))
+            object.__setattr__(self, "_ust_voice_dir", "")
+
+        def __setattr__(self, name, value):
+            if name in {"voice_lib_path", "_ust_voice_dir"}:
+                assert vo_se_engine_patch._NATIVE_ENGINE_LOCK._is_owned()
+            object.__setattr__(self, name, value)
+
+    refresh_calls = []
+
+    monkeypatch.setattr(vo_se_engine_patch, "UstParser", FakeParser)
+    monkeypatch.setattr(
+        vo_se_engine_patch.UstConverter,
+        "to_note_dicts",
+        staticmethod(lambda _project: []),
+    )
+    monkeypatch.setattr(
+        vo_se_engine_patch,
+        "_refresh_voice_library_v2_unlocked",
+        lambda engine: refresh_calls.append(engine.voice_lib_path),
+    )
+
+    engine = FakeEngine()
+    result = vo_se_engine_patch._load_ust_project(engine, str(tmp_path / "test.ust"))
+
+    assert result == []
+    assert engine.voice_lib_path == str(voice_dir)
+    assert engine._ust_voice_dir == str(voice_dir)
+    assert refresh_calls == [str(voice_dir)]
