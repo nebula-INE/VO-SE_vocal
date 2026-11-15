@@ -49,7 +49,7 @@ const MAX_CHUNK_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 60;
 const MAX_ZIP_ENTRIES = 100_000;
 const MAX_ZIP_MEMBER_BYTES = 2 * 1024 * 1024 * 1024;
-const MAX_ZIP_TOTAL_BYTES = 8 * 1024 * 1024 * 1024;
+const MAX_ZIP_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 
 function voicebankNameFromFilename(filename) {
   if (typeof filename !== 'string' || !filename.trim()) return null;
