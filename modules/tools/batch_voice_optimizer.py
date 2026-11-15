@@ -950,11 +950,21 @@ class OtoPredictor:
             }, f)
 
     def load(self, path: str) -> None:
+        """Load a pickle checkpoint only after explicit local trust opt-in."""
+        if os.environ.get("VOSE_TRUST_PICKLE_MODELS") != "1":
+            logger.warning(
+                "Skipped pickle model checkpoint %s: set VOSE_TRUST_PICKLE_MODELS=1 "
+                "only for a locally-created, fully trusted file.",
+                path,
+            )
+            return
         with open(path, 'rb') as f:
             data = pickle.load(f)
-        self.model = data['model']
-        self.scaler = data['scaler']
-        self.is_trained = data.get('is_trained', True)
+        if not isinstance(data, dict) or not {"model", "scaler"}.issubset(data):
+            raise ValueError("Invalid VO-SE optimizer checkpoint format")
+        self.model = data["model"]
+        self.scaler = data["scaler"]
+        self.is_trained = bool(data.get("is_trained", True))
 
     def _heuristic_predict(self, features: AcousticFeatures) -> OtoParams:
         """機械学習が使えない場合のヒューリスティック推定（改善版）"""
