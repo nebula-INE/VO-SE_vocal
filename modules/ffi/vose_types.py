@@ -93,15 +93,39 @@ def note_event_abi_signature() -> int:
 
 
 
-def validate_oto_entry_layout():
-    """Validate the native OtoEntry ABI on 64-bit hosts."""
-    if ctypes.sizeof(ctypes.c_void_p) == 8:
-        expected = 632
-        actual = ctypes.sizeof(COtoEntry)
-        if actual != expected:
-            raise RuntimeError(
-                f"COtoEntry ABI mismatch: expected {expected} bytes, got {actual} bytes"
-            )
+def validate_oto_entry_layout() -> None:
+    """Validate the 64-bit OtoEntry layout shared with the native voice database."""
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        raise RuntimeError("VO-SE desktop rendering requires a 64-bit process")
+    expected_size = 632
+    actual_size = ctypes.sizeof(COtoEntry)
+    if actual_size != expected_size:
+        raise RuntimeError(
+            f"COtoEntry ABI mismatch: expected {expected_size} bytes, "
+            f"got {actual_size} bytes"
+        )
+
+    expected_offsets = {"wav_path": 80, "offset": 592, "overlap": 624}
+    actual_offsets = {
+        field_name: getattr(COtoEntry, field_name).offset
+        for field_name in expected_offsets
+    }
+    if actual_offsets != expected_offsets:
+        raise RuntimeError(
+            "COtoEntry ABI field-offset mismatch: "
+            f"expected {expected_offsets}, got {actual_offsets}"
+        )
+
+
+def oto_entry_abi_signature() -> int:
+    """Return the exact size/offset fingerprint expected from the loaded C++ core."""
+    validate_oto_entry_layout()
+    return (
+        (ctypes.sizeof(COtoEntry) << 48)
+        | (COtoEntry.wav_path.offset << 32)
+        | (COtoEntry.offset.offset << 16)
+        | COtoEntry.overlap.offset
+    )
 
 
 __all__ = [
@@ -109,5 +133,7 @@ __all__ = [
     "CNoteEvent",
     "as_c_double_array",
     "validate_note_event_layout",
+    "note_event_abi_signature",
     "validate_oto_entry_layout",
+    "oto_entry_abi_signature",
 ]
