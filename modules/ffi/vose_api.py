@@ -97,6 +97,7 @@ def bind_all(lib: ctypes.CDLL) -> None:
     # Required desktop safety probe: prevent a stale native library with a
     # different NoteEvent layout from receiving ctypes pointers.
     _bind(lib, "get_note_event_abi", [], ctypes.c_uint64)
+    _bind(lib, "get_oto_entry_abi", [], ctypes.c_uint64)
     _bind(lib, "clear_engine_cache", [], None)
     _bind(lib, "init_official_engine", [], None)
 
