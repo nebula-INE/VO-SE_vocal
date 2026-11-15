@@ -48,23 +48,48 @@ def as_c_double_array(values: Iterable[float]) -> ctypes.Array[ctypes.c_double]:
     seq = tuple(float(v) for v in values)
     return (ctypes.c_double * len(seq))(*seq)
 
-def validate_note_event_layout():
-    """CNoteEvent のレイアウト検証。
-
-    C++ 側の NoteEvent は 64bit 環境で pointer x 8 + int x 3 + double x 5 の
-    8-byte alignment になるため 128 bytes になる。
-    （2026-09-28 現在の vose_core.h の定義に基づく）
-    """
-
+def validate_note_event_layout() -> None:
+    """Validate the 64-bit NoteEvent layout shared with the native renderer."""
     pointer_size = ctypes.sizeof(ctypes.c_void_p)
-    if pointer_size == 8:
-        expected = 128
-        actual = ctypes.sizeof(CNoteEvent)
-        if actual != expected:
-            raise RuntimeError(
-                f"CNoteEvent ABI mismatch: expected {expected} bytes, "
-                f"got {actual} bytes"
-            )
+    if pointer_size != 8:
+        raise RuntimeError(
+            "VO-SE desktop rendering requires a 64-bit process; "
+            f"pointer size is {pointer_size}"
+        )
+
+    expected_size = 128
+    actual_size = ctypes.sizeof(CNoteEvent)
+    if actual_size != expected_size:
+        raise RuntimeError(
+            f"CNoteEvent ABI mismatch: expected {expected_size} bytes, "
+            f"got {actual_size} bytes"
+        )
+
+    expected_offsets = {
+        "start_time_ms": 104,
+        "preutterance_ms": 112,
+        "overlap_ms": 120,
+    }
+    actual_offsets = {
+        field_name: getattr(CNoteEvent, field_name).offset
+        for field_name in expected_offsets
+    }
+    if actual_offsets != expected_offsets:
+        raise RuntimeError(
+            "CNoteEvent ABI field-offset mismatch: "
+            f"expected {expected_offsets}, got {actual_offsets}"
+        )
+
+
+def note_event_abi_signature() -> int:
+    """Return the exact size/offset fingerprint expected from the loaded C++ core."""
+    validate_note_event_layout()
+    return (
+        (ctypes.sizeof(CNoteEvent) << 48)
+        | (CNoteEvent.start_time_ms.offset << 32)
+        | (CNoteEvent.preutterance_ms.offset << 16)
+        | CNoteEvent.overlap_ms.offset
+    )
 
 
 
