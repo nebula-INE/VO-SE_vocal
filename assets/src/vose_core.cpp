@@ -3352,6 +3352,14 @@ DLLEXPORT uint64_t get_note_event_abi(void)
         | static_cast<uint64_t>(offsetof(NoteEvent, overlap_ms));
 }
 
+DLLEXPORT uint64_t get_oto_entry_abi(void)
+{
+    return (static_cast<uint64_t>(sizeof(OtoEntry)) << 48)
+        | (static_cast<uint64_t>(offsetof(OtoEntry, wav_path)) << 32)
+        | (static_cast<uint64_t>(offsetof(OtoEntry, offset)) << 16)
+        | static_cast<uint64_t>(offsetof(OtoEntry, overlap));
+}
+
 // 音声データベース／解析キャッシュをクリアする
 DLLEXPORT void clear_engine_cache(void)
 {
