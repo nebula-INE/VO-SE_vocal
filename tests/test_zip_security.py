@@ -8,14 +8,19 @@ from modules.utils.zip_handler import ZipHandler
 @pytest.mark.smoke
 def test_zip_handler_rejects_path_traversal(tmp_path):
     archive = tmp_path / "malicious.zip"
+    voices = tmp_path / "voices"
+    existing = voices / "malicious"
+    existing.mkdir(parents=True)
+    (existing / "keep.txt").write_text("preserve", encoding="utf-8")
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("../../outside.txt", "blocked")
 
-    ok, message = ZipHandler.extract_voice_bank(str(archive), str(tmp_path / "voices"))
+    ok, message = ZipHandler.extract_voice_bank(str(archive), str(voices))
 
     assert ok is False
     assert "ZIP" in message or "不正" in message
     assert not (tmp_path / "outside.txt").exists()
+    assert (existing / "keep.txt").read_text(encoding="utf-8") == "preserve"
 
 
 @pytest.mark.smoke
