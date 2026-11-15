@@ -514,6 +514,7 @@ function extractWithYauzl(zipPath, targetDir) {
       let processing = false;
       let entryCount = 0;
       let totalUncompressedBytes = 0;
+      let actualUncompressedBytes = 0;
 
       const fail = (error) => {
         if (settled) return;
@@ -578,7 +579,27 @@ function extractWithYauzl(zipPath, targetDir) {
                 else streamResolve(stream);
               });
             });
-            await pipeline(readStream, fs.createWriteStream(entryPath, { flags: 'wx' }));
+            let actualMemberBytes = 0;
+            const sizeGuard = new Transform({
+              transform(chunk, encoding, callback) {
+                actualMemberBytes += chunk.length;
+                actualUncompressedBytes += chunk.length;
+                if (actualMemberBytes > MAX_ZIP_MEMBER_BYTES ||
+                    actualUncompressedBytes > MAX_ZIP_TOTAL_BYTES) {
+                  callback(new Error('ZIP expanded content exceeds the configured size limit'));
+                  return;
+                }
+                callback(null, chunk);
+              }
+            });
+            await pipeline(
+              readStream,
+              sizeGuard,
+              fs.createWriteStream(entryPath, { flags: 'wx' })
+            );
+            if (actualMemberBytes !== memberSize) {
+              throw new Error(`ZIP member size mismatch: ${decodedName}`);
+            }
           }
 
           processing = false;
