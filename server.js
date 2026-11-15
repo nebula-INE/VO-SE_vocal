@@ -5,8 +5,10 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'node:crypto';
 import { Transform } from 'node:stream';
 import {
+  isAllowedRequestOrigin,
   isPathInside,
   normalizeChildName,
+  normalizeRequestHostname,
   normalizeUploadId,
   resolveRelativeAssetPath,
   validateZipEntryPath
@@ -44,16 +46,8 @@ if (allowedOrigins.size > 0) {
   }));
 }
 
-// Protect the local-only server against DNS-rebinding Host headers. LAN hosts
-// must be listed explicitly when the server is intentionally exposed.
-function requestHostname(hostHeader) {
-  const value = String(hostHeader || '').trim().toLowerCase();
-  if (value.startsWith('[')) {
-    const closingBracket = value.indexOf(']');
-    return closingBracket > 0 ? value.slice(1, closingBracket) : '';
-  }
-  return value.replace(/:\\d+$/, '');
-}
+// Protect the local-only server against DNS rebinding and cross-origin writes.
+// LAN hosts/origins must be listed explicitly when remote-device access is intended.
 const allowedHosts = new Set([
   'localhost',
   '127.0.0.1',
@@ -61,9 +55,13 @@ const allowedHosts = new Set([
   ...(process.env.VOSE_ALLOWED_HOSTS || '').split(',').map((host) => host.trim().toLowerCase()).filter(Boolean)
 ]);
 app.use((req, res, next) => {
-  const hostname = requestHostname(req.headers.host);
+  const hostname = normalizeRequestHostname(req.headers.host);
   if (!allowedHosts.has(hostname)) {
     return res.status(403).json({ success: false, error: 'Host header is not allowlisted' });
+  }
+  const allowNullOrigin = process.env.VOSE_ALLOW_NULL_ORIGIN === '1';
+  if (!isAllowedRequestOrigin(req.headers.origin, PORT, [...allowedOrigins], allowNullOrigin)) {
+    return res.status(403).json({ success: false, error: 'Origin is not allowlisted' });
   }
   next();
 });
