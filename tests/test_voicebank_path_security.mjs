@@ -14,7 +14,7 @@ test('voicebank names reject traversal, separators and reserved device names', (
   assert.equal(normalizeChildName('あ音源'), 'あ音源');
   assert.equal(normalizeChildName('../outside'), null);
   assert.equal(normalizeChildName('..'), null);
-  assert.equal(normalizeChildName('folder\\\\bank'), null);
+  assert.equal(normalizeChildName('folder\\bank'), null);
   assert.equal(normalizeChildName('CON'), null);
   assert.equal(normalizeChildName(''), null);
 });
@@ -31,14 +31,14 @@ test('oto references stay inside the owning voicebank, including Windows paths',
   assert.equal(resolveRelativeAssetPath(root, nested, 'voice.wav'), path.join(nested, 'voice.wav'));
   assert.equal(resolveRelativeAssetPath(root, nested, '../../outside.wav'), null);
   assert.equal(resolveRelativeAssetPath(root, nested, '/etc/passwd'), null);
-  assert.equal(resolveRelativeAssetPath(root, nested, 'C:\\\\Windows\\\\win.ini'), null);
+  assert.equal(resolveRelativeAssetPath(root, nested, 'C:\\Windows\\win.ini'), null);
 });
 
 test('ZIP paths reject traversal and absolute paths', () => {
-  assert.equal(validateZipEntryPath('Voice/oto.ini'), 'Voice/oto.ini');
-  assert.equal(validateZipEntryPath('Voice\\\\oto.ini'), 'Voice/oto.ini');
+  assert.equal(validateZipEntryPath('Voice\\oto.ini'), 'Voice/oto.ini');
+  assert.equal(validateZipEntryPath('Voice\\oto.ini'), 'Voice/oto.ini');
   assert.equal(validateZipEntryPath('../../outside.txt'), null);
-  assert.equal(validateZipEntryPath('C:\\\\outside.txt'), null);
+  assert.equal(validateZipEntryPath('C:\\outside.txt'), null);
   assert.equal(validateZipEntryPath('/etc/passwd'), null);
 });
 
