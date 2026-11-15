@@ -1684,7 +1684,7 @@ export default function App() {
         const uploadInChunks = async (): Promise<any> => {
           const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB
           const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-          const uploadId = `up_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+          const uploadId = `up_${crypto.randomUUID()}`;
           currentUploadIdRef.current = uploadId;
 
           let lastServerResult: any = null;
