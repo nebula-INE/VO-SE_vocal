@@ -3,8 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  isAllowedRequestOrigin,
   isPathInside,
   normalizeChildName,
+  normalizeRequestHostname,
   normalizeUploadId,
   resolveRelativeAssetPath,
   validateZipEntryPath
@@ -43,6 +45,18 @@ test('ZIP paths reject traversal and absolute paths', () => {
   assert.equal(validateZipEntryPath('../../outside.txt'), null);
   assert.equal(validateZipEntryPath('C:\\outside.txt'), null);
   assert.equal(validateZipEntryPath('/etc/passwd'), null);
+});
+
+test('local server accepts only loopback or explicitly allowed origins and hosts', () => {
+  assert.equal(isAllowedRequestOrigin('http://localhost:3000', 3000), true);
+  assert.equal(isAllowedRequestOrigin('http://127.0.0.1:3000', 3000), true);
+  assert.equal(isAllowedRequestOrigin('http://evil.example', 3000), false);
+  assert.equal(isAllowedRequestOrigin('null', 3000), false);
+  assert.equal(isAllowedRequestOrigin('null', 3000, [], true), true);
+  assert.equal(isAllowedRequestOrigin('https://lan.example', 3000, ['https://lan.example']), true);
+  assert.equal(normalizeRequestHostname('localhost:3000'), 'localhost');
+  assert.equal(normalizeRequestHostname('127.0.0.1:3000'), '127.0.0.1');
+  assert.equal(normalizeRequestHostname('[::1]:3000'), '::1');
 });
 
 test('path containment only accepts strict descendants by default', () => {
