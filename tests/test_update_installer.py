@@ -123,7 +123,7 @@ def test_find_macos_bundle_rejects_unrelated_app_bundle(tmp_path):
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"test")
 
-    with pytest.raises(update_installer.UpdateInstallError, match="名前が想定と異なります"):
+    with pytest.raises(update_installer.UpdateInstallError, match="アプリバンドル名が想定と異なります"):
         update_installer._find_macos_app_bundle(executable)
 
 
