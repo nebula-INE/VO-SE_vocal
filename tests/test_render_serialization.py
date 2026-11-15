@@ -71,6 +71,18 @@ def test_load_ust_project_replaces_voice_root_under_native_render_lock(
         def load(self, path):
             return SimpleNamespace(voice_dir=str(voice_dir), tempo=120.0)
 
+    class TrackingLock:
+        active = False
+
+        def __enter__(self):
+            self.active = True
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.active = False
+
+    native_lock = TrackingLock()
+
     class FakeEngine:
         def __init__(self):
             object.__setattr__(self, "voice_lib_path", str(tmp_path / "old"))
@@ -78,11 +90,12 @@ def test_load_ust_project_replaces_voice_root_under_native_render_lock(
 
         def __setattr__(self, name, value):
             if name in {"voice_lib_path", "_ust_voice_dir"}:
-                assert vo_se_engine_patch._NATIVE_ENGINE_LOCK._is_owned()
+                assert native_lock.active
             object.__setattr__(self, name, value)
 
     refresh_calls = []
 
+    monkeypatch.setattr(vo_se_engine_patch, "_NATIVE_ENGINE_LOCK", native_lock)
     monkeypatch.setattr(vo_se_engine_patch, "UstParser", FakeParser)
     monkeypatch.setattr(
         vo_se_engine_patch.UstConverter,
