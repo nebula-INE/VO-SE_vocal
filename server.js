@@ -2,12 +2,22 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exec, execSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import { pipeline } from 'stream/promises';
+import { Transform } from 'stream';
 import yauzl from 'yauzl';
 import multer from 'multer';
+import {
+  normalizeVoicebankName,
+  voicebankNameFromFilename,
+  isSafeUploadId,
+  isPathInside,
+  resolvePathInside,
+  resolveZipEntryPath,
+  isRealPathInside
+} from './modules/utils/voicebank_security.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +32,10 @@ if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
   }
 }
 
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map((value) => value.trim()).filter(Boolean);
+if (allowedOrigins.length > 0) {
+  app.use(cors({ origin: allowedOrigins, credentials: false }));
+}
 
 // Configure Multer for streaming multipart/form-data directly to disk
 const uploadTempDir = path.join(__dirname, 'temp', '_uploads');
@@ -196,7 +209,7 @@ async function parseOtoIniFull(dirPath) {
           const entryObj = {
             alias,
             filename,
-            wav_path: path.join(currentDir, filename),
+            wav_path: resolvePathInside(dirPath, filename, currentDir),
             left_blank,
             fixed_range,
             right_blank,
@@ -321,6 +334,7 @@ class VoicebankRegistryEngine {
 
     const indexed = {
       mtime: latestMtime,
+      voicebankRoot: fs.realpathSync(vbPath),
       aliasCount: parsed.aliasCount,
       hasVcv: parsed.hasVcv,
       aliasesPreview: parsed.aliases,
@@ -414,16 +428,23 @@ function decodeZipFilename(bufOrStr) {
   }
 }
 
-function extractWithUnzipCommand(zipPath, targetDir) {
-  return new Promise((resolve, reject) => {
-    fs.mkdirSync(targetDir, { recursive: true });
-    exec(`unzip -o -q "${zipPath}" -d "${targetDir}"`, { timeout: 45000, maxBuffer: 16 * 1024 * 1024 }, (err) => {
-      if (!err) return resolve(true);
-      exec(`unzip -O CP932 -o -q "${zipPath}" -d "${targetDir}"`, { timeout: 45000 }, (err2) => {
-        if (!err2) return resolve(true);
-        reject(err2 || err);
-      });
-    });
+const MAX_ZIP_ENTRIES = 100_000;
+const MAX_ZIP_MEMBER_BYTES = 2 * 1024 ** 3;
+const MAX_ZIP_TOTAL_BYTES = 8 * 1024 ** 3;
+const MAX_UPLOAD_BYTES = 600 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
+
+function createByteLimitTransform(maxBytes, message) {
+  let totalBytes = 0;
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        callback(new Error(message));
+        return;
+      }
+      callback(null, chunk);
+    }
   });
 }
 
@@ -431,109 +452,141 @@ function extractWithYauzl(zipPath, targetDir) {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(targetDir, { recursive: true });
 
-    yauzl.open(zipPath, { lazyEntries: true, autoClose: false, decodeStrings: false }, (err, zipfile) => {
-      if (err) return reject(err);
+    yauzl.open(zipPath, {
+      lazyEntries: true,
+      autoClose: false,
+      decodeStrings: false,
+      validateEntrySizes: true
+    }, (openError, zipfile) => {
+      if (openError) return reject(openError);
 
-      zipfile.readEntry();
+      let settled = false;
+      let entryCount = 0;
+      let totalExpandedBytes = 0;
+
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        try { zipfile.close(); } catch {}
+        reject(error);
+      };
 
       zipfile.on('entry', (entry) => {
-        const rawName = decodeZipFilename(entry.fileName);
-        const safeName = rawName.replace(/\\/g, '/');
-        if (safeName.includes('../') || path.isAbsolute(safeName)) {
-          zipfile.readEntry();
-          return;
-        }
-
-        const entryPath = path.join(targetDir, safeName);
-
-        if (/\/$/.test(safeName)) {
-          fs.mkdirSync(entryPath, { recursive: true });
-          zipfile.readEntry();
-          return;
-        }
-
-        fs.mkdirSync(path.dirname(entryPath), { recursive: true });
-
-        zipfile.openReadStream(entry, (err, readStream) => {
-          if (err) {
-            try { zipfile.close(); } catch (e) {}
-            return reject(err);
+        (async () => {
+          entryCount += 1;
+          if (entryCount > MAX_ZIP_ENTRIES) {
+            throw new Error('ZIP内のファイル数が上限を超えています。');
           }
 
-          const writeStream = fs.createWriteStream(entryPath);
-          readStream.pipe(writeStream);
+          const rawName = decodeZipFilename(entry.fileName);
+          const entryPath = resolveZipEntryPath(targetDir, rawName);
+          if (!entryPath) {
+            throw new Error(`不正なZIPパスです: ${rawName}`);
+          }
 
-          writeStream.on('close', () => {
+          const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff;
+          if ((unixMode & 0xf000) === 0xa000) {
+            throw new Error(`ZIP内のシンボリックリンクは許可されていません: ${rawName}`);
+          }
+
+          const isDirectory = rawName.endsWith('/') || rawName.endsWith(String.fromCharCode(92)) || (unixMode & 0xf000) === 0x4000;
+          if (isDirectory) {
+            await fs.promises.mkdir(entryPath, { recursive: true });
             zipfile.readEntry();
+            return;
+          }
+
+          const size = Number(entry.uncompressedSize);
+          if (!Number.isSafeInteger(size) || size < 0 || size > MAX_ZIP_MEMBER_BYTES) {
+            throw new Error(`ZIP内のファイルサイズが上限を超えています: ${rawName}`);
+          }
+          totalExpandedBytes += size;
+          if (totalExpandedBytes > MAX_ZIP_TOTAL_BYTES) {
+            throw new Error('ZIP展開後の合計サイズが上限を超えています。');
+          }
+
+          await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
+          const readStream = await new Promise((streamResolve, streamReject) => {
+            zipfile.openReadStream(entry, (error, stream) => {
+              if (error) streamReject(error);
+              else streamResolve(stream);
+            });
           });
-          writeStream.on('error', (e) => {
-            try { zipfile.close(); } catch (err2) {}
-            reject(e);
-          });
-          readStream.on('error', (e) => {
-            try { zipfile.close(); } catch (err2) {}
-            reject(e);
-          });
-        });
+
+          // 'wx' prevents duplicate ZIP members from overwriting a prior entry.
+          await pipeline(readStream, fs.createWriteStream(entryPath, { flags: 'wx' }));
+          zipfile.readEntry();
+        })().catch(fail);
       });
 
       zipfile.on('end', () => {
-        try { zipfile.close(); } catch (e) {}
+        if (settled) return;
+        settled = true;
+        try { zipfile.close(); } catch {}
         resolve(true);
       });
-      zipfile.on('error', (e) => {
-        try { zipfile.close(); } catch (err2) {}
-        reject(e);
-      });
+      zipfile.on('error', fail);
+      zipfile.readEntry();
     });
   });
 }
 
 async function extractZipStreaming(zipPath, targetDir) {
-  fs.mkdirSync(targetDir, { recursive: true });
-  try {
-    await extractWithUnzipCommand(zipPath, targetDir);
-    return true;
-  } catch (e1) {
-    try {
-      await extractWithYauzl(zipPath, targetDir);
-      return true;
-    } catch (e2) {
-      const AdmZip = (await import('adm-zip')).default;
-      const zip = new AdmZip(zipPath);
-      zip.extractAllTo(targetDir, true);
-      return true;
-    }
-  }
+  // The only extractor is the bounded, path-validating streaming implementation.
+  // There is deliberately no shell/unzip or whole-archive fallback.
+  await extractWithYauzl(zipPath, targetDir);
+  return true;
 }
 
 // --- API Endpoints ---
 
-// Delete Voicebank API
+// Delete Voicebank API. Only a real child directory of voicebanks may be removed.
 app.delete('/api/py/voicebanks', (req, res) => {
-  const vbName = req.query.name;
-  if (!vbName) return res.status(400).json({ success: false, error: 'Voicebank name required' });
-
-  const vbPath = path.join(__dirname, 'temp', 'voicebanks', vbName);
+  let vbName;
   try {
-    if (fs.existsSync(vbPath)) {
-      fs.rmSync(vbPath, { recursive: true, force: true });
+    vbName = normalizeVoicebankName(req.query.name);
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid voicebank name' });
+  }
+
+  const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
+  const vbPath = resolvePathInside(voicebanksDir, vbName);
+  if (!vbPath || vbPath === path.resolve(voicebanksDir)) {
+    return res.status(400).json({ success: false, error: 'Invalid voicebank path' });
+  }
+
+  try {
+    let stat;
+    try { stat = fs.lstatSync(vbPath); } catch (error) {
+      if (error.code === 'ENOENT') {
+        vbRegistry.invalidate(vbName);
+        return res.json({ success: true, message: `音源「${vbName}」は既に存在しません。` });
+      }
+      throw error;
     }
+    if (stat.isSymbolicLink() || !stat.isDirectory() || !isRealPathInside(voicebanksDir, vbPath)) {
+      return res.status(400).json({ success: false, error: 'Refusing to remove a non-local voicebank directory' });
+    }
+    fs.rmSync(vbPath, { recursive: true, force: false });
     vbRegistry.invalidate(vbName);
     return res.json({ success: true, message: `音源「${vbName}」をライブラリから削除しました。` });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Voicebank could not be removed safely' });
   }
 });
 
 // Install Preset UTAU Voicebank API (Pure Native Node.js)
 app.post('/api/py/download-preset-voicebank', (req, res) => {
   const { presetId, name } = req.body || {};
-  const targetName = name || presetId || 'Standard Japanese CV';
+  let targetName;
+  try {
+    targetName = normalizeVoicebankName(name || presetId || 'Standard Japanese CV');
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid voicebank name' });
+  }
 
   try {
     createDefaultVoicebank(targetName, true);
-    const vbPath = path.join(__dirname, 'temp', 'voicebanks', targetName);
     vbRegistry.invalidate(targetName);
     res.json({ success: true, installedName: targetName, aliasCount: 300 });
   } catch (err) {
@@ -576,28 +629,31 @@ app.get('/api/py/voicebanks', async (req, res) => {
 
 // Detailed Inspection & OTO entries API
 app.get('/api/py/voicebank-details', async (req, res) => {
-  const vbName = req.query.name;
-  if (!vbName) return res.status(400).json({ success: false, error: 'Voicebank name required' });
-
-  const vbPath = path.join(__dirname, 'temp', 'voicebanks', vbName);
-  if (!fs.existsSync(vbPath)) {
-    return res.status(404).json({ success: false, error: `音源「${vbName}」が見つかりません。` });
+  const resolved = resolveVoicebankPath(req.query.name);
+  if (!resolved) {
+    return res.status(404).json({ success: false, error: 'Voicebank not found' });
   }
 
   const query = (req.query.q || '').toString().trim();
-  const limitVal = parseInt(req.query.limit) || 150;
+  const limitVal = parseInt(req.query.limit, 10) || 150;
 
   try {
-    const searchResult = await vbRegistry.search(vbName, vbPath, query, limitVal);
+    const searchResult = await vbRegistry.search(
+      resolved.resolvedName,
+      resolved.resolvedPath,
+      query,
+      limitVal
+    );
+    const entries = searchResult.entries.map(({ wav_path, ...entry }) => entry);
     res.json({
       success: true,
-      name: vbName,
+      name: resolved.resolvedName,
       aliasCount: searchResult.aliasCount,
       hasVcv: searchResult.hasVcv,
-      entries: searchResult.entries
+      entries
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: 'Voicebank details could not be read safely' });
   }
 });
 
@@ -1252,7 +1308,7 @@ vbRegistry.warmBaseMidiCache = (indexed) => {
     const end = Math.min(entries.length, i + WARM_BATCH_SIZE);
     for (; i < end; i++) {
       const e = entries[i];
-      if (!e || !e.wav_path) continue;
+      if (!e || !e.wav_path || !isRealPathInside(indexed.voicebankRoot, e.wav_path)) continue;
       try {
         detectWavBaseMidi(e.wav_path, e.alias, e.filename);
       } catch (err) {
@@ -1562,134 +1618,128 @@ function resolveVoicebankPath(targetName) {
 
   const baseDir = path.join(__dirname, 'temp', 'voicebanks');
   const hasRequestedName = !!(targetName && String(targetName).trim());
-
-  // 1. Direct path check
+  let safeTargetName = '';
   if (hasRequestedName) {
-    const directPath = path.join(baseDir, targetName);
-    if (fs.existsSync(directPath)) {
-      return { resolvedName: targetName, resolvedPath: directPath };
-    }
+    try { safeTargetName = normalizeVoicebankName(String(targetName)); }
+    catch { return null; }
   }
 
-  // 2. Scan temp/voicebanks for matching directories
+  if (hasRequestedName) {
+    const directPath = resolvePathInside(baseDir, safeTargetName);
+    try {
+      if (
+        directPath &&
+        fs.statSync(directPath).isDirectory() &&
+        isRealPathInside(baseDir, directPath)
+      ) {
+        return { resolvedName: safeTargetName, resolvedPath: directPath };
+      }
+    } catch {}
+  }
+
   try {
     const items = fs.readdirSync(baseDir, { withFileTypes: true });
-    const dirs = items.filter(i => i.isDirectory()).map(i => i.name);
-
-    if (dirs.length === 0) {
-      return null;
-    }
+    const dirs = items.filter((item) => item.isDirectory()).map((item) => item.name);
+    if (dirs.length === 0) return null;
 
     if (hasRequestedName) {
-      const lowerTarget = targetName.toLowerCase();
-      const ciMatch = dirs.find(d => d.toLowerCase() === lowerTarget);
+      const lowerTarget = safeTargetName.toLowerCase();
+      const ciMatch = dirs.find((dir) => dir.toLowerCase() === lowerTarget);
       if (ciMatch) {
-        return { resolvedName: ciMatch, resolvedPath: path.join(baseDir, ciMatch) };
+        const candidate = resolvePathInside(baseDir, ciMatch);
+        if (candidate && isRealPathInside(baseDir, candidate)) {
+          return { resolvedName: ciMatch, resolvedPath: candidate };
+        }
       }
 
-      const subMatches = dirs.filter(d => {
-        const lowerDir = d.toLowerCase();
+      const subMatches = dirs.filter((dir) => {
+        const lowerDir = dir.toLowerCase();
         return lowerDir.includes(lowerTarget) || lowerTarget.includes(lowerDir);
       });
-
       if (subMatches.length === 1) {
         const subMatch = subMatches[0];
-        console.warn(
-          `[VO-SE] resolveVoicebankPath: no exact match for "${targetName}", ` +
-          `using unique substring match "${subMatch}" instead. Consider renaming to avoid ambiguity.`
-        );
-        return { resolvedName: subMatch, resolvedPath: path.join(baseDir, subMatch) };
+        const candidate = resolvePathInside(baseDir, subMatch);
+        if (candidate && isRealPathInside(baseDir, candidate)) {
+          console.warn(
+            `[VO-SE] resolveVoicebankPath: no exact match for "${safeTargetName}", ` +
+            `using unique substring match "${subMatch}".`
+          );
+          return { resolvedName: subMatch, resolvedPath: candidate };
+        }
       }
 
-      if (subMatches.length > 1) {
-        console.warn(
-          `[VO-SE] resolveVoicebankPath: voicebank "${targetName}" is ambiguous; ` +
-          `substring matches are [${subMatches.join(', ')}]. Refusing to select one implicitly.`
-        );
-        return null;
-      }
-
-      // [FIX] previously: `return { resolvedName: dirs[0], ... }` here — silently
-      // substituting an unrelated voicebank. Now we fail loudly instead.
       console.warn(
-        `[VO-SE] resolveVoicebankPath: requested voicebank "${targetName}" not found ` +
-        `among [${dirs.join(', ')}] — returning 404 instead of substituting another voicebank.`
+        `[VO-SE] resolveVoicebankPath: requested voicebank "${safeTargetName}" not found; returning 404.`
       );
       return null;
     }
 
-    // No name was requested at all -> picking "any" voicebank is reasonable here.
-    return { resolvedName: dirs[0], resolvedPath: path.join(baseDir, dirs[0]) };
-  } catch (e) {
+    const first = dirs.find((dir) => {
+      const candidate = resolvePathInside(baseDir, dir);
+      return candidate && isRealPathInside(baseDir, candidate);
+    });
+    return first ? { resolvedName: first, resolvedPath: path.join(baseDir, first) } : null;
+  } catch {
     return null;
   }
 }
 
 // Case-insensitive search for WAV file in directory
-function resolveWavFilePath(dirPath, filename) {
-  if (!filename) return null;
-  const normFile = filename.replace(/\\/g, '/');
-  const targetWav = path.join(dirPath, normFile);
-  if (fs.existsSync(targetWav)) return targetWav;
+function resolveWavFilePath(dirPath, filename, voicebankRoot = dirPath) {
+  if (typeof filename !== 'string' || !filename) return null;
+  const normFile = filename.replace(/\\\\/g, '/');
+  const targetWav = resolvePathInside(voicebankRoot, normFile, dirPath);
+  const isSafeWav = (candidate) => {
+    try {
+      return fs.statSync(candidate).isFile() && isRealPathInside(voicebankRoot, candidate);
+    } catch {
+      return false;
+    }
+  };
+  if (targetWav && isSafeWav(targetWav)) return targetWav;
 
-  // Resolve each relative path component case-insensitively. This matters on
-  // Linux when oto.ini was authored on a case-insensitive filesystem.
-  // Prefer the exact relative path over any basename-only match so that
-  // duplicate names in different subfolders cannot select the wrong WAV.
+  // Retain case-insensitive UTAU filename matching, but never traverse beyond
+  // the selected voicebank root or follow a symlink outside it.
   try {
     const components = normFile.split('/').filter((part) => part && part !== '.');
-    let current = path.isAbsolute(normFile) ? path.parse(normFile).root : dirPath;
-
-    if (path.isAbsolute(normFile)) {
-      current = path.parse(normFile).root;
-    }
-
-    let resolved = current;
-    let failed = false;
+    let resolved = dirPath;
     for (const component of components) {
       if (component === '..') {
-        resolved = path.dirname(resolved);
+        const parent = path.dirname(resolved);
+        if (!isPathInside(voicebankRoot, parent) || !isRealPathInside(voicebankRoot, parent)) return null;
+        resolved = parent;
         continue;
       }
-
+      if (!isRealPathInside(voicebankRoot, resolved)) return null;
       const items = fs.readdirSync(resolved, { withFileTypes: true });
-      const match = items.find((item) =>
-        item.name.toLowerCase() === component.toLowerCase()
-      );
-      if (!match) {
-        failed = true;
-        break;
-      }
+      const match = items.find((item) => item.name.toLowerCase() === component.toLowerCase());
+      if (!match) return null;
       resolved = path.join(resolved, match.name);
     }
+    if (isSafeWav(resolved)) return resolved;
+  } catch {}
 
-    if (!failed && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
-      return resolved;
-    }
-  } catch (e) {}
-
-  // Legacy fallback: a basename-only search is safe only when exactly one
-  // matching WAV exists. Otherwise the alias must remain unresolved rather
-  // than silently selecting a different subfolder's sample.
+  // Basename fallback remains limited to one unambiguous match inside the bank.
   const baseWav = path.basename(normFile).toLowerCase();
   try {
     const matches = [];
     const searchDir = (current) => {
+      if (!isRealPathInside(voicebankRoot, current)) return;
       const items = fs.readdirSync(current, { withFileTypes: true });
       for (const item of items) {
-        const fullP = path.join(current, item.name);
+        const fullPath = path.join(current, item.name);
         if (item.isDirectory()) {
-          searchDir(fullP);
+          searchDir(fullPath);
           if (matches.length > 1) return;
-        } else if (item.name.toLowerCase() === baseWav) {
-          matches.push(fullP);
+        } else if (item.name.toLowerCase() === baseWav && isSafeWav(fullPath)) {
+          matches.push(fullPath);
           if (matches.length > 1) return;
         }
       }
     };
     searchDir(dirPath);
     if (matches.length === 1) return matches[0];
-  } catch (e) {}
+  } catch {}
 
   return null;
 }
@@ -1710,10 +1760,10 @@ app.get('/api/py/voicebank-alias-info', async (req, res) => {
   let entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
   
   if (entry) {
-    return res.json({ success: true, entry });
-  } else {
-    return res.status(404).json({ success: false, error: 'Alias not found' });
+    const { wav_path, ...publicEntry } = entry;
+    return res.json({ success: true, entry: publicEntry });
   }
+  return res.status(404).json({ success: false, error: 'Alias not found' });
 });
 
 app.get('/api/py/voicebank-sample', async (req, res) => {
@@ -1730,11 +1780,19 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
   let entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
   let wavFile = entry ? entry.wav_path : null;
 
-  if (wavFile && !fs.existsSync(wavFile) && entry.filename) {
-    wavFile = resolveWavFilePath(path.dirname(wavFile), entry.filename);
+  if (
+    wavFile &&
+    (!fs.existsSync(wavFile) || !isRealPathInside(resolvedPath, wavFile)) &&
+    entry.filename
+  ) {
+    wavFile = resolveWavFilePath(wavFile ? path.dirname(wavFile) : resolvedPath, entry.filename, resolvedPath);
   }
 
-  if (!entry || !wavFile || !fs.existsSync(wavFile)) {
+  let sampleIsSafe = false;
+  if (entry && wavFile && isRealPathInside(resolvedPath, wavFile)) {
+    try { sampleIsSafe = fs.statSync(wavFile).isFile(); } catch {}
+  }
+  if (!sampleIsSafe) {
     return res.status(404).json({ success: false, error: `Sample WAV for alias "${alias}" not found` });
   }
 
@@ -1761,8 +1819,9 @@ app.post('/api/py/render-notes', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Invalid notes array' });
   }
 
-  const vbPath = path.join(__dirname, 'temp', 'voicebanks', voicebank || '');
-  const indexed = fs.existsSync(vbPath) ? await vbRegistry.getOrIndex(voicebank, vbPath) : null;
+  const resolvedVoicebank = voicebank ? resolveVoicebankPath(voicebank) : null;
+  const vbPath = resolvedVoicebank ? resolvedVoicebank.resolvedPath : null;
+  const indexed = vbPath ? await vbRegistry.getOrIndex(resolvedVoicebank.resolvedName, vbPath) : null;
 
   const renderedNotes = notes.map((n, idx) => {
     const lyric = n.lyric || 'あ';
@@ -1773,10 +1832,13 @@ app.post('/api/py/render-notes', async (req, res) => {
     const entry = findAliasEntry(indexed, lyric, prevLyric, n.noteNum || 60);
     let resolvedWavPath = null;
     if (entry) {
-      if (fs.existsSync(entry.wav_path)) {
+      if (fs.existsSync(entry.wav_path) && isRealPathInside(vbPath, entry.wav_path)) {
         resolvedWavPath = entry.wav_path;
-      } else if (entry.filename) {
-        resolvedWavPath = resolveWavFilePath(path.dirname(entry.wav_path), entry.filename);
+      } else if (entry.filename && vbPath) {
+        resolvedWavPath = resolveWavFilePath(entry.wav_path ? path.dirname(entry.wav_path) : vbPath, entry.filename, vbPath);
+      }
+      if (resolvedWavPath && (!fs.existsSync(resolvedWavPath) || !isRealPathInside(vbPath, resolvedWavPath))) {
+        resolvedWavPath = null;
       }
     }
     const hasWav = !!resolvedWavPath;
@@ -1816,39 +1878,98 @@ app.post('/api/py/render-notes', async (req, res) => {
 //         一時ファイルへストリーム書き込みする。
 //         解凍も adm-zip の同期一括展開から yauzl の
 //         ストリーミング解凍に変更。
-async function processZipStreamToDir(zipPath, targetDir, baseName, res) {
+async function processZipStreamToDir(zipPath, requestedTargetDir, baseName, res) {
+  let stagePath = null;
+  let backupPath = null;
+  let backupCreated = false;
   try {
     if (!fs.existsSync(zipPath)) {
       throw new Error('一時ファイルが見つかりません。');
     }
 
-    // Clean previous directory if existing to prevent stale conflicts
-    if (fs.existsSync(targetDir)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+    const safeName = normalizeVoicebankName(baseName);
+    const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
+    fs.mkdirSync(voicebanksDir, { recursive: true });
+    const root = fs.realpathSync(voicebanksDir);
+    const targetDir = resolvePathInside(root, safeName);
+    if (!targetDir || path.resolve(requestedTargetDir) !== targetDir) {
+      throw new Error('Invalid voicebank destination');
     }
-    fs.mkdirSync(targetDir, { recursive: true });
 
-    await extractZipStreaming(zipPath, targetDir);
+    stagePath = path.join(root, `.${safeName}.staging-${randomUUID()}`);
+    backupPath = path.join(root, `.${safeName}.backup-${randomUUID()}`);
+    fs.mkdirSync(stagePath, { recursive: false });
 
-    vbRegistry.invalidate(baseName);
-    const indexed = await vbRegistry.getOrIndex(baseName, targetDir);
+    // Validate and extract into a fresh sibling directory. The old bank is not
+    // touched unless the complete archive has passed validation and extraction.
+    await extractZipStreaming(zipPath, stagePath);
+
+    let existing = null;
+    try { existing = fs.lstatSync(targetDir); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+
+    if (existing) {
+      if (
+        existing.isSymbolicLink() ||
+        !existing.isDirectory() ||
+        !isRealPathInside(root, targetDir)
+      ) {
+        throw new Error('Existing voicebank target is not a safe local directory');
+      }
+      fs.renameSync(targetDir, backupPath);
+      backupCreated = true;
+    }
+
+    try {
+      fs.renameSync(stagePath, targetDir);
+      stagePath = null;
+    } catch (installError) {
+      if (backupCreated) {
+        fs.renameSync(backupPath, targetDir);
+        backupCreated = false;
+      }
+      throw installError;
+    }
+
+    if (backupCreated) {
+      fs.rmSync(backupPath, { recursive: true, force: true });
+      backupCreated = false;
+    }
+
+    vbRegistry.invalidate(safeName);
+    const indexed = await vbRegistry.getOrIndex(safeName, targetDir);
 
     res.json({
       success: true,
       data: {
         success: true,
-        name: baseName,
+        name: safeName,
         aliasCount: indexed ? indexed.aliasCount : 0,
         hasVcv: indexed ? indexed.hasVcv : false,
         aliases: indexed ? indexed.aliasesPreview : [],
-        entries: indexed ? indexed.entries.slice(0, 100) : []
+        entries: indexed ? indexed.entries.slice(0, 100).map(({ wav_path, ...entry }) => entry) : []
       }
     });
   } catch (err) {
     console.error('[VO-SE Upload Error]', err);
-    res.status(500).json({ success: false, error: 'ZIPの解凍または音源解析に失敗しました: ' + (err.message || err) });
+    if (!res.headersSent) {
+      res.status(400).json({
+        success: false,
+        error: 'ZIPの検証または音源の安全な差し替えに失敗しました。既存音源は検証完了前に削除されません。'
+      });
+    }
   } finally {
-    // 一時ZIPは非同期で削除（レスポンスの完了をブロックしない）
+    if (stagePath && fs.existsSync(stagePath)) {
+      try { fs.rmSync(stagePath, { recursive: true, force: true }); } catch {}
+    }
+    if (backupCreated && backupPath && fs.existsSync(backupPath)) {
+      const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
+      const targetDir = resolvePathInside(voicebanksDir, String(baseName));
+      try {
+        if (targetDir && !fs.existsSync(targetDir)) fs.renameSync(backupPath, targetDir);
+        else fs.rmSync(backupPath, { recursive: true, force: true });
+      } catch {}
+    }
     fs.unlink(zipPath, () => {});
   }
 }
@@ -1870,7 +1991,13 @@ app.post('/api/py/upload-voicebank-form', uploadMiddleware.single('file'), async
     } catch (e) {}
   }
 
-  const baseName = path.parse(originalName).name || 'custom_voicebank';
+  let baseName;
+  try {
+    baseName = voicebankNameFromFilename(originalName);
+  } catch {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ success: false, error: 'Invalid voicebank filename' });
+  }
   const voicebanksDir = path.join(__dirname, 'temp', 'voicebanks');
   const targetDir = path.join(voicebanksDir, baseName);
 
@@ -1880,138 +2007,148 @@ app.post('/api/py/upload-voicebank-form', uploadMiddleware.single('file'), async
 // Cancel & Clean up Chunked Voicebank Upload API
 app.delete('/api/py/upload-voicebank-chunk', (req, res) => {
   const uploadId = req.headers['x-upload-id'] || req.query.uploadId;
-  if (uploadId) {
-    const tempDir = path.join(__dirname, 'temp');
-    const chunksDir = path.join(tempDir, '_chunks', uploadId);
-    try {
-      if (fs.existsSync(chunksDir)) {
-        fs.rmSync(chunksDir, { recursive: true, force: true });
-      }
-    } catch (e) {}
+  if (!isSafeUploadId(uploadId)) {
+    return res.status(400).json({ success: false, error: 'Invalid uploadId' });
   }
-  res.json({ success: true, message: 'アップロードをキャンセルし一時データを消去しました' });
+  const tempDir = path.join(__dirname, 'temp');
+  const chunksRoot = path.join(tempDir, '_chunks');
+  const chunksDir = resolvePathInside(chunksRoot, uploadId);
+  try {
+    if (chunksDir && fs.existsSync(chunksDir)) fs.rmSync(chunksDir, { recursive: true, force: true });
+    return res.json({ success: true, message: 'アップロードをキャンセルし一時データを消去しました' });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Temporary upload data could not be removed safely' });
+  }
 });
 
 app.post('/api/py/cancel-voicebank-upload', (req, res) => {
   const { uploadId } = req.body || {};
-  if (uploadId) {
-    const tempDir = path.join(__dirname, 'temp');
-    const chunksDir = path.join(tempDir, '_chunks', uploadId);
-    try {
-      if (fs.existsSync(chunksDir)) {
-        fs.rmSync(chunksDir, { recursive: true, force: true });
-      }
-    } catch (e) {}
+  if (!isSafeUploadId(uploadId)) {
+    return res.status(400).json({ success: false, error: 'Invalid uploadId' });
   }
-  res.json({ success: true, message: 'アップロードをキャンセルしました' });
+  const chunksRoot = path.join(__dirname, 'temp', '_chunks');
+  const chunksDir = resolvePathInside(chunksRoot, uploadId);
+  try {
+    if (chunksDir && fs.existsSync(chunksDir)) fs.rmSync(chunksDir, { recursive: true, force: true });
+    return res.json({ success: true, message: 'アップロードをキャンセルしました' });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Temporary upload data could not be removed safely' });
+  }
 });
 
 app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
   const uploadId = req.headers['x-upload-id'] || req.query.uploadId;
-  const chunkIndex = parseInt(req.headers['x-chunk-index'] || req.query.chunkIndex || '0', 10);
-  const totalChunks = parseInt(req.headers['x-total-chunks'] || req.query.totalChunks || '1', 10);
+  const chunkIndex = Number(req.headers['x-chunk-index'] || req.query.chunkIndex || 0);
+  const totalChunks = Number(req.headers['x-total-chunks'] || req.query.totalChunks || 1);
   const filename = req.headers['x-filename'] || req.query.filename || 'custom_voicebank.zip';
 
-  if (!uploadId) {
-    return res.status(400).json({ success: false, error: 'Missing uploadId' });
+  if (!isSafeUploadId(uploadId)) {
+    return res.status(400).json({ success: false, error: 'Invalid uploadId' });
+  }
+  if (
+    !Number.isSafeInteger(chunkIndex) ||
+    !Number.isSafeInteger(totalChunks) ||
+    totalChunks < 1 ||
+    totalChunks > 300 ||
+    chunkIndex < 0 ||
+    chunkIndex >= totalChunks
+  ) {
+    return res.status(400).json({ success: false, error: 'Invalid chunk index or totalChunks' });
   }
 
-  const decodedFilename = decodeURIComponent(filename);
-  const baseName = path.parse(decodedFilename).name;
+  let baseName;
+  try {
+    baseName = voicebankNameFromFilename(decodeURIComponent(String(filename)));
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid voicebank filename' });
+  }
 
   const tempDir = path.join(__dirname, 'temp');
-  const chunksDir = path.join(tempDir, '_chunks', uploadId);
+  const chunksRoot = path.join(tempDir, '_chunks');
+  const chunksDir = resolvePathInside(chunksRoot, uploadId);
+  if (!chunksDir) return res.status(400).json({ success: false, error: 'Invalid upload path' });
   const chunkFilePath = path.join(chunksDir, `part_${chunkIndex}`);
 
   try {
     fs.mkdirSync(chunksDir, { recursive: true });
-
-    // Write chunk
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+    if (Buffer.isBuffer(req.body)) {
+      if (req.body.length > MAX_CHUNK_BYTES) {
+        return res.status(413).json({ success: false, error: 'Upload chunk exceeds the 2 MiB limit' });
+      }
       fs.writeFileSync(chunkFilePath, req.body);
     } else {
-      const writeStream = fs.createWriteStream(chunkFilePath);
-      await pipeline(req, writeStream);
+      const writeStream = fs.createWriteStream(chunkFilePath, { flags: 'wx' });
+      await pipeline(req, createByteLimitTransform(MAX_CHUNK_BYTES, 'Upload chunk exceeds the 2 MiB limit'), writeStream);
     }
 
-    // Check if all chunks received
-    let receivedCount = 0;
-    try {
-      const files = fs.readdirSync(chunksDir);
-      receivedCount = files.filter(f => f.startsWith('part_')).length;
-    } catch (e) {}
-
+    const receivedCount = fs.readdirSync(chunksDir).filter((file) => /^part_\d+$/.test(file)).length;
     if (receivedCount < totalChunks) {
-      // Chunk acknowledged
-      return res.json({
-        success: true,
-        chunkIndex,
-        totalChunks,
-        receivedCount,
-        isComplete: false
-      });
+      return res.json({ success: true, chunkIndex, totalChunks, receivedCount, isComplete: false });
     }
 
-    // All chunks received -> Assemble into single zip
     const voicebanksDir = path.join(tempDir, 'voicebanks');
     const targetDir = path.join(voicebanksDir, baseName);
-    const assembledZipPath = path.join(tempDir, `_assembled_${baseName}_${Date.now()}.zip`);
+    const assembledZipPath = path.join(tempDir, `_assembled_${randomUUID()}.zip`);
+    const assembledStream = fs.createWriteStream(assembledZipPath, { flags: 'wx' });
 
-    const assembledStream = fs.createWriteStream(assembledZipPath);
-    for (let i = 0; i < totalChunks; i++) {
-      const partPath = path.join(chunksDir, `part_${i}`);
-      if (fs.existsSync(partPath)) {
-        const data = fs.readFileSync(partPath);
-        assembledStream.write(data);
+    try {
+      for (let index = 0; index < totalChunks; index += 1) {
+        const partPath = path.join(chunksDir, `part_${index}`);
+        if (!fs.existsSync(partPath)) throw new Error('Missing upload chunk');
+        await pipeline(fs.createReadStream(partPath), assembledStream, { end: false });
       }
+      assembledStream.end();
+      await new Promise((resolve, reject) => {
+        assembledStream.once('finish', resolve);
+        assembledStream.once('error', reject);
+      });
+      if (fs.statSync(assembledZipPath).size > MAX_UPLOAD_BYTES) {
+        throw new Error('Voicebank ZIP exceeds the 600 MiB upload limit');
+      }
+    } catch (error) {
+      assembledStream.destroy();
+      throw error;
     }
-    assembledStream.end();
 
-    await new Promise((resolve) => assembledStream.on('finish', resolve));
-
-    // Clean up chunks dir
     fs.rmSync(chunksDir, { recursive: true, force: true });
-
-    // Extract assembled zip with yauzl streaming
     await processZipStreamToDir(assembledZipPath, targetDir, baseName, res);
-
   } catch (err) {
-    try { fs.rmSync(chunksDir, { recursive: true, force: true }); } catch (e) {}
+    try { fs.rmSync(chunksDir, { recursive: true, force: true }); } catch {}
     if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Chunk upload failed: ' + err.message });
+      res.status(400).json({ success: false, error: 'Chunk upload failed validation' });
     }
   }
 });
 
 app.post('/api/py/upload-voicebank-stream', async (req, res) => {
-  const filename = req.headers['x-filename'] || req.query.filename || 'custom_voicebank.zip';
-  const decodedFilename = decodeURIComponent(filename);
-  const baseName = path.parse(decodedFilename).name;
+  let baseName;
+  try {
+    const filename = req.headers['x-filename'] || req.query.filename || 'custom_voicebank.zip';
+    baseName = voicebankNameFromFilename(decodeURIComponent(String(filename)));
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid voicebank filename' });
+  }
 
   const tempDir = path.join(__dirname, 'temp');
   const voicebanksDir = path.join(tempDir, 'voicebanks');
   const targetDir = path.join(voicebanksDir, baseName);
-  const tmpZipPath = path.join(tempDir, `_upload_${baseName}_${Date.now()}.zip`);
+  const tmpZipPath = path.join(tempDir, `_upload_${randomUUID()}.zip`);
 
   try {
     fs.mkdirSync(voicebanksDir, { recursive: true });
-
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-      // express.raw が既にバッファ化済み（小さいZIP向けの保険経路）
+    if (Buffer.isBuffer(req.body)) {
+      if (req.body.length > MAX_UPLOAD_BYTES) {
+        return res.status(413).json({ success: false, error: 'Voicebank ZIP exceeds the 600 MiB upload limit' });
+      }
       fs.writeFileSync(tmpZipPath, req.body);
-      await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
     } else {
-      // ★修正: chunks配列に貯めず、リクエストストリームを直接
-      //         ディスクへパイプする（RAM上に全量保持しない）
-      const writeStream = fs.createWriteStream(tmpZipPath);
-      await pipeline(req, writeStream);
-      await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
+      const writeStream = fs.createWriteStream(tmpZipPath, { flags: 'wx' });
+      await pipeline(req, createByteLimitTransform(MAX_UPLOAD_BYTES, 'Voicebank ZIP exceeds the 600 MiB upload limit'), writeStream);
     }
+    await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
   } catch (err) {
     fs.unlink(tmpZipPath, () => {});
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: err.message });
-    }
+    if (!res.headersSent) res.status(400).json({ success: false, error: 'Voicebank upload failed validation' });
   }
 });
 
@@ -2021,17 +2158,25 @@ app.post('/api/py/upload-voicebank', async (req, res) => {
     return res.status(400).json({ success: false, error: 'ファイルデータがありません。' });
   }
 
-  const baseName = path.parse(filename || 'custom_voicebank.zip').name;
+  let baseName;
+  try {
+    baseName = voicebankNameFromFilename(String(filename || 'custom_voicebank.zip'));
+  } catch {
+    return res.status(400).json({ success: false, error: 'Invalid voicebank filename' });
+  }
   const tempDir = path.join(__dirname, 'temp');
   const voicebanksDir = path.join(tempDir, 'voicebanks');
   const targetDir = path.join(voicebanksDir, baseName);
-  const tmpZipPath = path.join(tempDir, `_upload_${baseName}_${Date.now()}.zip`);
+  const tmpZipPath = path.join(tempDir, `_upload_${randomUUID()}.zip`);
 
   try {
     fs.mkdirSync(voicebanksDir, { recursive: true });
     // base64ルートは呼び出し側の都合上避けられないが、
     // デコード後は即ディスクに書き出し、以降はストリーミング解凍に合流させる
     const buffer = Buffer.from(fileData, 'base64');
+    if (buffer.length > MAX_UPLOAD_BYTES) {
+      return res.status(413).json({ success: false, error: 'Voicebank ZIP exceeds the 600 MiB upload limit' });
+    }
     fs.writeFileSync(tmpZipPath, buffer);
     await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
   } catch (err) {
@@ -2207,13 +2352,13 @@ app.post('/api/py/parse-ust', (req, res) => {
   }
 });
 
-// Run Test Suite Evaluation Endpoint
+// Automated tests run in CI/development, not inside the production web server.
 app.get('/api/py/run-tests', (req, res) => {
-  res.json({
-    success: true,
-    exitCode: 0,
-    stdout: 'Native Tests Passed: All system modules ultra-fast and validated.',
-    stderr: ''
+  res.status(501).json({
+    success: false,
+    exitCode: null,
+    stdout: '',
+    stderr: 'サーバー上のテスト実行APIは無効です。GitHub Actions の CI 結果をご確認ください。'
   });
 });
 
@@ -2240,9 +2385,11 @@ try {
   console.warn('[VO-SE] ensureDefaultVoicebanks at boot:', e);
 }
 
+const HOST = (process.env.HOST || '127.0.0.1').trim();
+
 setupVite().then(() => {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[VO-SE Studio] Server running on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[VO-SE Studio] Server running on http://${HOST}:${PORT}`);
   });
 }).catch((err) => {
   console.error('[VO-SE Studio] Failed to start server:', err);
