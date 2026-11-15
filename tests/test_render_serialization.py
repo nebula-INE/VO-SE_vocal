@@ -29,19 +29,24 @@ def test_apply_patch_serializes_atomic_v2_render_calls(monkeypatch, tmp_path):
         export_to_wav_v2: Callable[..., str]
 
     vo_se_engine_patch.apply_patch(FakeEngine)
-    engine = FakeEngine()
-    engine._render_lock = threading.RLock()
+    engines = [FakeEngine(), FakeEngine()]
+    for engine in engines:
+        engine._render_lock = threading.RLock()
 
     destination = tmp_path / "render.wav"
     results = []
     result_lock = threading.Lock()
 
-    def render():
+    def render(index):
+        engine = engines[index % len(engines)]
         value = engine.export_to_wav_v2([], {}, str(destination))
         with result_lock:
             results.append(value)
 
-    workers = [threading.Thread(target=render) for _ in range(8)]
+    workers = [
+        threading.Thread(target=render, args=(index,))
+        for index in range(8)
+    ]
     for worker in workers:
         worker.start()
     for worker in workers:
