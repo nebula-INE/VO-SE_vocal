@@ -462,6 +462,8 @@ jobs:
             $PYSIDE_ARGS \
             --hidden-import=modules.gui.main_window \
             --hidden-import=modules.updater.update_checker \
+            --hidden-import=modules.updater.update_manager \
+            --hidden-import=modules.updater.update_installer \
             --hidden-import=rtmidi \
             --hidden-import=mido.backends.rtmidi \
             --hidden-import=backports \
@@ -591,6 +593,8 @@ jobs:
                 --icon="assets/icon.ico" \
                 --hidden-import=modules.gui.main_window \
                 --hidden-import=modules.updater.update_checker \
+                --hidden-import=modules.updater.update_manager \
+                --hidden-import=modules.updater.update_installer \
                 --hidden-import=rtmidi \
                 --hidden-import=mido.backends.rtmidi \
                 --hidden-import=backports \
@@ -620,6 +624,8 @@ jobs:
                 --hidden-import=PySide6.QtMultimedia \
                 --hidden-import=modules.gui.main_window \
                 --hidden-import=modules.updater.update_checker \
+                --hidden-import=modules.updater.update_manager \
+                --hidden-import=modules.updater.update_installer \
                 --hidden-import=rtmidi \
                 --hidden-import=mido.backends.rtmidi \
                 --hidden-import=backports \
@@ -668,6 +674,8 @@ jobs:
                 --icon="assets/icon.icns" \
                 --hidden-import=modules.gui.main_window \
                 --hidden-import=modules.updater.update_checker \
+                --hidden-import=modules.updater.update_manager \
+                --hidden-import=modules.updater.update_installer \
                 --hidden-import=rtmidi \
                 --hidden-import=mido.backends.rtmidi \
                 --hidden-import=backports \
@@ -1085,7 +1093,8 @@ jobs:
 
           # --- 4. ZIP作成 ---
           echo "🗜️ Creating update ZIP..."
-          (cd dist && zip -ry "../${ZIP_FILE}" VO-SE_vocal_Mac.app)
+          # ditto preserves macOS resource forks and extended attributes in ZIPs.
+          ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_FILE"
 
           echo "✅ パッケージング完了: ${DMG_FILE} と ${ZIP_FILE}"
 
