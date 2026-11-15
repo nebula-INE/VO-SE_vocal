@@ -1909,14 +1909,23 @@ class _VocalPlaybackPreparationThread(QThread):
         current_track = None
         try:
             from modules.audio.vo_se_engine import VO_SE_Engine
-            if isinstance(self.engine, VO_SE_Engine):
+            needs_render = any(job["notes"] for job in self.jobs)
+            export_v2 = getattr(self.engine, "export_to_wav_v2", None)
+            if needs_render:
+                if not isinstance(self.engine, VO_SE_Engine):
+                    engine_type = type(self.engine).__name__
+                    raise RuntimeError(
+                        "ボーカル再生エンジンが初期化されていません。"
+                        f" 現在のエンジン: {engine_type}"
+                    )
                 from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
                 ensure_desktop_export_ready(self.engine)
-
-            export_v2 = getattr(self.engine, "export_to_wav_v2", None)
-            needs_render = any(job["notes"] for job in self.jobs)
-            if needs_render and not callable(export_v2):
-                raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
+                export_v2 = getattr(self.engine, "export_to_wav_v2", None)
+                if not callable(export_v2):
+                    raise RuntimeError(
+                        "VCV対応レンダラーを初期化できません。"
+                        "VO-SE Core のABI確認ログと起動ログを確認してください。"
+                    )
 
             results = []
             for job in self.jobs:
@@ -2001,6 +2010,7 @@ class _AudioMixerCommandThread(QThread):
         mixer: Any,
         tracks: Optional[List[Any]] = None,
         start_sec: float = 0.0,
+        block_size: Optional[int] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -2008,6 +2018,7 @@ class _AudioMixerCommandThread(QThread):
         self.mixer = mixer
         self.tracks = list(tracks or [])
         self.start_sec = float(start_sec)
+        self.block_size = int(block_size) if block_size is not None else None
 
     @Slot()
     def run(self) -> None:
@@ -2041,6 +2052,18 @@ class _AudioMixerCommandThread(QThread):
             elif self.operation == "stop":
                 self.mixer.stop()
                 self.completed.emit(self.operation, {})
+            elif self.operation == "set_buffer_size":
+                if self.block_size is None:
+                    raise ValueError("Audio buffer size was not supplied")
+                applied_size = self.mixer.set_block_size(self.block_size)
+                self.completed.emit(
+                    self.operation,
+                    {
+                        "block_size": applied_size,
+                        "position_sec": self.mixer.position_sec,
+                        "is_playing": self.mixer.is_playing,
+                    },
+                )
             else:
                 raise ValueError(f"Unsupported audio mixer operation: {self.operation}")
         except Exception as exc:
@@ -3773,7 +3796,7 @@ class MainWindow(
 
         self.buffer_slider = QSlider(Qt.Orientation.Horizontal)
         self.buffer_slider.setRange(1, 10)  # 1=最小(低遅延), 10=最大(安定)
-        self.buffer_slider.setValue(4)      # デフォルト中間
+        self.buffer_slider.setValue(3)      # デフォルト 256 samples (3番目)
         self.buffer_slider.setMaximumWidth(150)
         self.buffer_slider.valueChanged.connect(self.on_buffer_size_changed)
         perf_layout.addWidget(self.buffer_slider)
@@ -3790,27 +3813,33 @@ class MainWindow(
 
     @Slot(int)
     def on_buffer_size_changed(self, value: int) -> None:
-        """バッファサイズ変更（C++エンジンと AudioOutput に反映）"""
-        # マッピング: 1→64, 2→128, 3→256, 4→512, ... 10→8192
-        sizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
-        idx = max(0, min(value - 1, len(sizes) - 1))
-        new_size = sizes[idx]
-
+        """Change the active AudioMixer/PortAudio block size off the GUI thread."""
+        sizes = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+        index = max(0, min(int(value) - 1, len(sizes) - 1))
+        new_size = sizes[index]
         self.buffer_label.setText(f"{new_size} samples")
 
-        # 1. AudioOutput に反映
-        if hasattr(self, 'audio_output'):
-            self.audio_output.block_size = new_size
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 4000)
+            return
 
-        # 2. C++ エンジンに反映（存在する場合）
-        if hasattr(self, 'vo_se_engine') and hasattr(self.vo_se_engine, 'lib'):
-            try:
-                if hasattr(self.vo_se_engine.lib, 'vose_set_buffer_size'):
-                    self.vo_se_engine.lib.vose_set_buffer_size(new_size)
-            except Exception:
-                pass
+        current_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if current_worker is not None and current_worker.isRunning():
+            # Keep only the latest slider value; apply it after the current
+            # device operation completes rather than racing another thread.
+            self._pending_audio_buffer_size = new_size
+            return
 
-        self.statusBar().showMessage(f"バッファサイズ: {new_size} samples")
+        self._pending_audio_buffer_size = None
+        if int(getattr(mixer, "block_size", 0)) == new_size:
+            self.statusBar().showMessage(f"バッファサイズ: {new_size} samples")
+            return
+
+        if not self._start_audio_mixer_command(
+            "set_buffer_size", block_size=new_size
+        ):
+            self._pending_audio_buffer_size = new_size
 
     def log_startup(self, message):
         """標準出力へのログ記録）""" 
@@ -4363,7 +4392,7 @@ class MainWindow(
         """Initialize the single desktop callback-based AudioMixer path."""
         from modules.backend.audio_mixer import AudioMixer
 
-        self.audio_mixer = AudioMixer(sample_rate=44100)
+        self.audio_mixer = AudioMixer(sample_rate=44100, block_size=256)
         self.audio_player = self.audio_mixer
         self.audio_output = None
     def get_current_playback_state(self) -> bool:
@@ -5076,36 +5105,19 @@ class MainWindow(
 
     @Slot(bool)
     def toggle_performance(self, checked):
-        """
-        パフォーマンスモードの動的切り替え。
-        C++エンジン(vose_core)の内部バッファやスレッド優先度を操作します。
-        """
-        # 1. 動作モードの決定 (1: 高負荷・高品質, 0: 低負荷・安定)
+        """Select a stable mixer block size without calling removed native APIs."""
         mode = 1 if checked else 0
-        
-        # 2. C++エンジン(Shared Library)への安全なアクセス
-        try:
-            if hasattr(self.vo_se_engine, 'lib'):
-                if hasattr(self.vo_se_engine.lib, 'vose_set_performance_mode'):
-                    # C言語形式でモードを転送
-                    self.vo_se_engine.lib.vose_set_performance_mode(mode)
-                
-                # [蹂躙ポイント] 省電力モード時は内部バッファを増やして途切れを防ぐなどの追加処理
-                if mode == 0 and hasattr(self.vo_se_engine.lib, 'vose_set_buffer_size'):
-                    self.vo_se_engine.lib.vose_set_buffer_size(4096) # Core i3向けの安全策
-                elif mode == 1 and hasattr(self.vo_se_engine.lib, 'vose_set_buffer_size'):
-                    self.vo_se_engine.lib.vose_set_buffer_size(1024) # 高速レスポンス
-        except Exception as e:
-            print(f"Engine Performance Control Warning: {e}")
+        block_size = 1024 if mode == 1 else 4096
+        slider = getattr(self, "buffer_slider", None)
+        sizes = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+        if slider is not None:
+            slider.setValue(sizes.index(block_size) + 1)
+        else:
+            self.on_buffer_size_changed(sizes.index(block_size) + 1)
 
-        # 3. ユーザーへのフィードバック
-        status = "【High-Mode】レンダリング優先" if mode == 1 else "【Power-Save】Core i3最適化モード"
-        _ = "#ff4444" if mode == 1 else "#44ff44"
-        
+        status = "【High-Mode】低レイテンシ優先" if mode == 1 else "【Power-Save】安定性優先"
         self.statusBar().showMessage(f"System: {status} に切り替えました")
-        
-        # ログにも残して「まともに動いている」ことを証明
-        print(f"Performance Mode Changed to: {mode}")
+        print(f"Performance Mode Changed to: {mode}; buffer={block_size}")
 
     
 
@@ -5378,6 +5390,17 @@ class MainWindow(
     def _on_audio_mixer_command_completed(self, operation: str, result: object) -> None:
         details = result if isinstance(result, dict) else {}
 
+        if operation == "set_buffer_size":
+            mixer = getattr(self, "audio_mixer", None)
+            applied_size = int(details.get("block_size", getattr(mixer, "block_size", 256)))
+            self.buffer_label.setText(f"{applied_size} samples")
+            self._set_mixer_transport_busy(False)
+            if self.is_playing and bool(getattr(mixer, "is_playing", False)):
+                self.playback_timer.start()
+            self._refresh_transport_button_states()
+            self.statusBar().showMessage(f"バッファサイズ: {applied_size} samples", 4000)
+            return
+
         if operation == "start":
             diagnostics = details.get("diagnostics", {})
             if isinstance(diagnostics, dict):
@@ -5438,6 +5461,16 @@ class MainWindow(
     def _on_audio_mixer_command_failed(self, operation: str, error_message: str) -> None:
         mixer = getattr(self, "audio_mixer", None)
         self.is_playing = bool(getattr(mixer, "is_playing", False))
+        if operation == "set_buffer_size":
+            self._pending_audio_buffer_size = None
+            actual_size = int(getattr(mixer, "block_size", 256))
+            sizes = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+            slider = getattr(self, "buffer_slider", None)
+            if slider is not None and actual_size in sizes:
+                previous_signals = slider.blockSignals(True)
+                slider.setValue(sizes.index(actual_size) + 1)
+                slider.blockSignals(previous_signals)
+            self.buffer_label.setText(f"{actual_size} samples")
         if operation == "start":
             self.playback_timer.stop()
             self._set_playback_preparation_ui(False)
@@ -5457,6 +5490,15 @@ class MainWindow(
         if worker is not None and not worker.isRunning():
             self._audio_mixer_command_thread = None
 
+        pending_size = getattr(self, "_pending_audio_buffer_size", None)
+        mixer = getattr(self, "audio_mixer", None)
+        if pending_size is not None and mixer is not None:
+            self._pending_audio_buffer_size = None
+            if int(getattr(mixer, "block_size", 0)) != int(pending_size):
+                self._start_audio_mixer_command(
+                    "set_buffer_size", block_size=int(pending_size)
+                )
+
     def _set_mixer_transport_busy(self, busy: bool) -> None:
         for name in ("play_btn", "play_button", "stop_btn"):
             widget = getattr(self, name, None)
@@ -5468,6 +5510,7 @@ class MainWindow(
         operation: str,
         tracks: Optional[List[Any]] = None,
         start_sec: float = 0.0,
+        block_size: Optional[int] = None,
     ) -> bool:
         existing = getattr(self, "_audio_mixer_command_thread", None)
         if existing is not None and existing.isRunning():
@@ -5479,7 +5522,12 @@ class MainWindow(
             return False
 
         worker = _AudioMixerCommandThread(
-            operation, mixer, tracks=tracks, start_sec=start_sec, parent=self
+            operation,
+            mixer,
+            tracks=tracks,
+            start_sec=start_sec,
+            block_size=block_size,
+            parent=self,
         )
         worker.completed.connect(self._on_audio_mixer_command_completed)
         worker.failed.connect(self._on_audio_mixer_command_failed)
@@ -5495,7 +5543,10 @@ class MainWindow(
         else:
             self._set_mixer_transport_busy(True)
             self.playback_timer.stop()
-            self.statusBar().showMessage("音声出力を停止中...", 0)
+            if operation == "set_buffer_size":
+                self.statusBar().showMessage("音声出力バッファを安全に再設定中...", 0)
+            else:
+                self.statusBar().showMessage("音声出力を停止中...", 0)
         worker.start()
         return True
 
@@ -5607,6 +5658,15 @@ class MainWindow(
                     "previous_signature": getattr(track, "_playback_signature", ""),
                     "previous_path": getattr(track, "playback_path", ""),
                 })
+
+            if any(job["notes"] for job in jobs) and getattr(self, "vo_se_engine", None) is None:
+                self._set_playback_preparation_ui(False)
+                self.statusBar().showMessage(
+                    "ボーカルエンジンを初期化中です。準備完了後にもう一度再生してください。",
+                    5000,
+                )
+                self._refresh_transport_button_states()
+                return
 
             if not any(
                 (job["notes"] for job in jobs)
