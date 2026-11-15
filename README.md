@@ -23,3 +23,13 @@ GitHub Actions による CI/CD パイプラインを構築。 Windows (.exe) だ
 Windows: .exe を実行。
 
 Mac: .zip を解凍し、アプリを 右クリック > 開く で実行。
+
+
+Linux（Ubuntu / Linux Mint）:
+
+- 推奨: `vo-se-vocal_amd64.deb` をダウンロードし、次のコマンドでインストールしてください。必要な Qt/XCB・音声ランタイム依存関係はパッケージマネージャーが解決します。
+  
+  ```bash
+  sudo apt install ./vo-se-vocal_amd64.deb
+  ```
+- `VO-SE_vocal_Linux_x86_64.tar.gz` と単体の `VO-SE_vocal_Linux_x86_64` は、OSの共有ライブラリまで含む完全な自己完結型ではありません。依存ライブラリが不足している環境では起動しないため、通常は上記の Debian パッケージを使用してください。
