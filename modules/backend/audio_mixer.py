@@ -380,13 +380,12 @@ class AudioMixer:
         self._producer_stop.set()
         stream = self._stream
         if stream is not None:
-            stop_error: Exception | None = None
             try:
                 stream.stop()
-            except Exception as exc:
+            except Exception:
                 # stop() can report an already-stopped device; close() below
                 # is still attempted and is the authoritative release step.
-                stop_error = exc
+                pass
             try:
                 stream.close()
             except Exception as exc:
