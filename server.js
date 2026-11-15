@@ -44,6 +44,30 @@ if (allowedOrigins.size > 0) {
   }));
 }
 
+// Protect the local-only server against DNS-rebinding Host headers. LAN hosts
+// must be listed explicitly when the server is intentionally exposed.
+function requestHostname(hostHeader) {
+  const value = String(hostHeader || '').trim().toLowerCase();
+  if (value.startsWith('[')) {
+    const closingBracket = value.indexOf(']');
+    return closingBracket > 0 ? value.slice(1, closingBracket) : '';
+  }
+  return value.replace(/:\\d+$/, '');
+}
+const allowedHosts = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  ...(process.env.VOSE_ALLOWED_HOSTS || '').split(',').map((host) => host.trim().toLowerCase()).filter(Boolean)
+]);
+app.use((req, res, next) => {
+  const hostname = requestHostname(req.headers.host);
+  if (!allowedHosts.has(hostname)) {
+    return res.status(403).json({ success: false, error: 'Host header is not allowlisted' });
+  }
+  next();
+});
+
 const MAX_UPLOAD_BYTES = 600 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 60;
@@ -1822,12 +1846,25 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
 // Render Song Notes with Voicebank Mapping API (Pure Native)
 app.post('/api/py/render-notes', async (req, res) => {
   const { notes, voicebank } = req.body || {};
-  if (!notes || !Array.isArray(notes)) {
-    return res.status(400).json({ success: false, error: 'Invalid notes array' });
+  if (!Array.isArray(notes) || notes.length > 10000) {
+    return res.status(400).json({ success: false, error: 'Invalid notes array or too many notes' });
   }
 
-  const vbPath = path.join(__dirname, 'temp', 'voicebanks', voicebank || '');
-  const indexed = fs.existsSync(vbPath) ? await vbRegistry.getOrIndex(voicebank, vbPath) : null;
+  const safeVoicebankName = voicebank ? normalizeChildName(voicebank) : null;
+  if (voicebank && !safeVoicebankName) {
+    return res.status(400).json({ success: false, error: 'Invalid voicebank name' });
+  }
+  let indexed = null;
+  if (safeVoicebankName) {
+    const voicebanksRoot = path.resolve(__dirname, 'temp', 'voicebanks');
+    const vbPath = path.resolve(voicebanksRoot, safeVoicebankName);
+    if (!isPathInside(voicebanksRoot, vbPath)) {
+      return res.status(400).json({ success: false, error: 'Invalid voicebank path' });
+    }
+    if (fs.existsSync(vbPath)) {
+      indexed = await vbRegistry.getOrIndex(safeVoicebankName, vbPath);
+    }
+  }
 
   const renderedNotes = notes.map((n, idx) => {
     const lyric = n.lyric || 'あ';
@@ -1838,10 +1875,22 @@ app.post('/api/py/render-notes', async (req, res) => {
     const entry = findAliasEntry(indexed, lyric, prevLyric, n.noteNum || 60);
     let resolvedWavPath = null;
     if (entry) {
+      let candidatePath = null;
       if (fs.existsSync(entry.wav_path)) {
-        resolvedWavPath = entry.wav_path;
+        candidatePath = entry.wav_path;
       } else if (entry.filename) {
-        resolvedWavPath = resolveWavFilePath(path.dirname(entry.wav_path), entry.filename);
+        candidatePath = resolveWavFilePath(path.dirname(entry.wav_path), entry.filename);
+      }
+      if (candidatePath && safeVoicebankName) {
+        try {
+          const realRoot = fs.realpathSync(path.resolve(__dirname, 'temp', 'voicebanks', safeVoicebankName));
+          const realCandidate = fs.realpathSync(candidatePath);
+          if (isPathInside(realRoot, realCandidate) && fs.statSync(realCandidate).isFile()) {
+            resolvedWavPath = realCandidate;
+          }
+        } catch (error) {
+          resolvedWavPath = null;
+        }
       }
     }
     const hasWav = !!resolvedWavPath;
@@ -1867,7 +1916,7 @@ app.post('/api/py/render-notes', async (req, res) => {
 
   res.json({
     success: true,
-    voicebank,
+    voicebank: safeVoicebankName || '',
     noteCount: renderedNotes.length,
     notes: renderedNotes
   });
@@ -2189,8 +2238,18 @@ app.post('/api/py/upload-voicebank', async (req, res) => {
 // VOSE Engine Render Endpoint (API Bridge)
 app.post('/api/py/render-wav', async (req, res) => {
   const { notes, voicebank, tempo } = req.body;
-  if (!notes || !notes.length) {
-    return res.status(400).json({ success: false, error: 'No notes provided' });
+  if (!Array.isArray(notes) || notes.length === 0 || notes.length > 10000) {
+    return res.status(400).json({ success: false, error: 'Invalid or excessive notes array' });
+  }
+  const validTempo = Number.isFinite(Number(tempo)) && Number(tempo) >= 20 && Number(tempo) <= 400;
+  const validNotes = notes.every((note) =>
+    note && typeof note === 'object' &&
+    Number.isFinite(Number(note.tick)) && Number(note.tick) >= 0 &&
+    Number.isFinite(Number(note.length)) && Number(note.length) > 0 &&
+    Number.isFinite(Number(note.noteNum)) && Number(note.noteNum) >= 0 && Number(note.noteNum) <= 127
+  );
+  if (!validTempo || !validNotes) {
+    return res.status(400).json({ success: false, error: 'Invalid tempo or note data' });
   }
 
   try {
@@ -2206,7 +2265,10 @@ app.post('/api/py/render-wav', async (req, res) => {
     const sampleRate = 44100;
     // Calculate duration from ticks
     const maxTick = notes.reduce((max, n) => Math.max(max, n.tick + n.length), 0);
-    const durationSec = Math.max(1, (maxTick / 480) * (60 / (tempo || 120)));
+    const durationSec = Math.max(1, (maxTick / 480) * (60 / tempo));
+    if (!Number.isFinite(durationSec) || durationSec > 600) {
+      return res.status(400).json({ success: false, error: 'Requested render exceeds the 10-minute limit' });
+    }
     const numSamples = Math.floor(sampleRate * durationSec);
     const buffer = Buffer.alloc(44 + numSamples * 2);
     
