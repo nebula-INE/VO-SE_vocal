@@ -27,7 +27,7 @@ jobs:
       matrix:
         # [FIX-CI-ACTIONS] actions/checkout@v6 / setup-python@v6 は存在しない。
         # 2026年6月現在の最新安定版 v4 に統一。
-        os: [windows-latest, macos-15, ubuntu-latest]
+        os: [windows-latest, macos-15, ubuntu-22.04]
 
     steps:
       - name: "📂 [Step 1] Checkout Repository"
@@ -40,6 +40,14 @@ jobs:
           cache: 'pip'
           cache-dependency-path: requirements.txt
 
+      - name: "🔎 Record Linux compatibility baseline"
+        if: matrix.os == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Linux release baseline: $(getconf GNU_LIBC_VERSION)"
+          ldd --version | head -n 1
+
       - name: "🧩 [Step 3] Install OS Dependencies (Linux)"
         if: runner.os == 'Linux'
         run: |
@@ -48,7 +56,7 @@ jobs:
             libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 \
             libdbus-1-3 libxcb-cursor0 libxrender1 libxi6 \
             libsm6 libxext6 libfontconfig1 \
-            libpulse0 libasound2t64 libsndfile1 portaudio19-dev
+            libpulse0 libasound2 libsndfile1 portaudio19-dev
 
       - name: "🧩 [Step 3] Install OS Dependencies (macOS)"
         if: runner.os == 'macOS'
@@ -243,7 +251,7 @@ jobs:
             macos-15)
               EXE="./dist_out/VO-SE_PRO_Mac.app/Contents/MacOS/VO-SE_PRO_Mac"
               ;;
-            ubuntu-latest)
+            ubuntu-22.04)
               EXE="./dist_out/VO-SE_PRO_Linux"
               ;;
           esac
