@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import json
+import tempfile
 from typing import Any, Dict
 
 from PySide6.QtCore import Slot
@@ -367,15 +368,27 @@ class VoiceManagementMixin:
                 if os.path.getmtime(cache_path) > os.path.getmtime(ini_path):
                     with open(cache_path, "r", encoding="utf-8") as cache_file:
                         data = json.load(cache_file)
+                    root_path = os.path.realpath(voice_path)
+
+                    def valid_cache_entry(alias: Any, entry: Any) -> bool:
+                        if (
+                            not isinstance(alias, str)
+                            or not isinstance(entry, dict)
+                            or not isinstance(entry.get("wav_path"), str)
+                            or not all(
+                                isinstance(entry.get(key, 0.0), (int, float))
+                                for key in ("offset", "consonant", "blank", "preutterance", "overlap")
+                            )
+                        ):
+                            return False
+                        resolved_wav = os.path.realpath(entry["wav_path"])
+                        try:
+                            return os.path.commonpath([root_path, resolved_wav]) == root_path
+                        except ValueError:
+                            return False
+
                     if isinstance(data, dict) and all(
-                        isinstance(alias, str)
-                        and isinstance(entry, dict)
-                        and isinstance(entry.get("wav_path"), str)
-                        and all(
-                            isinstance(entry.get(key, 0.0), (int, float))
-                            for key in ("offset", "consonant", "blank", "preutterance", "overlap")
-                        )
-                        for alias, entry in data.items()
+                        valid_cache_entry(alias, entry) for alias, entry in data.items()
                     ):
                         return data
             except (OSError, ValueError, TypeError):
@@ -383,19 +396,28 @@ class VoiceManagementMixin:
                 pass
 
         oto_data = self.parse_oto_ini(voice_path)
-        temp_path = cache_path + ".tmp"
+        temp_path = None
         try:
-            with open(temp_path, "w", encoding="utf-8") as cache_file:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=".oto_cache_",
+                suffix=".tmp",
+                dir=voice_path,
+                delete=False,
+            ) as cache_file:
+                temp_path = cache_file.name
                 json.dump(oto_data, cache_file, ensure_ascii=False, allow_nan=False)
                 cache_file.flush()
                 os.fsync(cache_file.fileno())
             os.replace(temp_path, cache_path)
+            temp_path = None
         except (OSError, TypeError, ValueError) as e:
-            try:
-                if os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):
+                try:
                     os.remove(temp_path)
-            except OSError:
-                pass
+                except OSError:
+                    pass
             print(f"DEBUG: Cache save failed: {e}")
 
         return oto_data
