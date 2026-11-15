@@ -14,7 +14,7 @@ export function normalizeChildName(value, maxLength = 100) {
 }
 
 export function normalizeUploadId(value) {
-  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : null;
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value) ? value : null;
 }
 
 export function isPathInside(root, candidate, allowRoot = false) {
