@@ -736,9 +736,11 @@ def _load_ust_project(self, ust_path: str) -> List[Dict[str, Any]]:
         else:
             voice_dir = os.path.abspath(voice_dir)
         if os.path.isdir(voice_dir):
-            self.voice_lib_path = voice_dir
-            self._ust_voice_dir = voice_dir
+            # Keep Python's active voice-root fields and the process-wide OTO
+            # replacement in the same critical section as native rendering.
             with _NATIVE_ENGINE_LOCK:
+                self.voice_lib_path = voice_dir
+                self._ust_voice_dir = voice_dir
                 _refresh_voice_library_v2_unlocked(self)
         else:
             logger.warning("UST VoiceDir が見つかりません: %s", voice_dir)
