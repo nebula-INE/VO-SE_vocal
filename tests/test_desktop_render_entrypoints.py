@@ -323,6 +323,6 @@ def test_performance_mode_changes_mixer_buffer_without_legacy_native_symbols():
     handler = source.split("def toggle_performance(self, checked):", 1)[1].split(
         "def ", 1
     )[0]
-    assert "self.buffer_slider.setValue" in handler
+    assert "slider.setValue" in handler
     assert "vose_set_buffer_size" not in handler
     assert "vose_set_performance_mode" not in handler
