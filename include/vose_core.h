@@ -104,6 +104,7 @@ extern "C" {
     DLLEXPORT float get_engine_version(void);
     // Size/offset fingerprint for validating the Python ctypes NoteEvent layout.
     DLLEXPORT uint64_t get_note_event_abi(void);
+    DLLEXPORT uint64_t get_oto_entry_abi(void);
     DLLEXPORT void clear_engine_cache(void);
 
     // 4. BigVGAN ボコーダー（Pro版のみ有効。無印版ビルドでは呼んでも無視される）
