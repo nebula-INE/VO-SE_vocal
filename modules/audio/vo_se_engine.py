@@ -299,7 +299,11 @@ class VO_SE_Engine:
                         f"{symbol_name}。古いネイティブライブラリの可能性があるため、"
                         "現在のソースからC++エンジンを再ビルドしてください。"
                     )
-                actual_abi = int(abi_probe())
+                # ctypes symbols are dynamically typed at runtime; narrow
+                # the callable signature explicitly for Pyright and keep the
+                # C ABI return type contract visible at the call site.
+                typed_abi_probe = cast(Callable[[], int], abi_probe)
+                actual_abi = typed_abi_probe()
                 if actual_abi != expected_abi:
                     raise RuntimeError(
                         f"VO-SE Core ABI mismatch ({symbol_name}): "
