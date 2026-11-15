@@ -8,9 +8,12 @@ Do not expose this single-user API server to the public Internet: it does not
 provide user authentication.
 
 Cross-origin browser access is disabled unless exact origins are listed in the
-comma-separated `VOSE_ALLOWED_ORIGINS` environment variable. Host headers are
-restricted to loopback names unless explicit values are listed in
-`VOSE_ALLOWED_HOSTS`. CORS and Host validation are not authentication.
+comma-separated `VOSE_ALLOWED_ORIGINS` environment variable. Browser Origin
+headers are checked for state-changing requests; only the server's loopback
+origins are allowed by default. Host headers are restricted to loopback names
+unless explicit values are listed in `VOSE_ALLOWED_HOSTS`. Use
+`VOSE_ALLOW_NULL_ORIGIN=1` only for a trusted file-origin desktop wrapper.
+These checks are not authentication.
 
 ## Voicebank archives and paths
 
