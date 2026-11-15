@@ -1,5 +1,6 @@
 import json
 import os
+import pytest
 import pickle
 from pathlib import Path
 
@@ -11,9 +12,10 @@ class _UnpickleCommand:
         self.marker = marker
 
     def __reduce__(self):
-        return (os.system, (f'touch "{self.marker}"',))
+        return (os.mkdir, (str(self.marker),))
 
 
+@pytest.mark.smoke
 def test_untrusted_legacy_oto_cache_is_never_unpickled(tmp_path):
     voicebank = tmp_path / "voicebank"
     voicebank.mkdir()
