@@ -24,6 +24,7 @@ test('voicebank names reject traversal, separators and reserved device names', (
 test('upload IDs are bounded opaque path-safe tokens', () => {
   assert.equal(normalizeUploadId('up_1700000000000_abc1234'), 'up_1700000000000_abc1234');
   assert.equal(normalizeUploadId('../outside'), null);
+  assert.equal(normalizeUploadId('short'), null);
   assert.equal(normalizeUploadId('x'.repeat(129)), null);
 });
 
