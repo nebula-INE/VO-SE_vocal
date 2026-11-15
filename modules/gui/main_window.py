@@ -2351,6 +2351,7 @@ class MainWindow(
         self._pending_playback_tracks = None
         self._pending_playback_start_time = 0.0
         self._playback_preparing = False
+        self._pending_audio_buffer_size = None
         
         # 外部マネージャー
         self.history = HistoryManager()
@@ -6892,7 +6893,18 @@ class MainWindow(
             try:
                 stop_mixer()
             except Exception as exc:
-                print(f"Audio mixer shutdown warning: {exc}")
+                # A PortAudio callback may still reference the mixer if its
+                # native stream failed to close. Keep the window alive so the
+                # user can retry shutdown instead of destroying live callback state.
+                QMessageBox.warning(
+                    self,
+                    "音声デバイス終了エラー",
+                    "音声出力を安全に停止できませんでした。"
+                    f" 詳細: {exc}\n\n"
+                    "音声デバイスが停止したことを確認してから、もう一度終了してください。",
+                )
+                event.ignore()
+                return
 
         config = {
             "default_voice": getattr(self, "current_voice", None),
