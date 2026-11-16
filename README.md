@@ -25,11 +25,11 @@ Windows: .exe を実行。
 Mac: .zip を解凍し、アプリを 右クリック > 開く で実行。
 
 
-Linux（Ubuntu / Linux Mint）:
+Linux（Ubuntu / Linux Mint、64-bit amd64）:
 
-- 推奨: `vo-se-vocal_amd64.deb` をダウンロードし、次のコマンドでインストールしてください。必要な Qt/XCB・音声ランタイム依存関係はパッケージマネージャーが解決します。
-  
-  ```bash
-  sudo apt install ./vo-se-vocal_amd64.deb
-  ```
-- `VO-SE_vocal_Linux_x86_64.tar.gz` と単体の `VO-SE_vocal_Linux_x86_64` は、OSの共有ライブラリまで含む完全な自己完結型ではありません。依存ライブラリが不足している環境では起動しないため、通常は上記の Debian パッケージを使用してください。
+- Linux版は **`vo-se-vocal_amd64.deb`** を使用してください。
+- ダウンロードした `.deb` ファイルをダブルクリックし、表示された「ソフトウェア」または「ソフトウェアマネージャー」でインストールします。
+- 必要な Qt/XCB・音声ランタイム依存ライブラリ（PulseAudio、ALSA、libsndfile、PortAudio など）は、OSのパッケージ管理機能が自動的に導入します。端末コマンドや `requirements.txt` の手動インストールは不要です。
+- インストール後はアプリケーションメニューの **VO-SE vocal** から起動できます。デスクトップエントリーもパッケージに含まれます。
+
+Linuxの通常リリースでは、依存関係を自動解決できない単体バイナリ／tar.gz は配布しません。
