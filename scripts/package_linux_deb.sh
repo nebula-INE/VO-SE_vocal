@@ -16,7 +16,7 @@ if [[ ! -f "$binary_path" ]]; then
     echo "Linux application binary not found: $binary_path" >&2
     exit 1
 fi
-if [[ ! "$package_version" =~ ^[0-9][A-Za-z0-9.+:~_-]*$ ]]; then
+if ! dpkg --validate-version "$package_version"; then
     echo "Invalid Debian package version: $package_version" >&2
     exit 1
 fi
