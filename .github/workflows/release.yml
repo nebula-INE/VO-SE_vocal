@@ -99,7 +99,7 @@ jobs:
           python -m pip install Pillow PySide6 sounddevice soundfile
 
           # その他ツール類
-          python -m pip install "setuptools<81" pytest ruff pyright python-rtmidi mido pyinstaller
+          python -m pip install "setuptools<80.9" pytest ruff pyright python-rtmidi mido pyinstaller
 
           # デバッグ: インストール確認（CIログに出ます）
           python - <<'PY' || true
