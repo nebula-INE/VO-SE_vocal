@@ -353,7 +353,7 @@ OS_RUNTIME_LIBRARIES = {
         ("libpulse.so.0", "pulse", "libpulse0"),
         ("libasound.so.2", "asound", "libasound2t64/libasound2"),
         ("libsndfile.so.1", "sndfile", "libsndfile1"),
-        ("libportaudio.so.2", "portaudio", "portaudio19-dev"),
+        ("libportaudio.so.2", "portaudio", "libportaudio2"),
     ),
     "Darwin": (
         ("libportaudio.dylib", "portaudio", "portaudio"),
@@ -366,7 +366,7 @@ OS_DEPENDENCY_INSTALL_HINTS = {
         "Ubuntu/Debian: sudo apt-get install -y "
         "libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 "
         "libxcb-cursor0 libxrender1 libxi6 libsm6 libxext6 libfontconfig1 "
-        "libpulse0 libasound2t64 libsndfile1 portaudio19-dev"
+        "libpulse0 libasound2t64 libsndfile1 libportaudio2"
     ),
     "Darwin": "macOS: brew install portaudio libsndfile",
 }
@@ -412,10 +412,15 @@ def main():
         if is_smoke_test:
             print("[SmokeTest] 依存関係不足のため失敗しました。")
             return 1
-        print("requirements.txt と OS 依存ライブラリをインストールして再実行してください。")
-        install_hint = OS_DEPENDENCY_INSTALL_HINTS.get(platform.system())
-        if install_hint:
-            print(f"例: {install_hint}")
+        if getattr(sys, "frozen", False) and platform.system() == "Linux":
+            print("Linux版は公式の Debian パッケージからインストールしてください。")
+            print("GitHub Releases の vo-se-vocal_amd64.deb をソフトウェアマネージャーでインストールすると、")
+            print("必要なOS依存ライブラリもパッケージ管理機能によって自動導入されます。")
+        else:
+            print("開発環境では requirements-runtime.txt と OS 依存ライブラリをインストールしてください。")
+            install_hint = OS_DEPENDENCY_INSTALL_HINTS.get(platform.system())
+            if install_hint:
+                print(f"例: {install_hint}")
         sys.exit(1)
 
     if is_smoke_test:

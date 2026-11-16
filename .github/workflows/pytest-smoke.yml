@@ -55,7 +55,7 @@ jobs:
       - name: Install runtime and test dependencies
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip wheel "setuptools<82"
+          python -m pip install --upgrade pip wheel "setuptools<80.9"
           python -m pip install --upgrade pyopenjtalk-prebuilt
           python -m pip install -r requirements-runtime.txt
           python -m pip install pytest pytest-xdist pytest-cov pytest-qt

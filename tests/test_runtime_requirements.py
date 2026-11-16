@@ -23,7 +23,14 @@ def test_runtime_requirement_check_reports_linux_os_libraries(monkeypatch):
 
     assert "OS library: libGL.so.1 (libgl1)" in missing
     assert "OS library: libxcb-cursor.so.0 (libxcb-cursor0)" in missing
-    assert "OS library: libportaudio.so.2 (portaudio19-dev)" in missing
+    assert "OS library: libportaudio.so.2 (libportaudio2)" in missing
+
+
+def test_linux_runtime_hint_uses_runtime_audio_packages():
+    hint = main.OS_DEPENDENCY_INSTALL_HINTS["Linux"]
+    assert "libsndfile1" in hint
+    assert "libportaudio2" in hint
+    assert "portaudio19-dev" not in hint
 
 
 def test_runtime_requirement_check_skips_available_libraries(monkeypatch):
