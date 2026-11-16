@@ -15,6 +15,7 @@ on:
       - "include/**"
       - "tests/**"
       - "scripts/audit_linux_runtime_bundle.py"
+      - "scripts/package_linux_deb.sh"
       - "build/**"
       - "packaging/pyinstaller-hooks/**"
       - "bin/**"
@@ -63,7 +64,7 @@ jobs:
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
             libxrender1 libxi6 libsm6 libxext6 \
             libfontconfig1 libdbus-1-3 libglib2.0-0 libpulse0 \
-            libasound2 libportaudio2 xvfb
+            libasound2 libportaudio2 xvfb desktop-file-utils
 
       - name: Install runtime dependencies only
         run: |
@@ -441,6 +442,42 @@ jobs:
             echo "Expected the GUI process to remain alive until timeout; got exit code $rc"
             exit 1
           fi
+
+      - name: Build and install the Debian package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist_out
+          bash scripts/package_linux_deb.sh \
+            "dist/VO-SE_vocal_Linux" \
+            "dist_out/vo-se-vocal_amd64.deb" \
+            "0.0.0-ci"
+
+          # Validate the desktop entry and its installed Exec target.
+          sudo apt-get install -y "./dist_out/vo-se-vocal_amd64.deb"
+          test -x "/opt/vo-se-vocal/VO-SE_vocal_Linux"
+          desktop-file-validate /usr/share/applications/vo-se-vocal.desktop
+
+          MISSING="$(ldd /opt/vo-se-vocal/VO-SE_vocal_Linux 2>&1 | grep 'not found' || true)"
+          if [ -n "$MISSING" ]; then
+            echo "Unresolved packaged runtime libraries:"
+            echo "$MISSING"
+            exit 1
+          fi
+
+          # Launch the installed path, not only the pre-install build artifact.
+          set +e
+          xvfb-run -a env QT_QPA_PLATFORM=xcb \
+            timeout --signal=TERM --kill-after=10s 45s \
+            /opt/vo-se-vocal/VO-SE_vocal_Linux
+          rc=$?
+          set -e
+          echo "Installed Debian GUI startup exit code: $rc"
+          if [ "$rc" -ne 124 ] && [ "$rc" -ne 143 ]; then
+            echo "Installed app failed to remain open until timeout (exit code $rc)"
+            exit 1
+          fi
+          echo "Debian installer, dependency resolution, desktop entry, and installed GUI startup: OK"
 
       - name: Upload validation artifact
         uses: actions/upload-artifact@v4
