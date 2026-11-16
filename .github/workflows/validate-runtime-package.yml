@@ -484,7 +484,7 @@ jobs:
         with:
           name: VO-SE-vocal-Linux-runtime-validation
           path: |
-            dist_out/VO-SE_vocal_Linux_x86_64.tar.gz
+            dist_out/vo-se-vocal_amd64.deb
             dist_out/linux-runtime-size-report.json
           if-no-files-found: error
           retention-days: 7
