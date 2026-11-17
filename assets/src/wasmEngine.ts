@@ -27,6 +27,8 @@ import {
   scheduleSafePitchRamp,
   generateUtauPortamentoPoints,
   makeSemitoneCurve,
+  hasExplicitUstPortamento,
+  appendNextNotePreBitePoints,
   type PitchPoint
 } from './utils/pitchCurve';
 import { bufferToWav } from './utils/audioEncoder';
@@ -542,9 +544,18 @@ export async function renderStudioOffline(
 
         // ピッチベンド解析（明示的な指定がない場合も、前のノートと接続していれば自動ポルタメントを適用）
         let bendPoints: PitchPoint[] | null = null;
-        if (note.pbs && note.pbw && note.pby) {
+        if (hasExplicitUstPortamento(note)) {
           try {
-            bendPoints = smoothPitchBendPoints(parsePitchBend(note.pbs, note.pbw, note.pby));
+            const rawPoints = parsePitchBend(note.pbs || '', note.pbw || '', note.pby || '', note.pbm || '');
+            const durMs = durationSec * 1000;
+            if (rawPoints.length > 0 && durMs > rawPoints[rawPoints.length - 1].offsetMs) {
+              const shapes = String(note.pbm || '').split(',').map((s: string) => s.trim().toLowerCase());
+              const rawShape = shapes[Math.max(0, rawPoints.length - 1)];
+              const shape: '' | 's' | 'r' | 'j' =
+                rawShape === 's' || rawShape === 'r' || rawShape === 'j' ? rawShape : '';
+              rawPoints.push({ offsetMs: durMs, semitone: 0, shape });
+            }
+            bendPoints = rawPoints;
           } catch (e) {
             bendPoints = null;
           }
@@ -561,6 +572,17 @@ export async function renderStudioOffline(
             );
             bendPoints = smoothPitchBendPoints(autoPoints);
           }
+        }
+
+        const nextInfoForPitch = idx + 1 < schedulingInfos.length ? schedulingInfos[idx + 1] : null;
+        const isNextConnectedForPitch = nextInfoForPitch && (nextInfoForPitch.startTimeSec - (startTimeSec + durationSec) <= 0.015);
+        if (isNextConnectedForPitch && nextInfoForPitch) {
+          bendPoints = appendNextNotePreBitePoints(
+            bendPoints,
+            note.noteNum,
+            durationSec * 1000,
+            nextInfoForPitch.note
+          );
         }
 
         const computeLoopRange = (consumeSec: number): { loopStartSec: number; loopEndSec: number } | null => {

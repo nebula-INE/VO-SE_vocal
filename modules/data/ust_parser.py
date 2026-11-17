@@ -664,6 +664,7 @@ class UstConverter:
             current_time_sec += duration_sec
 
         if results:
+            apply_default_portamento_start(results)
             last_note = results[-1]
             last_note_end = (
                 float(last_note["start_time"]) + float(last_note["duration"])
@@ -673,6 +674,40 @@ class UstConverter:
                 last_note["_ust_trailing_rest_duration_sec"] = trailing_rest_sec
 
         return results
+
+    @staticmethod
+    def _build_ust_control_points(
+        pbs: str,
+        pbw: str,
+        pby: str,
+        pbm: str,
+        duration_ms: float,
+    ) -> Tuple[List[Tuple[float, float]], List[str], float]:
+        """Build (control_points, segment_shapes, pbs_offset_ms) from UTAU Mode 2 strings."""
+        widths = [float(w) for w in str(pbw or "").split(",") if w.strip()]
+        heights = [float(h) for h in str(pby or "").split(",") if h.strip()] if pby else []
+        shapes = [p.strip().lower() for p in str(pbm or "").split(",")] if pbm else []
+
+        pbs_parts = str(pbs or "").split(";")
+        pbs_offset_ms = float(pbs_parts[0]) if pbs_parts[0].strip() else 0.0
+        pbs_start_pitch = (
+            float(pbs_parts[1]) * 0.1
+            if len(pbs_parts) > 1 and pbs_parts[1].strip()
+            else 0.0
+        )
+
+        control_points: List[Tuple[float, float]] = [(pbs_offset_ms, pbs_start_pitch)]
+        segment_shapes: List[str] = []
+        t = pbs_offset_ms
+        for i, w in enumerate(widths):
+            t += w
+            h = (heights[i] * 0.1) if i < len(heights) else 0.0
+            control_points.append((t, h))
+            segment_shapes.append(shapes[i] if i < len(shapes) else "")
+        if duration_ms > t:
+            control_points.append((duration_ms, 0.0))
+            segment_shapes.append(shapes[len(widths)] if len(shapes) > len(widths) else "")
+        return control_points, segment_shapes, pbs_offset_ms
 
     @staticmethod
     def extract_portamento_curve(
@@ -737,8 +772,9 @@ class UstConverter:
             # PBWで定義された最後の点の後は、ノート終端を暗黙の0 semitone点として扱う。
             # 旧実装の「+10ms」はUST仕様にないマジック値で、短いノートでは
             # 最終区間の時間軸を不正に伸ばしていた。
-            control_points.append((duration_ms, 0.0))
-            segment_shapes.append(shapes[len(widths)] if len(shapes) > len(widths) else "")
+            if duration_ms > t:
+                control_points.append((duration_ms, 0.0))
+                segment_shapes.append(shapes[len(widths)] if len(shapes) > len(widths) else "")
 
             denom = max(resolution - 1, 1)
             step = duration_ms / denom
@@ -783,3 +819,82 @@ def _interp_shape(
                 eased = (1.0 - math.cos(math.pi * u)) / 2.0
             return y0 + (y1 - y0) * eased
     return 0.0
+
+
+def _is_rest_entry(note) -> bool:
+    if isinstance(note, dict):
+        lyric = str(note.get("lyric", "") or "")
+    else:
+        if getattr(note, "is_rest", False):
+            return True
+        lyric = str(getattr(note, "lyric", "") or "")
+    return UstNote(index=0, length=1, lyric=lyric, note_num=60, tempo=120.0).is_rest
+
+
+def apply_default_portamento_start(notes) -> None:
+    """Fill default PBS ';y' start pitch from the previous adjacent voiced note.
+
+    Applies to notes with non-empty PBW, empty PBY, and no ';' in PBS:
+      y (UTAU units) = (prev.note_num - note.note_num) * 10
+    Resets continuity across rests, missing predecessors, or zero interval.
+    """
+    prev = None
+    prev_end_sec: Optional[float] = None
+
+    for n in notes:
+        if _is_rest_entry(n):
+            prev = None
+            prev_end_sec = None
+            continue
+
+        if isinstance(n, dict):
+            start_raw = n.get("start_time")
+            dur_raw = n.get("duration")
+            if prev is not None and start_raw is not None and prev_end_sec is not None:
+                if abs(float(start_raw) - prev_end_sec) > 1e-4:
+                    prev = None
+
+            pbw = str(n.get("_ust_pbw", "") or "").strip()
+            pby = str(n.get("_ust_pby", "") or "").strip()
+            pbs = str(n.get("_ust_pbs", "") or "")
+            if prev is not None and pbw and not pby and ";" not in pbs:
+                prev_num = int(prev.get("note_number", prev.get("note_num", 60)))
+                cur_num = int(n.get("note_number", n.get("note_num", 60)))
+                delta = prev_num - cur_num
+                if delta != 0:
+                    ms = (pbs.split(";")[0].strip()) or "0"
+                    n["_ust_pbs"] = f"{ms};{delta * 10}"
+
+            prev = n
+            if start_raw is not None and dur_raw is not None:
+                prev_end_sec = float(start_raw) + max(0.0, float(dur_raw))
+            else:
+                prev_end_sec = None
+        else:
+            start_raw = getattr(n, "start_time", None)
+            dur_raw = getattr(n, "duration", None)
+            if prev is not None and start_raw is not None and prev_end_sec is not None:
+                if abs(float(start_raw) - prev_end_sec) > 1e-4:
+                    prev = None
+
+            pbw = str(getattr(n, "pbw", getattr(n, "_ust_pbw", "")) or "").strip()
+            pby = str(getattr(n, "pby", getattr(n, "_ust_pby", "")) or "").strip()
+            pbs = str(getattr(n, "pbs", getattr(n, "_ust_pbs", "")) or "")
+            if prev is not None and pbw and not pby and ";" not in pbs:
+                prev_num = int(getattr(prev, "note_num", getattr(prev, "note_number", 60)))
+                cur_num = int(getattr(n, "note_num", getattr(n, "note_number", 60)))
+                delta = prev_num - cur_num
+                if delta != 0:
+                    ms = (pbs.split(";")[0].strip()) or "0"
+                    updated_pbs = f"{ms};{delta * 10}"
+                    if hasattr(n, "pbs"):
+                        n.pbs = updated_pbs
+                    if hasattr(n, "_ust_pbs"):
+                        n._ust_pbs = updated_pbs
+
+            prev = n
+            if start_raw is not None and dur_raw is not None:
+                prev_end_sec = float(start_raw) + max(0.0, float(dur_raw))
+            else:
+                prev_end_sec = None
+

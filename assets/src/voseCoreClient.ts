@@ -23,6 +23,9 @@ import { renderStudioOffline } from './wasmEngine';
 import {
   parsePitchBend,
   smoothPitchBendPoints,
+  softClampSemitone,
+  sampleSemitoneAt,
+  hasExplicitUstPortamento,
   generateUtauPortamentoPoints,
   type PitchPoint
 } from './utils/pitchCurve';
@@ -130,102 +133,117 @@ async function fetchRawSample(
   }
 }
 
-// ノートのピッチベンド(PBS/PBW/PBY)を、5msフレーム周期の絶対Hzカーブへ変換する。
-// 明示的なピッチベンドが存在しない場合も、先行ノートとの音高差から滑らかなUTAU P2P3ポルタメントを自動生成。
-function buildPitchCurveHz(
+function normalizeTrailingControlPoint(
+  points: PitchPoint[],
+  evalDurationMs: number,
+  pbm: string = ''
+): PitchPoint[] {
+  if (points.length === 0) return points;
+  const last = points[points.length - 1];
+  if (evalDurationMs > last.offsetMs) {
+    const shapes = (pbm || '').split(',').map((s) => s.trim().toLowerCase());
+    const shapeIdx = Math.max(0, points.length - 1);
+    const rawShape = shapes[shapeIdx];
+    const shape: '' | 's' | 'r' | 'j' =
+      rawShape === 's' || rawShape === 'r' || rawShape === 'j' ? rawShape : '';
+    return [...points, { offsetMs: evalDurationMs, semitone: 0, shape }];
+  }
+  return points;
+}
+
+// ノートのピッチベンド(PBS/PBW/PBY)を、5msフレーム周期の基準Hzカーブ + セント単位portamentoOffsetsへ変換する。
+// effectivePreMs > 0 のときは C++ の lead_frames 分の負時間域 [-leadFrames*5ms, 0) を先頭にパディングし、
+// PreUtterance による時間軸の前倒しズレを解消する。
+function buildPitchAndPortamento(
   note: any,
   frameCount: number,
   durationMs: number,
-  prevNote?: any
-): number[] {
+  prevNote?: any,
+  nextNote?: any,
+  effectivePreMs: number = 0,
+  timeOffsetMs: number = 0
+): { pitchCurveHz: number[]; portamentoOffsets?: number[] } {
   const rawNoteNum = typeof note?.noteNum === 'number' && Number.isFinite(note.noteNum) ? note.noteNum : 60;
   const noteNum = Math.max(12, Math.min(108, rawNoteNum));
   const baseHz = 440 * Math.pow(2, (noteNum - 69) / 12);
+  const safeBaseHz = Number.isFinite(baseHz) && baseHz >= 50.0 && baseHz <= 2200.0 ? baseHz : 440.0;
+  const pitchCurveHz: number[] = new Array(frameCount).fill(safeBaseHz);
 
-  let bendSemitoneAt: (tMs: number) => number = () => 0;
   let points: PitchPoint[] = [];
-
-  if (note.pbs && note.pbw && note.pby) {
+  if (hasExplicitUstPortamento(note)) {
     try {
-      const rawPoints = parsePitchBend(note.pbs, note.pbw, note.pby);
-      points = smoothPitchBendPoints(rawPoints);
+      const evalDur = timeOffsetMs < 0 ? Math.max(durationMs, 500) : durationMs;
+      const rawPoints = parsePitchBend(note.pbs || '', note.pbw || '', note.pby || '', note.pbm || '');
+      points = normalizeTrailingControlPoint(rawPoints, evalDur, note.pbm || '');
     } catch (e) {
       points = [];
     }
   } else if (prevNote && typeof prevNote.noteNum === 'number' && prevNote.noteNum !== noteNum) {
-    // ベタ打ち（階段状ピッチ）を解消し、先行ノートからの滑らかなS字ポルタメントを自動生成
+    // ベタ打ち（階段状ピッチ）を解消し、先行ノートからの滑らかなS字ポルタメント+オーバーシュートを自動生成
+    // (ビブラートはC++側のapply_vibratoが一貫して付与するため二重付与を避けて0指定)
     const autoPoints = generateUtauPortamentoPoints(
       noteNum,
       prevNote.noteNum,
       durationMs,
-      { portamentoMs: 105, vibratoDepthSemitones: durationMs > 600 ? 0.18 : 0 }
+      { portamentoMs: 105, vibratoDepthSemitones: 0 }
+    );
+    points = smoothPitchBendPoints(autoPoints);
+  } else if (!prevNote && durationMs >= 160) {
+    // フレーズ頭(休符明け等)に微細な声帯立ち上がりしゃくりを付与
+    const autoPoints = generateUtauPortamentoPoints(
+      noteNum,
+      null,
+      durationMs,
+      { vibratoDepthSemitones: 0 }
     );
     points = smoothPitchBendPoints(autoPoints);
   }
 
-  if (points.length > 0) {
-    bendSemitoneAt = (tMs: number) => {
-      if (tMs <= points[0].offsetMs) return points[0].semitone;
-      for (let i = 0; i < points.length - 1; i++) {
-        const a = points[i];
-        const b = points[i + 1];
-        if (tMs >= a.offsetMs && tMs <= b.offsetMs) {
-          const ratio = b.offsetMs > a.offsetMs ? (tMs - a.offsetMs) / (b.offsetMs - a.offsetMs) : 0;
-          return a.semitone + (b.semitone - a.semitone) * ratio;
-        }
+  let hasNextPreBite = false;
+  let nextPbsMs = 0;
+  let nextDeltaSemitones = 0;
+  let nextPts: PitchPoint[] = [];
+  if (timeOffsetMs >= 0 && nextNote && hasExplicitUstPortamento(nextNote)) {
+    try {
+      const parsedNext = parsePitchBend(
+        nextNote.pbs || '',
+        nextNote.pbw || '',
+        nextNote.pby || '',
+        nextNote.pbm || ''
+      );
+      if (parsedNext.length >= 2 && parsedNext[0].offsetMs < 0) {
+        nextPbsMs = parsedNext[0].offsetMs;
+        nextPts = normalizeTrailingControlPoint(parsedNext, 500, nextNote.pbm || '');
+        nextDeltaSemitones = (typeof nextNote.noteNum === 'number' ? nextNote.noteNum : noteNum) - noteNum;
+        hasNextPreBite = true;
       }
-      return points[points.length - 1].semitone;
-    };
-  }
-
-  const curve: number[] = new Array(frameCount);
-  for (let i = 0; i < frameCount; i++) {
-    const tMs = (i / Math.max(1, frameCount - 1)) * durationMs;
-    const semi = bendSemitoneAt(tMs);
-    const safeSemi = Number.isFinite(semi) ? Math.max(-24, Math.min(24, semi)) : 0;
-    const hz = baseHz * Math.pow(2, safeSemi / 12);
-    curve[i] = Number.isFinite(hz) && hz >= 50.0 && hz <= 2200.0 ? hz : baseHz;
-  }
-
-  // 5点ガウシアン重み付けによる高品位ピッチスムージング
-  // フレーム境界(5ms)での微小な段差・急峻な階段状ピッチ変化を滑らかに補間
-  // （金属的ロボット感や音程の角立ち・ギザギザ感を解消し、肉声のように自然な歌声のうねりへ整える）
-  let finalCurve = curve;
-  if (curve.length >= 5) {
-    const smoothed = new Array(curve.length);
-    smoothed[0] = curve[0];
-    smoothed[1] = 0.25 * curve[0] + 0.50 * curve[1] + 0.25 * curve[2];
-    for (let i = 2; i < curve.length - 2; i++) {
-      smoothed[i] =
-        0.06 * curve[i - 2] +
-        0.24 * curve[i - 1] +
-        0.40 * curve[i] +
-        0.24 * curve[i + 1] +
-        0.06 * curve[i + 2];
-    }
-    smoothed[curve.length - 2] =
-      0.25 * curve[curve.length - 3] + 0.50 * curve[curve.length - 2] + 0.25 * curve[curve.length - 1];
-    smoothed[curve.length - 1] = curve[curve.length - 1];
-    finalCurve = smoothed;
-  } else if (curve.length >= 3) {
-    const smoothed = new Array(curve.length);
-    smoothed[0] = curve[0];
-    for (let i = 1; i < curve.length - 1; i++) {
-      smoothed[i] = 0.25 * curve[i - 1] + 0.50 * curve[i] + 0.25 * curve[i + 1];
-    }
-    smoothed[curve.length - 1] = curve[curve.length - 1];
-    finalCurve = smoothed;
-  }
-
-  // 最終安全バリデーション: 全要素が 50Hz〜2200Hz の有限実数であることを保証
-  for (let i = 0; i < finalCurve.length; i++) {
-    const v = finalCurve[i];
-    if (!Number.isFinite(v) || v < 50.0 || v > 2200.0) {
-      finalCurve[i] = baseHz;
+    } catch (e) {
+      hasNextPreBite = false;
     }
   }
 
-  return finalCurve;
+  if (points.length === 0 && !hasNextPreBite) {
+    return { pitchCurveHz };
+  }
+
+  const leadFrames = effectivePreMs > 0 ? Math.ceil(effectivePreMs / PITCH_FRAME_PERIOD_MS) : 0;
+  const totalLen = frameCount + leadFrames;
+  const portamentoOffsets: number[] = new Array(totalLen);
+
+  for (let j = 0; j < totalLen; j++) {
+    const tMs = timeOffsetMs + (j - leadFrames) * PITCH_FRAME_PERIOD_MS;
+    let semi = points.length > 0 ? sampleSemitoneAt(points, tMs) : 0;
+    if (hasNextPreBite) {
+      const tp = tMs - durationMs;
+      if (tp >= nextPbsMs) {
+        semi += nextDeltaSemitones + sampleSemitoneAt(nextPts, tp);
+      }
+    }
+    const clampedSemi = softClampSemitone(Number.isFinite(semi) ? semi : 0);
+    portamentoOffsets[j] = Number.isFinite(clampedSemi) ? clampedSemi * 100.0 : 0.0;
+  }
+
+  return { pitchCurveHz, portamentoOffsets };
 }
 
 function silentFrames(frameCount: number): number[] {
@@ -537,7 +555,10 @@ async function renderViaCore(
     note: any | null,
     startTimeSec: number,
     durationMs: number,
-    prevNote?: any | null
+    prevNote?: any | null,
+    nextNote?: any | null,
+    sampleOto?: OtoData | null,
+    timeOffsetMs: number = 0
   ) => {
     const p = Math.max(
       2,
@@ -557,10 +578,24 @@ async function renderViaCore(
         (Number.isFinite(preValue) && preValue > 0);
       const hasOverlap = note._ust_overlap_explicit === true ||
         (Number.isFinite(overlapValue) && overlapValue > 0);
+      const effectivePreMs = hasPre
+        ? Math.max(0, preValue)
+        : Math.max(0, Number(sampleOto?.preutteranceMs || 0));
+
+      const { pitchCurveHz, portamentoOffsets } = buildPitchAndPortamento(
+        note,
+        p,
+        durationMs,
+        prevNote,
+        nextNote,
+        effectivePreMs,
+        timeOffsetMs
+      );
 
       workerNotes.push({
         key,
-        pitchCurveHz: buildPitchCurveHz(note, p, durationMs, prevNote),
+        pitchCurveHz,
+        portamentoOffsets,
         intensity: typeof note.intensity === 'number' ? note.intensity : 100,
         modulation: typeof note.modulation === 'number' ? note.modulation : 0,
         startTimeMs,
@@ -609,6 +644,13 @@ async function renderViaCore(
       const noteNum = n.noteNum || 60;
       const key = `${voicebank}:${lyric}:${prevLyric || ''}:${noteNum}`;
 
+      const candidateNext = i + 1 < sortedNotes.length ? sortedNotes[i + 1] : null;
+      const nextStartTick = candidateNext ? Math.max(0, candidateNext.tick || 0) : -1;
+      const nextStartSec = candidateNext ? tickToTimeSec(nextStartTick) : Infinity;
+      const isNextContinuous = !!candidateNext && !isRest(candidateNext.lyric) &&
+        (nextStartSec - noteEndSec <= 0.015);
+      const effectiveNext = isNextContinuous ? candidateNext : null;
+
       const s = rawSampleMap.get(key);
       const wasmKey = cacheKeyToWasmKey.get(key);
       if (!s || !wasmKey) {
@@ -640,23 +682,25 @@ async function renderViaCore(
         const vcvMatched = continuousForCvvc &&
           !!s.matchedAlias &&
           isVcvMatchedAlias(s.matchedAlias, prevVowelForCvvc);
-        
+
         const effectivePrev = isContinuous ? prevNote : null;
 
         if (continuousForCvvc && !vcvMatched && vcMatchesExactly && Number.isFinite(preMs) && preMs > 0) {
           const vcWasmKey = cacheKeyToWasmKey.get(vcKey);
           if (vcWasmKey) {
             const vcStartSec = Math.max(0, noteStartSec - preMs / 1000.0);
-            pushEvent(vcWasmKey, n, vcStartSec, preMs, effectivePrev);
+            const vcNote = { ...n, pre_utterance: 0, overlap: 0, _ust_preutterance_explicit: true, _ust_overlap_explicit: true };
+            pushEvent(vcWasmKey, vcNote, vcStartSec, preMs, effectivePrev, null, vcSample?.oto, -preMs);
             // The VC already occupies the preutterance window. Do not apply
-            // the same preutterance a second time to the following CV.
-            const cvNote = { ...n, pre_utterance: 0, overlap: 0 };
-            pushEvent(wasmKey, cvNote, noteStartSec, noteDurationMs, effectivePrev);
+            // the same preutterance, re-trigger portamento, or trigger a phrase-entry scoop on the following CV.
+            const cvNote = { ...n, pre_utterance: 0, overlap: 0, _ust_preutterance_explicit: true, _ust_overlap_explicit: true };
+            const cvPrev = hasExplicitUstPortamento(n) ? effectivePrev : { noteNum };
+            pushEvent(wasmKey, cvNote, noteStartSec, noteDurationMs, cvPrev, effectiveNext, s.oto, 0);
           } else {
-            pushEvent(wasmKey, n, noteStartSec, noteDurationMs, effectivePrev);
+            pushEvent(wasmKey, n, noteStartSec, noteDurationMs, effectivePrev, effectiveNext, s.oto, 0);
           }
         } else {
-          pushEvent(wasmKey, n, noteStartSec, noteDurationMs, effectivePrev);
+          pushEvent(wasmKey, n, noteStartSec, noteDurationMs, effectivePrev, effectiveNext, s.oto, 0);
         }
       }
     }

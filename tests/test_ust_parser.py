@@ -568,5 +568,111 @@ class TestUstParser(unittest.TestCase):
             restored["_ust_trailing_rest_duration_sec"], 0.25, places=6
         )
 
+    def test_default_portamento_start_fills_pbs_y_when_pby_missing(self):
+        """修正A: PBWあり・PBY空欄・PBSに;無しなら前ノートとの音程差×10をPBS;yへ補完する。"""
+        project = UstParser()._parse([
+            "[#SETTING]",
+            "Tempo=120",
+            "[#0000]",
+            "Length=480",
+            "Lyric=あ",
+            "NoteNum=72",
+            "[#0001]",
+            "Length=480",
+            "Lyric=か",
+            "NoteNum=74",
+            "PBS=-29",
+            "PBW=56",
+            "[#0002]",
+            "Length=480",
+            "Lyric=き",
+            "NoteNum=74",
+            "PBS=-29",
+            "PBW=56",
+            "[#0003]",
+            "Length=480",
+            "Lyric=く",
+            "NoteNum=76",
+            "PBS=-29",
+            "PBW=56",
+            "PBY=15",
+            "[#0004]",
+            "Length=240",
+            "Lyric=R",
+            "NoteNum=60",
+            "[#0005]",
+            "Length=480",
+            "Lyric=け",
+            "NoteNum=79",
+            "PBS=-29",
+            "PBW=56",
+            "[#TRACKEND]",
+        ])
+        dicts = UstConverter.to_note_dicts(project)
+        self.assertEqual(dicts[1]["_ust_pbs"], "-29;-20")
+        self.assertEqual(dicts[2]["_ust_pbs"], "-29")
+        self.assertEqual(dicts[3]["_ust_pbs"], "-29")
+        self.assertEqual(dicts[4]["_ust_pbs"], "-29")
+
+    def test_build_ust_control_points_short_note_stays_monotonic(self):
+        """duration_ms < PBW終端時刻でも制御点時刻が逆行しない。"""
+        pts, _shapes, pbs_ms = UstConverter._build_ust_control_points(
+            "-29;-20", "56", "", "", 20.0
+        )
+        self.assertEqual(pbs_ms, -29.0)
+        self.assertEqual(pts, [(-29.0, -2.0), (27.0, 0.0)])
+
+    def test_build_portamento_curve_pre_bite_and_preutterance_padding(self):
+        """修正Bの先行食い込みと PreUtterance lead_frames 負時間パディングを検証する。"""
+        from modules.audio.vo_se_engine_patch import build_portamento_curve
+
+        note0 = {
+            "note_number": 72,
+            "duration": 0.5,
+            "_ust_tempo": 120.0,
+            "_ust_pbs": "",
+            "_ust_pbw": "",
+            "_ust_pby": "",
+            "_ust_pbm": "",
+        }
+        note1 = {
+            "note_number": 74,
+            "duration": 0.5,
+            "_ust_tempo": 120.0,
+            "_ust_pbs": "-29;-20",
+            "_ust_pbw": "56",
+            "_ust_pby": "",
+            "_ust_pbm": "",
+        }
+        # Note 0 tail gets Note 1's pre-bite (-29ms..-1ms -> up to ~+96.4 cents at 500ms)
+        curve0 = build_portamento_curve(note0, resolution=101, next_note=note1)
+        assert curve0 is not None
+        self.assertEqual(len(curve0), 101)
+        self.assertAlmostEqual(float(curve0[0]), 0.0, places=3)
+        self.assertGreater(float(curve0[-1]), 90.0)
+
+        # Note 1 with PreUtterance=50ms -> lead_frames=10, total=111 frames
+        curve1 = build_portamento_curve(
+            note1, resolution=101, preutterance_ms=50.0
+        )
+        assert curve1 is not None
+        self.assertEqual(len(curve1), 111)
+        # j=0 is -50ms (clamped to PBS start = -200 cents)
+        self.assertAlmostEqual(float(curve1[0]), -200.0, places=2)
+        # j=10 is t=0ms (note boundary): around -96.4 cents (27/56 remaining of -200)
+        self.assertLess(float(curve1[10]), -80.0)
+        self.assertGreater(float(curve1[10]), -115.0)
+        # j=17 is t=+35ms (> +27ms): settled at 0 cents
+        self.assertAlmostEqual(float(curve1[17]), 0.0, places=2)
+
+        # CVVC vc segment evaluating Note 1 during [-50ms, 0ms)
+        vc_curve = build_portamento_curve(
+            note1, resolution=11, preutterance_ms=0.0, time_offset_ms=-50.0
+        )
+        assert vc_curve is not None
+        self.assertAlmostEqual(float(vc_curve[0]), -200.0, places=2)
+        self.assertLess(float(vc_curve[-1]), -80.0)
+
+
 if __name__ == "__main__":
     unittest.main()

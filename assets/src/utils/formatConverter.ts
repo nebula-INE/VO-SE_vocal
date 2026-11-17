@@ -1,7 +1,7 @@
 // Project Format Converter for Vocal Synthesizers
 // Supports: UST (.ust), VOCALOID3/4 (.vsqx), Synthesizer V (.svp), Standard MIDI (.mid)
 
-import { parsePitchBend, serializePitchBend, PitchPoint } from './pitchCurve';
+import { parsePitchBend, serializePitchBend, type PitchPoint } from './pitchCurve';
 
 export interface Note {
   id: string;
@@ -14,6 +14,10 @@ export interface Note {
   pbs: string;
   pbw: string;
   pby: string;
+  pbm?: string;
+  hasPbs?: boolean;
+  hasPbw?: boolean;
+  hasPby?: boolean;
   tempo?: number; // Note-specific tempo (BPM) if specified
 }
 
@@ -138,6 +142,38 @@ export function parsePitchToMidi(val: string | number): number {
 // 1. UST (.ust) Parser & Exporter
 // ----------------------------------------------------------------------
 
+/**
+ * 修正A: PBWがあり、PBYが空で、PBSに ;y がないノートに対して
+ * 直前ノートとの音高差から始点ピッチ ;y = (prev.noteNum - note.noteNum) * 10 を補う。
+ * 休符やタイムラインの隙間を跨ぐ場合は補わない。
+ */
+export function applyDefaultPortamentoStart(notes: Note[]): void {
+  let prev: Note | null = null;
+  let prevEndTick: number | null = null;
+
+  for (const n of notes) {
+    if (prev !== null && prevEndTick !== null && n.tick > prevEndTick) {
+      prev = null;
+    }
+
+    const pbw = (n.pbw || '').trim();
+    const pby = (n.pby || '').trim();
+    const hasExplicitPby = n.hasPby !== undefined ? n.hasPby : Boolean(pby);
+    const pbs = n.pbs || '';
+
+    if (prev !== null && pbw && !hasExplicitPby && !pby && !pbs.includes(';')) {
+      const delta = prev.noteNum - n.noteNum;
+      if (delta !== 0) {
+        const ms = (pbs.split(';')[0] || '').trim() || '0';
+        n.pbs = `${ms};${delta * 10}`;
+      }
+    }
+
+    prev = n;
+    prevEndTick = (n.tick || 0) + Math.max(1, n.length || 480);
+  }
+}
+
 export function parseUstText(text: string): ProjectData {
   // Strip UTF-8 BOM if present and normalize newlines
   const cleanText = text.replace(/^\uFEFF/, '');
@@ -159,9 +195,13 @@ export function parseUstText(text: string): ProjectData {
   let curNoteNum = 60;
   let curIntensity = 120;
   let curFlags = '';
-  let curPbs = '0;0';
-  let curPbw = '50';
-  let curPby = '0';
+  let curPbs = '';
+  let curPbw = '';
+  let curPby = '';
+  let curPbm = '';
+  let curHasPbs = false;
+  let curHasPbw = false;
+  let curHasPby = false;
   let curPitches = '';
   let curTempo: number | undefined = undefined;
 
@@ -172,29 +212,26 @@ export function parseUstText(text: string): ProjectData {
 
     // UTAUの「タイ（継続）ノート」記法: Lyric="+" は新しい音素を発音せず、
     // 直前のノートの発音をそのまま継続する（ピッチカーブだけを追加で乗せることが多い）。
-    // これを普通の歌詞として音源解決しようとすると、音源には存在しないエイリアスなので
-    // 必ず失敗し、その区間が余計な無音になってしまっていた。
-    // 正しくは: 新規ノートを作らず、直前のノートの長さを延長し、
-    // このノート自身のPBS/PBW/PBYを直前ノートの続きとして結合する。
     if (trimmedLyric === '+') {
       if (notes.length > 0) {
         const prevNote = notes[notes.length - 1];
         const activeTempo = prevNote.tempo || currentRunningTempo || 120;
         const prevLengthMs = (prevNote.length / 480) * (60000 / activeTempo);
 
-        if (curPbs || curPbw || curPby) {
-          const prevPoints = parsePitchBend(prevNote.pbs, prevNote.pbw, prevNote.pby);
-          const tiePoints = parsePitchBend(curPbs, curPbw, curPby).map((p) => ({
+        if (curHasPbs || curHasPbw || curHasPby) {
+          const prevPoints = parsePitchBend(prevNote.pbs, prevNote.pbw, prevNote.pby, prevNote.pbm || '');
+          const tiePoints = parsePitchBend(curPbs, curPbw, curPby, curPbm).map((p) => ({
+            ...p,
             offsetMs: p.offsetMs + prevLengthMs,
-            semitone: p.semitone
           }));
-          // タイノートのPBSは直前ノートの領域に食い込む負のオフセットを持つことがある
-          // (滑らかなポルタメントとして正しい挙動)ため、結合後は時系列順に並べ直す。
           const mergedPoints = [...prevPoints, ...tiePoints].sort((a, b) => a.offsetMs - b.offsetMs);
           const merged = serializePitchBend(mergedPoints);
           prevNote.pbs = merged.pbs;
           prevNote.pbw = merged.pbw;
           prevNote.pby = merged.pby;
+          prevNote.hasPbs = true;
+          prevNote.hasPbw = true;
+          prevNote.hasPby = true;
         }
         prevNote.length = Math.max(1, prevNote.length) + Math.max(1, curLength);
       }
@@ -227,17 +264,18 @@ export function parseUstText(text: string): ProjectData {
     );
 
     if (!isRest) {
+      let hasMode2 = curHasPbs || curHasPbw || curHasPby;
       let finalPbs = curPbs;
       let finalPbw = curPbw;
       let finalPby = curPby;
+      let finalHasPbs = curHasPbs;
+      let finalHasPbw = curHasPbw;
+      let finalHasPby = curHasPby;
 
-      // Mode 1 Pitches / PitchBend fallback if Mode 2 PBS/PBW/PBY is empty or default
-      if ((!curPbs || curPbs === '0;0') && (!curPby || curPby === '0') && curPitches) {
+      // Mode 1 Pitches / PitchBend fallback if Mode 2 PBS/PBW/PBY is not explicitly present
+      if (!curHasPbs && !curHasPbw && !curHasPby && curPitches) {
         const pitchList = curPitches.split(',').map((s) => parseFloat(s.trim())).filter((n) => !isNaN(n));
         if (pitchList.length > 1) {
-          // UST/UTAU標準仕様: 単位は常に固定で「10 = 1半音」。
-          // (以前はノート内の最大絶対値でセント/0.1半音/実半音を"自動判定"していたが、
-          //  これは pitchCurve.ts と同じ根本原因のバグ。ベンドの深さと単位は無関係)
           const factor = 0.1;
           const activeTempo = curTempo || currentRunningTempo || 120;
           const stepMs = Math.max(10, Math.round(((curLength / 480) * (60000 / activeTempo)) / pitchList.length));
@@ -253,17 +291,18 @@ export function parseUstText(text: string): ProjectData {
             finalPbs = serialized.pbs;
             finalPbw = serialized.pbw;
             finalPby = serialized.pby;
+            hasMode2 = true;
+            finalHasPbs = true;
+            finalHasPbw = true;
+            finalHasPby = true;
           }
         }
       }
 
-      // Automatically calibrate and normalize through parsePitchBend & serializePitchBend to ensure safe bounds
-      if (finalPbs || finalPbw || finalPby) {
-        const parsedPoints = parsePitchBend(finalPbs, finalPbw, finalPby);
-        const normalized = serializePitchBend(parsedPoints);
-        finalPbs = normalized.pbs;
-        finalPbw = normalized.pbw;
-        finalPby = normalized.pby;
+      if (!hasMode2) {
+        finalPbs = '0;0';
+        finalPbw = '50';
+        finalPby = '0';
       }
 
       notes.push({
@@ -274,9 +313,13 @@ export function parseUstText(text: string): ProjectData {
         length: Math.max(1, curLength),
         intensity: Math.min(200, Math.max(0, curIntensity)),
         flags: curFlags,
-        pbs: finalPbs || '0;0',
-        pbw: finalPbw || '50',
-        pby: finalPby || '0',
+        pbs: finalPbs,
+        pbw: finalPbw,
+        pby: finalPby,
+        pbm: curPbm,
+        hasPbs: finalHasPbs,
+        hasPbw: finalHasPbw,
+        hasPby: finalHasPby,
         ...(curTempo !== undefined ? { tempo: curTempo } : {})
       });
     }
@@ -333,9 +376,13 @@ export function parseUstText(text: string): ProjectData {
       curNoteNum = 60;
       curIntensity = 120;
       curFlags = '';
-      curPbs = '0;0';
-      curPbw = '50';
-      curPby = '0';
+      curPbs = '';
+      curPbw = '';
+      curPby = '';
+      curPbm = '';
+      curHasPbs = false;
+      curHasPbw = false;
+      curHasPby = false;
       curPitches = '';
       curTempo = undefined;
       continue;
@@ -383,12 +430,18 @@ export function parseUstText(text: string): ProjectData {
         case 'pbs':
         case 'pbstart':
           curPbs = val;
+          curHasPbs = true;
           break;
         case 'pbw':
           curPbw = val;
+          curHasPbw = true;
           break;
         case 'pby':
           curPby = val;
+          curHasPby = true;
+          break;
+        case 'pbm':
+          curPbm = val;
           break;
         case 'pitches':
         case 'pitchbend':
@@ -426,6 +479,9 @@ export function parseUstText(text: string): ProjectData {
   // Push the final note if file did not have [#TRACKEND]
   pushCurrentNote();
 
+  // 修正A: ノート配列確定後に PBY 空かつ PBS に ;y がないノートの始点高さを補完
+  applyDefaultPortamentoStart(notes);
+
   // テンポ優先決定ルール:
   // 1. ノート側で最初に指定されたテンポ (firstNoteTempo)
   //    UTAUでは [#SETTING] がデフォルト120のままでも、[#0000] 等のノート側で
@@ -458,7 +514,11 @@ export function exportUstText(project: ProjectData): string {
     }
 
     const padIdx = String(sectionIndex++).padStart(4, '0');
-    ust += `[#${padIdx}]\nLength=${n.length}\nLyric=${n.lyric}\nNoteNum=${n.noteNum}\nIntensity=${Math.round(n.intensity || 120)}\nFlags=${n.flags || ''}\nPBS=${n.pbs || '0;0'}\nPBW=${n.pbw || '50'}\nPBY=${n.pby || '0'}\n`;
+    const expPbs = n.pbs !== undefined ? n.pbs : '0;0';
+    const expPbw = n.pbw !== undefined ? n.pbw : '50';
+    const expPby = n.pby !== undefined ? n.pby : '0';
+    ust += `[#${padIdx}]\nLength=${n.length}\nLyric=${n.lyric}\nNoteNum=${n.noteNum}\nIntensity=${Math.round(n.intensity || 120)}\nFlags=${n.flags || ''}\nPBS=${expPbs}\nPBW=${expPbw}\nPBY=${expPby}\n`;
+    if (n.pbm) ust += `PBM=${n.pbm}\n`;
     currentTick = n.tick + n.length;
   });
 

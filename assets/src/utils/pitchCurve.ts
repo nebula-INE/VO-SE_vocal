@@ -18,6 +18,8 @@ export interface PitchPoint {
   offsetMs: number;
   /** ノート基準音高からの半音オフセット */
   semitone: number;
+  /** PBM補間形状 ('': S字, 's': 線形, 'r': Rカーブ, 'j': Jカーブ)。省略時は従来の線形 */
+  shape?: '' | 's' | 'r' | 'j';
 }
 
 function parseNumeric(raw: string): number {
@@ -28,9 +30,56 @@ function parseNumeric(raw: string): number {
 
 const pitchBendCache = new Map<string, PitchPoint[]>();
 
-/** PBS/PBW/PBY文字列から制御点の配列を作る (キャッシュ付き高速パース & UTAU単位自動判定・限界突破防止) */
-export function parsePitchBend(pbs: string, pbw: string, pby: string): PitchPoint[] {
-  const key = `${pbs || ''}|${pbw || ''}|${pby || ''}`;
+function normalizePbmShape(raw?: string): '' | 's' | 'r' | 'j' {
+  const s = (raw || '').trim().toLowerCase();
+  if (s === 's' || s === 'r' || s === 'j') return s;
+  return '';
+}
+
+function interpShape(u: number, shape?: '' | 's' | 'r' | 'j'): number {
+  const clampedU = Math.max(0, Math.min(1, u));
+  if (shape === undefined || shape === 's') return clampedU;
+  if (shape === 'r') return Math.sin((Math.PI * clampedU) / 2);
+  if (shape === 'j') return 1 - Math.cos((Math.PI * clampedU) / 2);
+  return (1 - Math.cos(Math.PI * clampedU)) / 2;
+}
+
+/**
+ * USTノートのMode 2ポルタメント (PBS/PBW/PBY) が明示的に指定されているか判定する。
+ * MIDI/SVP/VSQX/UIが補う既定のプレースホルダ ('0;0', '50', '0') は除外する。
+ */
+export function hasExplicitUstPortamento(note: {
+  pbs?: string;
+  pbw?: string;
+  pby?: string;
+  hasPbs?: boolean;
+  hasPbw?: boolean;
+  hasPby?: boolean;
+} | null | undefined): boolean {
+  if (!note) return false;
+  if (note.hasPbs === true || note.hasPbw === true || note.hasPby === true) {
+    return Boolean(
+      (note.pbw && note.pbw.trim()) ||
+      (note.pby && note.pby.trim()) ||
+      (note.pbs && note.pbs.includes(';'))
+    );
+  }
+  const pbs = String(note.pbs || '').trim();
+  const pbw = String(note.pbw || '').trim();
+  const pby = String(note.pby || '').trim();
+  if (
+    (pbs === '' || pbs === '0;0') &&
+    (pbw === '' || pbw === '50') &&
+    (pby === '' || pby === '0')
+  ) {
+    return false;
+  }
+  return Boolean(pbw || pby || pbs.includes(';'));
+}
+
+/** PBS/PBW/PBY/PBM文字列から制御点の配列を作る (キャッシュ付き高速パース & UTAU単位固定・限界突破防止) */
+export function parsePitchBend(pbs: string, pbw: string, pby: string, pbm: string = ''): PitchPoint[] {
+  const key = `${pbs || ''}|${pbw || ''}|${pby || ''}|${pbm || ''}`;
   const cached = pitchBendCache.get(key);
   if (cached) return cached;
 
@@ -50,16 +99,11 @@ export function parsePitchBend(pbs: string, pbw: string, pby: string): PitchPoin
     .filter((s) => s.length > 0)
     .map(parseNumeric);
 
+  const shapes = (pbm || '')
+    .split(',')
+    .map((s) => normalizePbmShape(s));
+
   // UST/UTAU標準仕様: PBS/PBYの単位は常に固定で「10 = 1半音」。
-  //
-  // ★重要: 以前はノートごとの生値の最大絶対値からセント/0.1半音/実半音を
-  // "自動判定" していたが、これは根本的に誤り。ベンドの深さ（大きいか小さいか）と
-  // 数値の単位（何を1半音とみなすか）は無関係で、ファイル内では常に固定のはず。
-  // この誤判定により、穏やかなビブラートやしゃくり等の小さい生値
-  // （例: -14.3, 6.7 など、ノート内の最大絶対値が15以下のケース）が
-  // 「もう半音そのもの」と誤認識され、-14.3半音・6.7半音という
-  // 物理的にありえない急激なピッチジャンプとして適用されてしまっていた
-  // （実際は -1.43半音・0.67半音程度の穏やかなベンドのはずだった）。
   const scaleFactor = 0.1;
 
   // ノート開始位置からの相対時間・半音の安全クランプ (±24半音 = ±2オクターブ内に厳格制限)
@@ -68,14 +112,20 @@ export function parsePitchBend(pbs: string, pbw: string, pby: string): PitchPoin
   const points: PitchPoint[] = [{ offsetMs: clampedStartOffset, semitone: roundTo(clampedStartSemitone, 2) }];
 
   let cursorMs = clampedStartOffset;
-  for (let i = 0; i < rawHeights.length; i++) {
+  const count = Math.max(widths.length, rawHeights.length);
+  for (let i = 0; i < count; i++) {
     const rawW = widths[i] ?? (widths[widths.length - 1] ?? 50);
     const clampedW = Math.max(1, Math.min(5000, rawW));
     cursorMs += clampedW;
 
-    const scaledSemitone = rawHeights[i] * scaleFactor;
+    const rawH = rawHeights[i] ?? 0;
+    const scaledSemitone = rawH * scaleFactor;
     const clampedSemitone = Math.max(-24, Math.min(24, scaledSemitone));
-    points.push({ offsetMs: cursorMs, semitone: roundTo(clampedSemitone, 2) });
+    points.push({
+      offsetMs: cursorMs,
+      semitone: roundTo(clampedSemitone, 2),
+      shape: i < shapes.length ? shapes[i] : ''
+    });
   }
 
   if (pitchBendCache.size > 3000) {
@@ -87,20 +137,20 @@ export function parsePitchBend(pbs: string, pbw: string, pby: string): PitchPoin
   return points;
 }
 
-/** 制御点の配列からPBS/PBW/PBY文字列を再構築する */
+/** 制御点の配列からPBS/PBW/PBY文字列をUTAU 10cent単位で再構築する */
 export function serializePitchBend(points: PitchPoint[]): { pbs: string; pbw: string; pby: string } {
   if (points.length === 0) {
     return { pbs: '0;0', pbw: '', pby: '' };
   }
   const [first, ...rest] = points;
-  const pbs = `${Math.round(first.offsetMs)};${roundTo(first.semitone, 2)}`;
+  const pbs = `${Math.round(first.offsetMs)};${roundTo(first.semitone * 10, 2)}`;
 
   const widths: number[] = [];
   const heights: number[] = [];
   let prevMs = first.offsetMs;
   for (const p of rest) {
     widths.push(Math.max(1, Math.round(p.offsetMs - prevMs)));
-    heights.push(roundTo(p.semitone, 2));
+    heights.push(roundTo(p.semitone * 10, 2));
     prevMs = p.offsetMs;
   }
 
@@ -207,10 +257,78 @@ export function sampleSemitoneAt(points: PitchPoint[], offsetMs: number): number
     if (offsetMs >= a.offsetMs && offsetMs <= b.offsetMs) {
       const span = b.offsetMs - a.offsetMs;
       const t = span <= 0 ? 0 : (offsetMs - a.offsetMs) / span;
-      return a.semitone + (b.semitone - a.semitone) * t;
+      const eased = interpShape(t, b.shape);
+      return a.semitone + (b.semitone - a.semitone) * eased;
     }
   }
   return last.semitone;
+}
+
+/**
+ * 修正B: 連続する次ノートが負のPBSを持つ場合、現ノート末尾 (curDurationMs + tp, tp >= nextPbsMs)
+ * に次ノートの先行ポルタメントを食い込ませるための制御点を生成・追記する。
+ */
+export function appendNextNotePreBitePoints(
+  basePoints: PitchPoint[] | null,
+  curNoteNum: number,
+  curDurationMs: number,
+  nextNote: {
+    noteNum: number;
+    pbs?: string;
+    pbw?: string;
+    pby?: string;
+    pbm?: string;
+    hasPbs?: boolean;
+    hasPbw?: boolean;
+    hasPby?: boolean;
+  } | null | undefined
+): PitchPoint[] | null {
+  if (!nextNote || !hasExplicitUstPortamento(nextNote)) {
+    return basePoints;
+  }
+  const nextPts = parsePitchBend(
+    nextNote.pbs || '',
+    nextNote.pbw || '',
+    nextNote.pby || '',
+    nextNote.pbm || ''
+  );
+  if (nextPts.length < 2 || nextPts[0].offsetMs >= 0) {
+    return basePoints;
+  }
+
+  const nextPbsMs = nextPts[0].offsetMs;
+  const entryMs = Math.max(0, curDurationMs + nextPbsMs);
+  const deltaSemitones = nextNote.noteNum - curNoteNum;
+
+  const out: PitchPoint[] = basePoints && basePoints.length > 0
+    ? basePoints.map((p) => ({ ...p }))
+    : [{ offsetMs: 0, semitone: 0 }];
+
+  const baseAtEntry = sampleSemitoneAt(out, entryMs);
+  if (out[out.length - 1].offsetMs < entryMs - 0.5) {
+    out.push({ offsetMs: entryMs, semitone: baseAtEntry });
+  }
+
+  const stepMs = 5;
+  for (let tp = nextPbsMs; tp < 0; tp += stepMs) {
+    const offsetMs = curDurationMs + tp;
+    if (offsetMs < entryMs) continue;
+    const baseSemi = basePoints && basePoints.length > 0 ? sampleSemitoneAt(basePoints, offsetMs) : 0;
+    const nextBend = sampleSemitoneAt(nextPts, tp);
+    out.push({
+      offsetMs,
+      semitone: roundTo(baseSemi + deltaSemitones + nextBend, 3),
+    });
+  }
+
+  const baseAtEnd = basePoints && basePoints.length > 0 ? sampleSemitoneAt(basePoints, curDurationMs) : 0;
+  const nextBendAtZero = sampleSemitoneAt(nextPts, 0);
+  out.push({
+    offsetMs: curDurationMs,
+    semitone: roundTo(baseAtEnd + deltaSemitones + nextBendAtZero, 3),
+  });
+
+  return out;
 }
 
 /**
@@ -278,6 +396,10 @@ export interface AutoTuneConfig {
   vibratoDepthSemitones?: number;
   /** ビブラート周期 (Hz)。既定: 5.5Hz (標準的な人間の歌唱) */
   vibratoRateHz?: number;
+  /** ノート頭オーバーシュート深さ (半音)。既定: 自動 (~0.12-0.18半音) */
+  overshootSemitones?: number;
+  /** フレーズ頭(休符明け)の微細なしゃくり (半音)。既定: -0.30半音 (0で無効) */
+  phraseScoopSemitones?: number;
 }
 
 export function generateUtauPortamentoPoints(
@@ -292,7 +414,7 @@ export function generateUtauPortamentoPoints(
     Math.max(40, noteDurationMs * 0.45)
   );
   
-  // 1. 直前ノートとのポルタメントS字カーブ (P2P3)
+  // 1. 直前ノートとのポルタメントS字カーブ (P2P3) + ノート頭オーバーシュート
   if (prevNoteNum !== null && prevNoteNum !== currentNoteNum) {
     const delta = prevNoteNum - currentNoteNum;
     // ノートの境界を跨いで遷移させるため、開始位置をノート境界の手前に配置
@@ -306,6 +428,24 @@ export function generateUtauPortamentoPoints(
       const semitone = roundTo(delta * sCurve, 2);
       points.push({ offsetMs, semitone });
     }
+    // Note-head overshoot (~12-18 cents) past target in direction of pitch jump,
+    // settling over ~45ms on notes long enough to sustain cleanly.
+    const overshootEndMs = startMs + portMs + 50;
+    const defaultOvershoot = -Math.sign(delta) * Math.min(0.18, Math.max(0.08, Math.abs(delta) * 0.035));
+    const overshootSemi = config.overshootSemitones ?? defaultOvershoot;
+    if (overshootSemi !== 0 && overshootEndMs < noteDurationMs - 15) {
+      const peakMs = startMs + portMs + 16;
+      points.push({ offsetMs: Math.round(peakMs), semitone: roundTo(overshootSemi, 2) });
+      points.push({ offsetMs: Math.round(overshootEndMs), semitone: 0 });
+    }
+  } else if (prevNoteNum === null && noteDurationMs >= 160 && config.phraseScoopSemitones !== 0) {
+    // Subtle vocal onset scoop (~-30 cents rising smoothly over ~50ms) at phrase/rest entries
+    const scoopSemi = config.phraseScoopSemitones ?? -0.30;
+    const scoopMs = Math.min(55, Math.round(noteDurationMs * 0.22));
+    const midMs = Math.round(scoopMs * 0.5);
+    points.push({ offsetMs: 0, semitone: roundTo(scoopSemi, 2) });
+    points.push({ offsetMs: midMs, semitone: roundTo(scoopSemi * 0.35, 2) });
+    points.push({ offsetMs: scoopMs, semitone: 0 });
   } else {
     points.push({ offsetMs: 0, semitone: 0 });
   }
@@ -418,16 +558,20 @@ export function makeSemitoneCurve(
   maxAbsSemitone: number = 12
 ): (tSec: number) => number {
   const pts = points
-    .map((p) => ({ t: noteStartInBufferSec + p.offsetMs / 1000, v: p.semitone }))
+    .map((p) => ({ t: noteStartInBufferSec + p.offsetMs / 1000, v: p.semitone, shape: p.shape }))
     .sort((a, b) => a.t - b.t);
   const clamp = (v: number) => Math.max(-maxAbsSemitone, Math.min(maxAbsSemitone, v));
   return (tSec: number): number => {
-    if (pts.length === 0 || tSec < pts[0].t) return 0;
+    if (pts.length === 0) return 0;
+    if (tSec <= pts[0].t) return clamp(pts[0].v);
     for (let i = 1; i < pts.length; i++) {
       if (tSec <= pts[i].t) {
         const a = pts[i - 1], b = pts[i];
         const span = b.t - a.t;
-        return clamp(span > 1e-6 ? a.v + ((b.v - a.v) * (tSec - a.t)) / span : b.v);
+        if (span <= 1e-6) return clamp(b.v);
+        const u = (tSec - a.t) / span;
+        const eased = interpShape(u, b.shape);
+        return clamp(a.v + (b.v - a.v) * eased);
       }
     }
     return clamp(pts[pts.length - 1].v);

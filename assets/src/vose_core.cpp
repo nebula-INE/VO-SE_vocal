@@ -592,6 +592,8 @@ static constexpr bool   kMorphOverlapToPrevious = true;
 // true: オーバーラップで繋がるノート列を 1 本の f0/スペクトル/非周期性の時系列に
 //       まとめて WORLD を 1 回だけ回す（波形クロスフェードが不要になる）。
 // false: 従来のノート単位合成＋波形クロスフェード。
+// Stage 1 isolation: verify boundary/fade fixes and 10-30ms parameter interpolation
+// before re-enabling shared-Synthesis legato runs in Stage 4.
 static constexpr bool   kContinuousLegatoRuns = true;
 // 1グループの最大長。長いほど滑らかだが、ワーカー1本あたりのメモリが増える
 // （約 1025bin × 2 × 8B × 200フレーム/秒 ≒ 3.3MB/秒）。超えたら次のグループに分け、
@@ -602,13 +604,14 @@ static constexpr bool   kLegatoEnergyCompensation = true;
 
 // ---- フェード（書き込みフェーズ） ------------------------------------------
 // 休符明け（直前に繋がるノートがない）の立ち上がりフェードイン。
-static constexpr double kOnsetFadeVoicedMs   = 12.0;  // 母音・有声子音始まり
-static constexpr double kOnsetFadeUnvoicedMs = 3.0;   // 無声子音始まり（破裂を鈍らせない）
+static constexpr double kOnsetFadeVoicedMs   = 15.0;  // 母音・有声子音始まり
+static constexpr double kOnsetFadeUnvoicedMs = 5.0;   // 無声子音始まり（破裂を鈍らせない）
 // 休符前の終わりのリリースフェード（従来は固定 220 サンプル≒5ms）。
 static constexpr double kReleaseFadeMs       = 35.0;
-// 「隣接」とみなす許容誤差。隣接でオーバーラップが無いノート同士は、
-// 隙間(無音)を作らないよう従来どおりの短いフェードに留める。
+// 「隣接」とみなす許容誤差。
 static constexpr double kAdjacentToleranceMs = 2.0;
+// Overlapがある書き込み時に必ず確保する最小クロスフェード長(ms)
+static constexpr double kMinOverlapXfadeMs   = 12.0;
 
 // ---- 先行発声が無い(ほぼ0の)ボイスバンクの隣接ノート ------------------------
 // 先行発声が 0 だと、次のノートは前ノートが終わる位置からちょうど始まり、
@@ -1309,44 +1312,99 @@ void apply_vibrato(double* f0, int f0_length, double frame_period_ms,
                    int lead_frames)
 {
     if (!f0 || f0_length <= 0) return;
-    // ユーザーが明示的にビブラートを指定していない場合は、ピッチを忠実に保つ
-    if (!depth_curve || curve_length <= 0) return;
 
-    // Preutterance is a lead-in before the musical note. Vibrato belongs to
-    // the musical duration, not to that lead-in, so exclude lead frames from
-    // both the 50% onset calculation and curve resampling.
     const int lead = std::max(0, std::min(lead_frames, f0_length));
     const int musical_len = f0_length - lead;
-    const int vib_start = lead + musical_len / 2;
-    const int vib_len   = f0_length - vib_start;
-    if (musical_len <= 0 || vib_len <= 0) return;
+    if (musical_len <= 0) return;
 
-    constexpr double kVibDepthMax = 0.00868;  // 15cent
-    constexpr double kVibFreqDef  = 6.0;
-    const double     frame_sec    = frame_period_ms / 1000.0;
+    const double frame_sec = frame_period_ms / 1000.0;
+    const double musical_dur_ms = static_cast<double>(musical_len) * frame_period_ms;
+
+    if (depth_curve && curve_length > 0) {
+        // Explicit vibrato curve path
+        const int vib_start = lead + musical_len / 2;
+        const int vib_len   = f0_length - vib_start;
+        if (vib_len <= 0) return;
+
+        constexpr double kVibDepthMax = 0.00868;  // 15 cent scale per 1.0 depth
+        constexpr double kVibFreqDef  = 5.8;
+
+        for (int j = vib_start; j < f0_length; ++j) {
+            const double fade_progress =
+                static_cast<double>(j - vib_start) / std::max(vib_len - 1, 1);
+            const double eased = std::min(fade_progress * 2.2, 1.0);
+            const double fade_in = eased * eased * (3.0 - 2.0 * eased);
+
+            if (f0[j] <= 0.0) continue;
+
+            const int musical_idx = j - lead;
+            const double depth = resample_curve(depth_curve, curve_length, musical_idx, musical_len);
+            if (depth <= 0.0) continue;
+
+            const double rate = rate_curve
+                ? std::max(1.0, resample_curve(rate_curve, curve_length, musical_idx, musical_len))
+                : kVibFreqDef;
+
+            const double t_global = global_time_offset_sec + static_cast<double>(musical_idx) * frame_sec;
+            const double vib = std::sin(2.0 * M_PI * rate * t_global)
+                               * kVibDepthMax * depth * f0[j] * fade_in;
+            f0[j] = std::max(50.0, f0[j] + vib);
+        }
+        return;
+    }
+
+    // Natural baseline delayed vibrato (5-6 Hz, subtle amplitude) for all sustained notes.
+    // Skip shorter notes (<280ms) so fast passages stay nimble, and skip if explicit
+    // upstream pitch_curve already contains strong oscillatory vibrato.
+    if (musical_dur_ms < 280.0) return;
+
+    const double delay_ms = std::max(170.0, musical_dur_ms * 0.36);
+    const int vib_delay_frames = static_cast<int>(std::round(delay_ms / frame_period_ms));
+    const int vib_start = lead + vib_delay_frames;
+    const int vib_len   = f0_length - vib_start;
+    if (vib_len < 16) return;
+
+    // Detect if upstream pitch curve already encodes strong oscillatory vibrato
+    {
+        int prev_dir = 0;
+        int reversals = 0;
+        double min_hz = f0[vib_start], max_hz = f0[vib_start];
+        for (int j = vib_start + 1; j < f0_length; ++j) {
+            if (f0[j] <= 50.0 || f0[j - 1] <= 50.0) continue;
+            min_hz = std::min(min_hz, f0[j]);
+            max_hz = std::max(max_hz, f0[j]);
+            const double cents_step = 1200.0 * std::log2(f0[j] / f0[j - 1]);
+            const int dir = (cents_step > 1.0) ? 1 : (cents_step < -1.0 ? -1 : 0);
+            if (dir != 0 && prev_dir != 0 && dir != prev_dir) reversals++;
+            if (dir != 0) prev_dir = dir;
+        }
+        const double span_cents = (min_hz > 50.0 && max_hz > min_hz)
+            ? 1200.0 * std::log2(max_hz / min_hz) : 0.0;
+        if (reversals >= 3 && span_cents >= 16.0) return;
+    }
+
+    const double vib_dur_ms = static_cast<double>(vib_len) * frame_period_ms;
+    const double dur_scale = clamp((musical_dur_ms - 280.0) / 240.0, 0.35, 1.0);
+    const double peak_cents = 22.0 * dur_scale; // subtle studio vibrato (±22 cents max)
+    const double vib_rate_hz = 5.5;
+    const double attack_ms = std::min(180.0, vib_dur_ms * 0.55);
+    const double release_ms = std::min(45.0, vib_dur_ms * 0.18);
 
     for (int j = vib_start; j < f0_length; ++j) {
-        const double fade_progress =
-            static_cast<double>(j - vib_start) / std::max(vib_len - 1, 1);
-        const double eased = std::min(fade_progress * 2.2, 1.0);
-        const double fade_in = eased * eased * (3.0 - 2.0 * eased);
-
-        if (f0[j] <= 0.0) continue;
-
+        if (f0[j] <= 50.0) continue;
         const int musical_idx = j - lead;
-        const double depth = depth_curve
-            ? resample_curve(depth_curve, curve_length, musical_idx, musical_len)
-            : 0.0;
-        if (depth <= 0.0) continue;
+        const double elapsed_ms = static_cast<double>(j - vib_start) * frame_period_ms;
+        const double remain_ms  = static_cast<double>(f0_length - 1 - j) * frame_period_ms;
 
-        const double rate  = rate_curve
-            ? std::max(1.0, resample_curve(rate_curve, curve_length, musical_idx, musical_len))
-            : kVibFreqDef;
+        const double a_t = clamp(elapsed_ms / std::max(1.0, attack_ms), 0.0, 1.0);
+        const double fade_in = a_t * a_t * (3.0 - 2.0 * a_t);
+        const double r_t = clamp(remain_ms / std::max(1.0, release_ms), 0.0, 1.0);
+        const double fade_out = r_t * r_t * (3.0 - 2.0 * r_t);
 
         const double t_global = global_time_offset_sec + static_cast<double>(musical_idx) * frame_sec;
-        const double vib = std::sin(2.0 * M_PI * rate * t_global)
-                           * kVibDepthMax * depth * f0[j] * fade_in;
-        f0[j] = std::max(50.0, f0[j] + vib);
+        const double vib_cents = std::sin(2.0 * M_PI * vib_rate_hz * t_global)
+                               * peak_cents * fade_in * fade_out;
+        f0[j] = std::max(50.0, f0[j] * std::pow(2.0, vib_cents / 1200.0));
     }
 }
 
@@ -1389,17 +1447,94 @@ void smooth_f0_gaussian(double* f0, int f0_length)
     std::copy(tmp.begin(), tmp.end(), f0);
 }
 
-// ピッチや振幅の濁りを防ぐため、人工的なゆらぎは適用しない
+// Band-limited natural vocal fold micro-jitter (±3–5 cents) on voiced frames.
 static void apply_f0_jitter(
-    double* /*f0*/, int /*f0_length*/, double /*frame_period_ms*/,
-    double /*global_time_offset_sec*/, uint32_t /*voice_seed*/)
+    double* f0, int f0_length, double frame_period_ms,
+    double global_time_offset_sec, uint32_t voice_seed)
 {
+    if (!f0 || f0_length <= 0) return;
+    const double frame_sec = frame_period_ms / 1000.0;
+
+    // Seed phases deterministically per voice so adjacent/overlapping notes stay organic
+    const double p1 = (voice_seed & 0xFFu) * (2.0 * M_PI / 256.0);
+    const double p2 = ((voice_seed >> 8) & 0xFFu) * (2.0 * M_PI / 256.0);
+    const double p3 = ((voice_seed >> 16) & 0xFFu) * (2.0 * M_PI / 256.0);
+
+    uint32_t rng = voice_seed ^ 0x9E3779B9u;
+    if (rng == 0) rng = 0x12345678u;
+    double lp_noise = 0.0;
+
+    for (int j = 0; j < f0_length; ++j) {
+        if (f0[j] <= 50.0) {
+            lp_noise = 0.0;
+            continue;
+        }
+        // Deterministic LCG uniform in [-1, 1], low-pass smoothed (~14 Hz)
+        rng = rng * 1664525u + 1013904223u;
+        const double white = (static_cast<double>(rng >> 8) / 8388608.0) - 1.0;
+        lp_noise = 0.62 * lp_noise + 0.38 * white;
+
+        const double t = global_time_offset_sec + static_cast<double>(j) * frame_sec;
+        const double slow_drift =
+            1.2 * std::sin(2.0 * M_PI * 1.43 * t + p1) +
+            1.1 * std::sin(2.0 * M_PI * 3.17 * t + p2) +
+            1.0 * std::sin(2.0 * M_PI * 7.11 * t + p3);
+        const double jitter_cents = clamp(slow_drift + 2.8 * lp_noise, -5.0, 5.0);
+        f0[j] = std::max(50.0, f0[j] * std::pow(2.0, jitter_cents / 1200.0));
+    }
 }
 
+// Subtle vocal amplitude shimmer (±0.35 dB) updated at smooth control blocks (~0.7 ms).
 static void apply_shimmer(
-    std::vector<double>& /*note_buf*/, int /*fs*/,
-    double /*global_time_offset_sec*/, uint32_t /*voice_seed*/)
+    std::vector<double>& note_buf, int fs,
+    double global_time_offset_sec, uint32_t voice_seed)
 {
+    const size_t N = note_buf.size();
+    if (N < 64 || fs <= 0) return;
+
+    const double p1 = ((voice_seed >> 4) & 0xFFu) * (2.0 * M_PI / 256.0);
+    const double p2 = ((voice_seed >> 12) & 0xFFu) * (2.0 * M_PI / 256.0);
+    const double p3 = ((voice_seed >> 20) & 0xFFu) * (2.0 * M_PI / 256.0);
+
+    uint32_t rng = (voice_seed * 2654435761u) ^ 0xA5A55A5Au;
+    if (rng == 0) rng = 0x87654321u;
+    double lp = 0.0;
+
+    constexpr size_t kStep = 32;
+    const size_t edge_ramp = std::min<size_t>(N / 4, static_cast<size_t>(std::max(1, fs / 200))); // ~5ms
+    auto eval_gain = [&](size_t s) -> double {
+        rng = rng * 1664525u + 1013904223u;
+        const double w = (static_cast<double>(rng >> 8) / 8388608.0) - 1.0;
+        lp = 0.85 * lp + 0.15 * w;
+        const double t = global_time_offset_sec + static_cast<double>(s) / static_cast<double>(fs);
+        const double db = clamp(
+            0.14 * std::sin(2.0 * M_PI * 3.1 * t + p1) +
+            0.12 * std::sin(2.0 * M_PI * 7.4 * t + p2) +
+            0.09 * std::sin(2.0 * M_PI * 12.7 * t + p3) +
+            0.18 * lp,
+            -0.38, 0.38);
+        return std::pow(10.0, db / 20.0);
+    };
+
+    double g0 = eval_gain(0);
+    for (size_t s = 0; s < N; s += kStep) {
+        const size_t end = std::min(N, s + kStep);
+        const double g1 = eval_gain(end);
+        const double inv = 1.0 / static_cast<double>(std::max<size_t>(1, end - s));
+        for (size_t i = s; i < end; ++i) {
+            const double alpha = static_cast<double>(i - s) * inv;
+            double g = g0 + (g1 - g0) * alpha;
+            if (i < edge_ramp) {
+                const double e = static_cast<double>(i) / static_cast<double>(edge_ramp);
+                g = 1.0 + (g - 1.0) * e;
+            } else if (i > N - edge_ramp) {
+                const double e = static_cast<double>(N - i) / static_cast<double>(edge_ramp);
+                g = 1.0 + (g - 1.0) * e;
+            }
+            note_buf[i] *= g;
+        }
+        g0 = g1;
+    }
 }
 
 static void VOSE_Synthesis(
@@ -1587,6 +1722,14 @@ static double smooth_band_value(double freq, const double* bfreqs, const double*
 // ことで子音を壊さずに、波形クロスフェード前の2音のスペクトル/ピッチを近づける。
 // 時間領域のクロスフェード(書き込みフェーズ)は従来どおり残る。
 // ============================================================
+// 共有する有声高域APの保守的な天井（Stage 1/2共通）
+static inline double compute_voiced_ap_cap(double freq)
+{
+    static const double bfreqs[3] = {3500.0, 6500.0, 11000.0};
+    static const double bvals[4]  = {0.025, 0.14, 0.28, 0.42};
+    return smooth_band_value(freq, bfreqs, bvals, 3);
+}
+
 static void morph_head_toward_previous(
     const SynthNoteParams& p, int output_frames,
     double* f0, double** spec_ptrs, double** ap_ptrs)
@@ -1598,9 +1741,25 @@ static void morph_head_toward_previous(
     if (!pp.absolute_timing || !pv.absolute_timing) return;
     if (pv.state != NoteState::RENDERABLE || !pv.ev || !pp.ev) return;
 
-    const double morph_ms = std::min(pp.overlap_ms, pp.preutterance_ms);
+    const double prev_render_start = pv.start_time_ms - pv.preutterance_ms;
+    const double prev_out_ms       = 1000.0 * static_cast<double>(pv.note_samples) / kFs;
+    const double prev_musical_end  = prev_render_start + prev_out_ms;
+    const double cur_render_start  = pp.start_time_ms - pp.preutterance_ms;
+    const double gap_ms            = cur_render_start - prev_musical_end;
+
+    // オーバーラップまたは厳密タイムライン上で近接(<=25ms以内)の隣接ノートでは、
+    // 10〜30msの範囲でログスペクトル・ログF0・非周期性を前ノート終端へ滑らかに補間する。
+    // （25ms以上の音楽的休符を跨ぐ場合は無音境界を優先して補間しない）
+    if (gap_ms > 25.0) return;
+
+    const double requested_ovl = std::min(pp.overlap_ms, pp.preutterance_ms);
+    double target_morph_ms = (requested_ovl > 0.0)
+        ? clamp(requested_ovl, 12.0, 30.0)
+        : 18.0;
+    const double note_total_ms = static_cast<double>(output_frames) * kFramePeriod;
+    target_morph_ms = std::min(target_morph_ms, note_total_ms * 0.35);
     const int morph_frames = std::min(
-        output_frames, static_cast<int>(std::ceil(morph_ms / kFramePeriod)));
+        output_frames, static_cast<int>(std::ceil(target_morph_ms / kFramePeriod)));
     if (morph_frames < 2) return;
 
     const int fft_size  = p.fft_size;
@@ -1617,25 +1776,21 @@ static void morph_head_toward_previous(
         (kFramePeriod * kFs / 1000.0)));
     const int prev_out_frames   = std::max(1, pn.pitch_length + prev_lead);
     const int prev_curve_frames = std::max(1, prev_out_frames - prev_lead);
-    const double prev_out_ms    = 1000.0 * static_cast<double>(pv.note_samples) / kFs;
 
-    // 現ノートの出力 t=0 が、前ノートの出力時間軸の何 ms に当たるか
-    const double cur_render_start  = pp.start_time_ms - pp.preutterance_ms;
-    const double prev_render_start = pv.start_time_ms - pv.preutterance_ms;
     const double offset_ms = cur_render_start - prev_render_start;
 
     constexpr double kFloor = 1e-12;
-    static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
-    static const double bvals[4]  = {0.005, 0.025, 0.07, 0.15};
     std::vector<double> ap_cap(static_cast<size_t>(spec_bins));
     for (int k = 0; k < spec_bins; ++k) {
         const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
-        ap_cap[k] = smooth_band_value(freq, bfreqs, bvals, 3);
+        ap_cap[k] = compute_voiced_ap_cap(freq);
     }
 
     for (int j = 0; j < morph_frames; ++j) {
-        const double t_prev = offset_ms + j * kFramePeriod;
-        if (t_prev < 0.0 || t_prev >= prev_out_ms) continue;   // 前ノートが鳴っていない
+        // 重なり区間では同時刻を、重なり後の隣接区間では前ノート末尾フレームを引く
+        const double raw_t_prev = offset_ms + j * kFramePeriod;
+        if (raw_t_prev < 0.0) continue;
+        const double t_prev = std::min(raw_t_prev, std::max(0.0, prev_out_ms - kFramePeriod));
 
         const double u      = (j + 0.5) / morph_frames;
         const double w_cur  = 0.5 * (1.0 - std::cos(M_PI * u));
@@ -1655,20 +1810,21 @@ static void morph_head_toward_previous(
             ac[k] = clamp(w_cur * ac[k] + w_prev * std::min(ap[k], ap_cap[k]), 0.0, 1.0);
         }
 
-        // F0: 前ノートの同時刻のピッチ（ピッチカーブ＋ポルタメントのみ）へ寄せる
+        // F0: 前ノートの同時刻/末尾のピッチ（ピッチカーブ＋ポルタメント）へ対数補間
         const int jp = static_cast<int>(t_prev / kFramePeriod);
         double prev_f0 = 0.0;
         if (pn.pitch_curve) {
             const int ci = std::min(std::max(0, jp - prev_lead), prev_curve_frames - 1);
             prev_f0 = resample_curve(pn.pitch_curve, pn.pitch_length, ci, prev_curve_frames);
-            if (pn.portamento_offsets && pn.portamento_length > 0 && jp < pn.portamento_length) {
-                const double cents = resample_curve(pn.portamento_offsets, pn.portamento_length,
-                                                    jp, prev_out_frames);
+            if (pn.portamento_offsets && pn.portamento_length > 0) {
+                const double cents = (pn.portamento_length > pn.pitch_length && prev_lead > 0)
+                    ? resample_curve(pn.portamento_offsets, pn.portamento_length, jp, prev_out_frames)
+                    : resample_curve(pn.portamento_offsets, pn.portamento_length, ci, prev_curve_frames);
                 prev_f0 *= std::pow(2.0, cents / 1200.0);
             }
         }
         if (prev_f0 > 50.0 && f0[j] > 50.0)
-            f0[j] = std::exp(w_cur * std::log(f0[j]) + w_prev * std::log(prev_f0));
+            f0[j] = std::max(50.0, std::exp(w_cur * std::log(f0[j]) + w_prev * std::log(prev_f0)));
     }
 }
 
@@ -1806,8 +1962,14 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         }
 
         // ---- 3. ★★★ ポルタメントオフセットを適用（セント → Hz） ★★★ ----
-        if (n.portamento_offsets && n.portamento_length > 0 && j < n.portamento_length) {
-            double cents = resample_curve(n.portamento_offsets, n.portamento_length, j, output_frames);
+        if (n.portamento_offsets && n.portamento_length > 0) {
+            // portamento_length > pitch_length の場合は [−lead_frames*5ms .. note_ms] を含む
+            // 前値パディング済みカーブとして扱い、それ以外は従来互換の [0 .. note_ms] として
+            // curve_idx = j - lead_frames へ整列する（PreUtterance 分の前倒しズレを防止）。
+            const double cents = (n.portamento_length > n.pitch_length && lead_frames > 0)
+                ? resample_curve(n.portamento_offsets, n.portamento_length, j, output_frames)
+                : resample_curve(n.portamento_offsets, n.portamento_length,
+                                 std::min(curve_idx, curve_frames - 1), curve_frames);
             base_f0_val *= std::pow(2.0, cents / 1200.0);
         }
 
@@ -1856,25 +2018,47 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
         const bool in_consonant_friction = (t_out_ms < unvoiced_attack_ms);
 
+        const double breath_scale = clamp(breath / 0.5, 0.25, 1.25);
+        const double friction_tilt_scale = in_consonant_friction ? 0.55 : 1.0;
+
         for (int k = 0; k < spec_bins; ++k) {
             const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
+
+            // Single-stage 6kHz+ natural spectral tilt on WORLD power spectrum (sr[k] is |H|^2).
+            // Keeps 1-5.8kHz untouched and 4-8kHz consonant clarity healthy while rolling off
+            // 16kHz by ~-17 dB extra (reaching -36..-41 dB total relative to 1-3kHz).
+            if (freq > 5800.0) {
+                double tilt_db = 0.0;
+                if (freq <= 8000.0) {
+                    const double u = (freq - 5800.0) / 2200.0;
+                    const double s = 0.5 * (1.0 - std::cos(M_PI * u));
+                    tilt_db = -2.5 * s;
+                } else {
+                    const double u = clamp((freq - 8000.0) / 8000.0, 0.0, 1.7);
+                    tilt_db = -2.5 - 21.0 * std::pow(u, 1.15);
+                }
+                sr[k] *= std::pow(10.0, (tilt_db * friction_tilt_scale) / 10.0);
+            }
+
             double max_ap;
+            double floor_ap = 0.0;
             if (in_consonant_friction) {
                 // 無声子音アタック (k, s, t, h, p など): 子音の破裂・摩擦に必要な自然な高域非周期性を維持
                 static const double bfreqs[2] = {2000.0, 4000.0};
                 static const double bvals[3]  = {0.05, 0.35, 0.70};
                 max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
             } else {
-                // 母音区間および有声音 (あ, い, う, え, お, ん, ま, な, ら, わ 等):
-                // 原音の豊かな倍音・声帯振動を100%保持し、D4Cが誤検出する高域ホワイトノイズ(ヒス・ザー音)を大幅低減
-                static const double bfreqs[3] = {3500.0, 7000.0, 11000.0};
-                static const double bvals[4]  = {0.005, 0.025, 0.07, 0.15};
-                max_ap = smooth_band_value(freq, bfreqs, bvals, 3) * pitch_noise_suppress;
+                // Balanced studio vocal AP ceiling + conservative 5kHz+ breath floor
+                // (note WORLD squares AP internally: 0.26^2 = 6.76% noise energy above 12kHz).
+                max_ap = compute_voiced_ap_cap(freq) * pitch_noise_suppress;
+                static const double ffreqs[3] = {5000.0, 8000.0, 12000.0};
+                static const double fvals[4]  = {0.0, 0.11, 0.21, 0.26};
+                floor_ap = smooth_band_value(freq, ffreqs, fvals, 3)
+                         * pitch_noise_suppress * breath_scale;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
-            if (ar[k] > max_ap) {
-                ar[k] = max_ap;
-            }
+            floor_ap = std::min(floor_ap, max_ap);
+            ar[k] = clamp(ar[k], floor_ap, max_ap);
         }
     }
     } catch (const std::exception& e) {
@@ -2069,6 +2253,21 @@ static void synthesize_legato_run(
         if (sink.frames <= 0) continue;
 
         const int off = pp.run_frame_offset;
+        // Guard: if off > written_upto (frame rounding gap), bridge the gap from the last
+        // written frame so f0_run/spec_run never contain 0.0 holes that trigger WORLD bursts.
+        if (m > 0 && written_upto > 0 && off > written_upto) {
+            const int src_rf = written_upto - 1;
+            const double* last_s = &spec_run[static_cast<size_t>(src_rf) * bins];
+            const double* last_a = &ap_run  [static_cast<size_t>(src_rf) * bins];
+            for (int rf = written_upto; rf < std::min(off, run_frames); ++rf) {
+                std::copy(last_s, last_s + bins, &spec_run[static_cast<size_t>(rf) * bins]);
+                std::copy(last_a, last_a + bins, &ap_run  [static_cast<size_t>(rf) * bins]);
+                f0_run[rf]   = std::max(50.0, f0_run[src_rf]);
+                gain_run[rf] = gain_run[src_rf];
+            }
+            written_upto = std::min(off, run_frames);
+        }
+
         const int ovl_frames = (m == 0) ? 0 : std::min(sink.frames,
             static_cast<int>(std::ceil(std::min(pp.overlap_ms, pp.preutterance_ms)
                                        / kFramePeriod)));
@@ -2085,9 +2284,6 @@ static void synthesize_legato_run(
                 const double u     = (f + 0.5) / ovl_frames;
                 const double w_cur = 0.5 * (1.0 - std::cos(M_PI * u));
                 const double w_prv = 1.0 - w_cur;
-                // 対数領域の補間は、ピーク位置の違う2つの包絡の中間でエネルギーが
-                // 落ちる（母音→母音で数dBの凹みになる）。補間後のエネルギーを
-                // 両端の重み付き平均に合わせて、凹みを補正する（上限 +6dB）。
                 double e_cur = 0.0, e_prv = 0.0, e_mix = 0.0;
                 for (size_t k = 0; k < bins; ++k) {
                     e_cur += cs[k];
@@ -2105,12 +2301,12 @@ static void synthesize_legato_run(
                 const double pf = f0_run[rf];
                 const double cf = sink.f0[f];
                 f0_run[rf] = (pf > 50.0 && cf > 50.0)
-                    ? std::exp(w_cur * std::log(cf) + w_prv * std::log(pf)) : cf;
+                    ? std::exp(w_cur * std::log(cf) + w_prv * std::log(pf)) : std::max(50.0, cf);
                 gain_run[rf] = w_cur * sink.gain + w_prv * gain_run[rf];
             } else {
                 std::copy(cs, cs + bins, rs);
                 std::copy(ca, ca + bins, ra);
-                f0_run[rf]   = sink.f0[f];
+                f0_run[rf]   = std::max(50.0, sink.f0[f]);
                 gain_run[rf] = sink.gain;
             }
         }
@@ -2732,9 +2928,10 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     // positions, not merely the neighboring array element. A rest, missing
     // voice, or an out-of-order note must not be treated as an overlapping
     // predecessor/successor.
-    auto has_prior_absolute_audio = [&](int current_idx,
-                                        int64_t render_start,
-                                        int64_t nominal_start) -> bool {
+    auto get_prior_overlap_tail_samples = [&](int current_idx,
+                                              int64_t render_start,
+                                              int64_t nominal_start) -> int64_t {
+        int64_t max_tail = 0;
         for (int j = 0; j < note_count; ++j) {
             if (j == current_idx ||
                 prepass[j].state != NoteState::RENDERABLE ||
@@ -2748,13 +2945,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 std::max<int64_t>(0, prepass[j].note_samples -
                                      prepass[j].preutterance_samples);
 
-            // Only a note that is actually before this note and whose musical
-            // audio reaches the current render start can participate in the
-            // requested VoiceOverlap crossfade.
-            if (other_start < nominal_start && other_end > render_start)
-                return true;
+            if (other_start < nominal_start && other_end > render_start) {
+                max_tail = std::max<int64_t>(max_tail, other_end - render_start);
+            }
         }
-        return false;
+        return max_tail;
     };
 
     auto has_following_absolute_overlap = [&](int current_idx,
@@ -2777,16 +2972,12 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             const int64_t other_render_start = other_start -
                 prepass[j].preutterance_samples;
 
-            // The next note's preuttered audio reaches into this note's
-            // musical tail, so do not apply a release fade here.
             if (other_render_start < musical_end)
                 return true;
         }
         return false;
     };
 
-    // 直前のノートがオーバーラップなしでぴったり隣接している（隙間も重なりもない）か。
-    // この場合に新たなフェードを足すと無音の凹みができるので、従来の挙動を保つ。
     auto has_adjacent_prior_audio = [&](int current_idx, int64_t render_start) -> bool {
         const int64_t tol = static_cast<int64_t>(std::llround(kAdjacentToleranceMs * kFs / 1000.0));
         const int64_t current_start = static_cast<int64_t>(std::llround(
@@ -2804,7 +2995,6 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         return false;
     };
 
-    // 次のノートがオーバーラップなしでぴったり隣接しているか。
     auto has_following_adjacent = [&](int current_idx, int64_t musical_end) -> bool {
         const int64_t tol = static_cast<int64_t>(std::llround(kAdjacentToleranceMs * kFs / 1000.0));
         const int64_t current_start = static_cast<int64_t>(std::llround(
@@ -2849,34 +3039,31 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         }
 
         if (pp.absolute_timing) {
-            // Absolute placement:
-            //   musical start = start_time_ms
-            //   rendered start = start_time_ms - preutterance
-            //   previous voice remains audible for overlap_ms, then the
-            //   current note takes over. This is the UTAU-style timing model.
             const int64_t nominal_start = static_cast<int64_t>(std::llround(
                 pp.start_time_ms * kFs / 1000.0));
             const int64_t unclamped_start = nominal_start - pp.preutterance_samples;
             const int64_t render_start = std::max<int64_t>(0, unclamped_start);
-            // If preutterance reaches before t=0, skip that leading part of the
-            // synthesized buffer rather than accidentally truncating the note tail.
             const int64_t source_skip = std::max<int64_t>(0, -unclamped_start);
-            const bool prior_audio_overlaps = source_skip == 0 &&
-                has_prior_absolute_audio(idx, render_start, nominal_start);
-            const int64_t overlap_samples = (source_skip > 0 || !prior_audio_overlaps)
-                ? 0
-                : std::min<int64_t>(
-                    note_samples,
-                    std::min<int64_t>(
-                        pp.preutterance_samples,
-                        static_cast<int64_t>(std::llround(
-                            pp.overlap_ms * kFs / 1000.0))));
-
+            const int64_t prior_tail = (source_skip == 0)
+                ? get_prior_overlap_tail_samples(idx, render_start, nominal_start)
+                : 0;
+            const bool prior_audio_overlaps = (prior_tail > 0);
             const int64_t available_note_samples =
                 std::max<int64_t>(0, note_samples - source_skip);
             const int64_t write_len = std::min<int64_t>(
                 available_note_samples,
                 total_samples - render_start);
+
+            // Never overwrite active prior audio with 0 crossfade even when overlap_ms == 0
+            // (e.g. CV after VC in CVVC, or preutterance>0 / overlap=0 oto entries).
+            const int64_t requested_ovl = std::min<int64_t>(
+                pp.preutterance_samples,
+                static_cast<int64_t>(std::llround(pp.overlap_ms * kFs / 1000.0)));
+            const int64_t min_safe_xfade = static_cast<int64_t>(
+                std::llround(kMinOverlapXfadeMs * kFs / 1000.0));
+            const int64_t overlap_samples = prior_audio_overlaps
+                ? std::min<int64_t>(write_len / 2, std::max<int64_t>(requested_ovl, min_safe_xfade))
+                : 0;
 
             if (write_len > 0) {
                 if (overlap_samples > 0) {
@@ -2896,23 +3083,20 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                             note_bufs[idx][static_cast<size_t>(source_skip + s)];
                     }
                 } else {
-                    // 休符明け（直前に鳴っているノートも隣接ノートもない）の立ち上がりには
-                    // フェードインを入れる。これが無いと WORLD の出力先頭がそのまま
-                    // 急に立ち上がる。無声子音始まりは破裂を鈍らせないよう短くする。
-                    int64_t onset = 0;
-                    if (!prior_audio_overlaps && source_skip == 0 &&
-                        !has_adjacent_prior_audio(idx, render_start)) {
-                        const bool head_unvoiced =
-                            is_unvoiced_phoneme_name(pp.ev->path) ||
-                            (pp.has_oto && (is_unvoiced_phoneme_name(pp.oto.wav_path) ||
-                                            is_unvoiced_phoneme_name(pp.oto.alias) ||
-                                            is_unvoiced_vc_alias(pp.oto.alias)));
-                        const double onset_ms = head_unvoiced ? kOnsetFadeUnvoicedMs
-                                                              : kOnsetFadeVoicedMs;
-                        onset = std::min<int64_t>(
-                            write_len / 4,
-                            static_cast<int64_t>(std::llround(onset_ms * kFs / 1000.0)));
-                    }
+                    // Always apply a smooth onset ramp when not crossfaded against active
+                    // prior audio (never set onset=0 on adjacent boundaries or after rests).
+                    const bool adjacent_prior = has_adjacent_prior_audio(idx, render_start);
+                    const bool head_unvoiced =
+                        is_unvoiced_phoneme_name(pp.ev->path) ||
+                        (pp.has_oto && (is_unvoiced_phoneme_name(pp.oto.wav_path) ||
+                                        is_unvoiced_phoneme_name(pp.oto.alias) ||
+                                        is_unvoiced_vc_alias(pp.oto.alias)));
+                    const double onset_ms = adjacent_prior
+                        ? (head_unvoiced ? kOnsetFadeUnvoicedMs : 8.0)
+                        : (head_unvoiced ? kOnsetFadeUnvoicedMs : kOnsetFadeVoicedMs);
+                    const int64_t onset = std::min<int64_t>(
+                        write_len / 4,
+                        std::max<int64_t>(1, static_cast<int64_t>(std::llround(onset_ms * kFs / 1000.0))));
                     for (int64_t s = 0; s < write_len; ++s) {
                         double v = note_bufs[idx][static_cast<size_t>(source_skip + s)];
                         if (s < onset) {

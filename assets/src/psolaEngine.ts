@@ -21,6 +21,8 @@ import {
   scheduleSafePitchRamp,
   generateUtauPortamentoPoints,
   makeSemitoneCurve,
+  hasExplicitUstPortamento,
+  appendNextNotePreBitePoints,
   type PitchPoint
 } from './utils/pitchCurve';
 import { psolaPitchAndTimeShiftBuffer } from './psolaPitchShift';
@@ -408,9 +410,18 @@ export async function renderPsolaOffline(
         const safePitchRatio = Math.min(4.0, Math.max(0.18, pitchRatio));
 
         let bendPoints: PitchPoint[] | null = null;
-        if (note.pbs && note.pbw && note.pby) {
+        if (hasExplicitUstPortamento(note)) {
           try {
-            bendPoints = smoothPitchBendPoints(parsePitchBend(note.pbs, note.pbw, note.pby));
+            const rawPoints = parsePitchBend(note.pbs || '', note.pbw || '', note.pby || '', note.pbm || '');
+            const durMs = durationSec * 1000;
+            if (rawPoints.length > 0 && durMs > rawPoints[rawPoints.length - 1].offsetMs) {
+              const shapes = String(note.pbm || '').split(',').map((s: string) => s.trim().toLowerCase());
+              const rawShape = shapes[Math.max(0, rawPoints.length - 1)];
+              const shape: '' | 's' | 'r' | 'j' =
+                rawShape === 's' || rawShape === 'r' || rawShape === 'j' ? rawShape : '';
+              rawPoints.push({ offsetMs: durMs, semitone: 0, shape });
+            }
+            bendPoints = rawPoints;
           } catch (e) {
             bendPoints = null;
           }
@@ -426,6 +437,17 @@ export async function renderPsolaOffline(
             );
             bendPoints = smoothPitchBendPoints(autoPoints);
           }
+        }
+
+        const nextInfoForPitch = idx + 1 < schedulingInfos.length ? schedulingInfos[idx + 1] : null;
+        const isNextConnectedForPitch = nextInfoForPitch && (nextInfoForPitch.startTimeSec - (startTimeSec + durationSec) <= 0.015);
+        if (isNextConnectedForPitch && nextInfoForPitch) {
+          bendPoints = appendNextNotePreBitePoints(
+            bendPoints,
+            note.noteNum,
+            durationSec * 1000,
+            nextInfoForPitch.note
+          );
         }
 
         const offsetSec = Math.max(0, (cached.left_blank || 0) / 1000);

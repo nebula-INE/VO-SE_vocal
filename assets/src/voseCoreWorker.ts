@@ -236,7 +236,7 @@ function validateWavIsAudible(wavBytes: Uint8Array): void {
 async function getModule(): Promise<VoseCoreModule> {
   if (modPromise) return modPromise;
   modPromise = (async () => {
-    return await createVoseCoreModule({
+    const mod = await createVoseCoreModule({
       locateFile: (path: string) => (path.endsWith('.wasm') ? '/wasm/vose_core.wasm' : path),
       instantiateWasm: (imports: WebAssembly.Imports, successCallback: (inst: WebAssembly.Instance) => void) => {
         (async () => {
@@ -358,6 +358,8 @@ export interface WorkerNoteEntry {
   // (pitchCurveHz.lengthだけがpitch_length=フレーム数として使われる)。
   key: string | null;
   pitchCurveHz: number[];
+  /** C++ NoteEvent.portamento_offsets (セント単位)。pitch_length + lead_frames の時は負時間パディング済みとして扱う */
+  portamentoOffsets?: number[];
   intensity?: number;
   modulation?: number;
   // Absolute musical position in milliseconds. Negative = legacy sequential mode.
@@ -499,6 +501,7 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       const {
         key,
         pitchCurveHz,
+        portamentoOffsets,
         intensity,
         modulation,
         startTimeMs,
@@ -519,6 +522,14 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       const wavPathPtr = isVoiced ? allocCString(mod, key as string) : 0;
       if (wavPathPtr) allocatedPtrs.push(wavPathPtr);
 
+      // ポルタメントオフセット配列 (セント単位)
+      const safePortamentoOffsets =
+        isVoiced && Array.isArray(portamentoOffsets) && portamentoOffsets.length > 0
+          ? portamentoOffsets.map((c) => (Number.isFinite(c) ? Math.max(-2400, Math.min(2400, c)) : 0))
+          : null;
+      const portamentoPtr = safePortamentoOffsets ? allocDoubleArray(mod, safePortamentoOffsets) : 0;
+      if (portamentoPtr) allocatedPtrs.push(portamentoPtr);
+
       // 息・テンションパラメータ（0.50 = 完全中立・原音そのままの倍音と空気感を100%保持）:
       const effBreath = typeof breath === 'number' && Number.isFinite(breath) ? breath : 0.50;
       const effTension = typeof tension === 'number' && Number.isFinite(tension) ? tension : 0.50;
@@ -538,8 +549,8 @@ self.onmessage = async (ev: MessageEvent<RenderRequestMsg>) => {
       mod.setValue(base + OFF_VIBRATO_DEPTH_CURVE, 0, 'i32');
       mod.setValue(base + OFF_VIBRATO_RATE_CURVE, 0, 'i32');
       mod.setValue(base + OFF_VIBRATO_CURVE_LENGTH, 0, 'i32');
-      mod.setValue(base + OFF_PORTAMENTO_OFFSETS, 0, 'i32');
-      mod.setValue(base + OFF_PORTAMENTO_LENGTH, 0, 'i32');
+      mod.setValue(base + OFF_PORTAMENTO_OFFSETS, portamentoPtr, 'i32');
+      mod.setValue(base + OFF_PORTAMENTO_LENGTH, safePortamentoOffsets ? safePortamentoOffsets.length : 0, 'i32');
 
       const effIntensity = typeof intensity === 'number' && Number.isFinite(intensity) ? intensity : 100.0;
       const effModulation = typeof modulation === 'number' && Number.isFinite(modulation) ? modulation : 0.0;

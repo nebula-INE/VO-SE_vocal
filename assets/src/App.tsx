@@ -22,7 +22,8 @@ import {
   calculateFormantCutoff,
   softClampSemitone,
   scheduleSafePitchRamp,
-  applyAutoTuneToNotes
+  applyAutoTuneToNotes,
+  hasExplicitUstPortamento
 } from './utils/pitchCurve';
 // vose_core WASM(本物のC++コア)経由でレンダリング
 import { renderStudioCore as renderWasm, lastUsedEngine } from './voseCoreClient';
@@ -56,6 +57,10 @@ interface Note {
   pbs: string; // Pitch bend start e.g. "0;0"
   pbw: string; // Pitch bend width e.g. "50,100"
   pby: string; // Pitch bend height e.g. "0,5"
+  pbm?: string;
+  hasPbs?: boolean;
+  hasPbw?: boolean;
+  hasPby?: boolean;
   tempo?: number;
 }
 
@@ -1354,9 +1359,9 @@ export default function App() {
 
       // Pitch bend curve (PBS / PBW / PBY) integration with soft limiting, slew-rate smoothing & formant anti-aliasing filter
       let formantFilter: BiquadFilterNode | null = null;
-      if (pbs && pbw && pby) {
+      if (hasExplicitUstPortamento({ pbs, pbw, pby })) {
         try {
-          const rawPoints = parsePitchBend(pbs, pbw, pby);
+          const rawPoints = parsePitchBend(pbs || '', pbw || '', pby || '');
           const points = smoothPitchBendPoints(rawPoints);
 
           formantFilter = ctx.createBiquadFilter();
@@ -2193,9 +2198,9 @@ export default function App() {
 
         // Pitch bend curve (PBS / PBW / PBY) integration with soft limiting, slew-rate smoothing & formant anti-aliasing filter
         let formantFilter: BiquadFilterNode | null = null;
-        if (note.pbs && note.pbw && note.pby) {
+        if (hasExplicitUstPortamento(note)) {
           try {
-            const rawPoints = parsePitchBend(note.pbs, note.pbw, note.pby);
+            const rawPoints = parsePitchBend(note.pbs || '', note.pbw || '', note.pby || '', note.pbm || '');
             const points = smoothPitchBendPoints(rawPoints);
 
             formantFilter = ctx.createBiquadFilter();
@@ -2371,9 +2376,9 @@ export default function App() {
       osc2.type = 'triangle';
 
       // Pitch bend support on oscillator fallback
-      if (note.pbs && note.pbw && note.pby) {
+      if (hasExplicitUstPortamento(note)) {
         try {
-          const rawPoints = parsePitchBend(note.pbs, note.pbw, note.pby);
+          const rawPoints = parsePitchBend(note.pbs || '', note.pbw || '', note.pby || '', note.pbm || '');
           const points = smoothPitchBendPoints(rawPoints);
 
           scheduleSafePitchRamp(

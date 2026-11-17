@@ -114,61 +114,126 @@ def parse_ust_flag_overrides(
     return gender, tension, breath, pitch_shift_cents
 
 
+def _extract_ust_portamento_fields(note: Any) -> Tuple[str, str, str, str]:
+    if isinstance(note, dict):
+        return (
+            str(note.get("_ust_pbs", "") or ""),
+            str(note.get("_ust_pbw", "") or ""),
+            str(note.get("_ust_pby", "") or ""),
+            str(note.get("_ust_pbm", "") or ""),
+        )
+    return (
+        str(getattr(note, "_ust_pbs", getattr(note, "pbs", "")) or ""),
+        str(getattr(note, "_ust_pbw", getattr(note, "pbw", "")) or ""),
+        str(getattr(note, "_ust_pby", getattr(note, "pby", "")) or ""),
+        str(getattr(note, "_ust_pbm", getattr(note, "pbm", "")) or ""),
+    )
+
+
+def _get_note_duration_ms(note: Any) -> float:
+    if isinstance(note, dict):
+        duration_sec = float(note.get("duration", 0.0) or 0.0)
+        tempo = float(note.get("_ust_tempo", 120.0) or 120.0)
+        length = int(note.get("_ust_length_ticks", 0) or 0)
+    else:
+        duration_sec = float(getattr(note, "duration", 0.0) or 0.0)
+        tempo = float(getattr(note, "_ust_tempo", 120.0) or 120.0)
+        length = int(getattr(note, "_ust_length_ticks", getattr(note, "length", 0)) or 0)
+    if duration_sec > 0.0:
+        return duration_sec * 1000.0
+    if length > 0:
+        return float(length) * 60000.0 / max(tempo, 1.0) / 480.0
+    return 0.0
+
+
+def _get_note_midi_num(note: Any) -> int:
+    if isinstance(note, dict):
+        return int(note.get("note_number", note.get("note_num", 60)))
+    return int(getattr(note, "note_number", getattr(note, "note_num", 60)))
+
+
 def build_portamento_curve(
     ust_note: Any,
     resolution: int = 128,
+    next_note: Any = None,
+    preutterance_ms: float = 0.0,
+    time_offset_ms: float = 0.0,
 ) -> Optional[np.ndarray]:
-    """UST ノートからピッチオフセットカーブを生成する。"""
-    if isinstance(ust_note, dict):
-        pbs = ust_note.get("_ust_pbs", "")
-        pbw = ust_note.get("_ust_pbw", "")
-        pby = ust_note.get("_ust_pby", "")
-        pbm = ust_note.get("_ust_pbm", "")
-    else:
-        pbs = getattr(ust_note, "_ust_pbs", "")
-        pbw = getattr(ust_note, "_ust_pbw", "")
-        pby = getattr(ust_note, "_ust_pby", "")
-        pbm = getattr(ust_note, "_ust_pbm", "")
+    """UST ノートからピッチオフセットカーブ（セント単位）を生成する。
 
-    if not pbw:
+    - preutterance_ms > 0 の場合、C++ の lead_frames 分の負時間域 [-lead_frames*5ms, 0) を
+      先頭にパディングし、portamento_length = resolution + lead_frames を返す。
+    - 連続する後続ノート next_note が負の PBS を持つ場合、現ノート末尾 (tp >= next_pbs_ms)
+      に次ノートの先行ポルタメントを織り込む（修正B）。
+    """
+    from modules.data.ust_parser import _interp_shape
+
+    pbs, pbw, pby, pbm = _extract_ust_portamento_fields(ust_note)
+    duration_ms = _get_note_duration_ms(ust_note)
+    if duration_ms <= 0.0:
         return None
 
-    from modules.data.ust_parser import UstNote
+    has_cur_pbw = bool(pbw.strip())
+    cur_pts: List[Tuple[float, float]] = []
+    cur_shapes: List[str] = []
+    if has_cur_pbw:
+        try:
+            eval_dur_ms = max(duration_ms, 500.0) if time_offset_ms < 0.0 else duration_ms
+            cur_pts, cur_shapes, _ = UstConverter._build_ust_control_points(
+                pbs, pbw, pby, pbm, eval_dur_ms
+            )
+            if len(cur_pts) < 2:
+                has_cur_pbw = False
+        except Exception:
+            has_cur_pbw = False
 
-    # NoteEvent 互換辞書/オブジェクトの場合も、実際のノート長とテンポを
-    # 使ってポルタメントの時間軸を構築する。固定の480tick/120BPMだと
-    # テンポ変化や長音符でカーブ位置がずれる。
-    if isinstance(ust_note, dict):
-        duration_sec = float(ust_note.get("duration", 0.0))
-        tempo = float(ust_note.get("_ust_tempo", 120.0) or 120.0)
-        length = max(1, int(round(duration_sec * tempo * 480.0 / 60.0)))
-    else:
-        duration_sec = float(getattr(ust_note, "duration", 0.0) or 0.0)
-        tempo = float(getattr(ust_note, "_ust_tempo", 120.0) or 120.0)
-        if duration_sec > 0.0:
-            length = max(1, int(round(duration_sec * tempo * 480.0 / 60.0)))
-        else:
-            length = int(getattr(ust_note, "length", 480))
-            tempo = float(getattr(ust_note, "tempo", tempo) or tempo)
+    has_next_pre_bite = False
+    next_pbs_ms = 0.0
+    next_delta_semitones = 0.0
+    next_pts: List[Tuple[float, float]] = []
+    next_shapes: List[str] = []
+    if next_note is not None:
+        n_pbs, n_pbw, n_pby, n_pbm = _extract_ust_portamento_fields(next_note)
+        if n_pbw.strip():
+            try:
+                next_dur_ms = _get_note_duration_ms(next_note)
+                next_pts, next_shapes, next_pbs_ms = UstConverter._build_ust_control_points(
+                    n_pbs, n_pbw, n_pby, n_pbm, max(next_dur_ms, 500.0)
+                )
+                if next_pbs_ms < 0.0 and len(next_pts) >= 2:
+                    has_next_pre_bite = True
+                    next_delta_semitones = float(_get_note_midi_num(next_note) - _get_note_midi_num(ust_note))
+            except Exception:
+                has_next_pre_bite = False
 
-    dummy_note = UstNote(
-        index=0,
-        length=length,
-        lyric="",
-        note_num=60,
-        tempo=max(tempo, 1.0),
-        pbs=pbs,
-        pbw=pbw,
-        pby=pby,
-        pbm=pbm,
-    )
-    curve_list = UstConverter.extract_portamento_curve(dummy_note, resolution)
-    if not curve_list or len(curve_list) != resolution:
+    if not has_cur_pbw and not has_next_pre_bite:
         return None
 
-    # UstConverter は半音単位で返すが、C++ NoteEvent.portamento_offsets は
+    lead_frames = int(math.ceil(max(0.0, float(preutterance_ms)) / 5.0)) if preutterance_ms > 0.0 else 0
+    total_len = resolution + lead_frames
+
+    # When resolution matches C++ 5ms frame quantization, sample strictly on the 5ms grid.
+    # Otherwise fall back to uniform sampling across duration_ms for standalone callers.
+    if abs(duration_ms - resolution * 5.0) <= 5.0 or lead_frames > 0 or time_offset_ms != 0.0:
+        step_ms = 5.0
+    else:
+        step_ms = duration_ms / max(resolution - 1, 1)
+
+    curve_semitones = np.zeros(total_len, dtype=np.float64)
+    for j in range(total_len):
+        t_j = time_offset_ms + (j - lead_frames) * step_ms
+        val = 0.0
+        if has_cur_pbw:
+            val += float(_interp_shape(t_j, cur_pts, cur_shapes))
+        if has_next_pre_bite and time_offset_ms >= 0.0:
+            tp = t_j - duration_ms
+            if tp >= next_pbs_ms:
+                val += next_delta_semitones + float(_interp_shape(tp, next_pts, next_shapes))
+        curve_semitones[j] = val
+
+    # UstConverter は半音単位で扱うが、C++ NoteEvent.portamento_offsets は
     # セント単位として解釈するため、ここで 100 倍して単位を統一する。
-    return np.asarray(curve_list, dtype=np.float64) * 100.0
+    return curve_semitones * 100.0
 
 
 def _refresh_voice_library_v2_unlocked(self) -> None:
@@ -390,11 +455,14 @@ def _render_to_wav_v2(
         render_alias = str(getattr(note, "_cvvc_render_alias", "") or "")
         vcv_resolver = getattr(self, "vcv_resolver", None)
         wav_path = ""
+        resolved_oto_entry = None
+        note_num = 60
 
         if render_alias:
             cvvc_entry = getattr(oto_parser, "_db", {}).get(render_alias) if oto_parser is not None else None
             if cvvc_entry is not None:
                 wav_path = cvvc_entry.wav_path
+                resolved_oto_entry = cvvc_entry
         elif vcv_resolver is not None:
             prev_note = notes[i - 1] if i > 0 else None
             prev_lyric = getattr(prev_note, "lyric", None) if prev_note is not None else None
@@ -432,6 +500,7 @@ def _render_to_wav_v2(
             )
             if oto_entry is not None:
                 wav_path = oto_entry.wav_path
+                resolved_oto_entry = oto_entry
 
         if not wav_path or not os.path.exists(wav_path):
             # VCV/prefix.map 解決に失敗した場合でも、明示 alias の OTO エントリを
@@ -458,6 +527,7 @@ def _render_to_wav_v2(
                 candidate_path = str(getattr(direct_entry, "wav_path", "") or "")
                 if candidate_path and os.path.isfile(candidate_path):
                     wav_path = candidate_path
+                    resolved_oto_entry = direct_entry
 
         if not wav_path or not os.path.isfile(wav_path):
             wav_path = self.oto_map.get(note.lyric) or self.oto_map.get(
@@ -540,10 +610,63 @@ def _render_to_wav_v2(
             vib_depth = np.zeros(res, dtype=np.float64)
             vib_rate = np.zeros(res, dtype=np.float64)
 
-        portamento_curve = build_portamento_curve(note, resolution=res)
+        # The v2 UST/VCV path has already resolved PreUtterance/VoiceOverlap
+        # in align_vocal_timing(). Extract timing metadata BEFORE building
+        # portamento_offsets so PreUtterance lead_frames can pad negative time.
+        try:
+            start_time_sec = float(getattr(note, "start_time", 0.0))
+        except (TypeError, ValueError):
+            start_time_sec = 0.0
+
+        try:
+            preutterance_ms = float(getattr(note, "pre_utterance", 0.0))
+        except (TypeError, ValueError):
+            preutterance_ms = 0.0
+        try:
+            overlap_ms = float(getattr(note, "overlap", 0.0))
+        except (TypeError, ValueError):
+            overlap_ms = 0.0
+
+        c_pre_ms = max(0.0, preutterance_ms) if np.isfinite(preutterance_ms) else -1.0
+        resolved_oto_pre = (
+            max(0.0, float(getattr(resolved_oto_entry, "preutterance", 0.0) or 0.0))
+            if resolved_oto_entry is not None else 0.0
+        )
+        effective_pre_ms = c_pre_ms if c_pre_ms >= 0.0 else resolved_oto_pre
+
+        render_kind = str(getattr(note, "_cvvc_render_kind", "") or "")
+        next_note = None
+        if render_kind != "vc":
+            try:
+                cur_end_sec = start_time_sec + max(0.0, float(getattr(note, "duration", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                cur_end_sec = -1.0
+            for j in range(i + 1, note_count):
+                cand = notes[j]
+                if str(getattr(cand, "_cvvc_render_kind", "") or "") == "vc":
+                    continue
+                try:
+                    cand_start_sec = float(getattr(cand, "start_time", 0.0))
+                except (TypeError, ValueError):
+                    cand_start_sec = float("inf")
+                if cur_end_sec >= 0.0 and abs(cand_start_sec - cur_end_sec) <= 0.015:
+                    next_note = cand
+                break
+        time_offset_ms = (
+            -float(getattr(note, "duration", 0.0) or 0.0) * 1000.0
+            if render_kind == "vc" else 0.0
+        )
+
+        portamento_curve = build_portamento_curve(
+            note,
+            resolution=res,
+            next_note=next_note,
+            preutterance_ms=effective_pre_ms,
+            time_offset_ms=time_offset_ms,
+        )
         if portamento_curve is not None:
             portamento_arr = portamento_curve.astype(np.float64)
-            portamento_len = res
+            portamento_len = int(len(portamento_arr))
         else:
             portamento_arr = None
             portamento_len = 0
@@ -568,34 +691,13 @@ def _render_to_wav_v2(
         c_notes_array[i].intensity = float(np.clip(getattr(note, "_ust_intensity", 100.0), 0.0, 200.0))
         c_notes_array[i].modulation = float(np.clip(getattr(note, "_ust_modulation", 0.0), 0.0, 100.0))
 
-        # The v2 UST/VCV path has already resolved PreUtterance/VoiceOverlap
-        # in align_vocal_timing(). Serialize those resolved values explicitly
-        # so the native renderer does not mistake ctypes' zero-initialized
-        # fields for an intentional 0 ms override.
-        try:
-            start_time_sec = float(getattr(note, "start_time", 0.0))
-        except (TypeError, ValueError):
-            start_time_sec = 0.0
         c_notes_array[i].start_time_ms = (
             start_time_sec * 1000.0
             if np.isfinite(start_time_sec) and start_time_sec >= 0.0
             else -1.0
         )
 
-        try:
-            preutterance_ms = float(getattr(note, "pre_utterance", 0.0))
-        except (TypeError, ValueError):
-            preutterance_ms = 0.0
-        try:
-            overlap_ms = float(getattr(note, "overlap", 0.0))
-        except (TypeError, ValueError):
-            overlap_ms = 0.0
-
-        c_notes_array[i].preutterance_ms = (
-            max(0.0, preutterance_ms)
-            if np.isfinite(preutterance_ms)
-            else -1.0
-        )
+        c_notes_array[i].preutterance_ms = c_pre_ms
         c_notes_array[i].overlap_ms = (
             max(0.0, overlap_ms)
             if np.isfinite(overlap_ms)
