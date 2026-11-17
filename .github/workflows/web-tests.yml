@@ -7,9 +7,13 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'assets/src/**'
+      - 'public/wasm/**'
+      - 'scripts/build_wasm.sh'
       - 'tests/**'
       - 'package.json'
       - 'vite.config.*'
+      - '.github/workflows/build-wasm.yml'
       - '.github/workflows/web-tests.yml'
   workflow_dispatch:
 
@@ -31,6 +35,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+      - name: Build and stage the exact WASM used by regression tests
+        run: |
+          bash scripts/build_wasm.sh build/wasm
+          mkdir -p public/wasm assets/src/wasm
+          cp build/wasm/vose_core.js public/wasm/vose_core.js
+          cp build/wasm/vose_core.js assets/src/wasm/vose_core.js
+          cp build/wasm/vose_core.wasm public/wasm/vose_core.wasm
       - name: Install dependencies
         run: npm install
       - name: Run Web regression tests
