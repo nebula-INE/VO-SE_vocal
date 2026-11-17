@@ -436,6 +436,8 @@ struct NotePrepass {
     double                               preutterance_ms = 0.0;
     double                               overlap_ms = 0.0;
     int64_t                              preutterance_samples = 0;
+    int64_t                              base_note_samples = 0;
+    double                               orig_preutterance_ms = 0.0;
 
     // 直前に隣接する RENDERABLE ノートの index（なければ -1）。
     // オーバーラップ区間のパラメータモーフ(morph_head_toward_previous)が参照する。
@@ -628,6 +630,9 @@ static constexpr double kLegatoPseudoPreutterThresholdMs = 10.0;
 // 仮の先行発声のうち、オーバーラップ(クロスフェード)に使う割合。
 // 1.0 だと立ち上がり全体がクロスフェードになり子音の頭が鈍る。
 static constexpr double kLegatoPseudoOverlapRatio = 0.6;
+// 直前ノートが短い場合、後続ノートの先行発声による侵食量 (pre_ms - ov_ms) が
+// 前ノート公称長 (base_note_samples) のこの割合 + 休符ギャップを超えないよう縮小する。
+static constexpr double kMaxPrevNotePreutterFraction = 0.5;
 // クロスフェード重み: 0=従来(線形和が1の raised-cosine)、1=等パワー(sin/cos)。
 // 位相が揃わない2波形の和は等パワーのほうが音量が凹まず、
 // 揃っている場合は線形和のほうが膨らまない。中間を既定にする。
@@ -1025,12 +1030,14 @@ double map_time(double t_out_ms, const OtoEntry& oto,
 // fixed/stretch mapping. This preserves start_time + duration at the output.
 static double map_time_with_preutterance(double t_out_ms, const OtoEntry& oto,
                                          double source_wav_len_ms, double note_duration_ms,
-                                         double preutterance_ms)
+                                         double preutterance_ms,
+                                         double orig_preutterance_ms = -1.0)
 {
     const double pre = std::max(0.0, preutterance_ms);
     if (pre <= 0.0) {
         return map_time(t_out_ms, oto, source_wav_len_ms, note_duration_ms);
     }
+    const double orig_pre = (orig_preutterance_ms >= pre) ? orig_preutterance_ms : pre;
 
     const double offset = std::max(0.0, oto.offset);
     double fixed = std::max(0.0, oto.consonant);
@@ -1052,22 +1059,26 @@ static double map_time_with_preutterance(double t_out_ms, const OtoEntry& oto,
     }
 
     const double safe_cutoff_pos = std::max(offset + fixed + 10.0, cutoff_pos - 15.0);
-    const double source_stretch = std::max(0.0, safe_cutoff_pos - (offset + fixed));
-    const double safe_pre = std::min(pre, std::max(0.0, safe_cutoff_pos - offset));
+    const double avail_src = std::max(0.0, safe_cutoff_pos - offset);
+    const double safe_pre = std::min(pre, avail_src);
+    const double safe_orig_pre = std::min(orig_pre, avail_src);
 
     if (t_out_ms < safe_pre) {
-        return clamp(offset + t_out_ms, 0.0, std::max(0.0, safe_cutoff_pos));
+        const double pre_scale = (safe_pre > 0.0) ? (safe_orig_pre / safe_pre) : 1.0;
+        return clamp(offset + t_out_ms * pre_scale, 0.0, std::max(0.0, safe_cutoff_pos));
     }
 
     const double musical_t = t_out_ms - safe_pre;
-    const double fixed_after_pre = std::max(0.0, fixed - safe_pre);
+    const double fixed_after_pre = std::max(0.0, fixed - safe_orig_pre);
     if (musical_t < fixed_after_pre) {
-        return clamp(offset + safe_pre + musical_t, 0.0, std::max(0.0, safe_cutoff_pos));
+        return clamp(offset + safe_orig_pre + musical_t, 0.0, std::max(0.0, safe_cutoff_pos));
     }
 
+    const double stretch_src_start = offset + safe_orig_pre + fixed_after_pre;
+    const double source_stretch = std::max(0.0, safe_cutoff_pos - stretch_src_start);
     const double output_stretch = std::max(1.0, note_duration_ms - fixed_after_pre);
     const double ratio = (source_stretch > 0.0) ? (source_stretch / output_stretch) : 1.0;
-    const double mapped = (offset + fixed) + (musical_t - fixed_after_pre) * ratio;
+    const double mapped = stretch_src_start + (musical_t - fixed_after_pre) * ratio;
     return clamp(mapped, 0.0, std::max(0.0, safe_cutoff_pos));
 }
 
@@ -1798,7 +1809,8 @@ static void morph_head_toward_previous(
 
         const int src_frame = clamp(static_cast<int>(
             map_time_with_preutterance(t_prev, prev_oto, prev_src_ms,
-                                       prev_note_ms, pv.preutterance_ms)
+                                       prev_note_ms, pv.preutterance_ms,
+                                       pv.orig_preutterance_ms)
             / kFramePeriod), 0, cache_prev->length - 1);
         const double* sp = &cache_prev->flat_spec[static_cast<size_t>(src_frame) * spec_bins];
         const double* ap = &cache_prev->flat_ap  [static_cast<size_t>(src_frame) * spec_bins];
@@ -1817,9 +1829,14 @@ static void morph_head_toward_previous(
             const int ci = std::min(std::max(0, jp - prev_lead), prev_curve_frames - 1);
             prev_f0 = resample_curve(pn.pitch_curve, pn.pitch_length, ci, prev_curve_frames);
             if (pn.portamento_offsets && pn.portamento_length > 0) {
-                const double cents = (pn.portamento_length > pn.pitch_length && prev_lead > 0)
-                    ? resample_curve(pn.portamento_offsets, pn.portamento_length, jp, prev_out_frames)
-                    : resample_curve(pn.portamento_offsets, pn.portamento_length, ci, prev_curve_frames);
+                double cents = 0.0;
+                if (pn.portamento_length > pn.pitch_length) {
+                    const int orig_lead = pn.portamento_length - pn.pitch_length;
+                    const int pidx_p = clamp((jp - prev_lead) + orig_lead, 0, pn.portamento_length - 1);
+                    cents = pn.portamento_offsets[pidx_p];
+                } else {
+                    cents = resample_curve(pn.portamento_offsets, pn.portamento_length, ci, prev_curve_frames);
+                }
                 prev_f0 *= std::pow(2.0, cents / 1200.0);
             }
         }
@@ -1932,7 +1949,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
     for (int j = 0; j < output_frames; ++j) {
         const double t_out_ms = j * kFramePeriod;
         const double t_src_ms = map_time_with_preutterance(
-            t_out_ms, current_oto, src_ms, note_ms, pp.preutterance_ms);
+            t_out_ms, current_oto, src_ms, note_ms, pp.preutterance_ms,
+            pp.orig_preutterance_ms);
         const int src_frame   = clamp(
             static_cast<int>(t_src_ms / kFramePeriod), 0, cache_cur->length - 1);
 
@@ -1963,13 +1981,18 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
 
         // ---- 3. ★★★ ポルタメントオフセットを適用（セント → Hz） ★★★ ----
         if (n.portamento_offsets && n.portamento_length > 0) {
-            // portamento_length > pitch_length の場合は [−lead_frames*5ms .. note_ms] を含む
-            // 前値パディング済みカーブとして扱い、それ以外は従来互換の [0 .. note_ms] として
-            // curve_idx = j - lead_frames へ整列する（PreUtterance 分の前倒しズレを防止）。
-            const double cents = (n.portamento_length > n.pitch_length && lead_frames > 0)
-                ? resample_curve(n.portamento_offsets, n.portamento_length, j, output_frames)
-                : resample_curve(n.portamento_offsets, n.portamento_length,
-                                 std::min(curve_idx, curve_frames - 1), curve_frames);
+            // portamento_length > pitch_length の場合は先頭 (portamento_length - pitch_length) フレームを
+            // 負時間域パディング（beat 0 = orig_lead）として扱い、PreUtterance が縮小された場合でも
+            // ポルタメントの音楽的拍位置がずれないよう beat 相対位置 (j - lead_frames) で参照する。
+            double cents = 0.0;
+            if (n.portamento_length > n.pitch_length) {
+                const int orig_lead = n.portamento_length - n.pitch_length;
+                const int pidx_p = clamp((j - lead_frames) + orig_lead, 0, n.portamento_length - 1);
+                cents = n.portamento_offsets[pidx_p];
+            } else {
+                cents = resample_curve(n.portamento_offsets, n.portamento_length,
+                                       std::min(curve_idx, curve_frames - 1), curve_frames);
+            }
             base_f0_val *= std::pow(2.0, cents / 1200.0);
         }
 
@@ -2016,7 +2039,8 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                                   (pp.has_oto && is_unvoiced_vc_alias(current_oto.alias));
         const double fixed_ms = std::max(0.0, current_oto.consonant);
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
-        const bool in_consonant_friction = (t_out_ms < unvoiced_attack_ms);
+        const double src_offset_ms = t_src_ms - std::max(0.0, current_oto.offset);
+        const bool in_consonant_friction = has_unvoiced && (src_offset_ms < unvoiced_attack_ms);
 
         const double breath_scale = clamp(breath / 0.5, 0.25, 1.25);
         const double friction_tilt_scale = in_consonant_friction ? 0.55 : 1.0;
@@ -2550,7 +2574,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 !(notes[i].preutterance_ms > 0.0)) {
                 const NotePrepass& pv = prepass[last_idx];
                 const double prev_end_ms = pv.start_time_ms + 1000.0 *
-                    static_cast<double>(pv.note_samples - pv.preutterance_samples) / kFs;
+                    static_cast<double>(pv.base_note_samples) / kFs;
                 if (std::abs(prev_end_ms - notes[i].start_time_ms) <= kAdjacentToleranceMs) {
                     const double base_ms = 1000.0 * static_cast<double>(base_note_samples) / kFs;
                     pre_ms = std::min(kLegatoPseudoPreutterMs, 0.4 * base_ms);
@@ -2560,12 +2584,39 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 }
             }
 
+            const double orig_pre_ms = pseudo_pre ? 0.0 : pre_ms;
+
+            // 前ノートの公称長に対して先行発声の侵食量 (pre_ms - ov_ms) が大きすぎる場合、
+            // 短い前ノートが次の子音に食われないよう pre_ms と ov_ms を同率で縮小する。
+            // 休符・隙間(gap_ms)がある場合はその分を余裕として加算する。
+            bool capped_pre = false;
+            if (absolute_timing && last_idx >= 0 &&
+                prepass[last_idx].state == NoteState::RENDERABLE &&
+                prepass[last_idx].absolute_timing) {
+                const NotePrepass& pv = prepass[last_idx];
+                const double prev_len_ms = 1000.0 * static_cast<double>(pv.base_note_samples) / kFs;
+                const double prev_end_ms = pv.start_time_ms + prev_len_ms;
+                const double gap_ms = std::max(0.0, notes[i].start_time_ms - prev_end_ms);
+                const double limit = kMaxPrevNotePreutterFraction * prev_len_ms + gap_ms;
+                const double eff_ov_ms = std::min(ov_ms, pre_ms);
+                const double need = pre_ms - eff_ov_ms;
+                if (need > limit && need > 0.0) {
+                    const double r = limit / need;
+                    pre_ms *= r;
+                    ov_ms = eff_ov_ms * r;
+                    capped_pre = true;
+                }
+            }
+
             prepass[i].absolute_timing = absolute_timing;
             prepass[i].start_time_ms = absolute_timing ? notes[i].start_time_ms : -1.0;
+            prepass[i].base_note_samples = base_note_samples;
             prepass[i].preutterance_ms = pre_ms;
+            prepass[i].orig_preutterance_ms = pseudo_pre ? pre_ms : orig_pre_ms;
             // レガート接続(直前が隣接ノート)で UST が Overlap を明示していない場合のみ、
             // 短すぎるオーバーラップを kMinLegatoOverlapMs まで底上げする。
-            const bool floor_overlap = prev_renderable && notes[i].overlap_ms < 0.0 && !pseudo_pre;
+            // 前ノート長制限で縮小したノートは子音がクロスフェードで潰れないよう底上げしない。
+            const bool floor_overlap = prev_renderable && notes[i].overlap_ms < 0.0 && !pseudo_pre && !capped_pre;
             prepass[i].overlap_ms = std::min(
                 floor_overlap ? std::max(ov_ms, kMinLegatoOverlapMs) : ov_ms, pre_ms);
             prepass[i].prev_idx = prev_renderable ? last_idx : -1;

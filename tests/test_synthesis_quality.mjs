@@ -933,3 +933,26 @@ test('Compiled WASM PreUtterance pitch timing alignment lands transition midpoin
   assert.ok(postMidi !== null && postMidi >= 73.8, `expected settled target near 74.0 MIDI, got ${postMidi}`);
 });
 
+test('C++ vose_core short-note preutterance cap, gap allowance, floor bypass, and consonant compression contract', () => {
+  const coreSrc = fs.readFileSync('assets/src/vose_core.cpp', 'utf8');
+  const internalHdr = fs.readFileSync('include/vose_core_internal.h', 'utf8');
+
+  // 1. Prepass tracks nominal base_note_samples and orig_preutterance_ms
+  assert.match(coreSrc, /int64_t\s+base_note_samples\s*=\s*0;/);
+  assert.match(coreSrc, /double\s+orig_preutterance_ms\s*=\s*0\.0;/);
+  assert.match(internalHdr, /int64_t\s+base_note_samples\s*=\s*0;/);
+  assert.match(internalHdr, /double\s+orig_preutterance_ms\s*=\s*0\.0;/);
+
+  // 2. 50% fraction constant + gap-inclusive limit + proportional pre_ms/ov_ms scaling + floor bypass
+  assert.match(coreSrc, /kMaxPrevNotePreutterFraction\s*=\s*0\.5;/);
+  assert.match(coreSrc, /const double prev_len_ms = 1000\.0 \* static_cast<double>\(pv\.base_note_samples\) \/ kFs;/);
+  assert.match(coreSrc, /const double gap_ms = std::max\(0\.0, notes\[i\]\.start_time_ms - prev_end_ms\);/);
+  assert.match(coreSrc, /const double limit = kMaxPrevNotePreutterFraction \* prev_len_ms \+ gap_ms;/);
+  assert.match(coreSrc, /const bool floor_overlap = prev_renderable && notes\[i\]\.overlap_ms < 0\.0 && !pseudo_pre && !capped_pre;/);
+
+  // 3. map_time_with_preutterance compresses preutterance to keep vowel on beat, and portamento indexes by beat offset
+  assert.match(coreSrc, /const double pre_scale = \(safe_pre > 0\.0\) \? \(safe_orig_pre \/ safe_pre\) : 1\.0;/);
+  assert.match(coreSrc, /const double fixed_after_pre = std::max\(0\.0, fixed - safe_orig_pre\);/);
+  assert.match(coreSrc, /const bool in_consonant_friction = has_unvoiced && \(src_offset_ms < unvoiced_attack_ms\);/);
+  assert.match(coreSrc, /const int orig_lead = n\.portamento_length - n\.pitch_length;/);
+});

@@ -47,13 +47,16 @@ struct NotePrepass {
     double                               preutterance_ms = 0.0;
     double                               overlap_ms = 0.0;
     int64_t                              preutterance_samples = 0;
+    int64_t                              base_note_samples = 0;
+    double                               orig_preutterance_ms = 0.0;
 
     NotePrepass() = default;
     NotePrepass(NoteState s, int64_t ns,
                 std::shared_ptr<const EmbeddedVoice> e,
                 std::shared_ptr<const EmbeddedVoice> pe = nullptr,
                 const OtoEntry* o = nullptr)
-        : state(s), note_samples(ns), ev(std::move(e)), prev_ev(std::move(pe))
+        : state(s), note_samples(ns), ev(std::move(e)), prev_ev(std::move(pe)),
+          base_note_samples(ns)
     { if (o) { oto = *o; has_oto = true; } }
 };
 
