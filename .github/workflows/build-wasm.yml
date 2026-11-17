@@ -38,6 +38,7 @@ jobs:
                src/world/matlabfunctions.cpp \
                src/world/stonemask.cpp \
                src/world/synthesis.cpp \
+               -Iassets/src \
                -Iinclude \
                -O3 \
                -std=c++17 \
