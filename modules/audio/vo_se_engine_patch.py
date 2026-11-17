@@ -317,6 +317,39 @@ def _note_duration_frames(note, frame_period_ms: float = 5.0) -> int:
     return max(1, int(round(duration_sec * 1000.0 / frame_period_ms)))
 
 
+def _lookup_oto_map_fallback(oto_map: Any, lyric: Any, phonemes: Any) -> str:
+    """Look up a legacy WAV basename without treating a phoneme list as a key.
+
+    A multi-phoneme sequence is not a single alias, so it is deliberately not
+    reduced to an arbitrary first/last phoneme. A one-item sequence remains
+    compatible with callers that represent a single phoneme as a list.
+    """
+    if not isinstance(oto_map, dict):
+        return ""
+
+    aliases: List[str] = []
+    if isinstance(lyric, str) and lyric:
+        aliases.append(lyric)
+
+    if isinstance(phonemes, str) and phonemes:
+        aliases.append(phonemes)
+    elif (
+        isinstance(phonemes, (list, tuple))
+        and len(phonemes) == 1
+        and isinstance(phonemes[0], str)
+        and phonemes[0]
+    ):
+        aliases.append(phonemes[0])
+
+    for alias in aliases:
+        candidate = oto_map.get(alias)
+        if isinstance(candidate, os.PathLike):
+            candidate = os.fspath(candidate)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return ""
+
+
 def _expected_render_duration_sec(notes) -> float:
     """v2 の絶対タイムラインから期待される WAV 長を秒で求める。"""
     end_sec = 0.0
@@ -446,6 +479,7 @@ def _render_to_wav_v2(
     note_count = len(notes)
     from modules.audio.vo_se_engine import CNoteEvent
     resolved_voice_count = 0
+    unresolved_note_diagnostics: List[str] = []
     c_notes_array = (CNoteEvent * note_count)()
     self._temp_refs = []
 
@@ -530,12 +564,29 @@ def _render_to_wav_v2(
                     resolved_oto_entry = direct_entry
 
         if not wav_path or not os.path.isfile(wav_path):
-            wav_path = self.oto_map.get(note.lyric) or self.oto_map.get(
-                getattr(note, "phonemes", ""), ""
+            # The legacy basename map accepts string aliases only. NoteEvent.phonemes
+            # is commonly list[str]; passing that list to dict.get() raises
+            # TypeError: unhashable type: 'list'. Never guess one phone from a
+            # multi-phoneme sequence because that can substitute the wrong sample.
+            wav_path = _lookup_oto_map_fallback(
+                getattr(self, "oto_map", {}),
+                getattr(note, "lyric", None),
+                getattr(note, "phonemes", None),
             )
 
         if wav_path:
             wav_path = os.path.abspath(os.path.normpath(str(wav_path)))
+
+        if not wav_path or not os.path.isfile(wav_path):
+            phoneme_preview = getattr(note, "phonemes", None)
+            if isinstance(phoneme_preview, (list, tuple)):
+                phoneme_preview = list(phoneme_preview[:8])
+            note_number = getattr(note, "note_number", getattr(note, "note_num", None))
+            unresolved_note_diagnostics.append(
+                f"#{i + 1} lyric={getattr(note, 'lyric', None)!r} "
+                f"note_number={note_number!r} phonemes={phoneme_preview!r}"
+            )
+            wav_path = ""
 
         # 未解決時にライブラリ先頭の別音素を使うと、誤発音になるため、
         # 解決不能なノートは空のままにする。ただし後段で「全ノート無音」を
@@ -723,10 +774,20 @@ def _render_to_wav_v2(
     # ノートが存在するのに音源が1件も解決できない場合、C++ は仕様上
     # 全ノートを無音として正常終了できてしまう。これは「書き出し成功」
     # ではなく音源解決失敗なので、ここで明示的に止める。
+    if unresolved_note_diagnostics:
+        logger.warning(
+            "音源WAVを解決できないノートが %d 件あります: %s",
+            len(unresolved_note_diagnostics),
+            "; ".join(unresolved_note_diagnostics[:5]),
+        )
+
     if note_count > 0 and resolved_voice_count == 0:
+        examples = "; ".join(unresolved_note_diagnostics[:5])
+        detail = f" 未解決ノート: {examples}" if examples else ""
         raise RuntimeError(
             "レンダリング対象の音源WAVを1件も解決できませんでした。"
             " 音源フォルダ・oto.ini・prefix.mapを確認してください。"
+            + detail
         )
 
     native_output = os.path.abspath(file_path).encode("utf-8")
