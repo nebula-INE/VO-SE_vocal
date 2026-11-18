@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import Any
 
 from modules.data.oto_parser import OtoEntry
 
 
 def _decode_oto(data: bytes) -> tuple[str, str]:
-    if data.startswith(b"\\xef\\xbb\\xbf"):
+    bom = bytes((0xEF, 0xBB, 0xBF))
+    if data.startswith(bom):
         return data.decode("utf-8-sig"), "utf-8-sig"
     for encoding in ("utf-8", "cp932", "shift_jis"):
         try:
@@ -44,20 +44,24 @@ def save_oto_entry(
     with open(ini_path, "rb") as handle:
         raw = handle.read()
     text, encoding = _decode_oto(raw)
-    newline = "\r\n" if "\r\n" in text else "\n"
+    newline = "\\r\\n" if "\\r\\n" in text else "\\n"
     lines = text.splitlines()
-    target_filename = entry.filename.replace("\\", "/").casefold()
+    target_filename = entry.filename.replace("\\\\", "/").casefold()
     updated = False
 
     for index, raw_line in enumerate(lines):
-        if not raw_line.strip() or raw_line.lstrip().startswith((";", "#")) or "=" not in raw_line:
+        if (
+            not raw_line.strip()
+            or raw_line.lstrip().startswith((";", "#"))
+            or "=" not in raw_line
+        ):
             continue
         filename, rhs = raw_line.split("=", 1)
         parts = rhs.split(",")
-        if not parts:
-            continue
-        alias = parts[0].strip()
-        filename_matches = filename.strip().replace("\\", "/").casefold() == target_filename
+        alias = parts[0].strip() if parts else ""
+        filename_matches = (
+            filename.strip().replace("\\\\", "/").casefold() == target_filename
+        )
         if not filename_matches or alias != entry.alias:
             continue
         lines[index] = f"{filename}={alias}," + ",".join(values)
@@ -75,7 +79,10 @@ def save_oto_entry(
         except OSError:
             pass
         with os.fdopen(fd, "wb") as handle:
-            handle.write((newline.join(lines) + (newline if text.endswith(("\n", "\r")) else "")).encode(encoding, errors="replace"))
+            rendered = newline.join(lines)
+            if text.endswith(("\\n", "\\r")):
+                rendered += newline
+            handle.write(rendered.encode(encoding, errors="replace"))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, ini_path)
