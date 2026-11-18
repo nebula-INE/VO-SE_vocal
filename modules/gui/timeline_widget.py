@@ -191,6 +191,8 @@ class TimelineWidget(QWidget):
 
         self.show_ai_phonemes: bool = True
         self.ai_ghost_alpha: int = 100
+        # Web版のGhostTrackOverlayと同じ、他のボーカルトラックのノート透視表示。
+        self.show_ghost_tracks: bool = True
 
         # [OPT-1] グリッドキャッシュ
         self._grid_pixmap: Optional[QPixmap] = None
@@ -845,7 +847,9 @@ class TimelineWidget(QWidget):
         self._draw_glow(p)
         if self.show_ai_phonemes:
             self._draw_ai_phoneme_ghosts(p)
-        
+        if self.show_ghost_tracks:
+            self._draw_ghost_tracks(p)
+
         self._draw_notes(p)
         self._draw_parameter_curves(p)
         self._draw_transient_flashes(p)  # 🌟 ノートの上に重ねてフラッシュを描画
@@ -955,6 +959,59 @@ class TimelineWidget(QWidget):
             p.setPen(QPen(QColor(0, 255, 255, 180), 1, Qt.PenStyle.DashLine))
             p.drawLine(int(rect.left()), int(rect.top()),
                        int(rect.left()), int(rect.bottom()))
+
+    def _get_ghost_track_entries(self) -> list[tuple[Any, list[Any]]]:
+        """Return notes from other vocal tracks without copying their data."""
+        main_window = self.window()
+        tracks = getattr(main_window, "tracks", None) or []
+        try:
+            current_index = int(getattr(main_window, "current_track_idx", -1))
+        except (TypeError, ValueError):
+            current_index = -1
+
+        entries: list[tuple[Any, list[Any]]] = []
+        for index, track in enumerate(tracks):
+            if index == current_index or getattr(track, "track_type", "") != "vocal":
+                continue
+            track_notes = getattr(track, "notes", None) or []
+            if track_notes:
+                entries.append((track, list(track_notes)))
+        return entries
+
+    def _draw_ghost_tracks(self, painter: QPainter) -> None:
+        """Render other vocal tracks as non-interactive, translucent piano-roll notes."""
+        viewport = self.rect()
+        for track, notes in self._get_ghost_track_entries():
+            try:
+                track_color = QColor(str(getattr(track, "color_label", "#64D2FF")))
+                if not track_color.isValid():
+                    track_color = QColor("#64D2FF")
+                fill = QColor(track_color)
+                fill.setAlpha(42)
+                outline = QColor(track_color)
+                outline.setAlpha(145)
+                painter.setBrush(QBrush(fill))
+                painter.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
+                for note in notes:
+                    try:
+                        rect = self._calc_note_rect(note)
+                    except (AttributeError, TypeError, ValueError):
+                        continue
+                    if not rect.intersects(QRectF(viewport)):
+                        continue
+                    painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 3, 3)
+                    lyric = str(getattr(note, "lyrics", getattr(note, "lyric", "")) or "")
+                    if rect.width() >= 28 and rect.height() >= 12 and lyric:
+                        painter.setPen(QColor(track_color).lighter(145))
+                        painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Medium))
+                        painter.drawText(
+                            rect.adjusted(4, 0, -2, 0),
+                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                            lyric,
+                        )
+                        painter.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
+            except (TypeError, ValueError):
+                logger.debug("Skipping invalid ghost track color/data", exc_info=True)
 
     def _draw_notes(self, painter: QPainter) -> None:
         """
@@ -1414,6 +1471,10 @@ class TimelineWidget(QWidget):
         self.update()
         super().mouseReleaseEvent(event)  # または元のコードをそのままコピー
 
+    def _set_ghost_tracks_visible(self, visible: bool) -> None:
+        self.show_ghost_tracks = bool(visible)
+        self.update()
+
     def _edit_selected_pitch_curve(self) -> None:
         selected = [note for note in self.notes_list if getattr(note, "is_selected", False)]
         if len(selected) != 1:
@@ -1433,6 +1494,13 @@ class TimelineWidget(QWidget):
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         menu = QMenu(self)
         selected_notes = [n for n in self.notes_list if getattr(n, 'is_selected', False)]
+
+        act_ghost_tracks = QAction("他トラックのノートを透視", self)
+        act_ghost_tracks.setCheckable(True)
+        act_ghost_tracks.setChecked(self.show_ghost_tracks)
+        act_ghost_tracks.toggled.connect(self._set_ghost_tracks_visible)
+        menu.addAction(act_ghost_tracks)
+        menu.addSeparator()
 
         if selected_notes:
             if len(selected_notes) == 1:
