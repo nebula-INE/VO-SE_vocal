@@ -4439,6 +4439,7 @@ class MainWindow(
         self.track_list_widget.clear()
 
         solo_exists = any(t.is_solo for t in self.tracks)
+        voice_options = self._get_voicebank_options()
 
         for i, t in enumerate(self.tracks):
             item = QListWidgetItem()
@@ -4446,8 +4447,10 @@ class MainWindow(
             self.track_list_widget.addItem(item)
 
             if str(getattr(t, "track_type", "vocal")).lower() == "vocal":
-                self._resolve_track_voicebank(t, fallback_id=getattr(self, "current_voice_id", ""))
-            strip = TrackStripWidget(t, self, voice_options=self._get_voicebank_options())
+                self._resolve_track_voicebank(
+                    t, fallback_id=getattr(self, "current_voice_id", ""), notify=True
+                )
+            strip = TrackStripWidget(t, self, voice_options=voice_options)
             strip.selected.connect(self._on_strip_selected)
             strip.voicebank_changed.connect(self._on_strip_voicebank_changed)
             strip.mute_toggled.connect(self._on_strip_mute)
