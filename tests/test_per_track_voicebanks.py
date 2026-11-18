@@ -1,9 +1,9 @@
 from pathlib import Path
-from typing import Any, cast
 from types import SimpleNamespace
+from typing import Any, cast
 
 from modules.audio.vo_se_engine import VO_SE_Engine
-from modules.gui.main_window import _VocalPlaybackPreparationThread
+from modules.gui.main_window import MainWindow, _VocalPlaybackPreparationThread
 
 
 def test_playback_preparation_routes_each_track_to_its_voicebank_and_restores_engine(tmp_path):
@@ -65,3 +65,30 @@ def test_playback_preparation_routes_each_track_to_its_voicebank_and_restores_en
     assert engine.refresh_paths == [
         str(voice_a), str(global_voice), str(voice_b), str(global_voice)
     ]
+
+
+
+def test_voicebank_ids_are_relative_to_managed_voice_roots(tmp_path):
+    voice_root = tmp_path / "voice_banks"
+    voice_root.mkdir()
+    voice_path = voice_root / "Singer A"
+    voice_path.mkdir()
+    (voice_path / "oto.ini").write_text("a.wav=a,0,0,0,0,0\\n", encoding="utf-8")
+    manager = SimpleNamespace(
+        voices={"Singer A": str(voice_path), "VO-SE Official (Embedded)": "__INTERNAL__"},
+        voices_dir=str(tmp_path / "assets" / "voices"),
+        internal_voice_dir=str(voice_root),
+        user_voice_dir=str(tmp_path / "user-voices"),
+    )
+    window = SimpleNamespace(voice_manager=manager, voice_gallery=None)
+    window._stable_voicebank_id = lambda path: MainWindow._stable_voicebank_id(window, path)
+    window._voicebank_catalog = lambda: MainWindow._voicebank_catalog(window)
+
+    catalog = MainWindow._voicebank_catalog(window)
+    singer = next(item for item in catalog if item["name"] == "Singer A")
+    assert singer["id"] == "utau:voice-banks/Singer A"
+    assert singer["path"] == str(voice_path.resolve())
+
+    resolved = MainWindow._resolve_voicebank_binding(window, str(voice_path))
+    assert resolved["id"] == "utau:voice-banks/Singer A"
+    assert resolved["path"] == str(voice_path.resolve())
