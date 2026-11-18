@@ -4350,7 +4350,7 @@ class MainWindow(
             selected.update({"missing": False, "pending": False, "requested_id": requested_id})
             return selected
 
-        if requested_id and requested_id != "NONE" and not catalog and fallback is None:
+        if requested_id and requested_id != "NONE" and not catalog:
             return {
                 "name": requested_id, "id": requested_id, "path": "",
                 "missing": False, "pending": True, "requested_id": requested_id,
