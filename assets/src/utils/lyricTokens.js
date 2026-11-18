@@ -23,6 +23,11 @@ export function segmentJapaneseCharacters(text) {
       token += cleaned[index];
       index += 1;
     }
+    // A prolonged vowel mark belongs to the same mora even after a digraph.
+    if (index < cleaned.length && cleaned[index] === "ー") {
+      token += cleaned[index];
+      index += 1;
+    }
     result.push(token);
   }
   return result;
