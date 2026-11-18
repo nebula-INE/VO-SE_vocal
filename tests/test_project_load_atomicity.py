@@ -392,3 +392,28 @@ def test_legacy_project_load_uses_lightweight_track_container_clones():
     )[0]
     assert "_clone_track_collection(existing_tracks)" in loader
     assert "deepcopy(existing_tracks)" not in loader
+
+
+
+def test_legacy_project_without_track_voicebank_uses_saved_global_voice(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    project_path = tmp_path / "legacy-global-voice.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 120.0,
+            "current_voice_id": "voice-b",
+            "current_voice": "Voice B",
+            "tracks": [{
+                "name": "Legacy vocal",
+                "type": "vocal",
+                "notes": [],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.tracks[0].voicebank_id == "voice-b"
+    assert window.current_voice_id == "voice-b"
