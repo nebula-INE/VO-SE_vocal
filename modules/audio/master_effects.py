@@ -273,7 +273,7 @@ class MasterEffectsProcessor:
 
     def _new_reverb_state(self, params: dict[str, float]) -> dict[str, Any]:
         delay_frames = []
-        for channel, delays in enumerate((self._REVERB_LEFT_DELAYS, self._REVERB_RIGHT_DELAYS)):
+        for delays in (self._REVERB_LEFT_DELAYS, self._REVERB_RIGHT_DELAYS):
             channel_delays = []
             for seconds in delays:
                 delay = max(1, int(round(seconds * self.sample_rate)))
