@@ -96,3 +96,43 @@ def test_smooth_param_records_undo_and_redo():
 
     history.commands[0].redo()
     assert widget.parameters["Pitch"] == expected
+
+@pytest.mark.smoke
+def test_pitch_automation_only_edit_is_recorded_and_restorable_by_undo_redo():
+    from modules.data.data_models import NoteEvent
+    from modules.gui.timeline_widget import TimelineWidget
+
+    class Signal:
+        def __init__(self):
+            self.calls = []
+
+        def emit(self, *args):
+            self.calls.append(args)
+
+    widget = TimelineWidget.__new__(TimelineWidget)
+    note = NoteEvent(note_number=60, start_time=0.0, duration=0.5, lyric="あ")
+    widget.notes_list = [note]
+    widget.edit_committed_signal = Signal()
+    widget.notes_changed_signal = Signal()
+    widget._invalidate_note_rects = lambda: None
+    widget.update = lambda: None
+
+    before = widget._snapshot_notes()
+    note._ust_pbs = "-20;0"
+    note._ust_pbw = "10,10"
+    note._ust_pby = "0,0"
+    widget._commit_edit(before, "UTAU P2P3 自動調声")
+
+    assert len(widget.edit_committed_signal.calls) == 1
+    saved_before, saved_after, description = widget.edit_committed_signal.calls[0]
+    assert description == "UTAU P2P3 自動調声"
+
+    widget._restore_notes_snapshot(saved_before)
+    assert getattr(widget.notes_list[0], "_ust_pbs", None) is None
+    assert getattr(widget.notes_list[0], "_ust_pbw", None) is None
+    assert getattr(widget.notes_list[0], "_ust_pby", None) is None
+
+    widget._restore_notes_snapshot(saved_after)
+    assert widget.notes_list[0]._ust_pbs == "-20;0"
+    assert widget.notes_list[0]._ust_pbw == "10,10"
+    assert widget.notes_list[0]._ust_pby == "0,0"
