@@ -6,9 +6,11 @@
     "dev": "node server.js",
     "build": "vite build",
     "start": "node server.js",
-    "lint": "echo 'No lint errors'",
+    "lint": "npm run lint:web && npm run lint:python",
     "test": "npm run test:web",
-    "test:web": "node --test tests/test_voicebank_security.mjs tests/test_web_multipitch_render_playback.mjs tests/test_web_render_progress.mjs tests/test_synthesis_quality.mjs"
+    "test:web": "node --test tests/test_voicebank_security.mjs tests/test_web_multipitch_render_playback.mjs tests/test_web_render_progress.mjs tests/test_synthesis_quality.mjs",
+    "lint:web": "eslint assets/src server.js modules/utils/voicebank_security.js tests --max-warnings=0",
+    "lint:python": "python -m ruff check modules tests main.py"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.0.0",
@@ -32,6 +34,11 @@
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.3",
-    "vite": "^6.1.0"
+    "vite": "^6.1.0",
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.14.0",
+    "typescript-eslint": "^8.0.0",
+    "eslint-plugin-react-hooks": "^5.2.0"
   }
 }
