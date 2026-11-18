@@ -45,3 +45,29 @@ def test_pitch_point_serialization_keeps_ust_units_and_segment_shapes():
 def test_pitch_point_serialization_fills_missing_shapes_with_linear():
     fields = serialize_pitch_points([(0.0, 0.0), (100.0, 0.5), (200.0, -0.5)])
     assert fields == ("0;0", "100,100", "5,-5", "s,s")
+
+def test_pitch_curve_editor_preserves_empty_pbm_shape_segments(qtbot):
+    note = SimpleNamespace(
+        duration=0.5,
+        _ust_pbs="0;0",
+        _ust_pbw="50,50,50",
+        _ust_pby="10,0,-10",
+        _ust_pbm="s,,j",
+    )
+    dialog = PitchCurveEditorDialog(note, tempo=120.0)
+    qtbot.addWidget(dialog)
+
+    assert dialog._preview.shapes == ["s", "", "j"]
+    dialog.apply_to_note(note)
+    assert note._ust_pbs == "0;0"
+    assert note._ust_pbw == "50,50,50"
+    assert note._ust_pby == "10,0,-10"
+    assert note._ust_pbm == "s,,j"
+
+
+def test_pitch_point_serialization_keeps_blank_pbm_shape_entries():
+    fields = serialize_pitch_points(
+        [(0.0, 0.0), (50.0, 1.0), (100.0, 0.0)],
+        ["s", ""],
+    )
+    assert fields == ("0;0", "50,50", "10,0", "s,")
