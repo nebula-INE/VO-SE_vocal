@@ -11,6 +11,7 @@ on:
       - 'public/wasm/**'
       - 'scripts/build_wasm.sh'
       - 'tests/**'
+      - 'server.js'
       - 'package.json'
       - 'vite.config.*'
       - '.github/workflows/build-wasm.yml'
