@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { registerHooks } from 'node:module';
 import { cleanWavArrayBuffer } from '../assets/src/utils/wavCleaner.ts';
 import {
@@ -537,7 +538,7 @@ test('Compiled WASM vocal synthesis passes boundary continuity, F0 smoothness, a
     delete process.versions.node;
     globalThis.window = {};
     const modFactory = (
-      await import(path.resolve('assets/src/wasm/vose_core.js'))
+      await import(pathToFileURL(path.resolve('assets/src/wasm/vose_core.js')).href)
     ).default;
     mod = await modFactory({
       instantiateWasm(info, recv) {
@@ -769,7 +770,7 @@ test('Compiled WASM PreUtterance pitch timing alignment lands transition midpoin
   try {
     delete process.versions.node;
     globalThis.window = {};
-    const modFactory = (await import(path.resolve('assets/src/wasm/vose_core.js'))).default;
+    const modFactory = (await import(pathToFileURL(path.resolve('assets/src/wasm/vose_core.js')).href)).default;
     mod = await modFactory({
       instantiateWasm(info, recv) {
         WebAssembly.instantiate(wasmBuf, info).then((r) => recv(r.instance));
