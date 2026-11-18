@@ -39,3 +39,18 @@ def test_save_oto_entry_does_not_rewrite_unknown_alias(tmp_path):
         pass
     else:
         raise AssertionError("unknown alias should not modify oto.ini")
+
+def test_save_oto_entry_does_not_add_bom_to_plain_utf8(tmp_path):
+    voice_dir = tmp_path / "utf8"
+    voice_dir.mkdir()
+    ini = voice_dir / "oto.ini"
+    ini.write_text("a.wav=あ,0,0,0,0,0\\n", encoding="utf-8")
+    entry = OtoEntry(
+        alias="あ", filename="a.wav", voice_dir=str(voice_dir),
+        left_blank=0, fixed_range=0, right_blank=0, preutterance=0, overlap=0,
+    )
+    save_oto_entry(
+        entry, left_blank=1, fixed_range=2, right_blank=3,
+        preutterance=4, overlap=5,
+    )
+    assert not ini.read_bytes().startswith(b"\\xef\\xbb\\xbf")
