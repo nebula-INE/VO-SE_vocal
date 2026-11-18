@@ -22,6 +22,10 @@ def segment_japanese_characters(text: str) -> list[str]:
         if index < len(cleaned) and cleaned[index] in _SMALL_KANA:
             char += cleaned[index]
             index += 1
+        # A prolonged vowel mark belongs to the same mora even after a digraph.
+        if index < len(cleaned) and cleaned[index] == "ー":
+            char += cleaned[index]
+            index += 1
         tokens.append(char)
     return tokens
 
