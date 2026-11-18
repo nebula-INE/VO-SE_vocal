@@ -6548,7 +6548,7 @@ class MainWindow(
                 f"UTAU P2P3 自動調声を適用: {changed_count} ノート"
             )
         except Exception as exc:
-            logger.exception("P2P3 自動調声エラー: %s", exc)
+            self.statusBar().showMessage(f"自動調声エラー: {exc}", 6000)
             QMessageBox.critical(
                 self, "自動調声エラー", f"自動調声を適用できませんでした:\n{exc}"
             )
