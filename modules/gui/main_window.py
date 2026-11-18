@@ -6149,39 +6149,33 @@ class MainWindow(
 
     @Slot()
     def on_click_apply_lyrics_bulk(self):
-        """歌詞の一括流し込み（Undo/Redo対応）"""
-        text, ok = QInputDialog.getMultiLineText(self, "歌詞の一括入力", "歌詞を入力:")
-        if not (ok and text):
-            return
-
+        """Web版と同じ区切り・ループ・プレビューに対応した歌詞一括入力。"""
         timeline = getattr(self, "timeline_widget", None)
-        if timeline is None:
+        if timeline is None or not timeline.notes_list:
             return
 
-        lyric_list = [char for char in text if char.strip() and char not in "、。！？"]
-        notes = sorted(timeline.notes_list, key=lambda n: n.start_time)
+        notes = sorted(timeline.notes_list, key=lambda note: note.start_time)
+        from modules.gui.batch_lyric_dialog import BatchLyricDialog
+
+        dialog = BatchLyricDialog(notes, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        assigned_lyrics = dialog.assigned_lyrics()
         before = timeline._snapshot_notes()
         changed = False
-
-        for i in range(min(len(lyric_list), len(notes))):
-            if getattr(notes[i], "lyrics", "") != lyric_list[i]:
-                notes[i].lyrics = lyric_list[i]
-                notes[i].phoneme = timeline.analyze_lyric_to_phoneme(lyric_list[i])
-                changed = True
+        for note, lyric in zip(notes, assigned_lyrics):
+            current = str(getattr(note, "lyrics", getattr(note, "lyric", "")) or "")
+            if current == lyric:
+                continue
+            note.lyrics = lyric
+            note.phoneme = timeline.analyze_lyric_to_phoneme(lyric)
+            changed = True
 
         if changed:
             timeline.notes_changed_signal.emit()
-            timeline._commit_edit(before, "歌詞一括流し込み")
+            timeline._commit_edit(before, "歌詞一括適用")
             timeline.update()
-        
-        if hasattr(self, 'pro_monitoring') and self.pro_monitoring:
-            self.sync_notes = True
-            
-            # QColorを明示的に使用（
-            self.bg_color: QColor = QColor("#FFFFFF")
-            
-            if hasattr(self, 'timeline_widget'):
-                self.refresh_canvas() # 再描画で同期を視覚化
 
    
     # =========================================================================
