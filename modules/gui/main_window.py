@@ -3095,7 +3095,7 @@ class MainWindow(
         self.toolbar.addAction(self.pitch_overlay_action)
     
         # オートチューン
-        auto_tune_action = QAction(icon("auto_tune"), " オートチューン", self)
+        auto_tune_action = QAction(icon("auto_tune"), " UTAU P2P3 自動調声", self)
         auto_tune_action.triggered.connect(self.auto_tune_selected)
         self.toolbar.addAction(auto_tune_action)
 
@@ -3393,10 +3393,11 @@ class MainWindow(
             self,
             "プロジェクトを開く",
             "",
-            "VO-SE Files (*.vose *.json *.ust *.vsqx *.mid *.midi);;"
+            "VO-SE Files (*.vose *.json *.ust *.vsqx *.svp *.mid *.midi);;"
             "MIDI Files (*.mid *.midi);;"
             "UTAU Files (*.ust);;"
             "VSQX Files (*.vsqx);;"
+            "Synthesizer V Files (*.svp);;"
             "VO-SE/JSON Files (*.vose *.json);;"
             "All Files (*)",
         )
@@ -3449,6 +3450,42 @@ class MainWindow(
         
         # ステータスバーの右側に常駐させる
         status_bar.addPermanentWidget(prog_bar)
+
+    def open_oto_inspector(self) -> None:
+        """Open the selected UTAU voicebank's editable oto.ini inspector."""
+        manager = getattr(self, "voice_manager", None)
+        voice_name = ""
+        selector = getattr(self, "character_selector", None)
+        if selector is not None and hasattr(selector, "currentText"):
+            voice_name = str(selector.currentText() or "")
+        if not voice_name:
+            voice_name = str(getattr(self, "current_voice", "") or "")
+
+        voices = getattr(manager, "voices", {}) if manager is not None else {}
+        record = voices.get(voice_name) if isinstance(voices, dict) else None
+        if isinstance(record, dict):
+            voice_dir = str(record.get("path", "") or "")
+        else:
+            voice_dir = str(record or "")
+
+        if not voice_dir or not os.path.isdir(voice_dir):
+            legacy_voices = getattr(self, "voices", {})
+            if isinstance(legacy_voices, dict):
+                candidate = legacy_voices.get(voice_name, "")
+                if isinstance(candidate, dict):
+                    candidate = candidate.get("path", "")
+                voice_dir = str(candidate or "")
+
+        if not voice_dir or not os.path.isdir(voice_dir):
+            QMessageBox.information(
+                self, "UTAU 原音設定",
+                "UTAU音源が選択されていません。先に音源ライブラリからUTAU音源を選択してください。",
+            )
+            return
+
+        from modules.gui.oto_inspector_dialog import OtoInspectorDialog
+        dialog = OtoInspectorDialog(voice_dir, self)
+        dialog.exec()
 
     def setup_actions(self):
         """アクションの定義"""
@@ -3505,6 +3542,16 @@ class MainWindow(
         export_midi_action.triggered.connect(self.export_to_midi_file)
         file_menu.addAction(export_midi_action)
 
+        export_ust_action = QAction("UTAU (.ust) 書き出し...", self)
+        export_ust_action.triggered.connect(self.export_as_ust)
+        file_menu.addAction(export_ust_action)
+        export_vsqx_action = QAction("VOCALOID (.vsqx) 書き出し...", self)
+        export_vsqx_action.triggered.connect(self.export_as_vsqx)
+        file_menu.addAction(export_vsqx_action)
+        export_svp_action = QAction("Synthesizer V (.svp) 書き出し...", self)
+        export_svp_action.triggered.connect(self.export_as_svp)
+        file_menu.addAction(export_svp_action)
+
         # 編集メニュー
         edit_menu = self.menuBar().addMenu("編集(&E)")
         edit_menu.addAction(self.undo_action)
@@ -3512,6 +3559,11 @@ class MainWindow(
         edit_menu.addSeparator()
         edit_menu.addAction(self.copy_action)
         edit_menu.addAction(self.paste_action)
+
+        tools_menu = self.menuBar().addMenu("ツール(&T)")
+        oto_inspector_action = QAction("UTAU 原音設定 (oto.ini)...", self)
+        oto_inspector_action.triggered.connect(self.open_oto_inspector)
+        tools_menu.addAction(oto_inspector_action)
 
     def setup_connections(self):
         """
@@ -6473,43 +6525,33 @@ class MainWindow(
     # ==========================================================================
     @Slot()
     def auto_tune_selected(self) -> None:
-        """
-        選択中のノートのピッチを半音階グリッドにスナップさせる（オートチューン風）
-        """
-        if self.timeline_widget is None:
+        """Web版と同じ P2P3 ポルタメント + ビブラートを全ノートへ適用する。"""
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is None:
             return
-        
-        selected = [n for n in self.timeline_widget.notes_list if getattr(n, 'is_selected', False)]
-        if not selected:
-            self.statusBar().showMessage("オートチューン: ノートが選択されていません")
+        notes = list(getattr(timeline, "notes_list", []) or [])
+        if not notes:
+            self.statusBar().showMessage("自動調声: ノートがありません")
             return
-        
-        # 元のピッチを保存（Undo用）
-        before_snapshot = self.timeline_widget._snapshot_notes()
-        
-        for note in selected:
-            # MIDIノート番号に最も近い整数に丸める（半音単位）
-            original = float(getattr(note, 'note_number', 60))
-            snapped = int(round(original))
-            # 範囲制限
-            note.note_number = max(0, min(127, snapped))
-            
-            # もしピッチカーブ（オートメーション）が存在すればそれも補正
-            # （GraphEditorWidget の Pitch イベントを参照）
-            if hasattr(self, 'graph_editor_widget'):
-                pitch_events = self.graph_editor_widget.all_parameters.get("Pitch", [])
-                for ev in pitch_events:
-                    if note.start_time <= ev.time <= note.start_time + note.duration:
-                        # セント単位で補正（MIDIノート基準にスナップ）
-                        midi_val = 69 + 12 * math.log2(ev.value / 440.0)
-                        snapped_midi = round(midi_val)
-                        ev.value = 440.0 * (2.0 ** ((snapped_midi - 69) / 12.0))
-        
-        self.timeline_widget._invalidate_note_rects()
-        self.timeline_widget.notes_changed_signal.emit()
-        self.timeline_widget._commit_edit(before_snapshot, "オートチューン")
-        self.timeline_widget.update()
-        self.statusBar().showMessage(f"オートチューン適用: {len(selected)} ノート")
+
+        from modules.data.auto_tune import apply_p2p3_autotune
+
+        before_snapshot = timeline._snapshot_notes()
+        try:
+            tempo = float(getattr(timeline, "tempo", 120.0) or 120.0)
+            changed_count = apply_p2p3_autotune(notes, tempo)
+            timeline._invalidate_note_rects()
+            timeline.notes_changed_signal.emit()
+            timeline._commit_edit(before_snapshot, "UTAU P2P3 自動調声")
+            timeline.update()
+            self.statusBar().showMessage(
+                f"UTAU P2P3 自動調声を適用: {changed_count} ノート"
+            )
+        except Exception as exc:
+            logger.exception("P2P3 自動調声エラー: %s", exc)
+            QMessageBox.critical(
+                self, "自動調声エラー", f"自動調声を適用できませんでした:\\n{exc}"
+            )
 
     @Slot(object, object, str)
     def on_graph_edit_committed(self, before: dict, after: dict, description: str):
