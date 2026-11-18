@@ -1536,28 +1536,34 @@ class ProjectIOMixin:
                     if not math.isfinite(volume) or not math.isfinite(pan):
                         raise ValueError(f"Track {index + 1} の音量・パン設定が不正です。")
 
+                    track_type = str(raw.get("type", "vocal"))
                     track = track_cls(
                         str(raw.get("name", f"Track {index + 1}")),
-                        str(raw.get("type", "vocal")),
+                        track_type,
                     )
-                    raw_voicebank_id = raw.get(
-                        "voicebank_id", saved_voice_id or getattr(self, "current_voice_id", "")
-                    )
-                    if raw_voicebank_id is not None and not isinstance(raw_voicebank_id, str):
-                        raise ValueError(
-                            f"Track {index + 1} の voicebank_id は文字列である必要があります。"
+                    if track_type.lower() == "vocal":
+                        raw_voicebank_id = raw.get(
+                            "voicebank_id", saved_voice_id or getattr(self, "current_voice_id", "")
                         )
-                    resolve_voicebank = getattr(self, "_resolve_voicebank_binding", None)
-                    if callable(resolve_voicebank):
-                        voice_binding = resolve_voicebank(
-                            raw_voicebank_id,
-                            fallback_id=saved_voice_id or getattr(self, "current_voice_id", ""),
-                        )
-                        track.voicebank_id = str(voice_binding.get("id") or "__INTERNAL__")
-                        if voice_binding.get("missing"):
-                            missing_track_voicebanks.append(str(raw_voicebank_id or "不明な音源"))
+                        if raw_voicebank_id is not None and not isinstance(raw_voicebank_id, str):
+                            raise ValueError(
+                                f"Track {index + 1} の voicebank_id は文字列である必要があります。"
+                            )
+                        resolve_voicebank = getattr(self, "_resolve_voicebank_binding", None)
+                        if callable(resolve_voicebank):
+                            voice_binding = resolve_voicebank(
+                                raw_voicebank_id,
+                                fallback_id=saved_voice_id or getattr(self, "current_voice_id", ""),
+                            )
+                            track.voicebank_id = str(voice_binding.get("id") or "__INTERNAL__")
+                            if voice_binding.get("missing"):
+                                missing_track_voicebanks.append(
+                                    str(raw_voicebank_id or "不明な音源")
+                                )
+                        else:
+                            track.voicebank_id = str(raw_voicebank_id or "")
                     else:
-                        track.voicebank_id = str(raw_voicebank_id or "")
+                        track.voicebank_id = ""
                     track.notes = notes
                     audio_path = str(
                         raw.get("audio_path", raw.get("audio", "")) or ""
