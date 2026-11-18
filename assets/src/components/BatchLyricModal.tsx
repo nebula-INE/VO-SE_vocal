@@ -10,7 +10,7 @@ interface BatchLyricModalProps {
 
 // The tokenization rules live in a shared, platform-neutral module. Both
 // Desktop (Python) and Web (TypeScript/JavaScript) run the same fixture cases.
-import { parseLyricTokens, segmentJapaneseCharacters } from '../utils/lyricTokens.js';
+import { parseLyricTokens } from '../utils/lyricTokens.js';
 export { parseLyricTokens, segmentJapaneseCharacters } from '../utils/lyricTokens.js';
 
 
