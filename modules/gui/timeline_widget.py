@@ -4,6 +4,7 @@ import os
 import ctypes
 import wave
 import bisect
+from copy import deepcopy
 import numpy as np
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Protocol, runtime_checkable, cast
@@ -1474,6 +1475,54 @@ class TimelineWidget(QWidget):
         self.update()
         super().mouseReleaseEvent(event)  # または元のコードをそのままコピー
 
+    def _edit_selected_lyric(self) -> None:
+        """Edit the selected note's lyric from the same context-menu action as Web."""
+        selected = [note for note in self.notes_list if getattr(note, "is_selected", False)]
+        if len(selected) != 1:
+            return
+        note = selected[0]
+        current_lyric = str(getattr(note, "lyrics", getattr(note, "lyric", "")) or "")
+        text, accepted = QInputDialog.getText(
+            self,
+            "歌詞の編集",
+            "ノートの歌詞:",
+            QLineEdit.EchoMode.Normal,
+            current_lyric,
+        )
+        if not accepted or text == current_lyric:
+            return
+        before = self._snapshot_notes()
+        note.lyrics = text
+        note.phoneme = self.analyze_lyric_to_phoneme(text)
+        self._invalidate_note_rects()
+        self.notes_changed_signal.emit()
+        self._commit_edit(before, "歌詞編集")
+        self.update()
+
+    def _duplicate_selected_notes(self) -> None:
+        """Duplicate the selected note block immediately after its current time span."""
+        selected = [note for note in self.notes_list if getattr(note, "is_selected", False)]
+        if not selected:
+            return
+        before = self._snapshot_notes()
+        first_start = min(float(note.start_time) for note in selected)
+        last_end = max(
+            float(note.start_time) + max(0.0, float(note.duration))
+            for note in selected
+        )
+        offset = max(0.05, last_end - first_start)
+        duplicates = deepcopy(selected)
+        for original in selected:
+            original.is_selected = False
+        for duplicate in duplicates:
+            duplicate.start_time = float(duplicate.start_time) + offset
+            duplicate.is_selected = True
+        self.notes_list.extend(duplicates)
+        self._invalidate_note_rects()
+        self.notes_changed_signal.emit()
+        self._commit_edit(before, "ノート複製")
+        self.update()
+
     def _set_ghost_tracks_visible(self, visible: bool) -> None:
         self.show_ghost_tracks = bool(visible)
         self.update()
@@ -1507,9 +1556,22 @@ class TimelineWidget(QWidget):
 
         if selected_notes:
             if len(selected_notes) == 1:
+                act_edit_lyric = QAction("歌詞を編集...", self)
+                act_edit_lyric.triggered.connect(self._edit_selected_lyric)
+                menu.addAction(act_edit_lyric)
+
                 act_pitch_curve = QAction("ピッチカーブを編集...", self)
                 act_pitch_curve.triggered.connect(self._edit_selected_pitch_curve)
                 menu.addAction(act_pitch_curve)
+
+            act_duplicate = QAction("選択ノートを複製", self)
+            act_duplicate.triggered.connect(self._duplicate_selected_notes)
+            menu.addAction(act_duplicate)
+
+            act_delete = QAction("選択ノートを削除", self)
+            act_delete.triggered.connect(self.delete_selected_notes)
+            menu.addAction(act_delete)
+            menu.addSeparator()
 
             act_clear = QAction(f"選択したノートの {self.current_param_layer} をリセット", self)
             act_clear.triggered.connect(self._clear_selected_params)
