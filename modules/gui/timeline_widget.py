@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Protocol, runtime_checkable, cast
 
 from PySide6.QtWidgets import (QWidget, QApplication, QInputDialog, QLineEdit,
-                               QMainWindow, QMenu)
+                               QMainWindow, QMenu, QDialog)
 from PySide6.QtCore import Qt, QRect, QRectF, Signal, Slot, QPoint, QPointF, QSize, QObject, QRunnable, QThreadPool
 from PySide6.QtGui import (QPainter, QPen, QBrush, QColor, QFont, QAction, QContextMenuEvent,
                             QLinearGradient, QPaintEvent, QMouseEvent, QKeyEvent, QWheelEvent,
@@ -1423,7 +1423,7 @@ class TimelineWidget(QWidget):
         from modules.gui.pitch_curve_dialog import PitchCurveEditorDialog
 
         dialog = PitchCurveEditorDialog(note, self.tempo, self)
-        if dialog.exec() != dialog.DialogCode.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         dialog.apply_to_note(note)
         self.notes_changed_signal.emit()
