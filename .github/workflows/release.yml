@@ -24,12 +24,13 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HOMEBREW_NO_AUTO_UPDATE: '1'
 
-# Serialize publication for each ref. A newer push must not race an older run
-# and let stale packages move the stable "latest" tag backwards.
+# Only the newest revision should publish the mutable "latest" release.
+# Cancel an obsolete matrix so a stalled old runner cannot block the latest commit.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   # =============================================================================
@@ -38,6 +39,7 @@ jobs:
   build:
     name: Build Python/PySide6 for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -59,8 +61,9 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.os }}" == macos* ]]; then
-            brew update
-            # CMake と OpenJTalk/HTS/libsndfile を入れてソースビルドに備える
+            # GitHub-hosted runners already ship with a usable Homebrew index.
+            # Avoid a full "brew update" on every matrix job; it can stall for
+            # many minutes and block publication of the latest release.
             brew install cmake libsndfile portaudio open-jtalk || true
           else
             sudo apt-get update
@@ -1190,6 +1193,7 @@ jobs:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: write
