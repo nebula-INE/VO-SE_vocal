@@ -80,7 +80,7 @@ def test_voicebank_ids_are_relative_to_managed_voice_roots(tmp_path):
         internal_voice_dir=str(voice_root),
         user_voice_dir=str(tmp_path / "user-voices"),
     )
-    window = SimpleNamespace(voice_manager=manager, voice_gallery=None)
+    window = cast(Any, SimpleNamespace(voice_manager=manager, voice_gallery=None))
     window._stable_voicebank_id = lambda path: MainWindow._stable_voicebank_id(window, path)
     window._voicebank_catalog = lambda: MainWindow._voicebank_catalog(window)
 
