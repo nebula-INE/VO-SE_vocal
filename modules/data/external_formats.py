@@ -137,7 +137,7 @@ def export_svp_json(project_name: str, tempo: float, notes: Iterable[Any]) -> st
             "onset": item["tick"] * SVP_TICK_SCALE,
             "duration": item["length"] * SVP_TICK_SCALE,
             "lyrics": item["lyric"],
-            "phonemes": item["lyric"],
+            "phonemes": _phoneme(item["lyric"]),
             "pitch": item["pitch"],
             "attributes": {
                 "tF0Left": 0,
