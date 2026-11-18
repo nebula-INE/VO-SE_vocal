@@ -2802,6 +2802,25 @@ class MainWindow(
                 self.statusBar().showMessage(f"音源切替エラー: {e}", 5000)
                 print(f"Engine voice switch failed: {e}")
 
+        # The global picker remains a convenient default for the currently edited
+        # vocal track. Restoring a project suppresses this behavior so each saved
+        # track keeps its own independent Voicebank.
+        if not bool(getattr(self, "_suppress_track_voice_assignment", False)):
+            tracks = list(getattr(self, "tracks", []) or [])
+            current_index = int(getattr(self, "current_track_idx", -1))
+            if 0 <= current_index < len(tracks):
+                active_track = tracks[current_index]
+                if str(getattr(active_track, "track_type", "vocal")).lower() == "vocal":
+                    resolve_binding = getattr(self, "_resolve_voicebank_binding", None)
+                    apply_track_voice = getattr(self, "_on_strip_voicebank_changed", None)
+                    if callable(resolve_binding) and callable(apply_track_voice):
+                        binding = resolve_binding(internal_id, fallback_id=internal_id)
+                        if not binding.get("missing") and not binding.get("pending"):
+                            apply_track_voice(active_track, str(binding.get("id") or "__INTERNAL__"))
+                            refresh_tracks = getattr(self, "refresh_track_list_ui", None)
+                            if callable(refresh_tracks):
+                                refresh_tracks()
+
         # --- 3. UIへのフィードバック ---
         if self.status_label:
             self.status_label.setText(f"歌手: {display_name}")
