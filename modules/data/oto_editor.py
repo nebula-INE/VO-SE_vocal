@@ -44,9 +44,9 @@ def save_oto_entry(
     with open(ini_path, "rb") as handle:
         raw = handle.read()
     text, encoding = _decode_oto(raw)
-    newline = "\\r\\n" if "\\r\\n" in text else "\\n"
+    newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.splitlines()
-    target_filename = entry.filename.replace("\\\\", "/").casefold()
+    target_filename = entry.filename.replace("\\", "/").casefold()
     updated = False
 
     for index, raw_line in enumerate(lines):
@@ -60,7 +60,7 @@ def save_oto_entry(
         parts = rhs.split(",")
         alias = parts[0].strip() if parts else ""
         filename_matches = (
-            filename.strip().replace("\\\\", "/").casefold() == target_filename
+            filename.strip().replace("\\", "/").casefold() == target_filename
         )
         if not filename_matches or alias != entry.alias:
             continue
@@ -80,7 +80,7 @@ def save_oto_entry(
             pass
         with os.fdopen(fd, "wb") as handle:
             rendered = newline.join(lines)
-            if text.endswith(("\\n", "\\r")):
+            if text.endswith(("\n", "\r")):
                 rendered += newline
             handle.write(rendered.encode(encoding, errors="replace"))
             handle.flush()
