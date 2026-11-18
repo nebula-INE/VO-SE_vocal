@@ -9,8 +9,10 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QGridLayout,
     QLabel,
     QPlainTextEdit,
+    QPushButton,
     QVBoxLayout,
 )
 
@@ -36,6 +38,23 @@ class BatchLyricDialog(QDialog):
         )
         description.setWordWrap(True)
         layout.addWidget(description)
+
+        preset_label = QLabel("クイック入力プリセット")
+        layout.addWidget(preset_label)
+        presets = [
+            ("ドレミファソラシド", "ど れ み ふぁ そ ら し ど"),
+            ("かえるのうた", "か え る の う た が き こ え て く る よ"),
+            ("キラキラ星", "き ら き ら ひ か る お そ ら の ほ し よ"),
+            ("あー (全音符あ)", "あ"),
+            ("ららら (ループ用)", "ら ら ら"),
+        ]
+        preset_grid = QGridLayout()
+        for index, (label, text) in enumerate(presets):
+            button = QPushButton(label, self)
+            button.setMinimumHeight(32)
+            button.clicked.connect(lambda _checked=False, value=text: self.input_edit.setPlainText(value))
+            preset_grid.addWidget(button, index // 3, index % 3)
+        layout.addLayout(preset_grid)
 
         self.input_edit = QPlainTextEdit(self)
         self.input_edit.setPlaceholderText(
