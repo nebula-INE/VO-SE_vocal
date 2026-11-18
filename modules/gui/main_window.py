@@ -6550,7 +6550,7 @@ class MainWindow(
         except Exception as exc:
             logger.exception("P2P3 自動調声エラー: %s", exc)
             QMessageBox.critical(
-                self, "自動調声エラー", f"自動調声を適用できませんでした:\\n{exc}"
+                self, "自動調声エラー", f"自動調声を適用できませんでした:\n{exc}"
             )
 
     @Slot(object, object, str)
