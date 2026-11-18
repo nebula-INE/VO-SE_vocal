@@ -63,7 +63,7 @@ def test_vsqx_export_is_well_formed_and_contains_timing_and_pitch():
     assert note is not None
     assert note.findtext("v:noteNum", namespaces=ns) == "72"
     assert note.findtext("v:lyric", namespaces=ns) == "あ"
-    assert note.findtext(".//v:bpm", namespaces=ns) == "12000"
+    assert root.findtext(".//v:masterTrack/v:tempo/v:bpm", namespaces=ns) == "12000"
 
 def test_svp_file_uses_async_project_loader_contract(tmp_path):
     from modules.gui.mixins.project_io_mixin import _parse_external_project_file
