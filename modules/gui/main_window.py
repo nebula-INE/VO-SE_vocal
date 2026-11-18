@@ -1911,6 +1911,7 @@ class _VocalPlaybackPreparationThread(QThread):
         current_track = None
         try:
             from modules.audio.vo_se_engine import VO_SE_Engine
+            from modules.audio.vo_se_engine_patch import voice_library_transaction
             needs_render = any(job["notes"] for job in self.jobs)
             export_v2 = None
             if needs_render:
@@ -1920,10 +1921,7 @@ class _VocalPlaybackPreparationThread(QThread):
                         "ボーカル再生エンジンが初期化されていません。"
                         f" 現在のエンジン: {engine_type}"
                     )
-                from modules.audio.vo_se_engine_patch import (
-                    ensure_desktop_export_ready,
-                    voice_library_transaction,
-                )
+                from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
                 ensure_desktop_export_ready(self.engine)
                 export_v2 = getattr(self.engine, "export_to_wav_v2", None)
                 if not callable(export_v2):
