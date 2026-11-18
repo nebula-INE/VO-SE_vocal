@@ -39,7 +39,7 @@ from PySide6.QtCore import (  # noqa: E402
 )
 from PySide6.QtWidgets import (  # noqa: E402
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSlider,
-    QPushButton, QFileDialog, QScrollBar, QInputDialog, QLineEdit,
+    QPushButton, QFileDialog, QScrollBar, QLineEdit,
     QLabel, QSplitter, QComboBox, QProgressBar, QMessageBox, QToolBar,
     QGridLayout, QFrame, QDialog, QScrollArea, QSizePolicy, QButtonGroup,
     QListWidget, QApplication, 
