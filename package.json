@@ -9,7 +9,7 @@
     "lint": "npm run lint:web && npm run lint:python",
     "test": "npm run test:web",
     "test:web": "node --test tests/test_voicebank_security.mjs tests/test_web_multipitch_render_playback.mjs tests/test_web_render_progress.mjs tests/test_synthesis_quality.mjs",
-    "lint:web": "eslint assets/src server.js modules/utils/voicebank_security.js tests --max-warnings=0",
+    "lint:web": "eslint --ext .js,.mjs,.ts,.tsx assets/src server.js modules/utils/voicebank_security.js tests",
     "lint:python": "python -m ruff check modules tests main.py"
   },
   "dependencies": {
