@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from modules.data.data_models import NoteEvent, PitchEvent
 from modules.data.ust_parser import UstParser, UstConverter
 from modules.data.vsqx_parser import parse_vsqx
+from modules.data.external_formats import export_svp_json, export_vsqx_xml, parse_svp_json
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,10 @@ def _parse_external_project_file(file_path: str) -> Dict[str, Any]:
         }
     if extension == ".vsqx":
         return {"format": "vsqx", "project": parse_vsqx(file_path)}
+    if extension == ".svp":
+        with open(file_path, "r", encoding="utf-8-sig") as handle:
+            project = parse_svp_json(handle.read())
+        return {"format": "svp", "project": project}
     if extension in {".mid", ".midi"}:
         from modules.data.midi_manager import get_midi_initial_tempo, load_midi_file
 
@@ -836,9 +841,10 @@ class ProjectIOMixin:
             self,
             "プロジェクトを開く",
             "",
-            "対応ファイル (*.ust *.vsqx *.mid *.midi *.json *.vose);;"
+            "対応ファイル (*.ust *.vsqx *.svp *.mid *.midi *.json *.vose);;"
             "UTAU プロジェクト (*.ust);;"
             "Vocaloid プロジェクト (*.vsqx);;"
+            "Synthesizer V プロジェクト (*.svp);;"
             "MIDI ファイル (*.mid *.midi);;"
             "VO-SE プロジェクト (*.vose *.json);;"
             "JSON ファイル (*.json)",
@@ -851,7 +857,7 @@ class ProjectIOMixin:
         if not file_path:
             return False
         extension = os.path.splitext(file_path)[1].lower()
-        if extension not in {".ust", ".vsqx", ".mid", ".midi", ".json", ".vose"}:
+        if extension not in {".ust", ".vsqx", ".svp", ".mid", ".midi", ".json", ".vose"}:
             self.statusBar().showMessage(
                 f"未対応のファイル形式です: {extension}", 4000
             )
@@ -901,6 +907,11 @@ class ProjectIOMixin:
                     file_path,
                     parsed_project=payload.get("project"),
                 )
+            elif file_format == "svp":
+                self._load_svp(
+                    file_path,
+                    parsed_project=payload.get("project"),
+                )
             elif file_format == "midi":
                 self.load_midi_file_from_path(
                     file_path,
@@ -934,6 +945,76 @@ class ProjectIOMixin:
             "読み込みエラー",
             f"{os.path.basename(file_path)} を読み込めませんでした。\n{error_message}",
         )
+
+    # ------------------------------------------------------------------
+    # Synthesizer V / VOCALOID project export
+    # ------------------------------------------------------------------
+
+    def _active_export_snapshot(self: Any) -> tuple[str, float, List[Any]]:
+        timeline = getattr(self, "timeline_widget", None)
+        if timeline is None:
+            raise RuntimeError("タイムラインが初期化されていません。")
+        notes = list(getattr(timeline, "notes_list", []) or [])
+        if not notes:
+            raise ValueError("書き出すノートがありません。")
+        tempo = float(getattr(timeline, "tempo", 120.0) or 120.0)
+        project_path = str(getattr(self, "current_project_path", "") or "")
+        project_name = os.path.splitext(os.path.basename(project_path))[0] or "VO-SE Vocal"
+        return project_name, tempo, notes
+
+    def export_as_svp(self: Any) -> bool:
+        """Export the current vocal track as a Synthesizer V .svp project."""
+        try:
+            project_name, tempo, notes = self._active_export_snapshot()
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Synthesizer V として書き出す",
+                f"{project_name}.svp", "Synthesizer V Project (*.svp)"
+            )
+            if not file_path:
+                return False
+            if not file_path.lower().endswith(".svp"):
+                file_path += ".svp"
+            payload = export_svp_json(project_name, tempo, notes)
+            with open(file_path, "w", encoding="utf-8", newline="\\n") as handle:
+                handle.write(payload)
+            self.statusBar().showMessage(
+                f"SVP 書き出し完了: {os.path.basename(file_path)}", 5000
+            )
+            return True
+        except Exception as exc:
+            logger.exception("SVP 書き出しエラー: %s", exc)
+            QMessageBox.critical(
+                self, "SVP 書き出しエラー",
+                f"Synthesizer V プロジェクトの書き出しに失敗しました:\\n{exc}"
+            )
+            return False
+
+    def export_as_vsqx(self: Any) -> bool:
+        """Export the current vocal track as a VOCALOID4 .vsqx project."""
+        try:
+            project_name, tempo, notes = self._active_export_snapshot()
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "VOCALOID として書き出す",
+                f"{project_name}.vsqx", "VOCALOID4 Project (*.vsqx)"
+            )
+            if not file_path:
+                return False
+            if not file_path.lower().endswith(".vsqx"):
+                file_path += ".vsqx"
+            payload = export_vsqx_xml(project_name, tempo, notes)
+            with open(file_path, "w", encoding="utf-8", newline="\\n") as handle:
+                handle.write(payload)
+            self.statusBar().showMessage(
+                f"VSQX 書き出し完了: {os.path.basename(file_path)}", 5000
+            )
+            return True
+        except Exception as exc:
+            logger.exception("VSQX 書き出しエラー: %s", exc)
+            QMessageBox.critical(
+                self, "VSQX 書き出しエラー",
+                f"VOCALOID プロジェクトの書き出しに失敗しました:\\n{exc}"
+            )
+            return False
 
     # ------------------------------------------------------------------
     # UST 書き出し
@@ -1831,6 +1912,53 @@ class ProjectIOMixin:
             return False
 
     # ------------------------------------------------------------------
+    # Internal: Synthesizer V .svp import
+    # ------------------------------------------------------------------
+
+    def _load_svp(self: Any, file_path: str, parsed_project: Any = None) -> bool:
+        """Load Synthesizer V .svp notes into the current desktop track."""
+        try:
+            before_state = self._capture_project_edit_state()
+            project = parsed_project
+            if not isinstance(project, dict):
+                with open(file_path, "r", encoding="utf-8-sig") as handle:
+                    project = parse_svp_json(handle.read())
+            notes = list(project.get("notes", []) or [])
+            if not notes:
+                raise ValueError("SVP に有効なノートがありません。")
+            tracks = list(getattr(self, "tracks", []) or [])
+            current_idx = int(getattr(self, "current_track_idx", 0))
+            if not tracks or not (0 <= current_idx < len(tracks)):
+                raise ValueError("読み込み先のトラックがありません。")
+            tracks[current_idx].notes = notes
+            self.tracks = tracks
+            timeline = getattr(self, "timeline_widget", None)
+            if timeline is not None:
+                if hasattr(timeline, "set_notes"):
+                    timeline.set_notes(notes)
+                else:
+                    timeline.notes_list = list(notes)
+                    timeline.update()
+            tempo = float(project.get("tempo", 120.0))
+            self._apply_project_tempo(tempo)
+            refresh = getattr(self, "refresh_track_list_ui", None)
+            if callable(refresh):
+                refresh()
+            self.statusBar().showMessage(
+                f"SVP 読み込み完了: {len(notes)} ノート / Tempo {tempo:.2f} BPM"
+            )
+            self._record_project_state_edit(
+                before_state, self._capture_project_edit_state(), "SVP読み込み"
+            )
+            return True
+        except Exception as exc:
+            logger.exception("SVP 読み込みエラー: %s", exc)
+            QMessageBox.critical(
+                self, "読み込みエラー", f"SVP の読み込みに失敗しました:\\n{exc}"
+            )
+            return False
+
+    # ------------------------------------------------------------------
     # 内部: .vsqx 読み込み
     # ------------------------------------------------------------------
 
@@ -2116,7 +2244,7 @@ class ProjectIOMixin:
             if file_lower.endswith(".zip") or (source_type == "url" and ".zip" in file_lower):
                 self.import_voice_bank(file_path, source_type=source_type)
 
-            elif file_lower.endswith((".mid", ".midi", ".json", ".vose", ".ust", ".vsqx")):
+            elif file_lower.endswith((".mid", ".midi", ".json", ".vose", ".ust", ".vsqx", ".svp")):
                 if self.load_file_from_path(file_path):
                     status_bar = self.statusBar()
                     if status_bar:
