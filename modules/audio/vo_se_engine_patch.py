@@ -212,14 +212,14 @@ def build_portamento_curve(
     - 連続する後続ノート next_note が負の PBS を持つ場合、現ノート末尾 (tp >= next_pbs_ms)
       に次ノートの先行ポルタメントを織り込む（修正B）。
     """
-    from modules.data.ust_parser import _interp_shape
+    from modules.data.ust_parser import _interp_shape, has_explicit_ust_portamento
 
     pbs, pbw, pby, pbm = _extract_ust_portamento_fields(ust_note)
     duration_ms = _get_note_duration_ms(ust_note)
     if duration_ms <= 0.0:
         return None
 
-    has_cur_pbw = bool(pbw.strip())
+    has_cur_pbw = has_explicit_ust_portamento(ust_note)
     cur_pts: List[Tuple[float, float]] = []
     cur_shapes: List[str] = []
     if has_cur_pbw:
@@ -240,7 +240,7 @@ def build_portamento_curve(
     next_shapes: List[str] = []
     if next_note is not None:
         n_pbs, n_pbw, n_pby, n_pbm = _extract_ust_portamento_fields(next_note)
-        if n_pbw.strip():
+        if has_explicit_ust_portamento(next_note):
             try:
                 next_dur_ms = _get_note_duration_ms(next_note)
                 next_pts, next_shapes, next_pbs_ms = UstConverter._build_ust_control_points(

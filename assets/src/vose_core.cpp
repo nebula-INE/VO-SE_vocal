@@ -607,7 +607,7 @@ static constexpr bool   kLegatoEnergyCompensation = true;
 // ---- フェード（書き込みフェーズ） ------------------------------------------
 // 休符明け（直前に繋がるノートがない）の立ち上がりフェードイン。
 static constexpr double kOnsetFadeVoicedMs   = 15.0;  // 母音・有声子音始まり
-static constexpr double kOnsetFadeUnvoicedMs = 5.0;   // 無声子音始まり（破裂を鈍らせない）
+static constexpr double kOnsetFadeUnvoicedMs = 8.0;   // 無声子音始まり（8-15msオンセット保証でクリック防止）
 // 休符前の終わりのリリースフェード（従来は固定 220 サンプル≒5ms）。
 static constexpr double kReleaseFadeMs       = 35.0;
 // 「隣接」とみなす許容誤差。
@@ -633,6 +633,8 @@ static constexpr double kLegatoPseudoOverlapRatio = 0.6;
 // 直前ノートが短い場合、後続ノートの先行発声による侵食量 (pre_ms - ov_ms) が
 // 前ノート公称長 (base_note_samples) のこの割合 + 休符ギャップを超えないよう縮小する。
 static constexpr double kMaxPrevNotePreutterFraction = 0.5;
+static constexpr double kShortPrevNoteThresholdMs    = 120.0;
+static constexpr double kShortPrevNotePreutterFraction = 0.32;
 // クロスフェード重み: 0=従来(線形和が1の raised-cosine)、1=等パワー(sin/cos)。
 // 位相が揃わない2波形の和は等パワーのほうが音量が凹まず、
 // 揃っている場合は線形和のほうが膨らまない。中間を既定にする。
@@ -2041,9 +2043,17 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
         const double unvoiced_attack_ms = has_unvoiced ? std::min(40.0, fixed_ms) : 0.0;
         const double src_offset_ms = t_src_ms - std::max(0.0, current_oto.offset);
         const bool in_consonant_friction = has_unvoiced && (src_offset_ms < unvoiced_attack_ms);
+        double friction_blend = 0.0;
+        if (in_consonant_friction && unvoiced_attack_ms > 0.0) {
+            const double taper_ms = std::min(10.0, unvoiced_attack_ms * 0.5);
+            const double fade_start = unvoiced_attack_ms - taper_ms;
+            friction_blend = (src_offset_ms <= fade_start || taper_ms <= 0.0)
+                ? 1.0
+                : clamp((unvoiced_attack_ms - src_offset_ms) / taper_ms, 0.0, 1.0);
+        }
 
         const double breath_scale = clamp(breath / 0.5, 0.25, 1.25);
-        const double friction_tilt_scale = in_consonant_friction ? 0.55 : 1.0;
+        const double friction_tilt_scale = 1.0 - 0.45 * friction_blend;
 
         for (int k = 0; k < spec_bins; ++k) {
             const double freq = static_cast<double>(k) * pp.ev->fs / fft_size;
@@ -2064,21 +2074,22 @@ void synthesize_note_impl(const SynthNoteParams& p, std::vector<double>& note_bu
                 sr[k] *= std::pow(10.0, (tilt_db * friction_tilt_scale) / 10.0);
             }
 
-            double max_ap;
-            double floor_ap = 0.0;
-            if (in_consonant_friction) {
-                // 無声子音アタック (k, s, t, h, p など): 子音の破裂・摩擦に必要な自然な高域非周期性を維持
+            const double voiced_max_ap = compute_voiced_ap_cap(freq) * pitch_noise_suppress;
+            static const double ffreqs[3] = {5000.0, 8000.0, 12000.0};
+            static const double fvals[4]  = {0.0, 0.11, 0.21, 0.26};
+            const double voiced_floor_ap = smooth_band_value(freq, ffreqs, fvals, 3)
+                                         * pitch_noise_suppress * breath_scale;
+
+            double max_ap = voiced_max_ap;
+            double floor_ap = voiced_floor_ap;
+            if (friction_blend > 0.0) {
+                // 無声子音アタック (k, s, t, h, p など): 子音の破裂・摩擦に必要な自然な高域非周期性を維持しつつ
+                // 子音末尾10msは有声上限へ滑らかに接続してフレーム境界の段差を抑える
                 static const double bfreqs[2] = {2000.0, 4000.0};
                 static const double bvals[3]  = {0.05, 0.35, 0.70};
-                max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
-            } else {
-                // Balanced studio vocal AP ceiling + conservative 5kHz+ breath floor
-                // (note WORLD squares AP internally: 0.26^2 = 6.76% noise energy above 12kHz).
-                max_ap = compute_voiced_ap_cap(freq) * pitch_noise_suppress;
-                static const double ffreqs[3] = {5000.0, 8000.0, 12000.0};
-                static const double fvals[4]  = {0.0, 0.11, 0.21, 0.26};
-                floor_ap = smooth_band_value(freq, ffreqs, fvals, 3)
-                         * pitch_noise_suppress * breath_scale;
+                const double fric_max_ap = smooth_band_value(freq, bfreqs, bvals, 2);
+                max_ap = (1.0 - friction_blend) * voiced_max_ap + friction_blend * fric_max_ap;
+                floor_ap = (1.0 - friction_blend) * voiced_floor_ap;
             }
             max_ap = std::min(1.0, max_ap + breath_allowance);
             floor_ap = std::min(floor_ap, max_ap);
@@ -2293,8 +2304,8 @@ static void synthesize_legato_run(
         }
 
         const int ovl_frames = (m == 0) ? 0 : std::min(sink.frames,
-            static_cast<int>(std::ceil(std::min(pp.overlap_ms, pp.preutterance_ms)
-                                       / kFramePeriod)));
+            std::max(2, static_cast<int>(std::ceil(
+                std::min(pp.overlap_ms, pp.preutterance_ms) / kFramePeriod))));
 
         for (int f = 0; f < sink.frames; ++f) {
             const int rf = off + f;
@@ -2319,7 +2330,14 @@ static void synthesize_legato_run(
                 }
                 if (kLegatoEnergyCompensation && e_mix > 0.0) {
                     const double target = w_cur * e_cur + w_prv * e_prv;
-                    const double comp = clamp(target / e_mix, 1.0, 4.0);
+                    const double ratio = target / e_mix;
+                    // 母音→無声子音（し/ち/つ）のようにスペクトル帯域が大きく食い違う場合、
+                    // 対数補間のエネルギー比(ratio>2.2)を最大4倍まで持ち上げると
+                    // 子音頭10msの摩擦音が+6dB跳ねてクリックになるため上限を1.35倍に抑え、
+                    // 境界の両端へ向かって1.0へ滑らかにテーパーする。
+                    const double raw_comp = clamp(ratio, 1.0, (ratio > 2.2) ? 1.25 : 1.50);
+                    const double taper = std::sin(M_PI * w_cur);
+                    const double comp = 1.0 + (raw_comp - 1.0) * taper;
                     for (size_t k = 0; k < bins; ++k) rs[k] *= comp;
                 }
                 const double pf = f0_run[rf];
@@ -2597,7 +2615,10 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 const double prev_len_ms = 1000.0 * static_cast<double>(pv.base_note_samples) / kFs;
                 const double prev_end_ms = pv.start_time_ms + prev_len_ms;
                 const double gap_ms = std::max(0.0, notes[i].start_time_ms - prev_end_ms);
-                const double limit = kMaxPrevNotePreutterFraction * prev_len_ms + gap_ms;
+                const double prev_fraction = (prev_len_ms < kShortPrevNoteThresholdMs)
+                    ? kShortPrevNotePreutterFraction
+                    : kMaxPrevNotePreutterFraction;
+                const double limit = prev_fraction * prev_len_ms + gap_ms;
                 const double eff_ov_ms = std::min(ov_ms, pre_ms);
                 const double need = pre_ms - eff_ov_ms;
                 if (need > limit && need > 0.0) {
@@ -2667,7 +2688,19 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     for (int i = 0; i < note_count; ++i)
         if (prepass[i].state == NoteState::RENDERABLE) prepass[i].run_head = i;
 
-    if (kContinuousLegatoRuns) {
+    double active_max_legato_run_ms = kMaxLegatoRunMs;
+    if (const char* env_max_leg = std::getenv("VOSE_MAX_LEGATO_RUN_MS")) {
+        char* endp = nullptr;
+        const double parsed = std::strtod(env_max_leg, &endp);
+        if (endp != env_max_leg && std::isfinite(parsed))
+            active_max_legato_run_ms = std::max(0.0, parsed);
+    }
+    const bool debug_boundaries = []() {
+        const char* env = std::getenv("VOSE_DEBUG_BOUNDARIES");
+        return env && env[0] == '1';
+    }();
+
+    if (kContinuousLegatoRuns && active_max_legato_run_ms > 0.0) {
         const double frame_samples = kFs * kFramePeriod / 1000.0;
         auto nominal_of = [&](int i) {
             return static_cast<int64_t>(std::llround(prepass[i].start_time_ms * kFs / 1000.0));
@@ -2694,7 +2727,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                     && nominal_of(i) > nominal_of(last)
                     && ovl_ms >= 2.0 * kFramePeriod
                     && static_cast<double>(musical_end_of(i) - R0) * 1000.0 / kFs
-                           <= kMaxLegatoRunMs;
+                           <= active_max_legato_run_ms;
             }
             if (join) {
                 prepass[last].run_next = i;
@@ -3003,10 +3036,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         return max_tail;
     };
 
-    auto has_following_absolute_overlap = [&](int current_idx,
-                                               int64_t musical_end) -> bool {
+    auto following_absolute_overlap_samples = [&](int current_idx,
+                                                  int64_t musical_end) -> int64_t {
         const int64_t current_start = static_cast<int64_t>(std::llround(
             prepass[current_idx].start_time_ms * kFs / 1000.0));
+        int64_t max_overlap = 0;
 
         for (int j = 0; j < note_count; ++j) {
             if (j == current_idx ||
@@ -3024,9 +3058,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 prepass[j].preutterance_samples;
 
             if (other_render_start < musical_end)
-                return true;
+                max_overlap = std::max<int64_t>(max_overlap, musical_end - other_render_start);
         }
-        return false;
+        return max_overlap;
     };
 
     auto has_adjacent_prior_audio = [&](int current_idx, int64_t render_start) -> bool {
@@ -3076,6 +3110,25 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
     for (int idx = 0; idx < note_count; ++idx) {
         const NotePrepass& pp = prepass[idx];
+        if (debug_boundaries && pp.state == NoteState::RENDERABLE && pp.absolute_timing) {
+            const int64_t ns = static_cast<int64_t>(std::llround(pp.start_time_ms * kFs / 1000.0));
+            const int64_t rs = std::max<int64_t>(0, ns - pp.preutterance_samples);
+            const int64_t pt = (ns - pp.preutterance_samples >= 0)
+                ? get_prior_overlap_tail_samples(idx, rs, ns) : 0;
+            const int64_t min_xf = static_cast<int64_t>(std::llround(kMinOverlapXfadeMs * kFs / 1000.0));
+            const int64_t req_ov = std::min<int64_t>(
+                pp.preutterance_samples,
+                static_cast<int64_t>(std::llround(pp.overlap_ms * kFs / 1000.0)));
+            const int64_t ov_smp = (pt > 0) ? std::max<int64_t>(req_ov, min_xf) : 0;
+            fprintf(stderr,
+                    "[BoundaryDebug] idx=%d key=%s render_start=%lld (%.4fs) prior_tail=%lld "
+                    "overlap_samples=%lld joined=%d run_frame_offset=%d pre_ms=%.2f ov_ms=%.2f\n",
+                    idx, pp.ev ? pp.ev->path.c_str() : "(null)",
+                    static_cast<long long>(rs), static_cast<double>(rs) / kFs,
+                    static_cast<long long>(pt), static_cast<long long>(ov_smp),
+                    pp.run_member ? 1 : 0, pp.run_frame_offset,
+                    pp.preutterance_ms, pp.overlap_ms);
+        }
         // レガート連続合成のメンバーは先頭ノートのバッファに含まれている。
         if (pp.run_member) continue;
         // 先頭ノートは run 全体（先頭の render_start 〜 最後のノートの終端）を 1 ノートとして扱う。
@@ -3119,12 +3172,26 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
             if (write_len > 0) {
                 if (overlap_samples > 0) {
                     const int64_t safe_xfade = std::min(overlap_samples, write_len);
+                    const int64_t prior_fade_len = std::min(safe_xfade, prior_tail);
                     for (int64_t s = 0; s < safe_xfade; ++s) {
-                        const double t = (safe_xfade > 1)
+                        const double t_in = (safe_xfade > 1)
                             ? static_cast<double>(s) / static_cast<double>(safe_xfade)
                             : 1.0;
                         double fade_in, fade_out;
-                        xfade_weights(t, fade_in, fade_out);
+                        xfade_weights(t_in, fade_in, fade_out);
+                        if (prior_tail < safe_xfade) {
+                            // 前のノートの余韻(prior_tail)が safe_xfade より短い場合、
+                            // prior_tail 到達前に前音量を 0 へ落とし切ることで途中切断段差を防ぐ。
+                            if (s < prior_fade_len) {
+                                const double t_out = (prior_fade_len > 1)
+                                    ? static_cast<double>(s) / static_cast<double>(prior_fade_len)
+                                    : 1.0;
+                                double unused_in;
+                                xfade_weights(t_out, unused_in, fade_out);
+                            } else {
+                                fade_out = 0.0;
+                            }
+                        }
                         full_song_buffer[render_start + s] =
                             full_song_buffer[render_start + s] * fade_out +
                             note_bufs[idx][static_cast<size_t>(source_skip + s)] * fade_in;
@@ -3143,10 +3210,10 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                                         is_unvoiced_phoneme_name(pp.oto.alias) ||
                                         is_unvoiced_vc_alias(pp.oto.alias)));
                     const double onset_ms = adjacent_prior
-                        ? (head_unvoiced ? kOnsetFadeUnvoicedMs : 8.0)
+                        ? kOnsetFadeUnvoicedMs
                         : (head_unvoiced ? kOnsetFadeUnvoicedMs : kOnsetFadeVoicedMs);
                     const int64_t onset = std::min<int64_t>(
-                        write_len / 4,
+                        write_len / 2,
                         std::max<int64_t>(1, static_cast<int64_t>(std::llround(onset_ms * kFs / 1000.0))));
                     for (int64_t s = 0; s < write_len; ++s) {
                         double v = note_bufs[idx][static_cast<size_t>(source_skip + s)];
@@ -3159,18 +3226,22 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                 }
             }
 
-            // If the next musical note does not overlap this one, apply a small
-            // release fade at the actual musical end (not at the preuttered start).
+            // If the next musical note does not overlap this one (or overlaps less than
+            // min_safe_xfade), apply a smooth release fade at musical_end so it never cuts off mid-wave.
             const int64_t musical_end = nominal_start +
                 std::max<int64_t>(0, note_samples - pp.preutterance_samples);
             // run の場合は最後のメンバーを基準に「後続ノートとの重なり」を判定する。
             const int tail_idx = pp.run_last >= 0 ? pp.run_last : idx;
-            const bool next_absolute_overlap =
-                has_following_absolute_overlap(tail_idx, musical_end);
-            if (!next_absolute_overlap) {
-                // 後続が隣接している場合は隙間を作らないよう従来の短いフェード(5ms)、
+            const int64_t following_ovl_samples =
+                following_absolute_overlap_samples(tail_idx, musical_end);
+            const int64_t min_safe_xfade_rel = static_cast<int64_t>(
+                std::llround(kMinOverlapXfadeMs * kFs / 1000.0));
+            const bool next_full_overlap = (following_ovl_samples >= min_safe_xfade_rel);
+            if (!next_full_overlap) {
+                // 後続が隣接または短重なり(12ms未満)の場合は隙間を作らないよう短いフェード(5ms)、
                 // 休符前など後続が離れている場合は kReleaseFadeMs の自然なリリースにする。
-                const bool next_adjacent = has_following_adjacent(tail_idx, musical_end);
+                const bool next_adjacent = (following_ovl_samples > 0) ||
+                    has_following_adjacent(tail_idx, musical_end);
                 const int64_t end_sample = std::min<int64_t>(
                     total_samples, nominal_start +
                     note_samples - pp.preutterance_samples);

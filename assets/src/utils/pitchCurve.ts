@@ -507,6 +507,9 @@ export function applyAutoTuneToNotes<T extends {
   pbs?: string;
   pbw?: string;
   pby?: string;
+  hasPbs?: boolean;
+  hasPbw?: boolean;
+  hasPby?: boolean;
 }>(notes: T[], tempoBpm: number, config: AutoTuneConfig = {}): T[] {
   if (!notes || notes.length === 0) return [];
   const sorted = [...notes].sort((a, b) => (a.tick || 0) - (b.tick || 0));
@@ -524,6 +527,10 @@ export function applyAutoTuneToNotes<T extends {
   return sorted.map((n, idx) => {
     if (isRest(n.lyric)) {
       return { ...n, pbs: '0;0', pbw: '', pby: '' };
+    }
+
+    if (hasExplicitUstPortamento(n)) {
+      return n;
     }
 
     const prevNote = idx > 0 ? sorted[idx - 1] : null;

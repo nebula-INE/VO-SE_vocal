@@ -103,6 +103,9 @@ class UstNote:
     pbw: str           = ""         # ポルタメント各セグメント幅 (カンマ区切り ms)
     pby: str           = ""         # ポルタメント各制御点の高さ (カンマ区切り semitone)
     pbm: str           = ""         # ポルタメント補間モード ("" / "r" / "s" / "j")
+    has_pbs: bool      = False      # USTにPBSキーが存在したか
+    has_pbw: bool      = False      # USTにPBWキーが存在したか
+    has_pby: bool      = False      # USTにPBYキーが存在したか
 
     # ビブラート
     vibrato: Optional[UstVibratoParams] = None
@@ -369,6 +372,9 @@ class UstParser:
             pbw           = block.get("PBW",   ""),
             pby           = block.get("PBY",   ""),
             pbm           = block.get("PBM",   ""),
+            has_pbs       = "PBS" in block,
+            has_pbw       = "PBW" in block,
+            has_pby       = "PBY" in block,
             vibrato       = vibrato,
             pre_utterance = pre_utterance,
             overlap       = ov,
@@ -493,6 +499,9 @@ class UstConverter:
         )
         previous["_ust_pbw"] = ",".join(widths)
         previous["_ust_pby"] = ",".join(heights)
+        previous["_ust_has_pbs"] = True
+        previous["_ust_has_pbw"] = True
+        previous["_ust_has_pby"] = True
 
         previous_shapes = [
             part.strip() for part in str(previous.get("_ust_pbm", "") or "").split(",")
@@ -645,6 +654,9 @@ class UstConverter:
                 "_ust_pbw": ust_note.pbw,
                 "_ust_pby": ust_note.pby,
                 "_ust_pbm": ust_note.pbm,
+                "_ust_has_pbs": ust_note.has_pbs,
+                "_ust_has_pbw": ust_note.has_pbw,
+                "_ust_has_pby": ust_note.has_pby,
                 "_ust_intensity": ust_note.intensity,
             }
 
@@ -699,14 +711,17 @@ class UstConverter:
         control_points: List[Tuple[float, float]] = [(pbs_offset_ms, pbs_start_pitch)]
         segment_shapes: List[str] = []
         t = pbs_offset_ms
-        for i, w in enumerate(widths):
+        count = max(len(widths), len(heights))
+        for i in range(count):
+            w = widths[i] if i < len(widths) else (widths[-1] if widths else 50.0)
+            w = max(1.0, min(5000.0, w))
             t += w
             h = (heights[i] * 0.1) if i < len(heights) else 0.0
             control_points.append((t, h))
             segment_shapes.append(shapes[i] if i < len(shapes) else "")
         if duration_ms > t:
             control_points.append((duration_ms, 0.0))
-            segment_shapes.append(shapes[len(widths)] if len(shapes) > len(widths) else "")
+            segment_shapes.append(shapes[count] if len(shapes) > count else "")
         return control_points, segment_shapes, pbs_offset_ms
 
     @staticmethod
@@ -819,6 +834,48 @@ def _interp_shape(
                 eased = (1.0 - math.cos(math.pi * u)) / 2.0
             return y0 + (y1 - y0) * eased
     return 0.0
+
+
+def _get_note_field(note, *names: str, default=None):
+    if isinstance(note, dict):
+        for name in names:
+            if name in note and note[name] is not None:
+                return note[name]
+        return default
+    for name in names:
+        if hasattr(note, name):
+            val = getattr(note, name)
+            if val is not None:
+                return val
+    return default
+
+
+def has_explicit_ust_portamento(note) -> bool:
+    """USTノートのMode 2ポルタメント (PBS/PBW/PBY) が明示的に指定されているか判定する。
+    MIDI/SVP/VSQX/UIが補う既定のプレースホルダ ('0;0', '50', '0') は除外する。
+    """
+    if note is None:
+        return False
+
+    pbs = str(_get_note_field(note, "_ust_pbs", "pbs", default="") or "").strip()
+    pbw = str(_get_note_field(note, "_ust_pbw", "pbw", default="") or "").strip()
+    pby = str(_get_note_field(note, "_ust_pby", "pby", default="") or "").strip()
+
+    has_pbs = _get_note_field(note, "_ust_has_pbs", "has_pbs", "hasPbs", default=None)
+    has_pbw = _get_note_field(note, "_ust_has_pbw", "has_pbw", "hasPbw", default=None)
+    has_pby = _get_note_field(note, "_ust_has_pby", "has_pby", "hasPby", default=None)
+
+    if has_pbs is True or has_pbw is True or has_pby is True:
+        return bool(pbw or pby or ";" in pbs)
+
+    if (
+        pbs in ("", "0;0")
+        and pbw in ("", "50")
+        and pby in ("", "0")
+    ):
+        return False
+
+    return bool(pbw or pby or ";" in pbs)
 
 
 def _is_rest_entry(note) -> bool:

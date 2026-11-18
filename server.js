@@ -2385,7 +2385,7 @@ try {
   console.warn('[VO-SE] ensureDefaultVoicebanks at boot:', e);
 }
 
-const HOST = (process.env.HOST || '127.0.0.1').trim();
+const HOST = (process.env.HOST || '0.0.0.0').trim();
 
 setupVite().then(() => {
   app.listen(PORT, HOST, () => {

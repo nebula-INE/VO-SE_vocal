@@ -11,6 +11,7 @@ import {
   parsePitchBend,
   serializePitchBend,
   hasExplicitUstPortamento,
+  applyAutoTuneToNotes,
   sampleSemitoneAt,
   appendNextNotePreBitePoints,
 } from '../assets/src/utils/pitchCurve.ts';
@@ -944,11 +945,14 @@ test('C++ vose_core short-note preutterance cap, gap allowance, floor bypass, an
   assert.match(internalHdr, /int64_t\s+base_note_samples\s*=\s*0;/);
   assert.match(internalHdr, /double\s+orig_preutterance_ms\s*=\s*0\.0;/);
 
-  // 2. 50% fraction constant + gap-inclusive limit + proportional pre_ms/ov_ms scaling + floor bypass
+  // 2. 50% default / 32% short-note (<120ms) fraction constants + gap-inclusive limit + proportional pre_ms/ov_ms scaling + floor bypass
   assert.match(coreSrc, /kMaxPrevNotePreutterFraction\s*=\s*0\.5;/);
+  assert.match(coreSrc, /kShortPrevNoteThresholdMs\s*=\s*120\.0;/);
+  assert.match(coreSrc, /kShortPrevNotePreutterFraction\s*=\s*0\.32;/);
+  assert.match(coreSrc, /kOnsetFadeUnvoicedMs\s*=\s*8\.0;/);
   assert.match(coreSrc, /const double prev_len_ms = 1000\.0 \* static_cast<double>\(pv\.base_note_samples\) \/ kFs;/);
   assert.match(coreSrc, /const double gap_ms = std::max\(0\.0, notes\[i\]\.start_time_ms - prev_end_ms\);/);
-  assert.match(coreSrc, /const double limit = kMaxPrevNotePreutterFraction \* prev_len_ms \+ gap_ms;/);
+  assert.match(coreSrc, /const double limit = prev_fraction \* prev_len_ms \+ gap_ms;/);
   assert.match(coreSrc, /const bool floor_overlap = prev_renderable && notes\[i\]\.overlap_ms < 0\.0 && !pseudo_pre && !capped_pre;/);
 
   // 3. map_time_with_preutterance compresses preutterance to keep vowel on beat, and portamento indexes by beat offset
@@ -957,3 +961,22 @@ test('C++ vose_core short-note preutterance cap, gap allowance, floor bypass, an
   assert.match(coreSrc, /const bool in_consonant_friction = has_unvoiced && \(src_offset_ms < unvoiced_attack_ms\);/);
   assert.match(coreSrc, /const int orig_lead = n\.portamento_length - n\.pitch_length;/);
 });
+
+test('applyAutoTuneToNotes preserves explicit UST PBS/PBW notes and tunes only unspecified/placeholder notes', () => {
+  const input = [
+    { id: 'n1', lyric: 'あ', noteNum: 60, tick: 0, length: 480, pbs: '0;0', pbw: '50', pby: '0' },
+    { id: 'n2', lyric: 'い', noteNum: 64, tick: 480, length: 480, pbs: '-29;-40', pbw: '56', pby: '12', hasPbs: true, hasPbw: true, hasPby: true },
+    { id: 'n3', lyric: 'う', noteNum: 67, tick: 960, length: 480, pbs: '', pbw: '', pby: '' },
+  ];
+  const tuned = applyAutoTuneToNotes(input, 120);
+  // Placeholder ('0;0', '50', '0') was auto-tuned
+  assert.notEqual(tuned[0].pbw, '50');
+  // Explicit UST note is untouched
+  assert.equal(tuned[1].pbs, '-29;-40');
+  assert.equal(tuned[1].pbw, '56');
+  assert.equal(tuned[1].pby, '12');
+  // Unspecified note gets auto-portamento transition
+  assert.ok(tuned[2].pbs.startsWith('-'));
+  assert.ok(tuned[2].pbw.length > 0);
+});
+

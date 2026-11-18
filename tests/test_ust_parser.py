@@ -673,6 +673,33 @@ class TestUstParser(unittest.TestCase):
         self.assertAlmostEqual(float(vc_curve[0]), -200.0, places=2)
         self.assertLess(float(vc_curve[-1]), -80.0)
 
+    def test_has_explicit_ust_portamento_parity(self):
+        """Fix 5: Python/Web 間で明示的 PBS/PBW/PBY 判定を統一しプレースホルダを除外する。"""
+        from modules.data.ust_parser import has_explicit_ust_portamento, UstNote
+        from modules.audio.vo_se_engine_patch import build_portamento_curve
+
+        # Placeholder defaults are NOT explicit
+        self.assertFalse(has_explicit_ust_portamento({"_ust_pbs": "0;0", "_ust_pbw": "50", "_ust_pby": "0"}))
+        self.assertFalse(has_explicit_ust_portamento({"_ust_pbs": "", "_ust_pbw": "", "_ust_pby": ""}))
+        self.assertFalse(has_explicit_ust_portamento(UstNote(index=0, length=480, lyric="あ", note_num=60, tempo=120.0, pbs="0;0", pbw="50", pby="0")))
+
+        # Explicit UST note flags OR non-default curves ARE explicit
+        self.assertTrue(has_explicit_ust_portamento({"_ust_pbs": "-29;-20", "_ust_pbw": "56", "_ust_pby": ""}))
+        self.assertTrue(has_explicit_ust_portamento({"_ust_pbs": "0;0", "_ust_pbw": "50", "_ust_pby": "0", "_ust_has_pbs": True, "_ust_has_pbw": True, "_ust_has_pby": True}))
+        self.assertTrue(has_explicit_ust_portamento({"_ust_pbs": "0;0", "_ust_pbw": "", "_ust_pby": "15"}))
+
+        # build_portamento_curve ignores placeholder ('0;0', '50', '0')
+        placeholder_note = {
+            "note_number": 60,
+            "duration": 0.5,
+            "_ust_tempo": 120.0,
+            "_ust_pbs": "0;0",
+            "_ust_pbw": "50",
+            "_ust_pby": "0",
+            "_ust_pbm": "",
+        }
+        self.assertIsNone(build_portamento_curve(placeholder_note, resolution=101))
+
 
 if __name__ == "__main__":
     unittest.main()

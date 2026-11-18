@@ -9,6 +9,8 @@ import math
 import re
 from typing import Any, Iterable, List, Tuple
 
+from modules.data.ust_parser import has_explicit_ust_portamento
+
 
 _RESTS = {
     "r", "r_", "r_0", "[r]", "息", "br", "pau", "sil", "吸", "吸気",
@@ -146,12 +148,17 @@ def apply_p2p3_autotune(notes: Iterable[Any], tempo_bpm: float) -> int:
             "duration_ms": duration * 1000.0,
         })
 
+    changed = 0
     for index, item in enumerate(timeline):
         note = item["note"]
         if _is_rest(item["lyric"]):
             setattr(note, "_ust_pbs", "0;0")
             setattr(note, "_ust_pbw", "")
             setattr(note, "_ust_pby", "")
+            changed += 1
+            continue
+
+        if has_explicit_ust_portamento(note):
             continue
 
         previous = timeline[index - 1] if index > 0 else None
@@ -168,5 +175,6 @@ def apply_p2p3_autotune(notes: Iterable[Any], tempo_bpm: float) -> int:
         setattr(note, "_ust_pbs", pbs)
         setattr(note, "_ust_pbw", pbw)
         setattr(note, "_ust_pby", pby)
+        changed += 1
 
-    return len(timeline)
+    return changed
