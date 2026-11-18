@@ -1475,6 +1475,28 @@ class TimelineWidget(QWidget):
         self.update()
         super().mouseReleaseEvent(event)  # または元のコードをそのままコピー
 
+    def _edit_selected_note_details(self) -> None:
+        """Open the full note inspector while preserving project/UST edit history."""
+        selected = [note for note in self.notes_list if getattr(note, "is_selected", False)]
+        if len(selected) != 1:
+            return
+        note = selected[0]
+        from modules.gui.note_inspector_dialog import NoteInspectorDialog
+
+        dialog = NoteInspectorDialog(note, self.tempo, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        before = self._snapshot_notes()
+        if not dialog.apply_to_note(note):
+            return
+        note.phoneme = self.analyze_lyric_to_phoneme(
+            str(getattr(note, "lyrics", getattr(note, "lyric", "")) or "")
+        )
+        self._invalidate_note_rects()
+        self.notes_changed_signal.emit()
+        self._commit_edit(before, "ノート詳細編集")
+        self.update()
+
     def _edit_selected_lyric(self) -> None:
         """Edit the selected note's lyric from the same context-menu action as Web."""
         selected = [note for note in self.notes_list if getattr(note, "is_selected", False)]
@@ -1559,6 +1581,10 @@ class TimelineWidget(QWidget):
                 act_edit_lyric = QAction("歌詞を編集...", self)
                 act_edit_lyric.triggered.connect(self._edit_selected_lyric)
                 menu.addAction(act_edit_lyric)
+
+                act_note_details = QAction("ノート詳細を編集...", self)
+                act_note_details.triggered.connect(self._edit_selected_note_details)
+                menu.addAction(act_note_details)
 
                 act_pitch_curve = QAction("ピッチカーブを編集...", self)
                 act_pitch_curve.triggered.connect(self._edit_selected_pitch_curve)
