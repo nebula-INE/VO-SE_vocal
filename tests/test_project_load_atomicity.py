@@ -299,7 +299,7 @@ def test_project_load_restores_saved_voice_when_installed(tmp_path, monkeypatch)
 
     assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
     assert window.tracks[0].voicebank_id == "voice-b"
-    assert window.current_voice_id == "voice-b
+    assert window.current_voice_id == "voice-b"
     assert window.current_voice == "Voice B"
     assert window.voice_gallery.cards["voice-b"].selected is True
 
