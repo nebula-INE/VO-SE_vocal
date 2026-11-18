@@ -990,26 +990,29 @@ class TimelineWidget(QWidget):
                 fill.setAlpha(42)
                 outline = QColor(track_color)
                 outline.setAlpha(145)
-                painter.setBrush(QBrush(fill))
-                painter.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
-                for note in notes:
-                    try:
-                        rect = self._calc_note_rect(note)
-                    except (AttributeError, TypeError, ValueError):
-                        continue
-                    if not rect.intersects(QRectF(viewport)):
-                        continue
-                    painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 3, 3)
-                    lyric = str(getattr(note, "lyrics", getattr(note, "lyric", "")) or "")
-                    if rect.width() >= 28 and rect.height() >= 12 and lyric:
-                        painter.setPen(QColor(track_color).lighter(145))
-                        painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Medium))
-                        painter.drawText(
-                            rect.adjusted(4, 0, -2, 0),
-                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                            lyric,
-                        )
+                painter.save()
+                try:
+                    for note in notes:
+                        try:
+                            rect = self._calc_note_rect(note)
+                        except (AttributeError, TypeError, ValueError):
+                            continue
+                        if not rect.intersects(QRectF(viewport)):
+                            continue
+                        painter.setBrush(QBrush(fill))
                         painter.setPen(QPen(outline, 1, Qt.PenStyle.DashLine))
+                        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 3, 3)
+                        lyric = str(getattr(note, "lyrics", getattr(note, "lyric", "")) or "")
+                        if rect.width() >= 28 and rect.height() >= 12 and lyric:
+                            painter.setPen(QColor(track_color).lighter(145))
+                            painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Medium))
+                            painter.drawText(
+                                rect.adjusted(4, 0, -2, 0),
+                                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                lyric,
+                            )
+                finally:
+                    painter.restore()
             except (TypeError, ValueError):
                 logger.debug("Skipping invalid ghost track color/data", exc_info=True)
 
