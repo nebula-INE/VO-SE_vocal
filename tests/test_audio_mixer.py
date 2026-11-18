@@ -34,7 +34,8 @@ def _install_memory_sources(mixer, *pairs):
         )
     mixer._tracks = tracks
     mixer._sources = sources
-    mixer._total_frames = max(source.output_frames for source in sources.values())
+    mixer._track_total_frames = max(source.output_frames for source in sources.values())
+    mixer._total_frames = mixer._track_total_frames + mixer._effects.tail_frames
 
 
 def test_mute_and_solo_activity_rules():
@@ -318,6 +319,66 @@ def test_play_reports_when_no_default_output_device_is_available(monkeypatch):
 
 
 
+def test_master_compressor_processes_the_combined_track_bus():
+    mixer = AudioMixer(sample_rate=1000, block_size=256)
+    first = _track()
+    second = _track()
+    _install_memory_sources(
+        mixer,
+        (first, np.full((256, 2), 0.5, dtype=np.float32)),
+        (second, np.full((256, 2), 0.5, dtype=np.float32)),
+    )
+    unprocessed = mixer._mix_block(0, 256)
+
+    mixer.set_effect_chain([{
+        "id": "compressor-main",
+        "type": "compressor",
+        "enabled": True,
+        "params": {
+            "threshold_db": -12.0,
+            "ratio": 8.0,
+            "attack_ms": 2.0,
+            "release_ms": 80.0,
+            "makeup_gain_db": 0.0,
+        },
+    }])
+    processed = mixer._mix_block(0, 256)
+
+    assert processed.shape == unprocessed.shape
+    assert float(np.mean(np.abs(processed[-100:]))) < float(
+        np.mean(np.abs(unprocessed[-100:]))
+    )
+    assert mixer.get_diagnostics()["enabled_effects"] == 1
+
+
+def test_master_reverb_extends_project_duration_and_renders_its_tail():
+    mixer = AudioMixer(sample_rate=8000, block_size=128)
+    track = _track()
+    impulse = np.zeros((128, 2), dtype=np.float32)
+    impulse[0] = (0.8, 0.8)
+    _install_memory_sources(mixer, (track, impulse))
+    track_frames = mixer._total_frames
+
+    mixer.set_effect_chain([{
+        "id": "reverb-main",
+        "type": "reverb",
+        "enabled": True,
+        "params": {
+            "room_size": 0.55,
+            "damping": 0.4,
+            "wet": 0.5,
+            "dry": 0.5,
+            "width": 0.8,
+        },
+    }])
+    assert mixer._total_frames > track_frames
+
+    mixer._mix_block(0, 128)
+    tail = mixer._mix_block(128, 512)
+    assert float(np.max(np.abs(tail))) > 1e-5
+
+
+
 def test_desktop_audio_mixer_default_matches_visible_buffer_setting():
     mixer = AudioMixer(sample_rate=44100)
     assert mixer.block_size == 256
@@ -396,3 +457,75 @@ def test_set_block_size_rejects_unsupported_sizes_without_touching_stream():
         raise AssertionError("unsupported block size must be rejected")
 
     assert mixer.block_size == 256
+
+
+def test_resume_resets_effect_history_after_discarding_prefetched_blocks(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.callback = kwargs["callback"]
+            self.channels = kwargs["channels"]
+            self.active = False
+
+        def start(self):
+            self.active = True
+            output = np.zeros((32, self.channels), dtype=np.float32)
+            self.callback(output, 32, None, None)
+
+        def stop(self):
+            self.active = False
+
+        def close(self):
+            self.active = False
+
+    class FakeSoundDevice:
+        CallbackStop = RuntimeError
+
+        @staticmethod
+        def query_devices(kind=None):
+            assert kind == "output"
+            return {
+                "name": "Test Output",
+                "max_output_channels": 2,
+                "default_samplerate": 64.0,
+            }
+
+        @staticmethod
+        def OutputStream(**kwargs):
+            return FakeStream(**kwargs)
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer(sample_rate=64, block_size=64)
+    track = _track()
+    _install_memory_sources(
+        mixer,
+        (track, np.ones((512, 2), dtype=np.float32) * 0.25),
+    )
+    mixer.set_effect_chain([{
+        "id": "resume-reverb",
+        "type": "reverb",
+        "enabled": True,
+        "params": {"wet": 0.5, "dry": 0.5},
+    }])
+
+    original_reset = mixer._effects.reset
+    reset_count = 0
+
+    def count_reset():
+        nonlocal reset_count
+        reset_count += 1
+        original_reset()
+
+    monkeypatch.setattr(mixer._effects, "reset", count_reset)
+
+    mixer.play(0.0)
+    assert mixer.position_sec == 0.5
+    mixer.pause()
+
+    # The producer may have processed blocks that were never consumed by the
+    # callback. Resuming must start with fresh filter/delay history.
+    mixer.play()
+    assert reset_count == 2
+    assert mixer.position_sec == 1.0
+    mixer.stop()
