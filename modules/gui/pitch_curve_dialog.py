@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
@@ -68,6 +69,17 @@ class PitchCurvePreview(QWidget):
     def set_fields(self, fields: tuple[str, str, str, str]) -> None:
         self.fields = fields
         try:
+            pbs_parts = [part.strip() for part in fields[0].split(";")]
+            if len(pbs_parts) > 2 or any(
+                part and not math.isfinite(float(part)) for part in pbs_parts
+            ):
+                raise ValueError("PBSは有限の数値を最大2個指定してください")
+            widths = [value.strip() for value in fields[1].split(",") if value.strip()]
+            if any(not math.isfinite(float(value)) or float(value) <= 0 for value in widths):
+                raise ValueError("PBWの区間幅は0より大きい有限値にしてください")
+            heights = [value.strip() for value in fields[2].split(",") if value.strip()]
+            if any(not math.isfinite(float(value)) for value in heights):
+                raise ValueError("PBYは有限の数値を指定してください")
             curve_points, _curve_shapes, _offset = UstConverter._build_ust_control_points(
                 *fields, self.duration_ms
             )
@@ -180,12 +192,14 @@ class PitchCurvePreview(QWidget):
         time_ms, semitones = self._from_screen(event.position())
         if not self._graph_area().contains(event.position().toPoint()):
             return
-        self.explicit_points.append((time_ms, semitones))
-        self.explicit_points.sort(key=lambda point: point[0])
+        if any(abs(existing_time - time_ms) < 2.0 for existing_time, _ in self.explicit_points):
+            return
         insertion_index = next(
-            (i for i, point in enumerate(self.explicit_points) if point == (time_ms, semitones)),
-            len(self.explicit_points) - 1,
+            (i for i, (existing_time, _value) in enumerate(self.explicit_points)
+             if existing_time > time_ms),
+            len(self.explicit_points),
         )
+        self.explicit_points.insert(insertion_index, (time_ms, semitones))
         self.shapes.insert(max(0, insertion_index - 1), "s")
         self._publish_points()
         self.update()
