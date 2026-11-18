@@ -1414,11 +1414,32 @@ class TimelineWidget(QWidget):
         self.update()
         super().mouseReleaseEvent(event)  # または元のコードをそのままコピー
 
+    def _edit_selected_pitch_curve(self) -> None:
+        selected = [note for note in self.notes_list if getattr(note, "is_selected", False)]
+        if len(selected) != 1:
+            return
+        note = selected[0]
+        before = self._snapshot_notes()
+        from modules.gui.pitch_curve_dialog import PitchCurveEditorDialog
+
+        dialog = PitchCurveEditorDialog(note, self.tempo, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        dialog.apply_to_note(note)
+        self.notes_changed_signal.emit()
+        self._commit_edit(before, "ピッチカーブ編集")
+        self.update()
+
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         menu = QMenu(self)
         selected_notes = [n for n in self.notes_list if getattr(n, 'is_selected', False)]
 
         if selected_notes:
+            if len(selected_notes) == 1:
+                act_pitch_curve = QAction("ピッチカーブを編集...", self)
+                act_pitch_curve.triggered.connect(self._edit_selected_pitch_curve)
+                menu.addAction(act_pitch_curve)
+
             act_clear = QAction(f"選択したノートの {self.current_param_layer} をリセット", self)
             act_clear.triggered.connect(self._clear_selected_params)
             menu.addAction(act_clear)
