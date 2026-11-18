@@ -75,15 +75,17 @@ def test_pitch_point_serialization_keeps_blank_pbm_shape_entries():
 def test_note_inspector_updates_existing_ust_metadata_without_renderer_changes(qtbot):
     from modules.gui.note_inspector_dialog import NoteInspectorDialog
 
-    note = SimpleNamespace(
+    from modules.data.data_models import NoteEvent
+
+    note = NoteEvent(
         note_number=60,
-        lyric="あ",
-        lyrics="あ",
+        start_time=0.0,
         duration=0.5,
-        _ust_intensity=120.0,
-        _ust_flags="g-5",
-        _ust_flags_present=False,
+        lyric="あ",
     )
+    note._ust_intensity = 120.0
+    note._ust_flags = "g-5"
+    note._ust_flags_present = False
     dialog = NoteInspectorDialog(note, tempo=120.0)
     qtbot.addWidget(dialog)
 
@@ -109,14 +111,16 @@ def test_note_inspector_updates_existing_ust_metadata_without_renderer_changes(q
 def test_note_inspector_preserves_inherited_flags_when_not_edited(qtbot):
     from modules.gui.note_inspector_dialog import NoteInspectorDialog
 
-    note = SimpleNamespace(
+    from modules.data.data_models import NoteEvent
+
+    note = NoteEvent(
         note_number=60,
-        lyric="あ",
-        lyrics="あ",
+        start_time=0.0,
         duration=0.5,
-        _ust_flags="g-5",
-        _ust_flags_present=False,
+        lyric="あ",
     )
+    note._ust_flags = "g-5"
+    note._ust_flags_present = False
     dialog = NoteInspectorDialog(note, tempo=120.0)
     qtbot.addWidget(dialog)
 
