@@ -457,3 +457,75 @@ def test_set_block_size_rejects_unsupported_sizes_without_touching_stream():
         raise AssertionError("unsupported block size must be rejected")
 
     assert mixer.block_size == 256
+
+
+def test_resume_resets_effect_history_after_discarding_prefetched_blocks(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.callback = kwargs["callback"]
+            self.channels = kwargs["channels"]
+            self.active = False
+
+        def start(self):
+            self.active = True
+            output = np.zeros((32, self.channels), dtype=np.float32)
+            self.callback(output, 32, None, None)
+
+        def stop(self):
+            self.active = False
+
+        def close(self):
+            self.active = False
+
+    class FakeSoundDevice:
+        CallbackStop = RuntimeError
+
+        @staticmethod
+        def query_devices(kind=None):
+            assert kind == "output"
+            return {
+                "name": "Test Output",
+                "max_output_channels": 2,
+                "default_samplerate": 64.0,
+            }
+
+        @staticmethod
+        def OutputStream(**kwargs):
+            return FakeStream(**kwargs)
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer(sample_rate=64, block_size=64)
+    track = _track()
+    _install_memory_sources(
+        mixer,
+        (track, np.ones((512, 2), dtype=np.float32) * 0.25),
+    )
+    mixer.set_effect_chain([{
+        "id": "resume-reverb",
+        "type": "reverb",
+        "enabled": True,
+        "params": {"wet": 0.5, "dry": 0.5},
+    }])
+
+    original_reset = mixer._effects.reset
+    reset_count = 0
+
+    def count_reset():
+        nonlocal reset_count
+        reset_count += 1
+        original_reset()
+
+    monkeypatch.setattr(mixer._effects, "reset", count_reset)
+
+    mixer.play(0.0)
+    assert mixer.position_sec == 0.5
+    mixer.pause()
+
+    # The producer may have processed blocks that were never consumed by the
+    # callback. Resuming must start with fresh filter/delay history.
+    mixer.play()
+    assert reset_count == 2
+    assert mixer.position_sec == 1.0
+    mixer.stop()
