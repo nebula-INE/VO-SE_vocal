@@ -365,6 +365,7 @@ class _ProjectMixdownWorker(QThread):
 
         try:
             from modules.audio.vo_se_engine import VO_SE_Engine
+            from modules.audio.vo_se_engine_patch import voice_library_transaction
             if isinstance(self.engine, VO_SE_Engine):
                 from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
                 ensure_desktop_export_ready(self.engine)
@@ -408,15 +409,19 @@ class _ProjectMixdownWorker(QThread):
                     notes_snapshot = deepcopy(
                         list(getattr(track, "notes", []) or [])
                     )
-                    result = export_v2(
-                        notes_snapshot,
-                        self.parameters,
-                        vocal_path,
-                        mode_flag=self.mode_flag,
-                        progress_callback=report_vocal_progress,
-                        cancel_check=self._cancel_event.is_set,
-                        tempo_bpm=self.tempo,
-                    )
+                    with voice_library_transaction(
+                        self.engine,
+                        str(getattr(track, "_voicebank_render_path", "") or ""),
+                    ):
+                        result = export_v2(
+                            notes_snapshot,
+                            self.parameters,
+                            vocal_path,
+                            mode_flag=self.mode_flag,
+                            progress_callback=report_vocal_progress,
+                            cancel_check=self._cancel_event.is_set,
+                            tempo_bpm=self.tempo,
+                        )
                     # Some renderers signal cancellation by returning None.
                     # Check the event before classifying a missing path as a
                     # render failure, so the UI reports a normal cancellation.
@@ -603,7 +608,12 @@ class ProjectIOMixin:
             card_name = str(getattr(card, "display_name", name) or name)
             select_card = getattr(gallery, "on_card_clicked", None)
             if callable(select_card):
-                select_card(card_name, voice_id)
+                previous_suppression = bool(getattr(self, "_suppress_track_voice_assignment", False))
+                self._suppress_track_voice_assignment = True
+                try:
+                    select_card(card_name, voice_id)
+                finally:
+                    self._suppress_track_voice_assignment = previous_suppression
                 return True
 
         combo = getattr(self, "character_selector", None)
@@ -613,7 +623,12 @@ class ProjectIOMixin:
                 resolved_name = str(combo.itemText(index))
                 on_voice_changed = getattr(self, "on_voice_changed", None)
                 if callable(on_voice_changed):
-                    on_voice_changed(resolved_name, voice_id)
+                    previous_suppression = bool(getattr(self, "_suppress_track_voice_assignment", False))
+                    self._suppress_track_voice_assignment = True
+                    try:
+                        on_voice_changed(resolved_name, voice_id)
+                    finally:
+                        self._suppress_track_voice_assignment = previous_suppression
                     combo.blockSignals(True)
                     combo.setCurrentIndex(index)
                     combo.blockSignals(False)
@@ -1486,6 +1501,7 @@ class ProjectIOMixin:
             if raw_tracks is not None and not isinstance(raw_tracks, list):
                 raise ValueError("tracks は配列である必要があります。")
 
+            missing_track_voicebanks = []
             if isinstance(raw_tracks, list) and raw_tracks:
                 loaded_tracks = []
                 for index, raw in enumerate(raw_tracks):
@@ -1520,10 +1536,34 @@ class ProjectIOMixin:
                     if not math.isfinite(volume) or not math.isfinite(pan):
                         raise ValueError(f"Track {index + 1} の音量・パン設定が不正です。")
 
+                    track_type = str(raw.get("type", "vocal"))
                     track = track_cls(
                         str(raw.get("name", f"Track {index + 1}")),
-                        str(raw.get("type", "vocal")),
+                        track_type,
                     )
+                    if track_type.lower() == "vocal":
+                        raw_voicebank_id = raw.get(
+                            "voicebank_id", saved_voice_id or getattr(self, "current_voice_id", "")
+                        )
+                        if raw_voicebank_id is not None and not isinstance(raw_voicebank_id, str):
+                            raise ValueError(
+                                f"Track {index + 1} の voicebank_id は文字列である必要があります。"
+                            )
+                        resolve_voicebank = getattr(self, "_resolve_voicebank_binding", None)
+                        if callable(resolve_voicebank):
+                            voice_binding = resolve_voicebank(
+                                raw_voicebank_id,
+                                fallback_id=saved_voice_id or getattr(self, "current_voice_id", ""),
+                            )
+                            track.voicebank_id = str(voice_binding.get("id") or "__INTERNAL__")
+                            if voice_binding.get("missing"):
+                                missing_track_voicebanks.append(
+                                    str(raw_voicebank_id or "不明な音源")
+                                )
+                        else:
+                            track.voicebank_id = str(raw_voicebank_id or "")
+                    else:
+                        track.voicebank_id = ""
                     track.notes = notes
                     audio_path = str(
                         raw.get("audio_path", raw.get("audio", "")) or ""
@@ -1653,7 +1693,13 @@ class ProjectIOMixin:
             )
             if not voice_restored:
                 status_message += " / 保存時の音源が未検出のため現在の音源を維持"
-            self.statusBar().showMessage(status_message, 5000 if not voice_restored else 3000)
+            if missing_track_voicebanks:
+                unique_missing = ", ".join(dict.fromkeys(missing_track_voicebanks))
+                status_message += f" / トラック音源未検出: {unique_missing}"
+            self.statusBar().showMessage(
+                status_message,
+                6000 if (not voice_restored or missing_track_voicebanks) else 3000,
+            )
             self._record_project_state_edit(
                 before_state,
                 self._capture_project_edit_state(),
@@ -2132,6 +2178,7 @@ class ProjectIOMixin:
                     "is_solo": bool(getattr(track, "is_solo", False)),
                     "engine_type": str(getattr(track, "engine_type", "Aural")),
                     "color_label": str(getattr(track, "color_label", "")),
+                    "voicebank_id": str(getattr(track, "voicebank_id", "") or ""),
                     "notes": [n.to_dict() if hasattr(n, "to_dict") else dict(n)
                               for n in (getattr(track, "notes", []) or [])],
                 })
@@ -2442,6 +2489,25 @@ class ProjectIOMixin:
             snapshot.audio_path = str(getattr(track, "audio_path", "") or "")
             # Do not reuse a stale playback cache from a previous transport session.
             snapshot.playback_path = ""
+            snapshot._playback_signature = ""
+            if track_type == "vocal":
+                resolve_track_voicebank = getattr(self, "_resolve_track_voicebank", None)
+                if callable(resolve_track_voicebank):
+                    binding = resolve_track_voicebank(
+                        track, fallback_id=getattr(self, "current_voice_id", ""), notify=False
+                    )
+                else:
+                    binding = {
+                        "id": str(getattr(track, "voicebank_id", "") or getattr(self, "current_voice_id", "")),
+                        "path": "",
+                    }
+                if binding.get("pending"):
+                    self.statusBar().showMessage(
+                        "Voicebank一覧のスキャン完了後にミックスダウンしてください。", 5000
+                    )
+                    return False
+                snapshot.voicebank_id = str(binding.get("id") or "__INTERNAL__")
+                snapshot._voicebank_render_path = str(binding.get("path") or "")
             snapshot.volume = float(getattr(track, "volume", 1.0))
             snapshot.pan = float(getattr(track, "pan", 0.0))
             snapshot.is_muted = bool(getattr(track, "is_muted", False))

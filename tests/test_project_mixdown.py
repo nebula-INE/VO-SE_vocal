@@ -304,3 +304,60 @@ def test_project_worker_reports_vocal_render_cancellation_as_cancelled(tmp_path)
     assert not output.exists()
     assert original_note.value == "original"
 
+
+
+
+def test_project_worker_routes_each_vocal_through_its_voicebank_and_restores_engine(tmp_path):
+    voice_a = tmp_path / "voice-a"
+    voice_b = tmp_path / "voice-b"
+    global_voice = tmp_path / "global-voice"
+    for voice in (voice_a, voice_b, global_voice):
+        voice.mkdir()
+        (voice / "oto.ini").write_text("a.wav=a,0,0,0,0,0\\n", encoding="utf-8")
+
+    vocal_a = _track(
+        "", track_type="vocal", audio_path="", notes=[SimpleNamespace(value="a")],
+        name="Vocal A", voicebank_id=str(voice_a), _voicebank_render_path=str(voice_a),
+    )
+    vocal_b = _track(
+        "", track_type="vocal", audio_path="", notes=[SimpleNamespace(value="b")],
+        name="Vocal B", voicebank_id=str(voice_b), _voicebank_render_path=str(voice_b),
+    )
+    output = tmp_path / "per-voicebank-mix.wav"
+
+    class VoiceAwareEngine:
+        def __init__(self):
+            self.voice_lib_path = str(global_voice)
+            self._default_voice_lib_path = str(global_voice)
+            self.active_paths = []
+            self.refresh_paths = []
+
+        def refresh_voice_library_v2(self):
+            self.refresh_paths.append(self.voice_lib_path)
+
+        def export_to_wav_v2(self, notes, parameters, file_path, **kwargs):
+            self.active_paths.append(self.voice_lib_path)
+            _write(file_path, np.full((16, 2), 0.1, dtype=np.float32), sample_rate=44100)
+            return file_path
+
+    engine = VoiceAwareEngine()
+    worker = _ProjectMixdownWorker(
+        engine,
+        [vocal_a, vocal_b],
+        {"Pitch": [], "Gender": [], "Tension": [], "Breath": []},
+        120.0,
+        str(output),
+    )
+    completed = []
+    failed = []
+    worker.completed.connect(completed.append)
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert failed == []
+    assert completed == [str(output)]
+    assert engine.active_paths == [str(voice_a), str(voice_b)]
+    assert engine.voice_lib_path == str(global_voice)
+    assert engine.refresh_paths == [
+        str(voice_a), str(global_voice), str(voice_b), str(global_voice)
+    ]

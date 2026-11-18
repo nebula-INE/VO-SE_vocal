@@ -26,7 +26,8 @@ import os
 import ctypes
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 import re
 
 import numpy as np
@@ -47,6 +48,51 @@ logger = logging.getLogger(__name__)
 # insufficient when a secondary launcher or a voice-bank switch uses another
 # VO_SE_Engine instance in the same process.
 _NATIVE_ENGINE_LOCK = threading.RLock()
+
+
+@contextmanager
+def voice_library_transaction(engine: Any, voice_path: Optional[str] = None) -> Iterator[None]:
+    """Temporarily route one render through a Voicebank under the native-state lock."""
+    current_path = str(getattr(engine, "voice_lib_path", "") or "")
+    refresh = getattr(engine, "refresh_voice_library_v2", None)
+    if not current_path or not callable(refresh):
+        yield
+        return
+
+    with _NATIVE_ENGINE_LOCK:
+        previous_path = os.path.abspath(current_path)
+        default_path = str(
+            getattr(engine, "_default_voice_lib_path", previous_path) or previous_path
+        )
+        target_path = (
+            os.path.abspath(os.path.expanduser(str(voice_path)))
+            if voice_path else os.path.abspath(default_path)
+        )
+        if voice_path and (
+            not os.path.isdir(target_path)
+            or not os.path.isfile(os.path.join(target_path, "oto.ini"))
+        ):
+            raise FileNotFoundError(f"指定されたUTAU音源が見つかりません: {target_path}")
+
+        had_ust_voice_dir = "_ust_voice_dir" in getattr(engine, "__dict__", {})
+        previous_ust_voice_dir = getattr(engine, "_ust_voice_dir", None)
+        switched = target_path != previous_path
+        try:
+            if switched:
+                engine.voice_lib_path = target_path
+                refresh()
+            yield
+        finally:
+            if switched:
+                engine.voice_lib_path = previous_path
+                refresh()
+            if had_ust_voice_dir:
+                engine._ust_voice_dir = previous_ust_voice_dir
+            elif hasattr(engine, "_ust_voice_dir"):
+                try:
+                    delattr(engine, "_ust_voice_dir")
+                except AttributeError:
+                    pass
 
 
 def build_vibrato_curves(

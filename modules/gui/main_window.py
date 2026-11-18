@@ -345,9 +345,10 @@ class EngineInitializer:
 
 
 class VoseTrack:
-    def __init__(self, name, track_type="vocal"):
+    def __init__(self, name, track_type="vocal", voicebank_id=""):
         self.name = name
         self.track_type = track_type  # "vocal"（歌声） または "wave"（オケ）
+        self.voicebank_id = str(voicebank_id or "")
         
         # --- 基本データ ---
         self.notes = []               # 歌声トラック用のノートリスト
@@ -373,6 +374,7 @@ class VoseTrack:
         return {
             "name": self.name,
             "type": self.track_type,
+            "voicebank_id": self.voicebank_id,
             "audio_path": self.audio_path,
             "volume": self.volume,
             "pan": self.pan,
@@ -1909,6 +1911,7 @@ class _VocalPlaybackPreparationThread(QThread):
         current_track = None
         try:
             from modules.audio.vo_se_engine import VO_SE_Engine
+            from modules.audio.vo_se_engine_patch import voice_library_transaction
             needs_render = any(job["notes"] for job in self.jobs)
             export_v2 = None
             if needs_render:
@@ -1949,6 +1952,7 @@ class _VocalPlaybackPreparationThread(QThread):
                     note_state,
                     job["parameters"],
                     job["voice_id"],
+                    str(job.get("voice_path") or ""),
                     float(job["tempo"]),
                 ))
                 previous_path = str(job.get("previous_path") or "")
@@ -1972,13 +1976,16 @@ class _VocalPlaybackPreparationThread(QThread):
                 # Narrow the optional engine method before calling it.
                 if not callable(export_v2):
                     raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
-                result = export_v2(
-                    notes,
-                    job["parameters"],
-                    cache_path,
-                    mode_flag=0,
-                    cancel_check=self._cancel_event.is_set,
-                )
+                with voice_library_transaction(
+                    self.engine, str(job.get("voice_path") or "")
+                ):
+                    result = export_v2(
+                        notes,
+                        job["parameters"],
+                        cache_path,
+                        mode_flag=0,
+                        cancel_check=self._cancel_event.is_set,
+                    )
                 if not result:
                     raise RuntimeError(
                         f"Vocal {track_index + 1} のWAV生成に失敗しました。"
@@ -2694,6 +2701,7 @@ class MainWindow(
         # 上部コントロールバーの「Voice」ボックスをギャラリーと連動させる
         self.voice_gallery.voice_selected.connect(self._sync_voice_selector)
         self.voice_gallery.gallery_rebuilt.connect(self._populate_voice_selector)
+        self.voice_gallery.gallery_rebuilt.connect(self._refresh_track_voice_selectors)
         self.voice_gallery.voice_imported.connect(
             lambda name: self.statusBar().showMessage(f"音源「{name}」を追加しました", 5000))
         if getattr(self, "character_selector", None) is not None:
@@ -2780,13 +2788,38 @@ class MainWindow(
                     if not oto_data:
                         self.statusBar().showMessage(f"oto.ini を確認できません: {voice_path}", 5000)
                 else:
-                    # 内蔵音源など、フォルダ型でない音源は既存のライブラリを維持。
-                    refresh = getattr(self.vo_se_engine, "refresh_voice_library", None)
-                    if callable(refresh):
-                        refresh()
+                    # 内蔵音源はエンジン起動時の標準ライブラリへ戻す。
+                    default_voice_path = str(
+                        getattr(self.vo_se_engine, "_default_voice_lib_path", "") or ""
+                    )
+                    if default_voice_path:
+                        self.vo_se_engine.set_voice_library(default_voice_path)
+                    else:
+                        refresh = getattr(self.vo_se_engine, "refresh_voice_library", None)
+                        if callable(refresh):
+                            refresh()
             except Exception as e:
                 self.statusBar().showMessage(f"音源切替エラー: {e}", 5000)
                 print(f"Engine voice switch failed: {e}")
+
+        # The global picker remains a convenient default for the currently edited
+        # vocal track. Restoring a project suppresses this behavior so each saved
+        # track keeps its own independent Voicebank.
+        if not bool(getattr(self, "_suppress_track_voice_assignment", False)):
+            tracks = list(getattr(self, "tracks", []) or [])
+            current_index = int(getattr(self, "current_track_idx", -1))
+            if 0 <= current_index < len(tracks):
+                active_track = tracks[current_index]
+                if str(getattr(active_track, "track_type", "vocal")).lower() == "vocal":
+                    resolve_binding = getattr(self, "_resolve_voicebank_binding", None)
+                    apply_track_voice = getattr(self, "_on_strip_voicebank_changed", None)
+                    if callable(resolve_binding) and callable(apply_track_voice):
+                        binding = resolve_binding(internal_id, fallback_id=internal_id)
+                        if not binding.get("missing") and not binding.get("pending"):
+                            apply_track_voice(active_track, str(binding.get("id") or "__INTERNAL__"))
+                            refresh_tracks = getattr(self, "refresh_track_list_ui", None)
+                            if callable(refresh_tracks):
+                                refresh_tracks()
 
         # --- 3. UIへのフィードバック ---
         if self.status_label:
@@ -4198,6 +4231,182 @@ class MainWindow(
     # --- 保存（マルチトラック対応） ---
     # (旧: save_project は modules/gui/mixins/project_io_mixin.py へ移動済み)
 
+    def _stable_voicebank_id(self, voice_path: str) -> str:
+        """Create a portable ID for app-managed banks; fall back to an external absolute path."""
+        resolved_path = os.path.abspath(os.path.expanduser(str(voice_path)))
+        manager = getattr(self, "voice_manager", None)
+        roots = (
+            ("assets-voices", getattr(manager, "voices_dir", "")),
+            ("voice-banks", getattr(manager, "internal_voice_dir", "")),
+            ("user-voices", getattr(manager, "user_voice_dir", "")),
+        )
+        for prefix, root in roots:
+            if not root:
+                continue
+            root_path = os.path.abspath(os.path.expanduser(str(root)))
+            try:
+                if os.path.normcase(os.path.commonpath([root_path, resolved_path])) != os.path.normcase(root_path):
+                    continue
+            except ValueError:
+                continue
+            relative = os.path.relpath(resolved_path, root_path).replace(os.sep, "/")
+            return f"utau:{prefix}/{relative}"
+        return resolved_path
+
+    def _voicebank_catalog(self) -> List[Dict[str, str]]:
+        """Return installed Voicebanks keyed by the same stable IDs used by the gallery."""
+        manager = getattr(self, "voice_manager", None)
+        voices = getattr(manager, "voices", {}) if manager is not None else {}
+        voices = voices if isinstance(voices, dict) else {}
+        gallery = getattr(self, "voice_gallery", None)
+        cards = getattr(gallery, "cards", {}) if gallery is not None else {}
+        cards = cards if isinstance(cards, dict) else {}
+        catalog: List[Dict[str, str]] = []
+        seen = set()
+
+        def append_voice(display_name: str, raw_id: Any, raw_path: Any) -> None:
+            name = str(display_name or "").strip()
+            identity = str(raw_id or "").strip()
+            path = str(raw_path or "").strip()
+            if not name or not identity or identity.startswith("__RECRUITING__"):
+                return
+            if identity.startswith("__INTERNAL__") or path.startswith("__INTERNAL__"):
+                identity = "__INTERNAL__"
+                path = ""
+            else:
+                if not path and os.path.isdir(identity):
+                    path = identity
+                if not path:
+                    return
+                path = os.path.abspath(os.path.expanduser(path))
+                if not os.path.isdir(path) or not os.path.isfile(os.path.join(path, "oto.ini")):
+                    return
+                identity = self._stable_voicebank_id(path)
+            if identity in seen:
+                return
+            seen.add(identity)
+            catalog.append({"name": name, "id": identity, "path": path})
+
+        for identity, card in cards.items():
+            if bool(getattr(card, "is_recruiting", False)):
+                continue
+            name = str(getattr(card, "display_name", "") or "")
+            value = voices.get(name, identity)
+            if isinstance(value, dict):
+                append_voice(name, value.get("id") or identity, value.get("path"))
+            else:
+                append_voice(name, identity, value)
+
+        for name, value in voices.items():
+            if isinstance(value, dict):
+                append_voice(str(name), value.get("id") or value.get("path"), value.get("path"))
+            else:
+                append_voice(str(name), value, value)
+        return catalog
+
+    def _get_voicebank_options(self):
+        catalog = self._voicebank_catalog()
+        if not catalog:
+            return [("VO-SE Official (Embedded)", "__INTERNAL__")]
+        return [(item["name"], item["id"]) for item in catalog]
+
+    def _resolve_voicebank_binding(
+        self, voice_id: Any, fallback_id: Any = None
+    ) -> Dict[str, Any]:
+        """Resolve a persisted stable ID to an installed Voicebank without guessing paths."""
+        catalog = self._voicebank_catalog()
+
+        def canonical_id(value: Any) -> str:
+            text = str(value or "").strip()
+            return "__INTERNAL__" if text.startswith("__INTERNAL__") else text
+
+        def find(value: Any) -> Optional[Dict[str, Any]]:
+            requested = canonical_id(value)
+            if not requested or requested == "NONE":
+                return None
+            if requested == "__INTERNAL__":
+                return next((dict(item) for item in catalog if item["id"] == requested), {
+                    "name": "VO-SE Official (Embedded)", "id": "__INTERNAL__", "path": ""
+                })
+            normalized = os.path.normcase(os.path.abspath(os.path.expanduser(requested)))
+            for item in catalog:
+                if item["id"] == requested:
+                    return dict(item)
+                if item["path"] and os.path.normcase(os.path.abspath(item["path"])) == normalized:
+                    return dict(item)
+            if os.path.isdir(requested) and os.path.isfile(os.path.join(requested, "oto.ini")):
+                resolved_path = os.path.abspath(os.path.expanduser(requested))
+                return {
+                    "name": os.path.basename(resolved_path),
+                    "id": self._stable_voicebank_id(resolved_path),
+                    "path": resolved_path,
+                }
+            return None
+
+        requested_id = canonical_id(voice_id)
+        fallback = find(fallback_id)
+        selected = find(requested_id)
+        if selected is not None:
+            selected.update({"missing": False, "pending": False, "requested_id": requested_id})
+            return selected
+
+        if requested_id and requested_id != "NONE" and not catalog:
+            return {
+                "name": requested_id, "id": requested_id, "path": "",
+                "missing": False, "pending": True, "requested_id": requested_id,
+            }
+
+        if fallback is not None:
+            fallback.update({
+                "missing": bool(requested_id and requested_id != "NONE"),
+                "pending": False,
+                "requested_id": requested_id,
+            })
+            return fallback
+
+        if catalog:
+            selected = next(
+                (dict(item) for item in catalog if item["id"] == "__INTERNAL__"),
+                dict(catalog[0]),
+            )
+        else:
+            selected = {
+                "name": "VO-SE Official (Embedded)", "id": "__INTERNAL__", "path": ""
+            }
+        selected.update({
+            "missing": bool(requested_id and requested_id != "NONE"),
+            "pending": False,
+            "requested_id": requested_id,
+        })
+        return selected
+
+    def _resolve_track_voicebank(
+        self, track: Any, fallback_id: Any = None, notify: bool = False
+    ) -> Dict[str, Any]:
+        """Resolve a track's Voicebank and persist a safe fallback when one is missing."""
+        fallback = fallback_id or getattr(self, "current_voice_id", "")
+        requested = getattr(track, "voicebank_id", "") or fallback
+        binding = self._resolve_voicebank_binding(requested, fallback_id=fallback)
+        if not binding.get("pending"):
+            resolved_id = str(binding.get("id") or "__INTERNAL__")
+            if str(getattr(track, "voicebank_id", "") or "") != resolved_id:
+                track.voicebank_id = resolved_id
+                track.playback_path = ""
+                track._playback_signature = ""
+        if notify and binding.get("missing"):
+            status_bar = getattr(self, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage(
+                    f"トラック「{getattr(track, 'name', 'Vocal')}」のVoicebankが見つからないため、"
+                    f"「{binding.get('name', '内蔵音源')}」へ切り替えました。",
+                    6000,
+                )
+        return binding
+
+    def _refresh_track_voice_selectors(self) -> None:
+        """Rebuild track selectors after the asynchronous Voicebank scan completes."""
+        self.refresh_track_list_ui()
+
     def get_active_tracks(self):
         """現在鳴らすべきトラックのリストを返す（再生エンジン用）"""
         # ソロがあるかチェック
@@ -4230,14 +4439,20 @@ class MainWindow(
         self.track_list_widget.clear()
 
         solo_exists = any(t.is_solo for t in self.tracks)
+        voice_options = self._get_voicebank_options()
 
         for i, t in enumerate(self.tracks):
             item = QListWidgetItem()
             item.setSizeHint(QSize(0, 64))
             self.track_list_widget.addItem(item)
 
-            strip = TrackStripWidget(t, self)
+            if str(getattr(t, "track_type", "vocal")).lower() == "vocal":
+                self._resolve_track_voicebank(
+                    t, fallback_id=getattr(self, "current_voice_id", ""), notify=True
+                )
+            strip = TrackStripWidget(t, self, voice_options=voice_options)
             strip.selected.connect(self._on_strip_selected)
+            strip.voicebank_changed.connect(self._on_strip_voicebank_changed)
             strip.mute_toggled.connect(self._on_strip_mute)
             strip.solo_toggled.connect(self._on_strip_solo)
             strip.volume_changed.connect(self._on_strip_volume)
@@ -4283,6 +4498,9 @@ class MainWindow(
 
         def apply(value):
             setattr(track, attr, value)
+            if attr == "voicebank_id":
+                track.playback_path = ""
+                track._playback_signature = ""
             self.refresh_track_list_ui()
             if track in self.tracks and self.tracks.index(track) == self.current_track_idx:
                 if attr in {"volume", "pan", "is_muted", "is_solo"}:
@@ -4297,6 +4515,34 @@ class MainWindow(
             apply(old_value)
 
         self.history.push(EditCommand(redo, undo, description))
+
+    def _on_strip_voicebank_changed(self, track, voicebank_id: str) -> None:
+        if track not in self.tracks or str(getattr(track, "track_type", "vocal")).lower() != "vocal":
+            return
+        old_value = str(getattr(track, "voicebank_id", "") or "")
+        binding = self._resolve_voicebank_binding(
+            voicebank_id, fallback_id=getattr(self, "current_voice_id", "")
+        )
+        if binding.get("missing") or binding.get("pending"):
+            self.statusBar().showMessage(
+                "選択したVoicebankを解決できません。音源一覧を再スキャンしてください。",
+                5000,
+            )
+            self.refresh_track_list_ui()
+            return
+        new_value = str(binding.get("id") or "__INTERNAL__")
+        if old_value == new_value:
+            return
+        track.voicebank_id = new_value
+        track.playback_path = ""
+        track._playback_signature = ""
+        self._record_track_property_change(
+            track, "voicebank_id", old_value, new_value, "トラックVoicebank変更"
+        )
+        self.statusBar().showMessage(
+            f"{track.name} のVoicebankを「{binding.get('name', new_value)}」に変更しました。",
+            3000,
+        )
 
     def _on_strip_mute(self, track, is_muted: bool):
         if track in self.tracks:
@@ -5225,7 +5471,7 @@ class MainWindow(
         }
 
     def _render_vocal_track_for_playback(self, track: Any, track_index: int) -> str:
-        """Render one Vocal track to a cached WAV for mixer playback."""
+        """Render one Vocal track to a cached WAV using its own Voicebank."""
         notes = list(getattr(track, "notes", []) or [])
         if not notes:
             track.playback_path = ""
@@ -5233,6 +5479,7 @@ class MainWindow(
             return ""
 
         from modules.audio.vo_se_engine import VO_SE_Engine
+        from modules.audio.vo_se_engine_patch import voice_library_transaction
         if isinstance(self.vo_se_engine, VO_SE_Engine):
             from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
             ensure_desktop_export_ready(self.vo_se_engine)
@@ -5241,6 +5488,16 @@ class MainWindow(
         if not callable(export_v2):
             raise RuntimeError("VCV対応の export_to_wav_v2 が利用できません。")
 
+        binding = self._resolve_track_voicebank(
+            track, fallback_id=getattr(self, "current_voice_id", ""), notify=True
+        ) if callable(getattr(self, "_resolve_track_voicebank", None)) else {
+            "id": str(getattr(track, "voicebank_id", "") or getattr(self, "current_voice_id", "")),
+            "path": "",
+        }
+        if binding.get("pending"):
+            raise RuntimeError("Voicebank一覧のスキャン完了後に再生してください。")
+        voice_id = str(binding.get("id") or "__INTERNAL__")
+        voice_path = str(binding.get("path") or "")
         parameters = self._build_render_parameters()
         signature_items = []
         for note in notes:
@@ -5249,12 +5506,8 @@ class MainWindow(
                 to_dict() if callable(to_dict)
                 else getattr(note, "__dict__", repr(note))
             )
-        signature = repr((
-            signature_items,
-            parameters,
-            self.current_voice_id,
-            float(getattr(self.timeline_widget, "tempo", 120.0)),
-        ))
+        tempo = float(getattr(self.timeline_widget, "tempo", 120.0))
+        signature = repr((signature_items, parameters, voice_id, voice_path, tempo))
 
         cache_dir = os.path.join(tempfile.gettempdir(), "vose_playback_cache")
         os.makedirs(cache_dir, exist_ok=True)
@@ -5262,8 +5515,6 @@ class MainWindow(
         cache_key = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:24]
         cache_path = os.path.join(cache_dir, f"track_{track_index}_{cache_key}.wav")
 
-        # Check the existing signature before invalidating the previous path.
-        # Clearing it first made this cache-hit branch unreachable.
         previous_path = str(getattr(track, "playback_path", "") or "")
         if (getattr(track, "_playback_signature", None) == signature
                 and previous_path and os.path.isfile(previous_path)):
@@ -5274,12 +5525,8 @@ class MainWindow(
         self.statusBar().showMessage(
             f"Vocal {track_index + 1} を再生用にレンダリング中..."
         )
-        result = export_v2(
-            notes,
-            parameters,
-            cache_path,
-            mode_flag=0,
-        )
+        with voice_library_transaction(self.vo_se_engine, voice_path):
+            result = export_v2(notes, parameters, cache_path, mode_flag=0)
         if not result:
             raise RuntimeError(f"Vocal {track_index + 1} のWAV生成に失敗しました。")
 
@@ -5649,12 +5896,18 @@ class MainWindow(
                 # copying a long UST twice on the GUI thread.
                 source_notes = getattr(track, "notes", []) or []
                 notes_snapshot = list(source_notes)
+                binding = self._resolve_track_voicebank(
+                    track, fallback_id=voice_id, notify=False
+                )
+                if binding.get("pending"):
+                    raise RuntimeError("Voicebank一覧のスキャン完了後に再生してください。")
                 jobs.append({
                     "index": index,
                     "track": track,
                     "notes": notes_snapshot,
                     "parameters": parameters,
-                    "voice_id": voice_id,
+                    "voice_id": binding["id"],
+                    "voice_path": binding["path"],
                     "tempo": tempo,
                     "previous_signature": getattr(track, "_playback_signature", ""),
                     "previous_path": getattr(track, "playback_path", ""),

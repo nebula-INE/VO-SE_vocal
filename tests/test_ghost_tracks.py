@@ -36,7 +36,7 @@ def test_ghost_track_collection_handles_missing_window_tracks():
         def window(self):
             return SimpleNamespace(tracks=[], current_track_idx=0)
 
-    assert TimelineWidget._get_ghost_track_entries(FakeTimeline()) == []
+    assert TimelineWidget._get_ghost_track_entries(cast(Any, FakeTimeline())) == []
 
 def test_selected_notes_duplicate_as_one_relative_block_with_undo_commit():
     original_a = SimpleNamespace(

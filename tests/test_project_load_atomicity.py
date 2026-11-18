@@ -18,6 +18,7 @@ class _Track:
         self.is_solo = False
         self.engine_type = "Aural"
         self.color_label = ""
+        self.voicebank_id = ""
 
 
 class _Timeline:
@@ -204,6 +205,7 @@ def test_non_finite_note_timing_is_rejected_before_commit(tmp_path, monkeypatch)
 
 def test_project_save_persists_the_current_voice_identity(tmp_path, monkeypatch):
     window = _ProjectWindow()
+    window.tracks[0].voicebank_id = "voice-a"
     project_path = tmp_path / "voice-project.vose"
     monkeypatch.setattr(
         project_io_module.QFileDialog,
@@ -216,6 +218,7 @@ def test_project_save_persists_the_current_voice_identity(tmp_path, monkeypatch)
     saved = json.loads(project_path.read_text(encoding="utf-8"))
     assert saved["current_voice_id"] == "voice-a"
     assert saved["current_voice"] == "Voice A"
+    assert saved["tracks"][0]["voicebank_id"] == "voice-a"
     assert window.current_project_path == str(project_path.resolve())
 
 
@@ -286,6 +289,7 @@ def test_project_load_restores_saved_voice_when_installed(tmp_path, monkeypatch)
             "tracks": [{
                 "name": "Loaded",
                 "type": "vocal",
+                "voicebank_id": "voice-b",
                 "notes": [],
             }],
         }),
@@ -294,6 +298,7 @@ def test_project_load_restores_saved_voice_when_installed(tmp_path, monkeypatch)
     monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
 
     assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.tracks[0].voicebank_id == "voice-b"
     assert window.current_voice_id == "voice-b"
     assert window.current_voice == "Voice B"
     assert window.voice_gallery.cards["voice-b"].selected is True
@@ -387,3 +392,28 @@ def test_legacy_project_load_uses_lightweight_track_container_clones():
     )[0]
     assert "_clone_track_collection(existing_tracks)" in loader
     assert "deepcopy(existing_tracks)" not in loader
+
+
+
+def test_legacy_project_without_track_voicebank_uses_saved_global_voice(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    project_path = tmp_path / "legacy-global-voice.vose"
+    project_path.write_text(
+        json.dumps({
+            "tempo": 120.0,
+            "current_voice_id": "voice-b",
+            "current_voice": "Voice B",
+            "tracks": [{
+                "name": "Legacy vocal",
+                "type": "vocal",
+                "notes": [],
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.tracks[0].voicebank_id == "voice-b"
+    assert window.current_voice_id == "voice-b"

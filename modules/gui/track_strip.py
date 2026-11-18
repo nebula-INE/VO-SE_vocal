@@ -21,7 +21,7 @@ DAWやSynthesizer Vのように、トラックごとにMute/Solo/Volume(フェ�
 """
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit,
-    QPushButton, QSlider
+    QPushButton, QSlider, QComboBox
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
@@ -37,8 +37,9 @@ class TrackStripWidget(QFrame):
     volume_changed = Signal(object, float)   # 0.0 - 1.0
     pan_changed = Signal(object, float)      # -1.0 - 1.0
     name_edited = Signal(object, str)
+    voicebank_changed = Signal(object, str)
 
-    def __init__(self, track, parent=None):
+    def __init__(self, track, parent=None, voice_options=None):
         super().__init__(parent)
         self.track = track
         self.setObjectName("TrackStrip")
@@ -75,6 +76,14 @@ class TrackStripWidget(QFrame):
         self.name_edit.setFrame(False)
         self.name_edit.editingFinished.connect(self._on_name_edited)
         top_row.addWidget(self.name_edit, 1)
+
+        self.voice_selector = QComboBox()
+        self.voice_selector.setObjectName("TrackVoicebankSelector")
+        self.voice_selector.setFixedWidth(142)
+        self.voice_selector.setToolTip("このボーカルトラックで使用するUTAU音源")
+        self.voice_selector.currentIndexChanged.connect(self._on_voicebank_changed)
+        top_row.addWidget(self.voice_selector)
+        self.set_voice_options(voice_options or [])
 
         content.addLayout(top_row)
 
@@ -129,7 +138,7 @@ class TrackStripWidget(QFrame):
     def sync_from_track(self):
         """self.track の内容をUIへ反映する（外部からのデータ変更後に呼ぶ）"""
         t = self.track
-        for w in (self.name_edit, self.mute_btn, self.solo_btn, self.pan_slider, self.vol_fader):
+        for w in (self.name_edit, self.mute_btn, self.solo_btn, self.pan_slider, self.vol_fader, self.voice_selector):
             w.blockSignals(True)
 
         self.name_edit.setText(t.name)
@@ -143,10 +152,20 @@ class TrackStripWidget(QFrame):
         self.vol_fader.setValue(max(0, min(100, vol_val)))
         self.vol_label.setText(f"{self.vol_fader.value()}%")
 
-        for w in (self.name_edit, self.mute_btn, self.solo_btn, self.pan_slider, self.vol_fader):
+        current_voicebank = str(getattr(t, "voicebank_id", "") or "")
+        voice_index = self.voice_selector.findData(current_voicebank)
+        if current_voicebank and voice_index < 0:
+            self.voice_selector.insertItem(0, f"⚠ 未検出: {current_voicebank}", current_voicebank)
+            voice_index = 0
+        if voice_index >= 0:
+            self.voice_selector.setCurrentIndex(voice_index)
+
+        for w in (self.name_edit, self.mute_btn, self.solo_btn, self.pan_slider, self.vol_fader, self.voice_selector):
             w.blockSignals(False)
 
         is_vocal = getattr(t, "track_type", "vocal") == "vocal"
+        self.voice_selector.setVisible(is_vocal)
+        self.voice_selector.setEnabled(is_vocal)
         self.type_badge.setText("V" if is_vocal else "A")
         self.type_badge.setProperty("trackType", "vocal" if is_vocal else "wave")
 
@@ -154,6 +173,28 @@ class TrackStripWidget(QFrame):
         self.color_bar.setStyleSheet(f"background-color: {QColor(color).name()};")
 
         self._restyle()
+
+    def set_voice_options(self, voice_options) -> None:
+        """Replace selector entries while preserving the track's stable Voicebank ID."""
+        current_id = str(getattr(self.track, "voicebank_id", "") or "")
+        self.voice_selector.blockSignals(True)
+        self.voice_selector.clear()
+        for name, voice_id in voice_options:
+            self.voice_selector.addItem(str(name), str(voice_id))
+        index = self.voice_selector.findData(current_id)
+        if current_id and index < 0:
+            self.voice_selector.addItem(f"⚠ 未検出: {current_id}", current_id)
+            index = self.voice_selector.count() - 1
+        if index >= 0:
+            self.voice_selector.setCurrentIndex(index)
+        elif self.voice_selector.count() > 0:
+            self.voice_selector.setCurrentIndex(0)
+        self.voice_selector.blockSignals(False)
+
+    def _on_voicebank_changed(self, index: int) -> None:
+        voice_id = self.voice_selector.itemData(index)
+        if voice_id is not None:
+            self.voicebank_changed.emit(self.track, str(voice_id))
 
     def set_dimmed(self, dimmed: bool):
         """ミュート中 or (他トラックがソロ中でこのトラックはソロでない) 場合に薄暗くする"""

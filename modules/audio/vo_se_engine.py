@@ -48,6 +48,7 @@ class VO_SE_Engine:
         # パス解決（開発環境とビルド後の両方に対応）
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.voice_lib_path = os.path.abspath(os.path.join(base_dir, "..", voice_lib_dir))
+        self._default_voice_lib_path = self.voice_lib_path
         
         # 🚀 【フェーズ3：音素解析・原音設定・C++転送ブリッジの完全統合】
         # refresh_voice_library() が走る前に、受け皿となるパーサー類を確実に実体化
@@ -99,21 +100,17 @@ class VO_SE_Engine:
             print(f"Device error: {e}")
 
     def set_voice_library(self, path: str) -> None:
-        """音源フォルダを動的に切り替え、oto.ini/VCV 解決状態を再構築する。"""
-        self.voice_lib_path = os.path.abspath(path)
+        """音源フォルダ切替とOTO更新をネイティブレンダーに対して排他制御する。"""
+        from modules.audio.vo_se_engine_patch import _NATIVE_ENGINE_LOCK
 
-        # MainWindow 起動時に vo_se_engine_patch が適用済みなら、
-        # 通常スキャンではなく VCV 対応版を必ず使う。
-        # これを base refresh_voice_library() のままにすると、音源切替後も
-        # 古い OtoParser/VcvResolver を参照し続ける。
-        refresh_v2 = getattr(self, "refresh_voice_library_v2", None)
-        if callable(refresh_v2):
-            # refresh_voice_library_v2() が OTO をネイティブへ同期する。
-            # ここで再送すると音源切替時に同じDBを二重登録することになる。
-            refresh_v2()
-        else:
-            self.refresh_voice_library()
-            self.set_oto_data(getattr(self.oto_parser, "_db", {}))
+        with _NATIVE_ENGINE_LOCK:
+            self.voice_lib_path = os.path.abspath(path)
+            refresh_v2 = getattr(self, "refresh_voice_library_v2", None)
+            if callable(refresh_v2):
+                refresh_v2()
+            else:
+                self.refresh_voice_library()
+                self.set_oto_data(getattr(self.oto_parser, "_db", {}))
 
     def set_oto_data(self, oto_data) -> None:
         """oto.ini のメタデータをPython/ネイティブ両方へ同期する。"""
