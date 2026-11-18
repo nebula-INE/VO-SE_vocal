@@ -1,24 +1,21 @@
+import json
+from pathlib import Path
+
+import pytest
+
 from modules.utils.lyric_tokens import assign_lyrics, parse_lyric_tokens
 
 
-def test_auto_mode_splits_space_delimited_lyrics():
-    assert parse_lyric_tokens("さ く ら\nひ ら く") == ["さ", "く", "ら", "ひ", "ら", "く"]
+CASES = json.loads(
+    (Path(__file__).parents[1] / "specs" / "lyric_tokenization_cases.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 
-def test_auto_mode_segments_japanese_morae():
-    assert parse_lyric_tokens("きゃくしゅー") == ["きゃ", "く", "しゅー"]
-
-
-def test_character_mode_keeps_small_kana_with_previous_character():
-    assert parse_lyric_tokens("てぃふぁ", "char") == ["てぃ", "ふぁ"]
-
-
-def test_line_mode_assigns_one_token_per_line():
-    assert parse_lyric_tokens("あ\n\nい\r\nう", "line") == ["あ", "い", "う"]
-
-
-def test_space_mode_keeps_each_whitespace_delimited_token():
-    assert parse_lyric_tokens("hello   world\nagain", "space") == ["hello", "world", "again"]
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])
+def test_python_lyric_tokenization_matches_shared_web_contract(case):
+    assert parse_lyric_tokens(case["text"], case["mode"]) == case["tokens"]
 
 
 def test_fill_modes_match_web_batch_lyric_behavior():
@@ -28,8 +25,6 @@ def test_fill_modes_match_web_batch_lyric_behavior():
 
 
 def test_invalid_modes_are_rejected():
-    import pytest
-
     with pytest.raises(ValueError):
         parse_lyric_tokens("あ", "unknown")
     with pytest.raises(ValueError):
