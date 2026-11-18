@@ -121,7 +121,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             <label className="text-[var(--vose-text-secondary)] font-medium">音量強度 (Intensity):</label>
             <span className="font-mono text-[#2997ff] font-bold">{selectedNote.intensity}</span>
           </div>
-          <input type="range" min="0" max="150" value={selectedNote.intensity} onChange={(e) => onUpdateNote('intensity', parseFloat(e.target.value))} className="w-full h-2 accent-[#0a84ff] bg-[var(--vose-bg-elevated)] rounded-lg appearance-none cursor-pointer" aria-label="音量強度" />
+          <input type="range" min="0" max="200" value={selectedNote.intensity} onChange={(e) => onUpdateNote('intensity', parseFloat(e.target.value))} className="w-full h-2 accent-[#0a84ff] bg-[var(--vose-bg-elevated)] rounded-lg appearance-none cursor-pointer" aria-label="音量強度" />
         </div>
 
         <div>
