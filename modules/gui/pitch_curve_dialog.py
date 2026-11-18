@@ -148,7 +148,8 @@ class PitchCurveEditorDialog(QDialog):
             | QDialogButtonBox.StandardButton.Apply,
             parent=self,
         )
-        buttons.button(QDialogButtonBox.StandardButton.Apply).setText("適用")
+        self._apply_button = buttons.button(QDialogButtonBox.StandardButton.Apply)
+        self._apply_button.setText("適用")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -160,11 +161,8 @@ class PitchCurveEditorDialog(QDialog):
     def _refresh_preview(self) -> None:
         fields = self._current_fields()
         self._preview.set_fields(fields)
-        apply_button = self.findChild(QDialogButtonBox).button(
-            QDialogButtonBox.StandardButton.Apply
-        )
         valid = not self._preview.error
-        apply_button.setEnabled(valid)
+        self._apply_button.setEnabled(valid)
         if not valid:
             self._error_label.setText(f"入力値を確認してください: {self._preview.error}")
         else:
