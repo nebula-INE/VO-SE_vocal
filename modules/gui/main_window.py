@@ -4231,6 +4231,28 @@ class MainWindow(
     # --- 保存（マルチトラック対応） ---
     # (旧: save_project は modules/gui/mixins/project_io_mixin.py へ移動済み)
 
+    def _stable_voicebank_id(self, voice_path: str) -> str:
+        """Create a portable ID for app-managed banks; fall back to an external absolute path."""
+        resolved_path = os.path.abspath(os.path.expanduser(str(voice_path)))
+        manager = getattr(self, "voice_manager", None)
+        roots = (
+            ("assets-voices", getattr(manager, "voices_dir", "")),
+            ("voice-banks", getattr(manager, "internal_voice_dir", "")),
+            ("user-voices", getattr(manager, "user_voice_dir", "")),
+        )
+        for prefix, root in roots:
+            if not root:
+                continue
+            root_path = os.path.abspath(os.path.expanduser(str(root)))
+            try:
+                if os.path.normcase(os.path.commonpath([root_path, resolved_path])) != os.path.normcase(root_path):
+                    continue
+            except ValueError:
+                continue
+            relative = os.path.relpath(resolved_path, root_path).replace(os.sep, "/")
+            return f"utau:{prefix}/{relative}"
+        return resolved_path
+
     def _voicebank_catalog(self) -> List[Dict[str, str]]:
         """Return installed Voicebanks keyed by the same stable IDs used by the gallery."""
         manager = getattr(self, "voice_manager", None)
@@ -4259,7 +4281,7 @@ class MainWindow(
                 path = os.path.abspath(os.path.expanduser(path))
                 if not os.path.isdir(path) or not os.path.isfile(os.path.join(path, "oto.ini")):
                     return
-                identity = path
+                identity = self._stable_voicebank_id(path)
             if identity in seen:
                 return
             seen.add(identity)
@@ -4306,19 +4328,19 @@ class MainWindow(
                 return next((dict(item) for item in catalog if item["id"] == requested), {
                     "name": "VO-SE Official (Embedded)", "id": "__INTERNAL__", "path": ""
                 })
-            if os.path.isdir(requested) and os.path.isfile(os.path.join(requested, "oto.ini")):
-                resolved_path = os.path.abspath(os.path.expanduser(requested))
-                return {
-                    "name": os.path.basename(resolved_path),
-                    "id": resolved_path,
-                    "path": resolved_path,
-                }
             normalized = os.path.normcase(os.path.abspath(os.path.expanduser(requested)))
             for item in catalog:
                 if item["id"] == requested:
                     return dict(item)
                 if item["path"] and os.path.normcase(os.path.abspath(item["path"])) == normalized:
                     return dict(item)
+            if os.path.isdir(requested) and os.path.isfile(os.path.join(requested, "oto.ini")):
+                resolved_path = os.path.abspath(os.path.expanduser(requested))
+                return {
+                    "name": os.path.basename(resolved_path),
+                    "id": self._stable_voicebank_id(resolved_path),
+                    "path": resolved_path,
+                }
             return None
 
         requested_id = canonical_id(voice_id)
