@@ -9,7 +9,9 @@ from modules.data.oto_parser import OtoEntry
 
 
 def _decode_oto(data: bytes) -> tuple[str, str]:
-    for encoding in ("utf-8-sig", "cp932", "shift_jis"):
+    if data.startswith(b"\\xef\\xbb\\xbf"):
+        return data.decode("utf-8-sig"), "utf-8-sig"
+    for encoding in ("utf-8", "cp932", "shift_jis"):
         try:
             return data.decode(encoding), encoding
         except UnicodeDecodeError:
@@ -68,6 +70,10 @@ def save_oto_entry(
     directory = os.path.dirname(ini_path)
     fd, temp_path = tempfile.mkstemp(prefix=".oto-", suffix=".tmp", dir=directory)
     try:
+        try:
+            os.chmod(temp_path, os.stat(ini_path).st_mode)
+        except OSError:
+            pass
         with os.fdopen(fd, "wb") as handle:
             handle.write((newline.join(lines) + (newline if text.endswith(("\n", "\r")) else "")).encode(encoding, errors="replace"))
             handle.flush()
