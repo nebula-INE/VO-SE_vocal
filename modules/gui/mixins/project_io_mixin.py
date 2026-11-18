@@ -608,7 +608,12 @@ class ProjectIOMixin:
             card_name = str(getattr(card, "display_name", name) or name)
             select_card = getattr(gallery, "on_card_clicked", None)
             if callable(select_card):
-                select_card(card_name, voice_id)
+                previous_suppression = bool(getattr(self, "_suppress_track_voice_assignment", False))
+                self._suppress_track_voice_assignment = True
+                try:
+                    select_card(card_name, voice_id)
+                finally:
+                    self._suppress_track_voice_assignment = previous_suppression
                 return True
 
         combo = getattr(self, "character_selector", None)
@@ -618,7 +623,12 @@ class ProjectIOMixin:
                 resolved_name = str(combo.itemText(index))
                 on_voice_changed = getattr(self, "on_voice_changed", None)
                 if callable(on_voice_changed):
-                    on_voice_changed(resolved_name, voice_id)
+                    previous_suppression = bool(getattr(self, "_suppress_track_voice_assignment", False))
+                    self._suppress_track_voice_assignment = True
+                    try:
+                        on_voice_changed(resolved_name, voice_id)
+                    finally:
+                        self._suppress_track_voice_assignment = previous_suppression
                     combo.blockSignals(True)
                     combo.setCurrentIndex(index)
                     combo.blockSignals(False)
