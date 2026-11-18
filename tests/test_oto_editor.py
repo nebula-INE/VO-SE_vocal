@@ -7,7 +7,7 @@ def test_save_oto_entry_updates_only_selected_line_and_preserves_cp932(tmp_path)
     voice_dir.mkdir()
     ini = voice_dir / "oto.ini"
     ini.write_bytes(
-        "あ.wav=あ,1,2,-3,4,5\\r\\nい.wav=い,6,7,8,9,10\\r\\n".encode("cp932")
+        "あ.wav=あ,1,2,-3,4,5\r\nい.wav=い,6,7,8,9,10\r\n".encode("cp932")
     )
     entry = OtoEntry(
         alias="い", filename="い.wav", voice_dir=str(voice_dir),
@@ -26,7 +26,7 @@ def test_save_oto_entry_does_not_rewrite_unknown_alias(tmp_path):
     voice_dir = tmp_path / "voice"
     voice_dir.mkdir()
     (voice_dir / "oto.ini").write_text(
-        "a.wav=a,0,0,0,0,0\\n", encoding="utf-8"
+        "a.wav=a,0,0,0,0,0\n", encoding="utf-8"
     )
     entry = OtoEntry(
         alias="missing", filename="missing.wav", voice_dir=str(voice_dir),
