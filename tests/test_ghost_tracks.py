@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any, cast
 
 from modules.gui.timeline_widget import TimelineWidget
 
@@ -25,7 +26,7 @@ def test_ghost_track_collection_excludes_active_track_and_non_vocal_tracks():
         def window(self):
             return window
 
-    entries = TimelineWidget._get_ghost_track_entries(FakeTimeline())
+    entries = TimelineWidget._get_ghost_track_entries(cast(Any, FakeTimeline()))
 
     assert entries == [(other_vocal, other_vocal.notes)]
 
@@ -89,7 +90,7 @@ def test_selected_notes_duplicate_as_one_relative_block_with_undo_commit():
             self.updated = True
 
     timeline = FakeTimeline()
-    TimelineWidget._duplicate_selected_notes(timeline)
+    TimelineWidget._duplicate_selected_notes(cast(Any, timeline))
 
     assert len(timeline.notes_list) == 5
     duplicate_a, duplicate_b = timeline.notes_list[3:]
