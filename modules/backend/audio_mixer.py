@@ -277,8 +277,11 @@ class AudioMixer:
 
         self._shutdown_playback(reset_position=False)
         with self._lock:
-            if start_sec is not None or self._position == 0:
-                self._effects.reset()
+            # The producer renders blocks ahead of the device callback. A pause or
+            # stream restart discards queued blocks, so the processor's state may be
+            # ahead of the audible position. Reset at every new producer segment to
+            # avoid resuming with stale compressor/reverb/ EQ history.
+            self._effects.reset()
             if not self._sources:
                 raise RuntimeError("No audio tracks are loaded")
             if start_sec is not None:
