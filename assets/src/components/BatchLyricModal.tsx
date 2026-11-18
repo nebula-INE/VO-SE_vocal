@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Type, Check, X, Sparkles, HelpCircle, ArrowRight } from 'lucide-react';
+import { Type, Check, X } from 'lucide-react';
 
 interface BatchLyricModalProps {
   isOpen: boolean;
