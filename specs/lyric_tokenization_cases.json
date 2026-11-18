@@ -1,0 +1,9 @@
+[
+  {"name":"mora-digraph-and-long-vowel","text":"きゃくしゅー","mode":"auto","tokens":["きゃ","く","しゅー"]},
+  {"name":"char-mode-small-kana","text":"てぃふぁ","mode":"char","tokens":["てぃ","ふぁ"]},
+  {"name":"whitespace-tokenization","text":"さ く ら\nひ ら く","mode":"auto","tokens":["さ","く","ら","ひ","ら","く"]},
+  {"name":"line-mode","text":"あ\n\nい\r\nう","mode":"line","tokens":["あ","い","う"]},
+  {"name":"space-mode","text":"hello   world\nagain","mode":"space","tokens":["hello","world","again"]},
+  {"name":"katakana-mora","text":"ティファ","mode":"char","tokens":["ティ","ファ"]},
+  {"name":"empty-input","text":"  \n ","mode":"auto","tokens":[]}
+]

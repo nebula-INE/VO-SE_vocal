@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { Type, Check, X, Sparkles, HelpCircle, ArrowRight } from 'lucide-react';
+import { Type, Check, X } from 'lucide-react';
 
 interface BatchLyricModalProps {
   isOpen: boolean;
@@ -8,58 +8,11 @@ interface BatchLyricModalProps {
   onApplyLyrics: (newLyrics: string[]) => void;
 }
 
-// Convert various Japanese inputs (Romaji / Hiragana / Katakana / English) or segment string into individual lyric tokens
-export const parseLyricTokens = (rawText: string, delimiterMode: 'auto' | 'char' | 'space' | 'line'): string[] => {
-  if (!rawText.trim()) return [];
+// The tokenization rules live in a shared, platform-neutral module. Both
+// Desktop (Python) and Web (TypeScript/JavaScript) run the same fixture cases.
+import { parseLyricTokens } from '../utils/lyricTokens.js';
+export { parseLyricTokens, segmentJapaneseCharacters } from '../utils/lyricTokens.js';
 
-  if (delimiterMode === 'space') {
-    return rawText.trim().split(/\s+/).filter(Boolean);
-  }
-
-  if (delimiterMode === 'line') {
-    return rawText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  }
-
-  if (delimiterMode === 'char') {
-    // Split by character, but preserve digraphs like "きゃ", "しゅ", "ちょ", "てぃ", "ふぁ", "っ", etc. if appropriate
-    return segmentJapaneseCharacters(rawText);
-  }
-
-  // Auto mode: If contains spaces or newlines, split by whitespace. Otherwise, segment by kana/morae.
-  if (/\s+/.test(rawText.trim())) {
-    return rawText.trim().split(/\s+/).filter(Boolean);
-  }
-
-  return segmentJapaneseCharacters(rawText);
-};
-
-// Segment Japanese text respecting small kana like ゃ, ゅ, ょ, ぁ, ぃ, ぅ, ぇ, ぉ, っ, ゎ
-export const segmentJapaneseCharacters = (text: string): string[] => {
-  const cleaned = text.replace(/[\r\n\t]/g, '').trim();
-  const smallKanaRegex = /^[ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮー]/;
-  const result: string[] = [];
-
-  let i = 0;
-  while (i < cleaned.length) {
-    let char = cleaned[i];
-    if (char === ' ') {
-      i++;
-      continue;
-    }
-
-    // Check if next character is small kana or prolonged sound mark (結合)
-    if (i + 1 < cleaned.length && smallKanaRegex.test(cleaned[i + 1])) {
-      char += cleaned[i + 1];
-      i += 2;
-    } else {
-      i += 1;
-    }
-
-    result.push(char);
-  }
-
-  return result;
-};
 
 export const BatchLyricModal: React.FC<BatchLyricModalProps> = ({
   isOpen,
