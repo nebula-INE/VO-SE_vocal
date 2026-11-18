@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from typing import Any
 
 from modules.audio.master_effects import (
     MasterEffectsProcessor,
@@ -206,7 +207,8 @@ def test_effect_parameters_reject_boolean_values_and_invalid_sample_rates():
         normalize_effect_chain([_effect("compressor", {"ratio": True})])
     with pytest.raises(ValueError, match="sample_rate"):
         MasterEffectsProcessor(0)
+    invalid_rate: Any = 8000.5
     with pytest.raises(ValueError, match="sample_rate"):
-        MasterEffectsProcessor(8000.5)
+        MasterEffectsProcessor(invalid_rate)
     with pytest.raises(ValueError, match="sample_rate"):
         MasterEffectsProcessor(True)
