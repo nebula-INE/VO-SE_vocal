@@ -975,7 +975,7 @@ class ProjectIOMixin:
             if not file_path.lower().endswith(".svp"):
                 file_path += ".svp"
             payload = export_svp_json(project_name, tempo, notes)
-            with open(file_path, "w", encoding="utf-8", newline="\\n") as handle:
+            with open(file_path, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write(payload)
             self.statusBar().showMessage(
                 f"SVP 書き出し完了: {os.path.basename(file_path)}", 5000
@@ -985,7 +985,7 @@ class ProjectIOMixin:
             logger.exception("SVP 書き出しエラー: %s", exc)
             QMessageBox.critical(
                 self, "SVP 書き出しエラー",
-                f"Synthesizer V プロジェクトの書き出しに失敗しました:\\n{exc}"
+                f"Synthesizer V プロジェクトの書き出しに失敗しました:\n{exc}"
             )
             return False
 
@@ -1002,7 +1002,7 @@ class ProjectIOMixin:
             if not file_path.lower().endswith(".vsqx"):
                 file_path += ".vsqx"
             payload = export_vsqx_xml(project_name, tempo, notes)
-            with open(file_path, "w", encoding="utf-8", newline="\\n") as handle:
+            with open(file_path, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write(payload)
             self.statusBar().showMessage(
                 f"VSQX 書き出し完了: {os.path.basename(file_path)}", 5000
@@ -1012,7 +1012,7 @@ class ProjectIOMixin:
             logger.exception("VSQX 書き出しエラー: %s", exc)
             QMessageBox.critical(
                 self, "VSQX 書き出しエラー",
-                f"VOCALOID プロジェクトの書き出しに失敗しました:\\n{exc}"
+                f"VOCALOID プロジェクトの書き出しに失敗しました:\n{exc}"
             )
             return False
 
@@ -1954,7 +1954,7 @@ class ProjectIOMixin:
         except Exception as exc:
             logger.exception("SVP 読み込みエラー: %s", exc)
             QMessageBox.critical(
-                self, "読み込みエラー", f"SVP の読み込みに失敗しました:\\n{exc}"
+                self, "読み込みエラー", f"SVP の読み込みに失敗しました:\n{exc}"
             )
             return False
 
