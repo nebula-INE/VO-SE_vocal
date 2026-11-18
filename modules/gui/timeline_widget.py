@@ -663,6 +663,10 @@ class TimelineWidget(QWidget):
                         na.note_number != nb.note_number or
                         getattr(na, "lyrics", None) != getattr(nb, "lyrics", None)):
                     return False
+                # UST Mode 2 pitch automation is part of the editable note state.
+                for attribute in ("_ust_pbs", "_ust_pbw", "_ust_pby"):
+                    if getattr(na, attribute, None) != getattr(nb, attribute, None):
+                        return False
             return True
         except Exception:
             # 比較に失敗した場合は安全側に倒し、変化ありとして扱う
