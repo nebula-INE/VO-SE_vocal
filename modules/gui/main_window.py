@@ -4320,7 +4320,7 @@ class MainWindow(
             text = str(value or "").strip()
             return "__INTERNAL__" if text.startswith("__INTERNAL__") else text
 
-        def find(value: Any):
+        def find(value: Any) -> Optional[Dict[str, Any]]:
             requested = canonical_id(value)
             if not requested or requested == "NONE":
                 return None
