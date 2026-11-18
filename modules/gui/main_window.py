@@ -4365,20 +4365,20 @@ class MainWindow(
             return fallback
 
         if catalog:
-            selected = next(
+            selected_binding: Dict[str, Any] = next(
                 (dict(item) for item in catalog if item["id"] == "__INTERNAL__"),
                 dict(catalog[0]),
             )
         else:
-            selected = {
+            selected_binding = {
                 "name": "VO-SE Official (Embedded)", "id": "__INTERNAL__", "path": ""
             }
-        selected.update({
+        selected_binding.update({
             "missing": bool(requested_id and requested_id != "NONE"),
             "pending": False,
             "requested_id": requested_id,
         })
-        return selected
+        return selected_binding
 
     def _resolve_track_voicebank(
         self, track: Any, fallback_id: Any = None, notify: bool = False
