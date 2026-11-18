@@ -20,41 +20,7 @@ jobs:
         with:
           version: latest
       - name: Build WebAssembly Module
-        run: |
-          # PR #35 moved native engine sources from src/ to assets/src/.
-          # Stage the same sources into the legacy build layout used below.
-          mkdir -p build/wasm src/world
-          cp assets/src/vose_core.cpp src/
-          cp assets/src/world/*.cpp src/world/
-          cp include/world/*.h src/world/
-          em++ src/vose_core.cpp \
-               src/world/audioio.cpp \
-               src/world/cheaptrick.cpp \
-               src/world/common.cpp \
-               src/world/d4c.cpp \
-               src/world/dio.cpp \
-               src/world/fft.cpp \
-               src/world/harvest.cpp \
-               src/world/matlabfunctions.cpp \
-               src/world/stonemask.cpp \
-               src/world/synthesis.cpp \
-               -Iinclude \
-               -O3 \
-               -std=c++17 \
-               -fexceptions \
-               -s WASM=1 \
-               -s ALLOW_MEMORY_GROWTH=1 \
-               -s ALLOW_TABLE_GROWTH=1 \
-               -s MODULARIZE=1 \
-               -s EXPORT_NAME="createVoseCoreModule" \
-               -s EXPORT_ES6=1 \
-               -s ENVIRONMENT=web,worker \
-               -s ASSERTIONS=1 \
-               -s DISABLE_EXCEPTION_CATCHING=0 \
-               -s EXPORTED_FUNCTIONS="['_load_embedded_resource', '_load_embedded_resource_f32', '_execute_render', '_execute_render_cancelable', '_set_oto_data', '_set_vocal_timeline', '_get_engine_version', '_clear_engine_cache', '_malloc', '_free']" \
-               -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'getValue', 'setValue', 'FS', 'stringToUTF8', 'lengthBytesUTF8', 'addFunction', 'removeFunction', 'HEAPU8', 'HEAPF32', 'HEAPF64']" \
-               -s DEFAULT_TO_CXX \
-               -o build/wasm/vose_core.js
+        run: bash scripts/build_wasm.sh build/wasm
 
       - name: Verify required WebAssembly exports
         run: |
@@ -63,13 +29,21 @@ jobs:
           grep -q "_execute_render_cancelable" build/wasm/vose_core.js
           grep -q "_set_oto_data" build/wasm/vose_core.js
           grep -q "_get_engine_version" build/wasm/vose_core.js
+          grep -q "_get_note_event_abi" build/wasm/vose_core.js
+          grep -q "_get_oto_entry_abi" build/wasm/vose_core.js
           echo "Required vose_core WASM exports are present."
+
+      - name: Stage generated loaders and binary for regression tests
+        run: |
+          set -eu
+          mkdir -p public/wasm assets/src/wasm
+          cp build/wasm/vose_core.js public/wasm/vose_core.js
+          cp build/wasm/vose_core.js assets/src/wasm/vose_core.js
+          cp build/wasm/vose_core.wasm public/wasm/vose_core.wasm
 
       - name: Verify current source diagnostics are compiled
         run: |
           set -eu
-          # C++ string literals are normally stored in the WASM data section,
-          # not necessarily in the generated JavaScript loader.
           grep -a -q -- "source waveform is silent" build/wasm/vose_core.wasm
           grep -a -q -- "WORLD synthesis produced silence" build/wasm/vose_core.wasm
           echo "Current silent-render diagnostics are present in the WASM binary."
@@ -78,19 +52,10 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -eu
-          mkdir -p public/wasm
-          cp build/wasm/vose_core.js public/wasm/vose_core.js
-          cp build/wasm/vose_core.wasm public/wasm/vose_core.wasm
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Do not fetch the repository's unrelated LFS history here.
-          # The generated WASM files are committed as ordinary repository files.
-          # Fetching a stale/missing LFS object can fail deployment after a
-          # successful WASM build.
-
-          git add public/wasm/vose_core.js public/wasm/vose_core.wasm
+          git add public/wasm/vose_core.js public/wasm/vose_core.wasm assets/src/wasm/vose_core.js
           if git diff --cached --quiet; then
             echo "No changes to commit (build output identical to previous commit)."
           else

@@ -558,10 +558,10 @@ test('Compiled WASM vocal synthesis passes boundary continuity, F0 smoothness, a
   assert.equal(typeof mod._set_oto_data, 'function');
   assert.equal(typeof mod._get_engine_version, 'function');
 
-  if (mod._get_note_event_abi && mod._get_oto_entry_abi) {
-    assert.equal(Number((mod._get_note_event_abi() >> 48n) & 0xffffn), 88);
-    assert.equal(Number((mod._get_oto_entry_abi() >> 48n) & 0xffffn), 632);
-  }
+  assert.equal(typeof mod._get_note_event_abi, 'function');
+  assert.equal(typeof mod._get_oto_entry_abi, 'function');
+  assert.equal(Number((mod._get_note_event_abi() >> 48n) & 0xffffn), 88);
+  assert.equal(Number((mod._get_oto_entry_abi() >> 48n) & 0xffffn), 632);
 
   const defs = [
     { key: 'a', alias: 'あ', pcm: makeVocalPcm({ lyric: 'あ', seed: 101 }), oto: { offset: 20, consonant: 25, cutoff: 80, pre: 10, ovl: 5 } },
