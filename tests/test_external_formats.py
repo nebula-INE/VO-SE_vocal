@@ -64,3 +64,30 @@ def test_vsqx_export_is_well_formed_and_contains_timing_and_pitch():
     assert note.findtext("v:noteNum", namespaces=ns) == "72"
     assert note.findtext("v:lyric", namespaces=ns) == "あ"
     assert note.findtext(".//v:bpm", namespaces=ns) == "12000"
+
+def test_svp_file_uses_async_project_loader_contract(tmp_path):
+    from modules.gui.mixins.project_io_mixin import _parse_external_project_file
+
+    path = tmp_path / "desktop-parity.svp"
+    path.write_text(json.dumps({
+        "time": {"tempo": [{"position": 0, "bpm": 120}]},
+        "tracks": [{"mainGroup": {"notes": [
+            {"onset": 0, "duration": 480, "pitch": 60, "lyrics": "あ"}
+        ]}}],
+    }, ensure_ascii=False), encoding="utf-8")
+    payload = _parse_external_project_file(str(path))
+    assert payload["format"] == "svp"
+    assert payload["project"]["notes"][0].lyric == "あ"
+
+
+def test_exported_vsqx_can_be_read_by_desktop_parser(tmp_path):
+    from modules.data.vsqx_parser import parse_vsqx
+
+    notes = [NoteEvent(note_number=69, start_time=0.0, duration=0.5, lyric="あ")]
+    path = tmp_path / "roundtrip.vsqx"
+    path.write_text(export_vsqx_xml("Roundtrip", 120, notes), encoding="utf-8")
+    project = parse_vsqx(str(path))
+    assert project.tempo == 120
+    assert len(project.notes) == 1
+    assert project.notes[0].note_number == 69
+    assert project.notes[0].lyric == "あ"
