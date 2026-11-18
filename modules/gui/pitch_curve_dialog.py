@@ -86,11 +86,15 @@ class PitchCurvePreview(QWidget):
             widths = [value for value in fields[1].split(",") if value.strip()]
             explicit_count = len(widths) + 1
             self.explicit_points = list(curve_points[:explicit_count]) or [(0.0, 0.0)]
-            self.shapes = [
-                value.strip().lower() for value in fields[3].split(",") if value.strip()
-            ]
+            # Empty PBM segments are meaningful: UTAU's default smooth shape
+            # is represented by an empty entry, so never filter them out.
+            self.shapes = (
+                [value.strip().lower() for value in fields[3].split(",")]
+                if fields[3]
+                else []
+            )
             if len(self.shapes) < len(widths):
-                self.shapes.extend(["s"] * (len(widths) - len(self.shapes)))
+                self.shapes.extend([""] * (len(widths) - len(self.shapes)))
             self.error = ""
         except (TypeError, ValueError, OverflowError) as exc:
             self.error = str(exc)
