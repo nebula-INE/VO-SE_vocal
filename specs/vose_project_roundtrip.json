@@ -1,0 +1,136 @@
+{
+  "app_id": "VO_SE_Pro_2026",
+  "version": "1.5.0",
+  "project_name": "Web Desktop Parity Fixture",
+  "tempo": 120,
+  "current_track_idx": 1,
+  "current_time": 1.25,
+  "current_voice_id": "voice-a",
+  "current_voice": "Voice A",
+  "effect_chain": [
+    {
+      "id": "master-eq",
+      "type": "eq",
+      "enabled": true,
+      "params": {
+        "frequency_hz": 1200,
+        "gain_db": 1.5,
+        "q": 0.9
+      }
+    }
+  ],
+  "parameters": {
+    "Pitch": [
+      {
+        "time": 0,
+        "value": 0
+      },
+      {
+        "time": 1,
+        "value": 12
+      }
+    ],
+    "Gender": [
+      {
+        "time": 0,
+        "value": 0.25
+      }
+    ],
+    "Tension": [],
+    "Breath": [
+      {
+        "time": 0,
+        "value": 0.1
+      }
+    ]
+  },
+  "tracks": [
+    {
+      "web_track_id": "track_lead",
+      "name": "Lead Vocal",
+      "type": "vocal",
+      "voicebank_id": "voice-a",
+      "audio_path": "",
+      "volume": 0.72,
+      "pan": -0.25,
+      "is_muted": false,
+      "is_solo": true,
+      "engine_type": "Aural",
+      "color_label": "#0a84ff",
+      "effects": [
+        {
+          "id": "lead-clean-eq",
+          "type": "eq",
+          "enabled": true,
+          "params": {
+            "frequency_hz": 2800,
+            "gain_db": 2,
+            "q": 1.1
+          }
+        },
+        {
+          "id": "lead-compressor",
+          "type": "compressor",
+          "enabled": true,
+          "params": {
+            "threshold_db": -20,
+            "ratio": 3.5,
+            "attack_ms": 8,
+            "release_ms": 110,
+            "makeup_gain_db": 1
+          }
+        }
+      ],
+      "notes": [
+        {
+          "note_number": 64,
+          "start_time": 0.25,
+          "duration": 0.5,
+          "lyric": "あ",
+          "velocity": 120,
+          "vibrato_depth": 0.15,
+          "vibrato_rate": 5.5,
+          "formant_shift": 0,
+          "_ust_flags": "g-5",
+          "_ust_pbs": "0;0",
+          "_ust_pbw": "50",
+          "_ust_pby": "0",
+          "_ust_pbm": "0",
+          "_ust_pbs_present": true,
+          "_ust_pbw_present": true,
+          "_ust_pby_present": true,
+          "_ust_tempo": 120
+        }
+      ],
+      "voicebank_name": "Voice A"
+    },
+    {
+      "web_track_id": "track_backing",
+      "name": "Backing Audio",
+      "type": "wave",
+      "voicebank_id": "",
+      "audio_path": "backing.wav",
+      "volume": 0.35,
+      "pan": 0.6,
+      "is_muted": true,
+      "is_solo": false,
+      "engine_type": "Aural",
+      "color_label": "#bf5af2",
+      "effects": [
+        {
+          "id": "backing-room",
+          "type": "reverb",
+          "enabled": true,
+          "params": {
+            "room_size": 0.4,
+            "damping": 0.55,
+            "wet": 0.18,
+            "dry": 0.85,
+            "width": 0.75
+          }
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

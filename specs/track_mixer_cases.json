@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "description": "Shared Desktop/Web track mixer fixture. Gain is normalized 0..1 and pan is -1..1.",
+  "cases": [
+    {
+      "id": "center-unity",
+      "volume": 1,
+      "pan": 0,
+      "left_gain": 0.7071067812,
+      "right_gain": 0.7071067812
+    },
+    {
+      "id": "hard-left-half",
+      "volume": 0.5,
+      "pan": -1,
+      "left_gain": 0.5,
+      "right_gain": 0
+    },
+    {
+      "id": "hard-right-quarter",
+      "volume": 0.25,
+      "pan": 1,
+      "left_gain": 0,
+      "right_gain": 0.25
+    },
+    {
+      "id": "left-midpoint",
+      "volume": 0.8,
+      "pan": -0.5,
+      "left_gain": 0.739103626,
+      "right_gain": 0.3061467459
+    }
+  ],
+  "effect_chain_schema": {
+    "max_effects_per_chain": 16,
+    "types": [
+      "compressor",
+      "eq",
+      "reverb"
+    ],
+    "track_property": "effects"
+  },
+  "presets": {
+    "vocal_clean": [
+      {
+        "id": "vocal_clean_1",
+        "type": "eq",
+        "enabled": true,
+        "params": {
+          "frequency_hz": 350,
+          "gain_db": -1.5,
+          "q": 1
+        }
+      },
+      {
+        "id": "vocal_clean_2",
+        "type": "compressor",
+        "enabled": true,
+        "params": {
+          "threshold_db": -18,
+          "ratio": 3,
+          "attack_ms": 12,
+          "release_ms": 120,
+          "makeup_gain_db": 1
+        }
+      }
+    ],
+    "warm_room": [
+      {
+        "id": "warm_room_1",
+        "type": "eq",
+        "enabled": true,
+        "params": {
+          "frequency_hz": 240,
+          "gain_db": 1.5,
+          "q": 0.8
+        }
+      },
+      {
+        "id": "warm_room_2",
+        "type": "reverb",
+        "enabled": true,
+        "params": {
+          "room_size": 0.42,
+          "damping": 0.55,
+          "wet": 0.16,
+          "dry": 0.9,
+          "width": 0.8
+        }
+      }
+    ],
+    "vocal_presence": [
+      {
+        "id": "vocal_presence_1",
+        "type": "eq",
+        "enabled": true,
+        "params": {
+          "frequency_hz": 3200,
+          "gain_db": 2,
+          "q": 1.2
+        }
+      },
+      {
+        "id": "vocal_presence_2",
+        "type": "compressor",
+        "enabled": true,
+        "params": {
+          "threshold_db": -22,
+          "ratio": 4,
+          "attack_ms": 8,
+          "release_ms": 90,
+          "makeup_gain_db": 1.5
+        }
+      }
+    ]
+  },
+  "effect_defaults": {
+    "compressor": {
+      "threshold_db": -18,
+      "ratio": 4,
+      "attack_ms": 10,
+      "release_ms": 100,
+      "makeup_gain_db": 0
+    },
+    "reverb": {
+      "room_size": 0.45,
+      "damping": 0.5,
+      "wet": 0.12,
+      "dry": 0.9,
+      "width": 0.75
+    },
+    "eq": {
+      "frequency_hz": 1000,
+      "gain_db": 0,
+      "q": 1
+    }
+  },
+  "effect_parameter_ranges": {
+    "compressor": {
+      "threshold_db": [
+        -60,
+        0
+      ],
+      "ratio": [
+        1,
+        20
+      ],
+      "attack_ms": [
+        1,
+        200
+      ],
+      "release_ms": [
+        10,
+        1000
+      ],
+      "makeup_gain_db": [
+        -12,
+        12
+      ]
+    },
+    "reverb": {
+      "room_size": [
+        0,
+        0.9
+      ],
+      "damping": [
+        0,
+        0.95
+      ],
+      "wet": [
+        0,
+        1
+      ],
+      "dry": [
+        0,
+        1
+      ],
+      "width": [
+        0,
+        1
+      ]
+    },
+    "eq": {
+      "frequency_hz": [
+        20,
+        20000
+      ],
+      "gain_db": [
+        -18,
+        18
+      ],
+      "q": [
+        0.2,
+        10
+      ]
+    }
+  }
+}

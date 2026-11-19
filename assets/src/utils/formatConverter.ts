@@ -19,6 +19,10 @@ export interface Note {
   hasPbw?: boolean;
   hasPby?: boolean;
   tempo?: number; // Note-specific tempo (BPM) if specified
+  ustExtras?: Record<string, unknown>;
+  vibrato_depth?: number;
+  vibrato_rate?: number;
+  formant_shift?: number;
 }
 
 export interface ProjectData {

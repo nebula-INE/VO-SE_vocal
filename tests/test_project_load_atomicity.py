@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from modules.data.data_models import NoteEvent
@@ -19,6 +20,9 @@ class _Track:
         self.engine_type = "Aural"
         self.color_label = ""
         self.voicebank_id = ""
+        self.voicebank_name = ""
+        self.web_track_id = ""
+        self.effects = []
 
 
 class _Timeline:
@@ -107,6 +111,9 @@ class _AudioMixer:
             }
             for item in chain
         ]
+
+    def restore_tracks_preserving_sources(self, tracks):
+        self.restored_tracks = list(tracks)
 
 
 class _ProjectWindow:
@@ -536,6 +543,7 @@ def test_project_undo_snapshot_restores_master_effect_chain():
 
     assert window.effects_panel.get_effect_chain() == before_chain
     assert window.audio_mixer.effect_chain == before_chain
+    assert window.audio_mixer.restored_tracks == window.tracks
 
 
 
@@ -561,3 +569,262 @@ def test_legacy_project_without_track_voicebank_uses_saved_global_voice(tmp_path
     assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
     assert window.tracks[0].voicebank_id == "voice-b"
     assert window.current_voice_id == "voice-b"
+
+
+
+def test_project_load_restores_per_track_effect_chain(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    project_path = tmp_path / "track-effects.vose"
+    effect_chain = [{
+        "id": "vocal-eq-1",
+        "type": "eq",
+        "enabled": True,
+        "params": {"frequency_hz": 2400.0, "gain_db": 2.5, "q": 1.1},
+    }]
+    project_path.write_text(json.dumps({
+        "tempo": 120.0,
+        "tracks": [{
+            "name": "Vocal FX",
+            "type": "vocal",
+            "notes": [],
+            "effects": effect_chain,
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert window.tracks[0].effects == effect_chain
+
+
+def test_project_load_rejects_invalid_per_track_effect_before_commit(tmp_path, monkeypatch):
+    window = _ProjectWindow()
+    project_path = tmp_path / "invalid-track-effect.vose"
+    project_path.write_text(json.dumps({
+        "tempo": 120.0,
+        "tracks": [{
+            "name": "Invalid FX",
+            "type": "vocal",
+            "notes": [],
+            "effects": [{
+                "id": "bad-eq",
+                "type": "eq",
+                "enabled": True,
+                "params": {"gain_db": 80.0},
+            }],
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is False
+    assert window.tracks[0].name == "Current"
+
+def test_project_save_persists_each_track_effect_chain(tmp_path):
+    window = _ProjectWindow()
+    window.tracks[0].effects = [{
+        "id": "voice-comp",
+        "type": "compressor",
+        "enabled": True,
+        "params": {
+            "threshold_db": -18.0,
+            "ratio": 3.0,
+            "attack_ms": 10.0,
+            "release_ms": 100.0,
+            "makeup_gain_db": 0.0,
+        },
+    }]
+    project_path = tmp_path / "track-effects-save.vose"
+
+    assert ProjectIOMixin.on_save_project_clicked(window, str(project_path)) is True
+    saved = json.loads(project_path.read_text(encoding="utf-8"))
+    assert saved["tracks"][0]["effects"] == window.tracks[0].effects
+
+
+
+def test_project_history_snapshot_keeps_track_effects_detached():
+    from modules.gui.mixins.project_io_mixin import _clone_track_collection
+
+    window = _ProjectWindow()
+    window.tracks[0].effects = [{
+        "id": "snapshot-eq",
+        "type": "eq",
+        "enabled": True,
+        "params": {"frequency_hz": 1500.0, "gain_db": 2.0, "q": 1.0},
+    }]
+    snapshot = _clone_track_collection(window.tracks)
+    window.tracks[0].effects[0]["params"]["gain_db"] = 12.0
+    assert snapshot[0].effects[0]["params"]["gain_db"] == 2.0
+
+
+def test_selected_track_effects_are_not_serialized_as_the_master_chain():
+    from modules.gui.mixins.project_io_mixin import _get_master_effect_chain
+
+    window = _ProjectWindow()
+    master_chain = [{
+        "id": "master-limiter",
+        "type": "compressor",
+        "enabled": True,
+        "params": {
+            "threshold_db": -6.0,
+            "ratio": 8.0,
+            "attack_ms": 2.0,
+            "release_ms": 80.0,
+            "makeup_gain_db": 0.0,
+        },
+    }]
+    selected_track_chain = [{
+        "id": "track-room",
+        "type": "reverb",
+        "enabled": True,
+        "params": {
+            "room_size": 0.4,
+            "damping": 0.5,
+            "wet": 0.2,
+            "dry": 0.9,
+            "width": 0.8,
+        },
+    }]
+    window.effects_panel.get_scope = lambda: "track"
+    window.effects_panel.get_effect_chain = lambda: selected_track_chain
+    window.audio_mixer.get_effect_chain = lambda: master_chain
+
+    assert _get_master_effect_chain(window) == master_chain
+    assert _get_master_effect_chain(window) != selected_track_chain
+
+
+def test_track_effect_scope_without_master_getter_never_falls_back_to_track_chain():
+    from modules.gui.mixins.project_io_mixin import _get_master_effect_chain
+
+    window = _ProjectWindow()
+    track_chain = [{
+        "id": "selected-eq",
+        "type": "eq",
+        "enabled": True,
+        "params": {"frequency_hz": 1800.0, "gain_db": 2.0, "q": 1.0},
+    }]
+    window.effects_panel.get_scope = lambda: "track"
+    window.effects_panel.get_effect_chain = lambda: track_chain
+
+    assert _get_master_effect_chain(window) == []
+
+
+def test_project_save_keeps_master_chain_separate_when_track_scope_is_selected(tmp_path):
+    window = _ProjectWindow()
+    project_path = tmp_path / "separate-master-track.vose"
+    master_chain = [{
+        "id": "master-eq",
+        "type": "eq",
+        "enabled": True,
+        "params": {"frequency_hz": 1000.0, "gain_db": -1.0, "q": 0.8},
+    }]
+    track_chain = [{
+        "id": "track-reverb",
+        "type": "reverb",
+        "enabled": True,
+        "params": {
+            "room_size": 0.45,
+            "damping": 0.5,
+            "wet": 0.2,
+            "dry": 0.9,
+            "width": 0.75,
+        },
+    }]
+    window.tracks[0].effects = track_chain
+    window.effects_panel.get_scope = lambda: "track"
+    window.effects_panel.get_effect_chain = lambda: track_chain
+    window.audio_mixer.get_effect_chain = lambda: master_chain
+
+    assert ProjectIOMixin.on_save_project_clicked(window, str(project_path)) is True
+    saved = json.loads(project_path.read_text(encoding="utf-8"))
+
+    assert saved["effect_chain"] == master_chain
+    assert saved["tracks"][0]["effects"] == track_chain
+
+
+def test_shared_web_vose_fixture_loads_all_track_state_on_desktop(tmp_path, monkeypatch):
+    fixture_path = Path(__file__).resolve().parents[1] / "specs" / "vose_project_roundtrip.json"
+    project_data = json.loads(fixture_path.read_text(encoding="utf-8"))
+    project_path = tmp_path / "shared-parity.vose"
+    project_path.write_text(json.dumps(project_data, ensure_ascii=False), encoding="utf-8")
+
+    window = _ProjectWindow()
+    _bind_project_mixin_methods(window)
+    monkeypatch.setattr(project_io_module.QMessageBox, "critical", lambda *_a, **_k: None)
+
+    assert ProjectIOMixin.load_json_project(window, str(project_path)) is True
+    assert len(window.tracks) == 2
+
+    lead, backing = window.tracks
+    assert (lead.name, lead.track_type, lead.voicebank_id) == (
+        "Lead Vocal", "vocal", "voice-a"
+    )
+    assert lead.voicebank_name == "Voice A"
+    assert lead.web_track_id == "track_lead"
+    assert lead.volume == 0.72
+    assert lead.pan == -0.25
+    assert lead.is_muted is False
+    assert lead.is_solo is True
+    assert lead.effects == project_data["tracks"][0]["effects"]
+    assert len(lead.notes) == 1
+    assert lead.notes[0].note_number == 64
+    assert lead.notes[0].start_time == 0.25
+    assert lead.notes[0].duration == 0.5
+    assert lead.notes[0]._ust_flags == "g-5"
+    assert lead.notes[0]._ust_pbm == "0"
+    assert lead.notes[0].vibrato_depth == 0.15
+
+    assert (backing.name, backing.track_type) == ("Backing Audio", "wave")
+    assert backing.audio_path == str((tmp_path / "backing.wav").resolve())
+    assert backing.volume == 0.35
+    assert backing.pan == 0.6
+    assert backing.is_muted is True
+    assert backing.effects == project_data["tracks"][1]["effects"]
+
+    assert window.current_track_idx == 1
+    assert window.current_voice_id == "voice-a"
+    assert window.current_voice == "Voice A"
+    assert window.timeline_widget.tempo == 120.0
+    assert window.current_playback_time == 1.25
+    assert window.audio_mixer.effect_chain == project_data["effect_chain"]
+    assert window.graph_editor_widget.all_parameters["Pitch"][1].value == 12.0
+
+    resaved_path = tmp_path / "desktop-resaved.vose"
+    assert ProjectIOMixin.on_save_project_clicked(window, str(resaved_path)) is True
+    resaved = json.loads(resaved_path.read_text(encoding="utf-8"))
+    assert resaved["tracks"][0]["web_track_id"] == "track_lead"
+    assert resaved["tracks"][0]["voicebank_name"] == "Voice A"
+    assert resaved["tracks"][0]["notes"][0]["_ust_flags"] == "g-5"
+    assert resaved["tracks"][0]["notes"][0]["_ust_pbm"] == "0"
+    assert resaved["tracks"][0]["notes"][0]["vibrato_depth"] == 0.15
+
+
+def test_effect_slider_history_is_coalesced_and_flushed_before_undo():
+    from PySide6.QtCore import QObject
+    from modules.gui.main_window import MainWindow
+
+    class FakeWindow(QObject):
+        def __init__(self):
+            super().__init__()
+            self.recorded = None
+            self._pending_effect_history_before = None
+            self._capture_project_edit_state = lambda: {"track_effects": ["new"]}
+            self._record_project_state_edit = (
+                lambda before, after, description:
+                    setattr(self, "recorded", (before, after, description))
+            )
+            self._flush_pending_effect_history = (
+                MainWindow._flush_pending_effect_history.__get__(self, FakeWindow)
+            )
+
+    window = FakeWindow()
+    before = {"track_effects": ["old"]}
+    MainWindow._queue_effect_history_snapshot(window, before)
+    assert window._effect_history_timer.isActive()
+    MainWindow._flush_pending_effect_history(window)
+
+    assert window._pending_effect_history_before is None
+    assert window.recorded == (
+        before,
+        {"track_effects": ["new"]},
+        "エフェクト設定",
+    )

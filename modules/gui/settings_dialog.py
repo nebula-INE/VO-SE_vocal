@@ -1,6 +1,7 @@
 # modules/gui/settings_dialog.py
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, 
-                               QPushButton, QHeaderView, QKeySequenceEdit, QHBoxLayout, QLabel)
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem,
+                               QPushButton, QHeaderView, QKeySequenceEdit, QHBoxLayout, QLabel,
+                               QComboBox)
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtGui import QAction # 💡 明示的なインポートの追加
@@ -112,3 +113,101 @@ class ShortcutSettingsDialog(QDialog):
                 # 確実に一意化された objectName をキーにして保存
                 settings.setValue(f"shortcuts/{action.objectName()}", new_keyseq.toString())
         self.accept()
+
+
+
+class AudioSettingsDialog(QDialog):
+    """PortAudio output device, playback sample rate, and block-size preferences."""
+
+    SAMPLE_RATES = (44100, 48000, 88200, 96000)
+    BLOCK_SIZES = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        devices=None,
+        current_device=None,
+        sample_rate=44100,
+        block_size=256,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("オーディオ設定")
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+
+        description = QLabel(
+            "出力デバイス、再生サンプルレート、バッファサイズを変更できます。"
+            "再生中に変更した場合は再生位置を保持して安全に再初期化します。"
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self.device_combo = QComboBox()
+        self.device_combo.addItem("OSの既定デバイス", None)
+        for device in devices or []:
+            label = f"{device['name']} ({device.get('host_api', 'PortAudio')})"
+            self.device_combo.addItem(label, int(device["index"]))
+        device_index = self.device_combo.findData(current_device)
+        self.device_combo.setCurrentIndex(max(0, device_index))
+        self._add_row(layout, "出力デバイス", self.device_combo)
+
+        self.sample_rate_combo = QComboBox()
+        for rate in self.SAMPLE_RATES:
+            self.sample_rate_combo.addItem(f"{rate} Hz", rate)
+        rate_index = self.sample_rate_combo.findData(int(sample_rate))
+        self.sample_rate_combo.setCurrentIndex(max(0, rate_index))
+        self._add_row(layout, "サンプルレート", self.sample_rate_combo)
+
+        self.block_size_combo = QComboBox()
+        for size in self.BLOCK_SIZES:
+            self.block_size_combo.addItem(f"{size} frames", size)
+        block_index = self.block_size_combo.findData(int(block_size))
+        self.block_size_combo.setCurrentIndex(max(0, block_index))
+        self._add_row(layout, "バッファサイズ", self.block_size_combo)
+
+        self.latency_label = QLabel()
+        self.latency_label.setWordWrap(True)
+        layout.addWidget(self.latency_label)
+        self.sample_rate_combo.currentIndexChanged.connect(self._update_latency_estimate)
+        self.block_size_combo.currentIndexChanged.connect(self._update_latency_estimate)
+        self._update_latency_estimate()
+
+        hint = QLabel(
+            "ASIO / WASAPI / Core Audio等は、PortAudioに登録された出力デバイスとして表示されます。"
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("キャンセル")
+        cancel.clicked.connect(self.reject)
+        apply_button = QPushButton("適用")
+        apply_button.clicked.connect(self.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(apply_button)
+        layout.addLayout(buttons)
+
+    def _update_latency_estimate(self, *_args):
+        sample_rate = max(1, int(self.sample_rate_combo.currentData() or 44100))
+        block_size = max(1, int(self.block_size_combo.currentData() or 256))
+        block_ms = block_size / float(sample_rate) * 1000.0
+        self.latency_label.setText(
+            f"コールバック1ブロックの時間: 約 {block_ms:.2f} ms "
+            f"（実際のデバイス遅延・往復レイテンシーはドライバーと機器で変わります）"
+        )
+
+    @staticmethod
+    def _add_row(layout, label, widget):
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label))
+        row.addWidget(widget, 1)
+        layout.addLayout(row)
+
+    def values(self):
+        return {
+            "output_device": self.device_combo.currentData(),
+            "sample_rate": int(self.sample_rate_combo.currentData()),
+            "block_size": int(self.block_size_combo.currentData()),
+        }

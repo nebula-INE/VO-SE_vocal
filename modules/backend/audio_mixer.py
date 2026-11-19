@@ -7,6 +7,7 @@ real-time audio callback.
 """
 from __future__ import annotations
 
+import os
 import queue
 import threading
 from dataclasses import dataclass
@@ -41,12 +42,14 @@ class AudioMixer:
     """Callback-based stereo mixer with bounded, background audio streaming."""
 
     SUPPORTED_BLOCK_SIZES = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+    SUPPORTED_SAMPLE_RATES = (44100, 48000, 88200, 96000)
 
     def __init__(
         self,
         sample_rate: int = 44100,
         block_size: int = 256,
         queue_blocks: int = 8,
+        output_device: int | None = None,
     ) -> None:
         self.sample_rate = int(sample_rate)
         self.block_size = int(block_size)
@@ -62,6 +65,8 @@ class AudioMixer:
         self._track_total_frames = 0
         self._total_frames = 0
         self._effects = MasterEffectsProcessor(self.sample_rate)
+        self._track_effects: Dict[int, MasterEffectsProcessor] = {}
+        self.output_device = output_device
 
         self._blocks: queue.Queue[np.ndarray] = queue.Queue(
             maxsize=max(2, int(queue_blocks))
@@ -80,7 +85,9 @@ class AudioMixer:
         self.queue_underrun_count = 0
         self.last_callback_status = ""
         self.output_device_name = ""
+        self.output_device_host_api = ""
         self.output_default_samplerate = 0.0
+        self.output_latency_seconds = 0.0
         self._output_channels = 2
 
     @property
@@ -137,8 +144,21 @@ class AudioMixer:
                 "queue_underrun_count": self.queue_underrun_count,
                 "last_callback_status": self.last_callback_status,
                 "output_device_name": self.output_device_name,
+                "output_device_host_api": self.output_device_host_api,
                 "output_default_samplerate": self.output_default_samplerate,
+                "output_latency_ms": self.output_latency_seconds * 1000.0,
                 "output_channels": self._output_channels,
+                "output_device_index": self.output_device,
+                "sample_rate": self.sample_rate,
+                "block_size": self.block_size,
+                "enabled_track_effects": sum(
+                    sum(1 for item in processor.get_chain() if item["enabled"])
+                    for processor in self._track_effects.values()
+                ),
+                "track_effect_tail_frames": max(
+                    (processor.tail_frames for processor in self._track_effects.values()),
+                    default=0,
+                ),
                 "last_load_errors": list(self.last_load_errors),
                 "last_playback_errors": list(self.last_playback_errors),
                 "queued_blocks": self._blocks.qsize(),
@@ -151,7 +171,11 @@ class AudioMixer:
         if sd is None:
             raise RuntimeError("sounddevice is not available")
         try:
-            info = sd.query_devices(kind="output")
+            info = (
+                sd.query_devices(kind="output")
+                if self.output_device is None
+                else sd.query_devices(self.output_device, kind="output")
+            )
         except Exception as exc:
             raise RuntimeError(
                 "既定の音声出力デバイスを取得できません。OSのサウンド設定で"
@@ -177,6 +201,14 @@ class AudioMixer:
             )
 
         self.output_device_name = str(info.get("name", "Default output device"))
+        self.output_device_host_api = ""
+        try:
+            host_index = int(info.get("hostapi", -1))
+            host_apis = sd.query_hostapis()
+            if 0 <= host_index < len(host_apis):
+                self.output_device_host_api = str(dict(host_apis[host_index]).get("name", ""))
+        except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
+            self.output_device_host_api = ""
         try:
             self.output_default_samplerate = float(info.get("default_samplerate", 0.0) or 0.0)
         except (TypeError, ValueError, OverflowError):
@@ -184,6 +216,255 @@ class AudioMixer:
         # Stereo is preferred. A mono-only device is supported by downmixing
         # the prebuilt stereo block in the PortAudio callback.
         self._output_channels = 1 if max_channels == 1 else 2
+        check_settings = getattr(sd, "check_output_settings", None)
+        if callable(check_settings):
+            try:
+                check_settings(
+                    device=self.output_device,
+                    channels=self._output_channels,
+                    dtype="float32",
+                    samplerate=self.sample_rate,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"音声出力デバイス「{self.output_device_name}」は "
+                    f"{self.sample_rate} Hz / {self._output_channels}ch に対応していません: {exc}"
+                ) from exc
+
+    @staticmethod
+    def list_output_devices() -> list[dict[str, Any]]:
+        """Return output-capable PortAudio devices with their host API names."""
+        if sd is None:
+            return []
+        try:
+            devices = sd.query_devices()
+            host_apis = sd.query_hostapis()
+        except Exception:
+            return []
+        result: list[dict[str, Any]] = []
+        for index, raw in enumerate(devices):
+            info = dict(raw)
+            if int(info.get("max_output_channels", 0) or 0) <= 0:
+                continue
+            host_index = int(info.get("hostapi", -1))
+            host_name = ""
+            if 0 <= host_index < len(host_apis):
+                host_name = str(dict(host_apis[host_index]).get("name", ""))
+            result.append({
+                "index": index,
+                "name": str(info.get("name", f"Output {index}")),
+                "host_api": host_name,
+                "channels": int(info.get("max_output_channels", 0) or 0),
+                "default_samplerate": float(info.get("default_samplerate", 0.0) or 0.0),
+            })
+        return result
+
+    @staticmethod
+    def resolve_output_device(
+        devices: Iterable[dict[str, Any]],
+        preferred_index: int | None,
+        preferred_name: str = "",
+        preferred_host_api: str = "",
+    ) -> int | None:
+        """Resolve a persisted device by stable name/API before trusting its old index."""
+        available = list(devices)
+        if preferred_index is None:
+            # An explicit OS-default preference must continue following OS changes.
+            return None
+        if preferred_name:
+            matching = [
+                device for device in available
+                if str(device.get("name", "")) == preferred_name
+                and (
+                    not preferred_host_api
+                    or str(device.get("host_api", "")) == preferred_host_api
+                )
+            ]
+            if matching:
+                try:
+                    return int(matching[0]["index"])
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    return None
+            # Do not silently route to a different device after a named output was removed.
+            return None
+        if preferred_index is None:
+            return None
+        for device in available:
+            try:
+                if int(device.get("index", -1)) == int(preferred_index):
+                    return int(preferred_index)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        return None
+
+    def _configure_track_effects(self, tracks: Iterable[Any]) -> None:
+        """Create or update one independent processor for each project track."""
+        previous = self._track_effects
+        processors: Dict[int, MasterEffectsProcessor] = {}
+        for track in tracks:
+            track_id = id(track)
+            chain = normalize_effect_chain(getattr(track, "effects", []) or [])
+            processor = previous.get(track_id)
+            if processor is None:
+                processor = MasterEffectsProcessor(self.sample_rate, chain)
+            else:
+                processor.set_chain(chain, preserve_state=True)
+            processors[track_id] = processor
+        self._track_effects = processors
+
+    def _calculate_track_total_frames(
+        self,
+        sources: Dict[int, _TrackSource],
+    ) -> int:
+        total = 0
+        for track_id, source in sources.items():
+            processor = self._track_effects.get(track_id)
+            tail = processor.tail_frames if processor is not None else 0
+            total = max(total, source.output_frames + tail)
+        return total
+
+    def set_track_effect_chain(
+        self,
+        track: Any,
+        chain: Any,
+        *,
+        preserve_state: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Replace one track's effect chain without changing the master bus."""
+        normalized = normalize_effect_chain(chain)
+        with self._lock:
+            track.effects = normalized
+            processor = self._track_effects.get(id(track))
+            if processor is None:
+                processor = MasterEffectsProcessor(self.sample_rate, normalized)
+                self._track_effects[id(track)] = processor
+            else:
+                processor.set_chain(normalized, preserve_state=preserve_state)
+            self._track_total_frames = self._calculate_track_total_frames(self._sources)
+            self._total_frames = self._track_total_frames + self._effects.tail_frames
+            self._position = min(self._position, self._total_frames)
+        return normalized
+
+    def get_track_effect_chain(self, track: Any) -> list[dict[str, Any]]:
+        """Return a detached effect-chain snapshot for a single track."""
+        with self._lock:
+            processor = self._track_effects.get(id(track))
+            return processor.get_chain() if processor is not None else []
+
+    def _reset_effect_histories(self) -> None:
+        self._effects.reset()
+        for processor in self._track_effects.values():
+            processor.reset()
+
+    def configure_output(
+        self,
+        *,
+        output_device: int | None,
+        sample_rate: int,
+        block_size: int,
+    ) -> dict[str, Any]:
+        """Safely reconfigure PortAudio while preserving transport position."""
+        try:
+            requested_rate = int(sample_rate)
+            requested_block = int(block_size)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("sample_rate and block_size must be integers") from exc
+        if requested_rate not in self.SUPPORTED_SAMPLE_RATES:
+            raise ValueError(
+                f"Unsupported sample rate: {requested_rate}; "
+                f"expected one of {self.SUPPORTED_SAMPLE_RATES}"
+            )
+        if requested_block not in self.SUPPORTED_BLOCK_SIZES:
+            raise ValueError(
+                f"Unsupported audio block size: {requested_block}; "
+                f"expected one of {self.SUPPORTED_BLOCK_SIZES}"
+            )
+        if output_device is not None:
+            if isinstance(output_device, bool):
+                raise ValueError("output_device must be a device index or None")
+            try:
+                output_device = int(output_device)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("output_device must be a device index or None") from exc
+            if output_device < 0:
+                raise ValueError("output_device must be a non-negative device index")
+
+        with self._transport_lock:
+            was_playing = self.is_playing
+            was_started = self._stream is not None or self._producer_thread is not None
+            position_sec = self.position_sec
+            old_state = {
+                "sample_rate": self.sample_rate,
+                "block_size": self.block_size,
+                "output_device": self.output_device,
+                "effects": self._effects,
+                "track_effects": self._track_effects,
+                "sources": self._sources,
+                "track_total_frames": self._track_total_frames,
+                "total_frames": self._total_frames,
+                "position": self._position,
+                "device_name": self.output_device_name,
+                "device_host_api": self.output_device_host_api,
+                "default_rate": self.output_default_samplerate,
+                "latency": self.output_latency_seconds,
+                "channels": self._output_channels,
+            }
+            if was_started:
+                self._shutdown_playback(reset_position=False)
+
+            try:
+                rate_changed = requested_rate != self.sample_rate
+                self.sample_rate = requested_rate
+                self.block_size = requested_block
+                self.output_device = output_device
+                self.output_latency_seconds = 0.0
+                if rate_changed:
+                    master_chain = old_state["effects"].get_chain()
+                    self._effects = MasterEffectsProcessor(self.sample_rate, master_chain)
+                    self._track_effects = {}
+                    if self._tracks:
+                        self.set_tracks(self._tracks)
+                    else:
+                        self._sources = {}
+                        self._track_total_frames = 0
+                        self._total_frames = self._effects.tail_frames
+                else:
+                    self._track_total_frames = self._calculate_track_total_frames(self._sources)
+                    self._total_frames = self._track_total_frames + self._effects.tail_frames
+                self._position = min(
+                    max(0, int(round(position_sec * self.sample_rate))),
+                    self._total_frames,
+                )
+                self._probe_output_device()
+                if was_playing:
+                    self.play(position_sec)
+                return self.get_diagnostics()
+            except Exception:
+                if self._stream is not None or self._producer_thread is not None:
+                    try:
+                        self._shutdown_playback(reset_position=False)
+                    except Exception:
+                        pass
+                self.sample_rate = old_state["sample_rate"]
+                self.block_size = old_state["block_size"]
+                self.output_device = old_state["output_device"]
+                self._effects = old_state["effects"]
+                self._track_effects = old_state["track_effects"]
+                self._sources = old_state["sources"]
+                self._track_total_frames = old_state["track_total_frames"]
+                self._total_frames = old_state["total_frames"]
+                self._position = old_state["position"]
+                self.output_device_name = old_state["device_name"]
+                self.output_device_host_api = old_state["device_host_api"]
+                self.output_default_samplerate = old_state["default_rate"]
+                self.output_latency_seconds = old_state["latency"]
+                self._output_channels = old_state["channels"]
+                if was_playing:
+                    try:
+                        self.play(position_sec)
+                    except Exception:
+                        pass
+                raise
 
     def set_tracks(self, tracks: Iterable[Any]) -> None:
         """Validate track headers and prepare metadata without decoding whole files."""
@@ -226,11 +507,10 @@ class AudioMixer:
             raise RuntimeError(f"No playable audio tracks ({details})")
 
         with self._lock:
+            self._configure_track_effects(new_tracks)
             self._tracks = new_tracks
             self._sources = sources
-            self._track_total_frames = max(
-                source.output_frames for source in sources.values()
-            )
+            self._track_total_frames = self._calculate_track_total_frames(sources)
             self._total_frames = self._track_total_frames + self._effects.tail_frames
             self.last_load_errors = load_errors
             self.last_playback_errors = []
@@ -240,17 +520,59 @@ class AudioMixer:
         new_tracks = list(tracks)
         new_ids = {id(track) for track in new_tracks}
         with self._lock:
+            self._configure_track_effects(new_tracks)
             self._tracks = new_tracks
             self._sources = {
                 track_id: source
                 for track_id, source in self._sources.items()
                 if track_id in new_ids
             }
-            self._track_total_frames = max(
-                (source.output_frames for source in self._sources.values()),
-                default=0,
-            )
+            self._track_total_frames = self._calculate_track_total_frames(self._sources)
             self._total_frames = self._track_total_frames + self._effects.tail_frames
+
+    def restore_tracks_preserving_sources(self, tracks: Iterable[Any]) -> None:
+        """Rebind cloned project-history tracks to their already-loaded audio sources.
+
+        Undo/Redo deep-copies project track containers. Rebinding by resolved audio
+        path keeps those history restores from losing their source readers or
+        leaving effect processors attached to the previous track objects.
+        """
+        new_tracks = list(tracks)
+        with self._lock:
+            available: Dict[str, list[_TrackSource]] = {}
+            for source in self._sources.values():
+                key = os.path.normcase(os.path.abspath(source.path))
+                available.setdefault(key, []).append(source)
+
+            rebound: Dict[int, _TrackSource] = {}
+            processors: Dict[int, MasterEffectsProcessor] = {}
+            for track in new_tracks:
+                track_id = id(track)
+                chain = normalize_effect_chain(getattr(track, "effects", []) or [])
+                processors[track_id] = MasterEffectsProcessor(self.sample_rate, chain)
+                track_path = self._track_path(track)
+                if not track_path:
+                    continue
+                key = os.path.normcase(os.path.abspath(track_path))
+                candidates = available.get(key)
+                if not candidates:
+                    continue
+                source = candidates.pop(0)
+                rebound[track_id] = _TrackSource(
+                    track=track,
+                    path=source.path,
+                    frames=source.frames,
+                    sample_rate=source.sample_rate,
+                    output_frames=source.output_frames,
+                    data=source.data,
+                )
+
+            self._tracks = new_tracks
+            self._sources = rebound
+            self._track_effects = processors
+            self._track_total_frames = self._calculate_track_total_frames(rebound)
+            self._total_frames = self._track_total_frames + self._effects.tail_frames
+            self._position = min(self._position, self._total_frames)
 
     def set_effect_chain(self, chain: Any, *, preserve_state: bool = False) -> None:
         """Replace master parameters without touching tracks or the vocal renderer.
@@ -281,7 +603,7 @@ class AudioMixer:
             # stream restart discards queued blocks, so the processor's state may be
             # ahead of the audible position. Reset at every new producer segment to
             # avoid resuming with stale compressor/reverb/ EQ history.
-            self._effects.reset()
+            self._reset_effect_histories()
             if not self._sources:
                 raise RuntimeError("No audio tracks are loaded")
             if start_sec is not None:
@@ -309,12 +631,25 @@ class AudioMixer:
             stream = sd.OutputStream(
                 samplerate=self.sample_rate,
                 channels=self._output_channels,
+                device=self.output_device,
                 dtype="float32",
                 blocksize=self.block_size,
                 callback=self._audio_callback,
             )
             self._stream = stream
             stream.start()
+            raw_latency = getattr(stream, "latency", 0.0)
+            if isinstance(raw_latency, (tuple, list)):
+                latency_values = [
+                    float(value) for value in raw_latency
+                    if value is not None and float(value) >= 0.0
+                ]
+                self.output_latency_seconds = max(latency_values, default=0.0)
+            else:
+                try:
+                    self.output_latency_seconds = max(0.0, float(raw_latency or 0.0))
+                except (TypeError, ValueError, OverflowError):
+                    self.output_latency_seconds = 0.0
         except Exception as exc:
             try:
                 self._shutdown_playback(reset_position=False)
@@ -365,6 +700,7 @@ class AudioMixer:
                     data=stereo,
                 )
             }
+            self._track_effects = {id(track): MasterEffectsProcessor(self.sample_rate)}
             self._track_total_frames = len(stereo)
             self._total_frames = self._track_total_frames + self._effects.tail_frames
             self.last_load_errors = []
@@ -400,7 +736,7 @@ class AudioMixer:
                 max(0, int(float(position_ms) * self.sample_rate / 1000.0)),
                 self._total_frames,
             )
-            self._effects.reset()
+            self._reset_effect_histories()
         if was_playing:
             self.play()
 
@@ -408,7 +744,7 @@ class AudioMixer:
         """Stop playback and reset the transport and effect histories."""
         self._shutdown_playback(reset_position=True)
         with self._lock:
-            self._effects.reset()
+            self._reset_effect_histories()
 
     def _shutdown_playback(self, reset_position: bool) -> None:
         self._producer_stop.set()
@@ -515,52 +851,57 @@ class AudioMixer:
         readers: Dict[int, Any] | None = None,
         failed_sources: set[int] | None = None,
     ) -> np.ndarray:
-        """Mix one output block from file-backed or in-memory track sources."""
+        """Mix independent track chains first, then the shared master bus."""
         with self._lock:
             tracks = list(self._tracks)
             active_sources = dict(self._sources) if sources is None else sources
+            track_effects = dict(self._track_effects)
             effects = self._effects
         active_readers = readers or {}
         failed = failed_sources if failed_sources is not None else set()
         mix = np.zeros((frames, 2), dtype=np.float32)
-        solo_exists = any(
-            bool(getattr(track, "is_solo", False)) for track in tracks
-        )
+        solo_exists = any(bool(getattr(track, "is_solo", False)) for track in tracks)
 
         for track in tracks:
             track_id = id(track)
             source = active_sources.get(track_id)
             if source is None or track_id in failed:
                 continue
-            if start_frame >= source.output_frames:
-                continue
 
-            count = min(frames, source.output_frames - start_frame)
+            track_processor = track_effects.get(track_id)
+            track_tail = track_processor.tail_frames if track_processor is not None else 0
+            if start_frame >= source.output_frames + track_tail:
+                continue
             if not self._track_is_active(track, solo_exists):
-                # Still preserve this track's duration in the producer timeline.
                 continue
 
-            try:
-                if source.data is not None:
-                    chunk = source.data[start_frame : start_frame + count]
-                else:
-                    reader = active_readers.get(track_id)
-                    if reader is None:
+            block = np.zeros((frames, 2), dtype=np.float32)
+            if start_frame < source.output_frames:
+                count = min(frames, source.output_frames - start_frame)
+                try:
+                    if source.data is not None:
+                        chunk = source.data[start_frame : start_frame + count]
+                    else:
+                        reader = active_readers.get(track_id)
+                        if reader is None:
+                            continue
+                        chunk = self._read_file_block(reader, source, start_frame, count)
+                    if len(chunk) == 0:
                         continue
-                    chunk = self._read_file_block(reader, source, start_frame, count)
-            except Exception as exc:
-                if failed_sources is not None:
-                    failed_sources.add(track_id)
-                self._record_playback_error(f"{source.path}: {exc}")
-                continue
+                    block[:len(chunk)] = self._to_stereo(chunk)
+                except Exception as exc:
+                    if failed_sources is not None:
+                        failed_sources.add(track_id)
+                    self._record_playback_error(f"{source.path}: {exc}")
+                    continue
 
-            if len(chunk) == 0:
-                continue
+            # Feed silence after a source ends so the track's own reverb can ring out.
+            track_audio = track_processor.process(block) if track_processor is not None else block
             gain = float(np.clip(getattr(track, "volume", 1.0), 0.0, 1.0))
             pan = float(np.clip(getattr(track, "pan", 0.0), -1.0, 1.0))
             left_gain, right_gain = self._pan_gains(pan)
-            mix[: len(chunk), 0] += chunk[:, 0] * gain * left_gain
-            mix[: len(chunk), 1] += chunk[:, 1] * gain * right_gain
+            mix[:, 0] += track_audio[:, 0] * gain * left_gain
+            mix[:, 1] += track_audio[:, 1] * gain * right_gain
 
         processed = effects.process(mix)
         np.clip(processed, -1.0, 1.0, out=processed)

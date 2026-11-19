@@ -10,8 +10,8 @@ interface ProjectSheetProps {
   onClose?: () => void;
   onImportClick?: () => void;
   onImport?: () => void;
-  onExportClick?: (fmt: 'ust' | 'vsqx' | 'svp' | 'midi') => void;
-  onExportProject?: (fmt: 'ust' | 'vsqx' | 'svp' | 'midi') => void;
+  onExportClick?: (fmt: 'vose' | 'ust' | 'vsqx' | 'svp' | 'midi') => void;
+  onExportProject?: (fmt: 'vose' | 'ust' | 'vsqx' | 'svp' | 'midi') => void;
   onRenderWasm?: () => void;
   onExportWav?: () => void;
   isRendering?: boolean;
@@ -121,7 +121,7 @@ export const ProjectSheet: React.FC<ProjectSheetProps> = ({
           className="w-full h-11 bg-[var(--vose-bg-elevated)] hover:bg-[var(--vose-bg-hover)] active:bg-[var(--vose-bg-elevated)]/80 text-[#2997ff] border border-[var(--vose-border)] rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-base)]"
         >
           <Upload className="w-4 h-4 text-[#0a84ff]" />
-          <span>UST / VSQX / SVP / MIDI ファイルを開く</span>
+          <span>VO-SE / UST / VSQX / SVP / MIDI ファイルを開く</span>
         </button>
       </div>
 
@@ -132,6 +132,13 @@ export const ProjectSheet: React.FC<ProjectSheetProps> = ({
           <span>形式を指定して書き出し (Export)</span>
         </h4>
         <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => handleExport('vose')}
+            className="min-h-10 h-10 bg-[var(--vose-bg-base)] hover:bg-[var(--vose-bg-elevated)] border border-[#0a84ff]/50 rounded-lg flex items-center justify-center space-x-1.5 text-[var(--vose-text-primary)] transition cursor-pointer font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-base)]"
+          >
+            <Save className="w-3.5 h-3.5 text-[#0a84ff]" />
+            <span>.VOSE (全トラック)</span>
+          </button>
           <button
             onClick={() => handleExport('ust')}
             className="min-h-10 h-10 bg-[var(--vose-bg-base)] hover:bg-[var(--vose-bg-elevated)] border border-[var(--vose-border)] rounded-lg flex items-center justify-center space-x-1.5 text-[var(--vose-text-primary)] transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--vose-bg-base)]"
