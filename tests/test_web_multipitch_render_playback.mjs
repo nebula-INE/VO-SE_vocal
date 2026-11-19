@@ -162,3 +162,156 @@ test('Web multi-pitch aliases with identical oto aliases select the closest pitc
     throw error;
   }
 });
+
+
+
+test('Web loads uppercase PREFIX.MAP and parses the legacy two-column suffix form', async (t) => {
+  const voicebank = '__test_prefixmap_case_' + process.pid;
+  const voiceDir = join(VOICEBANKS, voicebank);
+  const c4 = makeWav(31);
+  const f4 = makeWav(121);
+  await mkdir(voiceDir, { recursive: true });
+  await writeFile(join(voiceDir, 'PREFIX.MAP'), 'C1\t_C4\n', 'utf8');
+  await writeFile(
+    join(voiceDir, 'oto.ini'),
+    'c4.wav=あ_C4,0,0,0,0,0\nf4.wav=あ_F4,0,0,0,0,0\n',
+    'utf8'
+  );
+  await writeFile(join(voiceDir, 'c4.wav'), c4);
+  await writeFile(join(voiceDir, 'f4.wav'), f4);
+
+  const port = 35000 + (process.pid % 1000);
+  const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+  try {
+    await waitForServer(child, port);
+    const sample = await request(
+      port,
+      'GET',
+      '/api/py/voicebank-sample?name=' + encodeURIComponent(voicebank) +
+        '&alias=' + encodeURIComponent('あ') + '&noteNum=65'
+    );
+    assert.equal(sample.status, 200, sample.body.toString());
+    assert.equal(decodeURIComponent(sample.headers['x-alias-matched']), 'あ_C4');
+    assert.deepEqual(sample.body, c4);
+  } catch (error) {
+    error.message += '\nserver stderr:\n' + stderr;
+    throw error;
+  }
+});
+
+
+test('Web does not borrow a pitch layer below the first PREFIX.MAP boundary', async (t) => {
+  const voicebank = '__test_prefixmap_boundary_' + process.pid;
+  const voiceDir = join(VOICEBANKS, voicebank);
+  const c5 = makeWav(41);
+  await mkdir(voiceDir, { recursive: true });
+  await writeFile(join(voiceDir, 'Prefix.map'), 'C5\t\t_C5\n', 'utf8');
+  await writeFile(
+    join(voiceDir, 'oto.ini'),
+    'a_c5.wav=あ_C5,0,0,0,0,0\nplain.wav=さ,0,0,0,0,0\n',
+    'utf8'
+  );
+  const defaultSample = makeWav(63);
+  await writeFile(join(voiceDir, 'a_c5.wav'), c5);
+  await writeFile(join(voiceDir, 'plain.wav'), defaultSample);
+
+  const port = 36000 + (process.pid % 1000);
+  const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+  try {
+    await waitForServer(child, port);
+    const sample = await request(
+      port,
+      'GET',
+      '/api/py/voicebank-sample?name=' + encodeURIComponent(voicebank) +
+        '&alias=' + encodeURIComponent('あ') + '&noteNum=65'
+    );
+    assert.equal(sample.status, 404, sample.body.toString());
+
+    const defaultSampleResponse = await request(
+      port,
+      'GET',
+      '/api/py/voicebank-sample?name=' + encodeURIComponent(voicebank) +
+        '&alias=' + encodeURIComponent('さ') + '&noteNum=65'
+    );
+    assert.equal(defaultSampleResponse.status, 200, defaultSampleResponse.body.toString());
+    assert.equal(
+      decodeURIComponent(defaultSampleResponse.headers['x-alias-matched']),
+      'さ'
+    );
+    assert.deepEqual(defaultSampleResponse.body, defaultSample);
+  } catch (error) {
+    error.message += '\nserver stderr:\n' + stderr;
+    throw error;
+  }
+});
+
+
+test('Web VCV predecessor vowel detection includes を', async (t) => {
+  const voicebank = '__test_vcv_wo_' + process.pid;
+  const voiceDir = join(VOICEBANKS, voicebank);
+  const vcv = makeWav(51);
+  const cv = makeWav(71);
+  await mkdir(voiceDir, { recursive: true });
+  await writeFile(
+    join(voiceDir, 'oto.ini'),
+    'o_ka.wav=o か,0,0,0,0,0\n- ka.wav=- か,0,0,0,0,0\n',
+    'utf8'
+  );
+  await writeFile(join(voiceDir, 'o_ka.wav'), vcv);
+  await writeFile(join(voiceDir, '- ka.wav'), cv);
+
+  const port = 37000 + (process.pid % 1000);
+  const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_ENV: 'test' }
+  });
+  t.after(async () => {
+    child.kill('SIGTERM');
+    await rm(voiceDir, { recursive: true, force: true });
+  });
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+  try {
+    await waitForServer(child, port);
+    const sample = await request(
+      port,
+      'GET',
+      '/api/py/voicebank-sample?name=' + encodeURIComponent(voicebank) +
+        '&alias=' + encodeURIComponent('か') +
+        '&prevLyric=' + encodeURIComponent('を') + '&noteNum=60'
+    );
+    assert.equal(sample.status, 200, sample.body.toString());
+    assert.equal(decodeURIComponent(sample.headers['x-alias-matched']), 'o か');
+    assert.deepEqual(sample.body, vcv);
+  } catch (error) {
+    error.message += '\nserver stderr:\n' + stderr;
+    throw error;
+  }
+});

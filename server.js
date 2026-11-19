@@ -122,6 +122,25 @@ function yieldToEventLoop() {
 const YIELD_EVERY_LINES = 500;   // oto.ini の行処理、この件数ごとに一度yield
 const YIELD_EVERY_FILES = 20;    // oto.iniファイル自体、この件数ごとに一度yield
 
+async function findRootPrefixMapPath(rootDir) {
+  const names = await fs.promises.readdir(rootDir);
+  const matches = names
+    .filter((name) => name.toLowerCase() === 'prefix.map')
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (matches.length > 1) {
+    console.warn(
+      `[VO-SE] multiple case variants of prefix.map found; using "${matches[0]}" in ${rootDir}`
+    );
+  }
+  for (const name of matches) {
+    const candidate = path.join(rootDir, name);
+    try {
+      if ((await fs.promises.stat(candidate)).isFile()) return candidate;
+    } catch {}
+  }
+  return null;
+}
+
 // ★修正: 同期の再帰関数だったものを非同期化。
 //   1. fs.readFileSync / fs.readdirSync → fs.promises 版に変更
 //   2. 一定件数ごとに yieldToEventLoop() を挟み、長時間の連続実行を避ける
@@ -264,10 +283,11 @@ async function parseOtoIniFull(dirPath) {
     }
   };
 
-  // prefix.map is optional and lives at the voicebank root.
+  // prefix.map is optional and lives at the voicebank root. Match the
+  // filename case-insensitively to support voicebanks authored on Windows.
   try {
-    const prefixPath = path.join(dirPath, 'prefix.map');
-    if (await fs.promises.access(prefixPath).then(() => true).catch(() => false)) {
+    const prefixPath = await findRootPrefixMapPath(dirPath);
+    if (prefixPath) {
       const prefixText = decodeTextBuffer(await fs.promises.readFile(prefixPath));
       result.prefixMap = parsePrefixMapText(prefixText);
     }
@@ -298,8 +318,11 @@ class VoicebankRegistryEngine {
       const stats = await fs.promises.stat(vbPath);
       latestMtime = stats.mtimeMs;
       try {
-        const prefixStats = await fs.promises.stat(path.join(vbPath, 'prefix.map'));
-        latestMtime = Math.max(latestMtime, prefixStats.mtimeMs);
+        const prefixPath = await findRootPrefixMapPath(vbPath);
+        if (prefixPath) {
+          const prefixStats = await fs.promises.stat(prefixPath);
+          latestMtime = Math.max(latestMtime, prefixStats.mtimeMs);
+        }
       } catch (e) {
         // prefix.map is optional.
       }
@@ -1130,9 +1153,9 @@ function getTrailingVowel(rawLyric) {
   // Japanese Kana trailing vowel (search backwards skipping 'っ'/'ッ'/'ー')
   const A_CHARS = 'あかさたなはまやらわがざだばぱぁゃアカサタナハマヤラワガザダバパァャ';
   const I_CHARS = 'いきしちにひみりぎじぢびぴぃイキシチニヒミリギジヂビピィ';
-  const U_CHARS = 'うくすつぬふむゆるぐずづぶぷぅゅウクスツヌフムユルグズヅブプゥュ';
+  const U_CHARS = 'うくすつぬふむゆるぐずづぶぷぅゅゔウクスツヌフムユルグズヅブプゥュヴ';
   const E_CHARS = 'えけせてねへめれげぜでべぺぇエケセテネヘメレゲゼデベペェ';
-  const O_CHARS = 'おこそとのほもよろをごぞどぼぽぉょオコソトノホモヨロヲゴゾドボポォョ';
+  const O_CHARS = 'おこそとのほもよろをごぞどぼぽぉょをオコソトノホモヨロヲゴゾドボポォョ';
   const N_CHARS = 'んン';
 
   const chars = Array.from(l);
@@ -1334,8 +1357,15 @@ function parsePrefixMapText(text) {
     if (!/^[A-Ga-g][#b]?-?\d+$/.test(noteToken)) continue;
     const midi = getMidiFromPitchTag(noteToken);
     if (!Number.isFinite(midi)) continue;
-    const prefix = (cols[1] || '').trim();
-    const suffix = (cols.length >= 3 ? cols[2] : '').trim();
+    let prefix = '';
+    let suffix = '';
+    if (cols.length >= 3) {
+      prefix = String(cols[1] || '').trim();
+      suffix = String(cols[2] || '').trim();
+    } else {
+      // Legacy UTAU two-column rows contain note + suffix, like Python/C++.
+      suffix = String(cols[1] || '').trim();
+    }
     map.set(Math.round(midi), {
       prefix: prefix === '-' ? '' : prefix,
       suffix: suffix === '-' ? '' : suffix
@@ -1486,6 +1516,68 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   if (hira && !candidates.includes(hira)) candidates.push(hira);
 
   const prevVowel = getTrailingVowel(prevLyric);
+
+  // Notes below the first prefix.map boundary are outside every declared
+  // pitch subbank. Only exact untagged aliases are safe there; do not allow
+  // pitch-suffix or filename fallbacks to borrow another layer.
+  const requestedMidi = Number(noteNum);
+  const hasRequestedMidi =
+    noteNum !== null && noteNum !== undefined && noteNum !== '' &&
+    Number.isFinite(requestedMidi);
+  const hasPrefixMap = indexed.prefixMap instanceof Map && indexed.prefixMap.size > 0;
+  const hasMappedRange = hasPrefixMap && hasRequestedMidi &&
+    Array.from(indexed.prefixMap.keys()).some((boundary) =>
+      Number(boundary) <= Math.max(0, Math.min(127, Math.round(requestedMidi)))
+    );
+  const explicitlyScoped = alias.includes('/') || alias.includes('\\');
+  const explicitlyPitchTagged =
+    /(?:_?[A-Ga-g][#b]?-?\d+|_[0-9]+|[↑↓強弱SP]+)$/i.test(alias);
+  if (
+    hasPrefixMap &&
+    hasRequestedMidi &&
+    !hasMappedRange &&
+    !explicitlyScoped &&
+    !explicitlyPitchTagged
+  ) {
+    const exactCandidates = [];
+    if (prevVowel) {
+      for (const candidate of candidates) {
+        exactCandidates.push(
+          `${prevVowel} ${candidate}`,
+          `${prevVowel}_${candidate}`,
+          `${prevVowel}${candidate}`
+        );
+      }
+    }
+    for (const candidate of candidates) {
+      exactCandidates.push(
+        `- ${candidate}`,
+        `_${candidate}`,
+        `-${candidate}`,
+        candidate
+      );
+    }
+
+    const isPitchTaggedEntry = (entry) =>
+      getExplicitMidiFromPitchTag(entry.alias) !== null ||
+      getExplicitMidiFromPitchTag(entry.filename) !== null ||
+      getExplicitMidiFromPitchTag(entry.wav_path) !== null;
+
+    for (const candidate of exactCandidates) {
+      const normalizedCandidate = String(candidate).normalize('NFC');
+      const exactEntry = (indexed.entries || []).find((entry) =>
+        entry &&
+        String(entry.alias || '').normalize('NFC') === normalizedCandidate &&
+        !isPitchTaggedEntry(entry)
+      );
+      if (exactEntry) return exactEntry;
+
+      const indexedEntry = aliasMap.get(candidate);
+      if (indexedEntry && !isPitchTaggedEntry(indexedEntry)) return indexedEntry;
+    }
+    return null;
+  }
+
   const matchMappedAlias = (candidate) => {
     // An explicitly written alias must always win over automatic pitch mapping.
     // This is especially important for explicit VCV aliases such as "a い".

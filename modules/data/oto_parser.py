@@ -17,10 +17,56 @@ import logging
 import gc
 import time
 from dataclasses import dataclass
-from modules.data.prefix_map import PrefixMapEntry, map_alias, parse_prefix_map
-from typing import Callable, Dict, List, Optional, cast
+from modules.data.prefix_map import (
+    PrefixMapEntry,
+    map_alias,
+    note_name_to_midi,
+    parse_prefix_map,
+)
+from typing import Callable, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
+
+_PITCH_SUFFIX_RE = re.compile(r"(?:_?[A-Ga-g][#b]?-?\d+)$", re.IGNORECASE)
+_PITCH_TAG_RE = re.compile(
+    r"(?:^|[_\s/\\.\-])([A-Ga-g])([#b]?)(-?\d+)(?=$|[_\s/\\.\-])"
+)
+_PITCH_SUFFIX_TAG_RE = re.compile(r"([A-Ga-g])([#b]?)(-?\d+)$", re.IGNORECASE)
+
+
+def _find_prefix_map_path(voice_dir: str) -> Optional[str]:
+    """Find the root-level prefix.map regardless of filename casing."""
+    try:
+        candidates = sorted(
+            (
+                name for name in os.listdir(voice_dir)
+                if name.casefold() == "prefix.map"
+                and os.path.isfile(os.path.join(voice_dir, name))
+            ),
+            key=lambda name: (name.casefold(), name),
+        )
+    except OSError:
+        return None
+
+    if len(candidates) > 1:
+        logger.warning(
+            "大文字小文字違いの prefix.map が複数あります。%s を使用します: %s",
+            candidates[0],
+            voice_dir,
+        )
+    return os.path.join(voice_dir, candidates[0]) if candidates else None
+
+
+def _extract_pitch_midi(*values: str) -> Optional[int]:
+    for value in values:
+        text = str(value or "")
+        match = _PITCH_TAG_RE.search(text) or _PITCH_SUFFIX_TAG_RE.search(text)
+        if match:
+            return note_name_to_midi(
+                f"{match.group(1)}{match.group(2)}{match.group(3)}"
+            )
+    return None
+
 
 # System RAM check helper for 8GB or lower RAM environments
 def get_system_ram_gb() -> float:
@@ -297,8 +343,8 @@ class OtoParser:
                     except OSError:
                         continue
         ini_files.sort()
-        prefix_map_path = os.path.join(voice_dir, "prefix.map")
-        if os.path.isfile(prefix_map_path):
+        prefix_map_path = _find_prefix_map_path(voice_dir)
+        if prefix_map_path is not None:
             try:
                 stat = os.stat(prefix_map_path)
                 source_signature.append(
@@ -429,14 +475,51 @@ class OtoParser:
             entry = self._db.get(prefix)
             if entry is not None:
                 return entry
-            prefix_lower = prefix.lower()
+
+            prefix_lower = prefix.casefold()
+            default_matches: Dict[int, OtoEntry] = {}
+            pitch_matches: Dict[int, Tuple[int, OtoEntry]] = {}
             for alias, candidate in self._db.items():
-                alias_lower = alias.lower()
-                if (
+                alias_lower = alias.casefold()
+                if not (
                     alias_lower.startswith(prefix_lower + "_")
                     or alias_lower.startswith(prefix_lower + " ")
                 ):
-                    return candidate
+                    continue
+
+                # A pitch-qualified alias is never an arbitrary fallback when
+                # prefix.map is present. Without a map, use its explicit pitch
+                # tag and the requested MIDI note to choose the closest layer.
+                pitch_midi = _extract_pitch_midi(
+                    alias, candidate.filename, candidate.voice_dir
+                )
+                if _PITCH_SUFFIX_RE.search(alias.strip()) or pitch_midi is not None:
+                    if not self._prefix_map and pitch_midi is not None:
+                        pitch_matches[id(candidate)] = (pitch_midi, candidate)
+                    continue
+
+                default_matches[id(candidate)] = candidate
+
+            if len(default_matches) == 1:
+                return next(iter(default_matches.values()))
+            if len(default_matches) > 1 or self._prefix_map:
+                return None
+
+            if pitch_matches:
+                if note_num is None:
+                    return next(iter(pitch_matches.values()))[1] if len(pitch_matches) == 1 else None
+                requested = int(round(float(note_num)))
+                best_distance = min(
+                    abs(pitch_midi - requested)
+                    for pitch_midi, _candidate in pitch_matches.values()
+                )
+                best = [
+                    candidate
+                    for pitch_midi, candidate in pitch_matches.values()
+                    if abs(pitch_midi - requested) == best_distance
+                ]
+                return best[0] if len(best) == 1 else None
+
             return None
 
         def match_mapped(alias: str) -> Optional[OtoEntry]:
@@ -524,12 +607,9 @@ class OtoParser:
         if prev_vowel:
             return None
 
-        if not hasattr(self, "_lyric_index"):
-            self._build_lyric_index()
-        indexed = self._lyric_index.get(clean_lyric, [])
-        if indexed:
-            return indexed[0]
-
+        # Do not infer a VCV predecessor when none was supplied. A first
+        # note or a note after a rest must use an exact CV/default alias, never
+        # whichever "a い" / "u い" entry happens to be indexed first.
         return None
 
     def _build_lyric_index(self) -> None:
@@ -545,16 +625,14 @@ class OtoParser:
     def _load_prefix_map(self, voice_dir: str) -> None:
         """Load the optional root-level UTAU prefix.map."""
         self._prefix_map = []
-        for name in ("prefix.map", "Prefix.map"):
-            path = os.path.join(voice_dir, name)
-            if not os.path.isfile(path):
-                continue
-            try:
-                self._prefix_map = parse_prefix_map(self._read_safe(path))
-                logger.info("prefix.map ロード完了 (%d 行): %s", len(self._prefix_map), path)
-            except OSError as exc:
-                logger.warning("prefix.map 読み込み失敗 (%s): %s", path, exc)
-            break
+        path = _find_prefix_map_path(voice_dir)
+        if path is None:
+            return
+        try:
+            self._prefix_map = parse_prefix_map(self._read_safe(path))
+            logger.info("prefix.map ロード完了 (%d 行): %s", len(self._prefix_map), path)
+        except OSError as exc:
+            logger.warning("prefix.map 読み込み失敗 (%s): %s", path, exc)
 
     def clear(self) -> None:
         """ロード済み oto.ini データをすべて破棄する。"""
