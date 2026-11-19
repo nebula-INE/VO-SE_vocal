@@ -26,6 +26,7 @@ _PITCH_SUFFIX_RE = re.compile(r"(?:_?[A-Ga-g][#b]?-?\d+)$", re.IGNORECASE)
 _PITCH_TAG_RE = re.compile(
     r"(?:^|[_\s/\\.\-])([A-Ga-g])([#b]?)(-?\d+)(?=$|[_\s/\\.\-])"
 )
+_PITCH_SUFFIX_TAG_RE = re.compile(r"([A-Ga-g])([#b]?)(-?\d+)$", re.IGNORECASE)
 
 
 def _find_prefix_map_path(voice_dir: str) -> Optional[str]:
@@ -53,7 +54,8 @@ def _find_prefix_map_path(voice_dir: str) -> Optional[str]:
 
 def _extract_pitch_midi(*values: str) -> Optional[int]:
     for value in values:
-        match = _PITCH_TAG_RE.search(str(value or ""))
+        text = str(value or "")
+        match = _PITCH_TAG_RE.search(text) or _PITCH_SUFFIX_TAG_RE.search(text)
         if match:
             return note_name_to_midi(
                 f"{match.group(1)}{match.group(2)}{match.group(3)}"
@@ -483,11 +485,12 @@ class OtoParser:
                 # A pitch-qualified alias is never an arbitrary fallback when
                 # prefix.map is present. Without a map, use its explicit pitch
                 # tag and the requested MIDI note to choose the closest layer.
-                if _PITCH_SUFFIX_RE.search(alias.strip()):
-                    if not self._prefix_map:
-                        pitch_midi = _extract_pitch_midi(alias, candidate.filename)
-                        if pitch_midi is not None:
-                            pitch_matches[id(candidate)] = (pitch_midi, candidate)
+                pitch_midi = _extract_pitch_midi(
+                    alias, candidate.filename, candidate.wav_path, candidate.voice_dir
+                )
+                if _PITCH_SUFFIX_RE.search(alias.strip()) or pitch_midi is not None:
+                    if not self._prefix_map and pitch_midi is not None:
+                        pitch_matches[id(candidate)] = (pitch_midi, candidate)
                     continue
 
                 default_matches[id(candidate)] = candidate
