@@ -1812,7 +1812,7 @@ class ProjectIOMixin:
                 self._capture_project_edit_state(),
                 "JSONプロジェクト読み込み",
             )
-            self._reset_project_autosave_baseline(clear_recovery=True)
+            ProjectIOMixin._reset_project_autosave_baseline(self, clear_recovery=True)
             return True
 
         except Exception as exc:
@@ -2535,12 +2535,12 @@ class ProjectIOMixin:
         file_path = os.path.abspath(os.path.expanduser(str(file_path)))
         tmp_file_path = f"{file_path}.tmp"
         try:
-            project_data = self._build_project_data(file_path)
+            project_data = ProjectIOMixin._build_project_data(self, file_path)
             with open(tmp_file_path, "w", encoding="utf-8") as handle:
                 json.dump(project_data, handle, ensure_ascii=False, indent=2)
             os.replace(tmp_file_path, file_path)
             self.current_project_path = file_path
-            self._reset_project_autosave_baseline(clear_recovery=True)
+            ProjectIOMixin._reset_project_autosave_baseline(self, clear_recovery=True)
             self.statusBar().showMessage(f"保存完了: {os.path.basename(file_path)}", 3000)
             return True
         except Exception as exc:
