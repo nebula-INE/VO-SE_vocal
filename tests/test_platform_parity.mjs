@@ -96,7 +96,8 @@ test('Web per-track effect parameter ranges match the shared Desktop contract', 
   for (const [effectType, parameters] of Object.entries(fixture.effect_parameter_ranges)) {
     for (const [name, [minimum, maximum]] of Object.entries(parameters)) {
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const match = panel.match(new RegExp(escaped + ': \\{ min: ([^,]+), max: ([^,]+),'));
+      // Match the complete property name; gain_db must not match makeup_gain_db.
+      const match = panel.match(new RegExp('^\\s*' + escaped + ': \\{ min: ([^,]+), max: ([^,]+),', 'm'));
       assert.ok(match, effectType + '.' + name);
       assert.equal(Number(match[1]), minimum, effectType + '.' + name + ' min');
       assert.equal(Number(match[2]), maximum, effectType + '.' + name + ' max');
