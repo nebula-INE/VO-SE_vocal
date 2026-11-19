@@ -827,7 +827,6 @@ def test_effect_slider_history_is_coalesced_and_flushed_before_undo(qtbot):
             self.statusBar = lambda: FakeStatusBar()
 
     window = FakeWindow()
-    qtbot.addWidget if False else None
     before = {"track_effects": ["initial"]}
     # Repeated slider changes share the original state snapshot and one timer.
     MainWindow._queue_effect_history_snapshot(window, before)
