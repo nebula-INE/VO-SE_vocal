@@ -29,6 +29,7 @@ from modules.data.ust_parser import UstParser, UstConverter
 from modules.data.vsqx_parser import parse_vsqx
 from modules.data.external_formats import export_svp_json, export_vsqx_xml, parse_svp_json
 from modules.audio.master_effects import normalize_effect_chain
+from modules.utils.project_autosave import AutosaveError, ProjectAutosaveStore
 
 logger = logging.getLogger(__name__)
 
@@ -1811,6 +1812,7 @@ class ProjectIOMixin:
                 self._capture_project_edit_state(),
                 "JSONプロジェクト読み込み",
             )
+            ProjectIOMixin._reset_project_autosave_baseline(self, clear_recovery=True)
             return True
 
         except Exception as exc:
@@ -2297,6 +2299,226 @@ class ProjectIOMixin:
             ".ustx の読み込みは現在未実装です。\nUST / MIDI / JSON / VO-SE プロジェクトをご利用ください。",
         )
 
+    def _build_project_data(self: Any, file_path: str) -> Dict[str, Any]:
+        """Build the canonical .vose payload without writing a file."""
+        tracks = list(getattr(self, "tracks", []) or [])
+        timeline = getattr(self, "timeline_widget", None)
+        current_idx = int(getattr(self, "current_track_idx", 0))
+        if timeline is not None and 0 <= current_idx < len(tracks):
+            tracks[current_idx].notes = list(getattr(timeline, "notes_list", []) or [])
+        tempo = float(getattr(timeline, "tempo", 120.0)) if timeline is not None else 120.0
+
+        serialized_tracks = []
+        for track in tracks:
+            serialized_tracks.append({
+                "name": str(getattr(track, "name", "Track")),
+                "type": str(getattr(track, "track_type", "vocal")),
+                "audio_path": str(getattr(track, "audio_path", "") or ""),
+                "volume": float(getattr(track, "volume", 1.0)),
+                "pan": float(getattr(track, "pan", 0.0)),
+                "is_muted": bool(getattr(track, "is_muted", False)),
+                "is_solo": bool(getattr(track, "is_solo", False)),
+                "engine_type": str(getattr(track, "engine_type", "Aural")),
+                "color_label": str(getattr(track, "color_label", "")),
+                "voicebank_id": str(getattr(track, "voicebank_id", "") or ""),
+                "notes": [
+                    note.to_dict() if hasattr(note, "to_dict") else dict(note)
+                    for note in (getattr(track, "notes", []) or [])
+                ],
+            })
+
+        graph = getattr(self, "graph_editor_widget", None)
+        all_parameters = getattr(graph, "all_parameters", {}) if graph is not None else {}
+        serialized_parameters = {
+            name: [
+                event.to_dict() if hasattr(event, "to_dict") else {
+                    "time": float(getattr(event, "time", 0.0)),
+                    "value": float(getattr(event, "value", 0.0)),
+                }
+                for event in (all_parameters.get(name, []) or [])
+            ]
+            for name in ("Pitch", "Gender", "Tension", "Breath")
+        }
+        current_voice_id = str(getattr(self, "current_voice_id", "NONE") or "NONE")
+        if current_voice_id == "NONE":
+            current_voice_id = ""
+        return {
+            "app_id": "VO_SE_Pro_2026",
+            "version": "1.5.0",
+            "project_name": os.path.splitext(os.path.basename(file_path))[0],
+            "tempo": tempo,
+            "current_track_idx": max(0, current_idx),
+            "current_time": float(getattr(self, "current_playback_time", 0.0)),
+            "current_voice_id": current_voice_id,
+            "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
+            "effect_chain": normalize_effect_chain(
+                getattr(
+                    getattr(self, "effects_panel", None),
+                    "get_effect_chain",
+                    lambda: [],
+                )()
+            ),
+            "parameters": serialized_parameters,
+            "tracks": serialized_tracks,
+        }
+
+    def _project_autosave_location(self: Any) -> tuple[str, bool]:
+        """Return a logical project path and whether it has been manually saved."""
+        current_path = str(getattr(self, "current_project_path", "") or "")
+        if current_path:
+            return os.path.abspath(os.path.expanduser(current_path)), True
+        return os.path.abspath(os.path.join(os.getcwd(), "Untitled.vose")), False
+
+    def _reset_project_autosave_baseline(
+        self: Any,
+        *,
+        clear_recovery: bool = True,
+    ) -> None:
+        """Mark the current project state as clean after load or explicit save."""
+        store = getattr(self, "_project_autosave_store", None)
+        if store is None:
+            return
+        try:
+            source_path, _was_saved = self._project_autosave_location()
+            project_data = self._build_project_data(source_path)
+            self._last_project_autosave_fingerprint = store.fingerprint(project_data)
+            if clear_recovery:
+                store.clear()
+        except (AutosaveError, OSError, TypeError, ValueError):
+            logger.exception("自動保存の基準状態を更新できませんでした")
+
+    def setup_project_autosave(self: Any) -> None:
+        """Start periodic crash-recovery snapshots after the editor is initialized."""
+        from PySide6.QtCore import QTimer
+
+        self._project_autosave_store = ProjectAutosaveStore()
+        self._last_project_autosave_fingerprint = ""
+        self._project_autosave_timer = QTimer(self)
+        self._project_autosave_timer.setInterval(30_000)
+        self._project_autosave_timer.timeout.connect(self._run_project_autosave)
+
+        smoke_test = os.environ.get("VOSE_STARTUP_SMOKE_TEST", "").lower() in {
+            "1", "true", "yes", "on",
+        }
+        disabled = os.environ.get("VOSE_DISABLE_AUTOSAVE", "").lower() in {
+            "1", "true", "yes", "on",
+        }
+        self._reset_project_autosave_baseline(clear_recovery=False)
+        if smoke_test or disabled:
+            return
+
+        self._project_autosave_timer.start()
+        QTimer.singleShot(750, self._check_project_autosave_recovery)
+
+    def _run_project_autosave(self: Any, force: bool = False) -> bool:
+        """Save only changed project data; never invoke synthesis or WAV export."""
+        store = getattr(self, "_project_autosave_store", None)
+        if store is None:
+            return False
+
+        mixer = getattr(self, "audio_mixer", None)
+        if (
+            bool(getattr(self, "is_playing", False))
+            or bool(getattr(self, "is_playing_state", False))
+            or bool(getattr(self, "is_recording", False))
+            or bool(getattr(mixer, "is_playing", False))
+        ):
+            return False
+
+        try:
+            source_path, was_saved = self._project_autosave_location()
+            project_data = self._build_project_data(source_path)
+            fingerprint = store.fingerprint(project_data)
+            if not force and fingerprint == getattr(
+                self, "_last_project_autosave_fingerprint", ""
+            ):
+                return False
+
+            store.write(project_data, source_path=source_path, was_saved=was_saved)
+            self._last_project_autosave_fingerprint = fingerprint
+            status_bar = getattr(self, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage("プロジェクトを自動保存しました", 2000)
+            return True
+        except (AutosaveError, OSError, TypeError, ValueError) as exc:
+            logger.exception("プロジェクトの自動保存に失敗しました: %s", exc)
+            status_bar = getattr(self, "statusBar", lambda: None)()
+            if status_bar is not None:
+                status_bar.showMessage(f"自動保存に失敗しました: {exc}", 5000)
+            return False
+
+    def _check_project_autosave_recovery(self: Any) -> None:
+        """Offer the last valid autosave only when it is newer than the source."""
+        store = getattr(self, "_project_autosave_store", None)
+        if store is None:
+            return
+        try:
+            record = store.read()
+        except AutosaveError as exc:
+            logger.warning("破損した自動保存ファイルを破棄します: %s", exc)
+            try:
+                store.clear()
+            except AutosaveError:
+                logger.exception("破損した自動保存ファイルを削除できません")
+            self.statusBar().showMessage("自動保存ファイルを読み込めませんでした", 5000)
+            return
+        if record is None:
+            return
+
+        source_path = str(record.get("source_path", "") or "")
+        if record.get("was_saved") and source_path and os.path.isfile(source_path):
+            try:
+                from datetime import datetime
+
+                saved_at = datetime.fromisoformat(str(record["saved_at"])).timestamp()
+                if os.path.getmtime(source_path) > saved_at + 1.0:
+                    store.clear()
+                    return
+            except (OSError, TypeError, ValueError):
+                logger.warning("自動保存と元プロジェクトの更新日時を比較できません")
+
+        reply = QMessageBox.question(
+            self,
+            "自動保存から復元",
+            "前回の作業内容の自動保存が見つかりました。\n"
+            "保存されていない変更を復元しますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            store.clear()
+            return
+
+        logical_path = source_path or os.path.abspath(
+            os.path.join(os.getcwd(), "Untitled.vose")
+        )
+        if not self.load_json_project(logical_path, parsed_data=record["project"]):
+            return
+
+        if bool(record.get("was_saved")) and source_path and os.path.isfile(source_path):
+            self.current_project_path = source_path
+        else:
+            self.current_project_path = ""
+        try:
+            store.clear()
+        except AutosaveError:
+            logger.exception("復元後の自動保存ファイルを削除できません")
+        self._reset_project_autosave_baseline(clear_recovery=False)
+        self.statusBar().showMessage("前回の自動保存からプロジェクトを復元しました", 6000)
+
+    def stop_project_autosave(self: Any, *, clear_recovery: bool = False) -> None:
+        """Stop the timer during a confirmed shutdown; optionally discard recovery."""
+        timer = getattr(self, "_project_autosave_timer", None)
+        if timer is not None:
+            timer.stop()
+        if clear_recovery:
+            store = getattr(self, "_project_autosave_store", None)
+            if store is not None:
+                try:
+                    store.clear()
+                except AutosaveError:
+                    logger.exception("終了時に自動保存ファイルを削除できません")
+
     def save_project(self: Any):
         """マルチトラック対応のVO-SEプロジェクト保存。"""
         return bool(self.on_save_project_clicked())
@@ -2313,62 +2535,12 @@ class ProjectIOMixin:
         file_path = os.path.abspath(os.path.expanduser(str(file_path)))
         tmp_file_path = f"{file_path}.tmp"
         try:
-            tracks = list(getattr(self, "tracks", []) or [])
-            timeline = getattr(self, "timeline_widget", None)
-            current_idx = int(getattr(self, "current_track_idx", 0))
-            if timeline is not None and 0 <= current_idx < len(tracks):
-                tracks[current_idx].notes = list(getattr(timeline, "notes_list", []) or [])
-            tempo = float(getattr(timeline, "tempo", 120.0)) if timeline is not None else 120.0
-            serialized_tracks = []
-            for track in tracks:
-                serialized_tracks.append({
-                    "name": str(getattr(track, "name", "Track")),
-                    "type": str(getattr(track, "track_type", "vocal")),
-                    "audio_path": str(getattr(track, "audio_path", "") or ""),
-                    "volume": float(getattr(track, "volume", 1.0)),
-                    "pan": float(getattr(track, "pan", 0.0)),
-                    "is_muted": bool(getattr(track, "is_muted", False)),
-                    "is_solo": bool(getattr(track, "is_solo", False)),
-                    "engine_type": str(getattr(track, "engine_type", "Aural")),
-                    "color_label": str(getattr(track, "color_label", "")),
-                    "voicebank_id": str(getattr(track, "voicebank_id", "") or ""),
-                    "notes": [n.to_dict() if hasattr(n, "to_dict") else dict(n)
-                              for n in (getattr(track, "notes", []) or [])],
-                })
-            graph = getattr(self, "graph_editor_widget", None)
-            all_parameters = getattr(graph, "all_parameters", {}) if graph is not None else {}
-            serialized_parameters = {
-                name: [
-                    event.to_dict() if hasattr(event, "to_dict") else {
-                        "time": float(getattr(event, "time", 0.0)),
-                        "value": float(getattr(event, "value", 0.0)),
-                    }
-                    for event in (all_parameters.get(name, []) or [])
-                ]
-                for name in ("Pitch", "Gender", "Tension", "Breath")
-            }
-            current_voice_id = str(getattr(self, "current_voice_id", "NONE") or "NONE")
-            if current_voice_id == "NONE":
-                current_voice_id = ""
-            project_data = {
-                "app_id": "VO_SE_Pro_2026",
-                "version": "1.5.0",
-                "project_name": os.path.splitext(os.path.basename(file_path))[0],
-                "tempo": tempo,
-                "current_track_idx": max(0, current_idx),
-                "current_time": float(getattr(self, "current_playback_time", 0.0)),
-                "current_voice_id": current_voice_id,
-                "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
-                "effect_chain": normalize_effect_chain(
-                    getattr(getattr(self, "effects_panel", None), "get_effect_chain", lambda: [])()
-                ),
-                "parameters": serialized_parameters,
-                "tracks": serialized_tracks,
-            }
+            project_data = ProjectIOMixin._build_project_data(self, file_path)
             with open(tmp_file_path, "w", encoding="utf-8") as handle:
                 json.dump(project_data, handle, ensure_ascii=False, indent=2)
             os.replace(tmp_file_path, file_path)
             self.current_project_path = file_path
+            ProjectIOMixin._reset_project_autosave_baseline(self, clear_recovery=True)
             self.statusBar().showMessage(f"保存完了: {os.path.basename(file_path)}", 3000)
             return True
         except Exception as exc:

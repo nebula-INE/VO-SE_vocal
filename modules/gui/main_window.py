@@ -2252,6 +2252,7 @@ class MainWindow(
         self.setup_realtime_monitoring()
 
         self.perform_startup_sequence()
+        self.setup_project_autosave()
 
         # AIダイナミクス推論セッション(self.ai_session)の構築。
         # active_provider の診断が終わった後である必要があるため
@@ -7271,6 +7272,7 @@ class MainWindow(
             except Exception as exc:
                 print(f"Audio output shutdown warning: {exc}")
 
+        self.stop_project_autosave(clear_recovery=True)
         event.accept()
         print("Application closing...")
 
