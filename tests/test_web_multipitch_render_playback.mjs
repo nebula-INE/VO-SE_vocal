@@ -218,8 +218,14 @@ test('Web does not borrow a pitch layer below the first PREFIX.MAP boundary', as
   const c5 = makeWav(41);
   await mkdir(voiceDir, { recursive: true });
   await writeFile(join(voiceDir, 'Prefix.map'), 'C5\\t\\t_C5\\n', 'utf8');
-  await writeFile(join(voiceDir, 'oto.ini'), 'a_c5.wav=あ_C5,0,0,0,0,0\\n', 'utf8');
+  await writeFile(
+    join(voiceDir, 'oto.ini'),
+    'a_c5.wav=あ_C5,0,0,0,0,0\\nplain.wav=さ,0,0,0,0,0\\n',
+    'utf8'
+  );
+  const defaultSample = makeWav(63);
   await writeFile(join(voiceDir, 'a_c5.wav'), c5);
+  await writeFile(join(voiceDir, 'plain.wav'), defaultSample);
 
   const port = 36000 + (process.pid % 1000);
   const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
@@ -244,6 +250,19 @@ test('Web does not borrow a pitch layer below the first PREFIX.MAP boundary', as
         '&alias=' + encodeURIComponent('あ') + '&noteNum=65'
     );
     assert.equal(sample.status, 404, sample.body.toString());
+
+    const defaultSampleResponse = await request(
+      port,
+      'GET',
+      '/api/py/voicebank-sample?name=' + encodeURIComponent(voicebank) +
+        '&alias=' + encodeURIComponent('さ') + '&noteNum=65'
+    );
+    assert.equal(defaultSampleResponse.status, 200, defaultSampleResponse.body.toString());
+    assert.equal(
+      decodeURIComponent(defaultSampleResponse.headers['x-alias-matched']),
+      'さ'
+    );
+    assert.deepEqual(defaultSampleResponse.body, defaultSample);
   } catch (error) {
     error.message += '\nserver stderr:\n' + stderr;
     throw error;
