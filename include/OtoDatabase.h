@@ -25,7 +25,9 @@
 #include <map>
 #include <cstring>
 #include <regex>
+#include <string>
 #include <algorithm>
+#include <cstdlib>
 #include <cctype>
 #include <limits>
 
@@ -282,7 +284,7 @@ public:
             {
                 const auto text = value.toStdString();
                 const std::regex pitchTag (
-                    R"((?:^|[_\\s/\\.\\-])([A-Ga-g])([#b]?)(-?\\d+)(?=$|[_\\s/\\.\\-]))");
+                    R"((?:^|[_\s/\\.-])([A-Ga-g])([#b]?)(-?\d+)(?=$|[_\s/\\.-]))");
                 std::smatch match;
                 if (! std::regex_search (text, match, pitchTag))
                     return -1;
