@@ -798,33 +798,51 @@ def test_shared_web_vose_fixture_loads_all_track_state_on_desktop(tmp_path, monk
     assert resaved["tracks"][0]["notes"][0]["vibrato_depth"] == 0.15
 
 
-def test_effect_slider_history_is_coalesced_and_flushed_before_undo():
+def test_effect_slider_history_is_coalesced_and_flushed_before_undo(qtbot):
     from PySide6.QtCore import QObject
     from modules.gui.main_window import MainWindow
+
+    class FakeHistory:
+        def __init__(self):
+            self.undo_called = False
+
+        def undo(self):
+            self.undo_called = True
+
+    class FakeStatusBar:
+        def showMessage(self, *_args):
+            return None
 
     class FakeWindow(QObject):
         def __init__(self):
             super().__init__()
             self.recorded = None
             self._pending_effect_history_before = None
-            self._capture_project_edit_state = lambda: {"track_effects": ["new"]}
+            self.history = FakeHistory()
+            self._capture_project_edit_state = lambda: {"track_effects": ["final"]}
             self._record_project_state_edit = (
                 lambda before, after, description:
                     setattr(self, "recorded", (before, after, description))
             )
-            self._flush_pending_effect_history = (
-                MainWindow._flush_pending_effect_history.__get__(self, FakeWindow)
-            )
+            self.statusBar = lambda: FakeStatusBar()
 
     window = FakeWindow()
-    before = {"track_effects": ["old"]}
+    qtbot.addWidget if False else None
+    before = {"track_effects": ["initial"]}
+    # Repeated slider changes share the original state snapshot and one timer.
     MainWindow._queue_effect_history_snapshot(window, before)
-    assert window._effect_history_timer.isActive()
-    MainWindow._flush_pending_effect_history(window)
+    timer = window._effect_history_timer
+    MainWindow._queue_effect_history_snapshot(window, {"track_effects": ["intermediate"]})
+    assert window._effect_history_timer is timer
+    assert timer.isActive()
 
+    # The actual Undo entry point must flush the pending gesture before undoing.
+    MainWindow.undo(window)
+
+    assert window.history.undo_called is True
     assert window._pending_effect_history_before is None
     assert window.recorded == (
         before,
-        {"track_effects": ["new"]},
+        {"track_effects": ["final"]},
         "エフェクト設定",
     )
