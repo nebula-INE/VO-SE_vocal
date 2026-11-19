@@ -1557,7 +1557,8 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
 
     const isPitchTaggedEntry = (entry) =>
       getExplicitMidiFromPitchTag(entry.alias) !== null ||
-      getExplicitMidiFromPitchTag(entry.filename) !== null;
+      getExplicitMidiFromPitchTag(entry.filename) !== null ||
+      getExplicitMidiFromPitchTag(entry.wav_path) !== null;
 
     for (const candidate of exactCandidates) {
       const normalizedCandidate = String(candidate).normalize('NFC');
