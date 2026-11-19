@@ -26,6 +26,8 @@
 #include <cstring>
 #include <regex>
 #include <algorithm>
+#include <cctype>
+#include <limits>
 
 struct OtoEntryCpp
 {
@@ -271,8 +273,100 @@ public:
             if (auto* e = get (cleanLyric))
                 return e;
 
+        // Without prefix.map, UTAU banks may still expose pitch layers
+        // through suffix-tagged aliases (e.g. あ_C4 / あ_F4). Select the
+        // closest explicit MIDI tag, but never pick an arbitrary first match.
+        if (prefixMap.empty())
+        {
+            const auto midiFromTag = [] (const juce::String& value) -> int
+            {
+                const auto text = value.toStdString();
+                const std::regex pitchTag (
+                    R"((?:^|[_\\s/\\.\\-])([A-Ga-g])([#b]?)(-?\\d+)(?=$|[_\\s/\\.\\-]))");
+                std::smatch match;
+                if (! std::regex_search (text, match, pitchTag))
+                    return -1;
+
+                int semitone = -1;
+                switch (std::toupper (match[1].str()[0]))
+                {
+                    case 'C': semitone = 0; break;
+                    case 'D': semitone = 2; break;
+                    case 'E': semitone = 4; break;
+                    case 'F': semitone = 5; break;
+                    case 'G': semitone = 7; break;
+                    case 'A': semitone = 9; break;
+                    case 'B': semitone = 11; break;
+                    default: return -1;
+                }
+
+                const auto accidental = match[2].str();
+                if (accidental == "#") ++semitone;
+                else if (accidental == "b") --semitone;
+
+                try
+                {
+                    const int octave = std::stoi (match[3].str());
+                    return (octave + 1) * 12 + semitone;
+                }
+                catch (...)
+                {
+                    return -1;
+                }
+            };
+
+            juce::StringArray pitchBases;
+            if (prevVowel.isNotEmpty())
+            {
+                pitchBases.add (prevVowel + " " + cleanLyric);
+                pitchBases.add (prevVowel + "_" + cleanLyric);
+                pitchBases.add (prevVowel + cleanLyric);
+            }
+            pitchBases.add ("- " + cleanLyric);
+            pitchBases.add ("_" + cleanLyric);
+            pitchBases.add ("-" + cleanLyric);
+            pitchBases.add (cleanLyric);
+
+            const OtoEntryCpp* bestEntry = nullptr;
+            int bestDistance = std::numeric_limits<int>::max();
+            bool ambiguousBest = false;
+            for (const auto& base : pitchBases)
+            {
+                const auto underscored = base + "_";
+                const auto spaced = base + " ";
+                for (const auto& [alias, entry] : db)
+                {
+                    if (! alias.startsWith (underscored) && ! alias.startsWith (spaced))
+                        continue;
+
+                    int taggedMidi = midiFromTag (alias);
+                    if (taggedMidi < 0) taggedMidi = midiFromTag (entry.filename);
+                    if (taggedMidi < 0) taggedMidi = midiFromTag (entry.voiceDir);
+                    if (taggedMidi < 0)
+                        continue;
+
+                    const int distance = std::abs (noteNum - taggedMidi);
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        bestEntry = &entry;
+                        ambiguousBest = false;
+                    }
+                    else if (distance == bestDistance && bestEntry != &entry)
+                    {
+                        ambiguousBest = true;
+                    }
+                }
+                if (bestEntry != nullptr && ! ambiguousBest && bestDistance == 0)
+                    break;
+            }
+
+            if (bestEntry != nullptr && ! ambiguousBest)
+                return bestEntry;
+        }
+
         // Do not guess a VCV context when no previous vowel was supplied.
-        // Exact CV/default candidates above are safe; choosing the first
+        // Exact CV/default candidates above are safe; selecting an arbitrary
         // suffix match (for example "a い" instead of "u い") is not.
         return nullptr;
     }
