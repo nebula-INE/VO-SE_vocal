@@ -447,9 +447,11 @@ class OtoParser:
                 return None
             return self._db.get(mapped)
 
-        # With a prefix.map present, notes below the first declared boundary
-        # are outside every mapped subbank. Do not silently fall back to an
-        # unqualified alias, otherwise pitch-bank selection is defeated.
+        # When no prefix.map range covers this note, use only exact aliases
+        # from the voicebank's unmarked/default layer. Do not run the broader
+        # suffix/partial matcher in this case: it could borrow an unrelated
+        # pitch layer. This mirrors OtoDatabase::resolveAlias() in C++ and
+        # keeps ordinary CV/VCV aliases usable below the first mapped boundary.
         if note_num is not None and self._prefix_map:
             from modules.data.prefix_map import select_prefix_map
             explicit_alias = (
@@ -457,8 +459,27 @@ class OtoParser:
                 and (" " in str(lyric) or "_" in str(lyric) or str(lyric).startswith("-"))
             )
             if select_prefix_map(self._prefix_map, int(note_num)) is None and not explicit_alias:
-                if not re.search(r"(?:^|[ _/])(?:[A-Ga-g][#b]?-?\d+)(?:$|[ _/])", str(lyric)):
-                    return None
+                exact_candidates: List[str] = []
+                if prev_vowel:
+                    exact_candidates.extend((
+                        f"{prev_vowel} {clean_lyric}",
+                        f"{prev_vowel}_{clean_lyric}",
+                        f"{prev_vowel}{clean_lyric}",
+                    ))
+                exact_candidates.extend((
+                    f"- {clean_lyric}",
+                    f"_{clean_lyric}",
+                    f"-{clean_lyric}",
+                    clean_lyric,
+                    str(lyric),
+                ))
+                for candidate in dict.fromkeys(exact_candidates):
+                    entry = self._db.get(candidate)
+                    if entry is not None:
+                        return entry
+                # No exact default alias exists. Keep the pitch-layer boundary
+                # strict instead of selecting a partially matching subbank.
+                return None
 
         # 明示的な VCV/CV alias はそのまま優先する。
         if lyric in self._db and (

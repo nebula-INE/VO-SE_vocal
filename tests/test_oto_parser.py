@@ -397,3 +397,47 @@ def test_prefix_map_supports_explicit_prefix_and_suffix():
     entries = parse_prefix_map("C4\tC4/\t_C4\n")
     assert map_alias("a い", 60, entries) == "C4/a い_C4"
     assert map_alias("C4/a い", 60, entries) == "C4/a い_C4"
+
+
+
+def test_resolve_alias_uses_exact_default_alias_below_first_prefix_boundary(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "prefix.map").write_text("C5\t\t_C5\n", encoding="utf-8")
+    (voice_dir / "oto.ini").write_text(
+        "ji.wav=じ,0,0,0,50,0\n"
+        "sa.wav=さ,0,0,0,50,0\n"
+        "i_sa.wav=i さ,0,0,0,50,0\n"
+        "a_i.wav=a い,0,0,0,50,0\n",
+        encoding="utf-8",
+    )
+    for name in ("ji.wav", "sa.wav", "i_sa.wav", "a_i.wav"):
+        (voice_dir / name).write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    # F4/A#4 are below the first C5 pitch-map range, so the unmarked/default
+    # layer must be used rather than rejecting all exact aliases.
+    assert _require_entry(parser.resolve_alias("じ", None, note_num=65)).alias == "じ"
+    assert _require_entry(parser.resolve_alias("さ", "i", note_num=65)).alias == "i さ"
+    assert _require_entry(parser.resolve_alias("a い", None, note_num=70)).alias == "a い"
+
+
+def test_resolve_alias_does_not_borrow_mapped_pitch_layer_below_first_boundary(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "prefix.map").write_text("C5\t\t_C5\n", encoding="utf-8")
+    (voice_dir / "oto.ini").write_text(
+        "a_c5.wav=あ_C5,0,0,0,50,0\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "a_c5.wav").write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    assert parser.resolve_alias("あ", None, note_num=65) is None
+    selected = parser.resolve_alias("あ", None, note_num=72)
+    assert selected is not None
+    assert selected.alias == "あ_C5"
