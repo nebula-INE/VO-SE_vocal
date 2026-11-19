@@ -271,13 +271,6 @@ public:
             if (auto* e = get (cleanLyric))
                 return e;
 
-        // Python版と同じく、明示された prevVowel がある場合は
-        // 別のVCV文脈への部分一致fallbackを禁止する。
-        // ここまでで VCV -> CV/語頭 -> plain lyric の安全なfallbackは
-        // 完了しているため、"u い" が "a い" などへ化けることを防ぐ。
-        if (prevVowel.isNotEmpty())
-            return nullptr;
-
         // Do not guess a VCV context when no previous vowel was supplied.
         // Exact CV/default candidates above are safe; choosing the first
         // suffix match (for example "a い" instead of "u い") is not.
