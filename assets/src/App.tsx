@@ -16,6 +16,11 @@ import {
   ProjectData
 } from './utils/formatConverter';
 import {
+  parseVoseProjectJson,
+  serializeVoseProjectJson,
+  type VoseProjectState,
+} from './utils/voseProject';
+import {
   parsePitchBend,
   msToTicks,
   smoothPitchBendPoints,
@@ -62,6 +67,17 @@ interface Note {
   hasPbw?: boolean;
   hasPby?: boolean;
   tempo?: number;
+  ustExtras?: Record<string, unknown>;
+  vibrato_depth?: number;
+  vibrato_rate?: number;
+  formant_shift?: number;
+}
+
+interface TrackEffect {
+  id: string;
+  type: 'compressor' | 'eq' | 'reverb';
+  enabled: boolean;
+  params: Record<string, number>;
 }
 
 interface Track {
@@ -69,11 +85,17 @@ interface Track {
   name: string;
   type: 'vocal' | 'wave';
   voicebank?: string;
+  voicebankId?: string;
   notes: Note[];
   volume: number;
+  pan: number;
+  effects?: TrackEffect[];
   isMuted: boolean;
   isSolo: boolean;
   audioUrl?: string;
+  sourcePath?: string;
+  engineType?: string;
+  colorLabel?: string;
 }
 
 interface UstProjectData {
@@ -214,6 +236,8 @@ const INITIAL_NOTES: Note[] = [
 export default function App() {
   const [tempo, setTempo] = useState<number>(120);
   const [projectName, setProjectName] = useState<string>('VO-SE Song 1');
+  const [projectMasterEffects, setProjectMasterEffects] = useState<TrackEffect[]>([]);
+  const [projectAutomation, setProjectAutomation] = useState<Record<string, unknown>>({});
   const [tracks, setTracks] = useState<Track[]>([
     {
       id: 'track_1',
@@ -221,7 +245,9 @@ export default function App() {
       type: 'vocal',
       voicebank: '',
       notes: INITIAL_NOTES,
-      volume: 0.8,
+      volume: 1.0,
+      pan: 0,
+      effects: [],
       isMuted: false,
       isSolo: false
     }
@@ -392,7 +418,9 @@ export default function App() {
       type,
       voicebank: '',
       notes: type === 'vocal' ? [{ id: '1', lyric: 'あ', noteNum: 60, tick: 0, length: 480, intensity: 120, flags: '', pbs: '0;0', pbw: '50', pby: '0' }] : [],
-      volume: 0.8,
+      volume: 1.0,
+      pan: 0,
+      effects: [],
       isMuted: false,
       isSolo: false
     };
@@ -424,7 +452,12 @@ export default function App() {
   };
 
   const handleUpdateTrack = (trackId: string, patch: Partial<Track>) => {
-    setTracks(prev => prev.map(t => t.id === trackId ? { ...t, ...patch } : t));
+    setTracks(prev => prev.map(t => {
+      if (t.id !== trackId) return t;
+      const next = { ...t, ...patch };
+      if (patch.voicebank !== undefined && patch.voicebank !== t.voicebank) next.voicebankId = undefined;
+      return next;
+    }));
   };
   const gridRef = useRef<HTMLDivElement>(null);
   const [clipboardNote, setClipboardNote] = useState<Note | null>(null);
@@ -641,7 +674,7 @@ export default function App() {
   // Voicebank State
   const selectedVoicebank = currentTrack?.voicebank || '';
   const setSelectedVoicebank = (vb: string) => {
-    setTracks(prev => prev.map(t => t.id === currentTrackId ? { ...t, voicebank: vb } : t));
+    setTracks(prev => prev.map(t => t.id === currentTrackId ? { ...t, voicebank: vb, voicebankId: undefined } : t));
   };
   const [customVoicebanks, setCustomVoicebanks] = useState<
     { name: string; aliasCount: number; hasVcv: boolean; aliases: string[]; entries: any[] }[]
@@ -886,6 +919,153 @@ export default function App() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
   const masterLimiterRef = useRef<DynamicsCompressorNode | null>(null);
+  const masterEffectSourceRef = useRef<AudioNode | null>(null);
+  const masterEffectNodesRef = useRef<AudioNode[]>([]);
+  const masterEffectSignatureRef = useRef('');
+  const trackAudioBusesRef = useRef<Map<string, {
+    input: GainNode;
+    volume: GainNode;
+    panner: StereoPannerNode;
+    signature: string;
+    nodes: AudioNode[];
+  }>>(new Map());
+
+  const applyMasterEffects = useCallback((ctx: AudioContext) => {
+    const source = masterEffectSourceRef.current;
+    const limiter = masterLimiterRef.current;
+    if (!source || !limiter) return;
+
+    const effects = Array.isArray(projectMasterEffects) ? projectMasterEffects : [];
+    const signature = JSON.stringify(effects);
+    if (signature === masterEffectSignatureRef.current) return;
+
+    try { source.disconnect(); } catch (e) {}
+    for (const node of masterEffectNodesRef.current) {
+      try { node.disconnect(); } catch (e) {}
+    }
+
+    const nodes: AudioNode[] = [];
+    let output: AudioNode = source;
+    try {
+      for (const effect of effects) {
+        if (!effect?.enabled || !effect.type) continue;
+        const params = effect.params || {};
+        if (effect.type === 'compressor') {
+          const compressor = ctx.createDynamicsCompressor();
+          compressor.threshold.setValueAtTime(
+            Math.max(-60, Math.min(0, params.threshold_db ?? -18)),
+            ctx.currentTime
+          );
+          compressor.ratio.setValueAtTime(
+            Math.max(1, Math.min(20, params.ratio ?? 4)),
+            ctx.currentTime
+          );
+          compressor.attack.setValueAtTime(
+            Math.max(0.001, Math.min(0.2, (params.attack_ms ?? 10) / 1000)),
+            ctx.currentTime
+          );
+          compressor.release.setValueAtTime(
+            Math.max(0.01, Math.min(1, (params.release_ms ?? 100) / 1000)),
+            ctx.currentTime
+          );
+          const makeup = ctx.createGain();
+          makeup.gain.setValueAtTime(
+            Math.pow(10, Math.max(-12, Math.min(12, params.makeup_gain_db ?? 0)) / 20),
+            ctx.currentTime
+          );
+          output.connect(compressor);
+          compressor.connect(makeup);
+          output = makeup;
+          nodes.push(compressor, makeup);
+        } else if (effect.type === 'eq') {
+          const equalizer = ctx.createBiquadFilter();
+          equalizer.type = 'peaking';
+          equalizer.frequency.setValueAtTime(
+            Math.max(20, Math.min(ctx.sampleRate * 0.49, params.frequency_hz ?? 1000)),
+            ctx.currentTime
+          );
+          equalizer.gain.setValueAtTime(
+            Math.max(-18, Math.min(18, params.gain_db ?? 0)),
+            ctx.currentTime
+          );
+          equalizer.Q.setValueAtTime(
+            Math.max(0.2, Math.min(10, params.q ?? 1)),
+            ctx.currentTime
+          );
+          output.connect(equalizer);
+          output = equalizer;
+          nodes.push(equalizer);
+        } else if (effect.type === 'reverb') {
+          const roomSize = Math.max(0, Math.min(0.9, params.room_size ?? 0.45));
+          const damping = Math.max(0, Math.min(0.95, params.damping ?? 0.5));
+          const wetLevel = Math.max(0, Math.min(1, params.wet ?? 0.12));
+          const dryLevel = Math.max(0, Math.min(1, params.dry ?? 0.9));
+          const width = Math.max(0, Math.min(1, params.width ?? 0.75));
+          const impulseLength = Math.max(
+            1,
+            Math.floor(ctx.sampleRate * (0.8 + roomSize * 1.7))
+          );
+          const impulse = ctx.createBuffer(2, impulseLength, ctx.sampleRate);
+          let noiseState = 2166136261;
+          for (const character of `master:${effect.id}:${ctx.sampleRate}`) {
+            noiseState = Math.imul(noiseState ^ character.charCodeAt(0), 16777619);
+          }
+          const nextNoise = () => {
+            noiseState ^= noiseState << 13;
+            noiseState ^= noiseState >>> 17;
+            noiseState ^= noiseState << 5;
+            return ((noiseState >>> 0) / 2147483648) - 1;
+          };
+          const left = impulse.getChannelData(0);
+          const right = impulse.getChannelData(1);
+          for (let frame = 0; frame < impulseLength; frame++) {
+            const decay = Math.pow(1 - frame / impulseLength, 2 + damping * 7);
+            const shared = nextNoise();
+            left[frame] = (shared * (1 - width) + nextNoise() * width) * decay;
+            right[frame] = (shared * (1 - width) + nextNoise() * width) * decay;
+          }
+          const convolver = ctx.createConvolver();
+          convolver.buffer = impulse;
+          const dampingFilter = ctx.createBiquadFilter();
+          dampingFilter.type = 'lowpass';
+          dampingFilter.frequency.setValueAtTime(
+            Math.max(1500, 20000 * (1 - damping * 0.85)),
+            ctx.currentTime
+          );
+          const dry = ctx.createGain();
+          dry.gain.setValueAtTime(dryLevel, ctx.currentTime);
+          const wet = ctx.createGain();
+          wet.gain.setValueAtTime(wetLevel, ctx.currentTime);
+          const merge = ctx.createGain();
+          output.connect(dry);
+          dry.connect(merge);
+          output.connect(convolver);
+          convolver.connect(dampingFilter);
+          dampingFilter.connect(wet);
+          wet.connect(merge);
+          output = merge;
+          nodes.push(convolver, dampingFilter, dry, wet, merge);
+        }
+      }
+      output.connect(limiter);
+      masterEffectNodesRef.current = nodes;
+      masterEffectSignatureRef.current = signature;
+    } catch (error) {
+      for (const node of nodes) {
+        try { node.disconnect(); } catch (e) {}
+      }
+      try { source.disconnect(); } catch (e) {}
+      source.connect(limiter);
+      masterEffectNodesRef.current = [];
+      masterEffectSignatureRef.current = signature;
+      console.warn('Master effect chain could not be applied; using dry master bus.', error);
+    }
+  }, [projectMasterEffects]);
+
+  useEffect(() => {
+    const ctx = audioCtxRef.current;
+    if (ctx) applyMasterEffects(ctx);
+  }, [applyMasterEffects]);
 
   const getOrCreateAudioContext = (): AudioContext => {
     if (!audioCtxRef.current) {
@@ -942,16 +1122,234 @@ export default function App() {
       deMud.connect(presence);
       presence.connect(airShelf);
       airShelf.connect(safetyLpf);
-      safetyLpf.connect(limiter);
+      // Project master effects sit after the fixed tone/safety filters and before the limiter.
+      masterEffectSourceRef.current = safetyLpf;
       limiter.connect(ctx.destination);
 
       masterGainRef.current = masterGain;
       masterLimiterRef.current = limiter;
+      applyMasterEffects(ctx);
+    } else {
+      applyMasterEffects(ctx);
     }
     return ctx;
   };
 
+  const getTrackBusInput = (
+    ctx: AudioContext,
+    trackId: string,
+    rawEffects: TrackEffect[] | undefined,
+    trackVolume: number,
+    trackPan: number
+  ): GainNode => {
+    const effects = Array.isArray(rawEffects) ? rawEffects : [];
+    const signature = JSON.stringify(effects);
+    const buses = trackAudioBusesRef.current;
+    const existing = buses.get(trackId);
+    if (existing && existing.signature === signature) {
+      existing.volume.gain.setTargetAtTime(
+        Math.max(0, Math.min(1, trackVolume)),
+        ctx.currentTime,
+        0.015
+      );
+      existing.panner.pan.setTargetAtTime(
+        Math.max(-1, Math.min(1, trackPan)),
+        ctx.currentTime,
+        0.015
+      );
+      return existing.input;
+    }
+
+    if (existing) {
+      existing.volume.gain.setTargetAtTime(0, ctx.currentTime, 0.01);
+      window.setTimeout(() => {
+        existing.nodes.forEach((node) => {
+          try { node.disconnect(); } catch (e) {}
+        });
+      }, 3000);
+    }
+
+    const input = ctx.createGain();
+    const nodes: AudioNode[] = [input];
+    let chainOutput: AudioNode = input;
+
+    for (const effect of effects) {
+      if (!effect?.enabled || !effect.type) continue;
+      const params = effect.params || {};
+      if (effect.type === 'compressor') {
+        const compressor = ctx.createDynamicsCompressor();
+        compressor.threshold.setValueAtTime(
+          Math.max(-60, Math.min(0, params.threshold_db ?? -18)),
+          ctx.currentTime
+        );
+        compressor.ratio.setValueAtTime(
+          Math.max(1, Math.min(20, params.ratio ?? 3)),
+          ctx.currentTime
+        );
+        compressor.attack.setValueAtTime(
+          Math.max(0.001, Math.min(0.2, (params.attack_ms ?? 10) / 1000)),
+          ctx.currentTime
+        );
+        compressor.release.setValueAtTime(
+          Math.max(0.01, Math.min(1, (params.release_ms ?? 100) / 1000)),
+          ctx.currentTime
+        );
+        const makeupGain = ctx.createGain();
+        makeupGain.gain.setValueAtTime(
+          Math.pow(10, Math.max(-12, Math.min(12, params.makeup_gain_db ?? 0)) / 20),
+          ctx.currentTime
+        );
+        chainOutput.connect(compressor);
+        compressor.connect(makeupGain);
+        chainOutput = makeupGain;
+        nodes.push(compressor, makeupGain);
+      } else if (effect.type === 'eq') {
+        const equalizer = ctx.createBiquadFilter();
+        equalizer.type = 'peaking';
+        equalizer.frequency.setValueAtTime(
+          Math.max(20, Math.min(ctx.sampleRate * 0.49, params.frequency_hz ?? 1000)),
+          ctx.currentTime
+        );
+        equalizer.gain.setValueAtTime(
+          Math.max(-18, Math.min(18, params.gain_db ?? 0)),
+          ctx.currentTime
+        );
+        equalizer.Q.setValueAtTime(
+          Math.max(0.2, Math.min(10, params.q ?? 1)),
+          ctx.currentTime
+        );
+        chainOutput.connect(equalizer);
+        chainOutput = equalizer;
+        nodes.push(equalizer);
+      } else if (effect.type === 'reverb') {
+        const roomSize = Math.max(0, Math.min(0.9, params.room_size ?? 0.45));
+        const damping = Math.max(0, Math.min(0.95, params.damping ?? 0.5));
+        const dryLevel = Math.max(0, Math.min(1, params.dry ?? 0.9));
+        const wetLevel = Math.max(0, Math.min(1, params.wet ?? 0.12));
+        const width = Math.max(0, Math.min(1, params.width ?? 0.75));
+        const duration = 0.8 + roomSize * 1.7;
+        const impulseLength = Math.max(1, Math.floor(ctx.sampleRate * duration));
+        const impulse = ctx.createBuffer(2, impulseLength, ctx.sampleRate);
+        let noiseState = 2166136261;
+        for (const character of `${trackId}:${effect.id}:${ctx.sampleRate}`) {
+          noiseState = Math.imul(noiseState ^ character.charCodeAt(0), 16777619);
+        }
+        const nextNoise = () => {
+          noiseState ^= noiseState << 13;
+          noiseState ^= noiseState >>> 17;
+          noiseState ^= noiseState << 5;
+          return ((noiseState >>> 0) / 2147483648) - 1;
+        };
+        const leftData = impulse.getChannelData(0);
+        const rightData = impulse.getChannelData(1);
+        for (let frame = 0; frame < impulseLength; frame++) {
+          const decay = Math.pow(1 - frame / impulseLength, 2 + damping * 7);
+          const sharedNoise = nextNoise();
+          const leftNoise = nextNoise();
+          const rightNoise = nextNoise();
+          leftData[frame] = (
+            sharedNoise * (1 - width) + leftNoise * width
+          ) * decay;
+          rightData[frame] = (
+            sharedNoise * (1 - width) + rightNoise * width
+          ) * decay;
+        }
+
+        const convolver = ctx.createConvolver();
+        convolver.buffer = impulse;
+        const dampingFilter = ctx.createBiquadFilter();
+        dampingFilter.type = 'lowpass';
+        dampingFilter.frequency.setValueAtTime(
+          Math.max(1500, 20000 * (1 - damping * 0.85)),
+          ctx.currentTime
+        );
+        const dry = ctx.createGain();
+        dry.gain.setValueAtTime(dryLevel, ctx.currentTime);
+        const wet = ctx.createGain();
+        wet.gain.setValueAtTime(wetLevel, ctx.currentTime);
+        const merge = ctx.createGain();
+
+        chainOutput.connect(dry);
+        dry.connect(merge);
+        chainOutput.connect(convolver);
+        convolver.connect(dampingFilter);
+        dampingFilter.connect(wet);
+        wet.connect(merge);
+        chainOutput = merge;
+        nodes.push(convolver, dampingFilter, dry, wet, merge);
+      }
+    }
+
+    const volume = ctx.createGain();
+    volume.gain.setValueAtTime(
+      Math.max(0, Math.min(1, trackVolume)),
+      ctx.currentTime
+    );
+    const panner = ctx.createStereoPanner();
+    panner.pan.setValueAtTime(
+      Math.max(-1, Math.min(1, trackPan)),
+      ctx.currentTime
+    );
+    chainOutput.connect(volume);
+    volume.connect(panner);
+    if (masterGainRef.current) {
+      panner.connect(masterGainRef.current);
+    } else {
+      panner.connect(ctx.destination);
+    }
+    nodes.push(volume, panner);
+
+    buses.set(trackId, { input, volume, panner, signature, nodes });
+    return input;
+  };
+
+  useEffect(() => {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    for (const track of tracks) {
+      const bus = trackAudioBusesRef.current.get(track.id);
+      if (!bus) continue;
+      bus.volume.gain.setTargetAtTime(
+        Math.max(0, Math.min(1, track.volume ?? 1.0)),
+        ctx.currentTime,
+        0.015
+      );
+      bus.panner.pan.setTargetAtTime(
+        Math.max(-1, Math.min(1, track.pan ?? 0)),
+        ctx.currentTime,
+        0.015
+      );
+    }
+  }, [tracks]);
+
+  useEffect(() => {
+    const liveTrackIds = new Set(tracks.map((track) => track.id));
+    for (const [trackId, bus] of trackAudioBusesRef.current.entries()) {
+      if (liveTrackIds.has(trackId)) continue;
+      bus.nodes.forEach((node) => {
+        try { node.disconnect(); } catch (e) {}
+      });
+      trackAudioBusesRef.current.delete(trackId);
+    }
+  }, [tracks]);
+
+  useEffect(() => () => {
+    for (const node of masterEffectNodesRef.current) {
+      try { node.disconnect(); } catch (e) {}
+    }
+    masterEffectNodesRef.current = [];
+    try { masterEffectSourceRef.current?.disconnect(); } catch (e) {}
+    masterEffectSourceRef.current = null;
+    for (const bus of trackAudioBusesRef.current.values()) {
+      bus.nodes.forEach((node) => {
+        try { node.disconnect(); } catch (e) {}
+      });
+    }
+    trackAudioBusesRef.current.clear();
+  }, []);
+
   const sampleCacheRef = useRef<Map<string, {
+
     buffer: AudioBuffer;
     left_blank: number;
     fixed_range: number;
@@ -1886,7 +2284,9 @@ export default function App() {
         type: 'vocal',
         voicebank: resolvedVoicebank,
         notes: formattedNotes,
-        volume: 0.8,
+        volume: 1.0,
+        pan: 0,
+        effects: [],
         isMuted: false,
         isSolo: false
       };
@@ -1927,7 +2327,9 @@ export default function App() {
               type: 'vocal',
               voicebank: resolvedVoicebank,
               notes: formattedNotes,
-              volume: 0.8,
+              volume: 1.0,
+              pan: 0,
+              effects: [],
               isMuted: false,
               isSolo: false
             });
@@ -1949,12 +2351,73 @@ export default function App() {
     });
   };
 
-  // Universal Project File Loader (.ust, .vsqx, .svp, .mid/.midi, etc.)
+  const applyVoseProject = (project: VoseProjectState, sourceName?: string) => {
+    const selectedIndex = Math.max(0, Math.min(project.tracks.length - 1, project.currentTrackIndex));
+    const importedTracks: Track[] = project.tracks.map((track, index) => {
+      const installedVoicebank = customVoicebanks.find((vb) =>
+        vb.name === track.voicebank || vb.name === track.voicebankId
+      )?.name;
+      return {
+        id: track.id,
+        name: track.name,
+        type: track.type,
+        voicebank: installedVoicebank ?? track.voicebank
+          ?? (index === selectedIndex ? project.currentVoiceName : undefined),
+        voicebankId: track.voicebankId ?? (index === selectedIndex ? project.currentVoiceId : undefined),
+        notes: track.notes,
+        volume: track.volume,
+        pan: track.pan,
+        effects: track.effects,
+        isMuted: track.isMuted,
+        isSolo: track.isSolo,
+        audioUrl: track.audioUrl,
+        sourcePath: track.sourcePath,
+        engineType: track.engineType,
+        colorLabel: track.colorLabel,
+      };
+    });
+
+    setTracks(importedTracks);
+    setCurrentTrackId(importedTracks[selectedIndex].id);
+    setTempo(project.tempo);
+    setProjectName(project.projectName);
+    setProjectMasterEffects(project.masterEffects as TrackEffect[]);
+    setProjectAutomation(project.parameters);
+    const restoredTick = Math.max(0, Math.round(project.currentTime * project.tempo * 480 / 60));
+    currentTickRef.current = restoredTick;
+    setCurrentTick(restoredTick);
+    const firstNote = importedTracks[selectedIndex].notes[0];
+    setSelectedNoteId(firstNote?.id ?? null);
+    const unresolvedDesktopAudio = importedTracks.some(
+      (track) => track.type === 'wave' && Boolean(track.sourcePath) && !track.audioUrl
+    );
+    const unresolvedVoicebanks = importedTracks.some(
+      (track) => track.type === 'vocal' && Boolean(track.voicebankId) && !track.voicebank
+    );
+    const warnings: string[] = [];
+    if (unresolvedDesktopAudio) warnings.push('伴奏ファイルのパスは保持しましたが、Desktopのローカルファイルはブラウザから直接開けないためWeb側で再リンクが必要です。');
+    if (unresolvedVoicebanks) warnings.push('一部トラックのvoicebank_idは保持しましたが、対応するWeb音源が未登録のため、Webで使用する音源を選択してください。');
+    const baseMessage = '「' + (sourceName || project.projectName) + '」から' + importedTracks.length + 'トラックを復元しました。';
+    setToast({
+      type: warnings.length > 0 ? 'warning' : 'success',
+      title: 'VO-SEプロジェクト読み込み完了',
+      desc: baseMessage + (warnings.length ? ' ' + warnings.join(' ') : ''),
+    });
+  };
+
+  // Universal Project File Loader (.vose, .ust, .vsqx, .svp, .mid/.midi)
   const loadProjectFile = async (file: File) => {
     const fileName = file.name.toLowerCase();
 
     try {
       let pData: ProjectData | null = null;
+
+      if (fileName.endsWith('.vose')) {
+        const buffer = await file.arrayBuffer();
+        const project = parseVoseProjectJson(decodeTextBuffer(buffer));
+        applyVoseProject(project, file.name);
+        return;
+      }
 
       if (fileName.endsWith('.mid') || fileName.endsWith('.midi')) {
         const buffer = await file.arrayBuffer();
@@ -2011,8 +2474,49 @@ export default function App() {
     }
   };
 
-  // Universal Project Export Handler (.ust, .vsqx, .svp, .mid)
-  const handleExportProject = (format: 'ust' | 'vsqx' | 'svp' | 'midi') => {
+  // Export either a complete Desktop-compatible .vose project or a standard interchange file.
+  const handleExportProject = (format: 'vose' | 'ust' | 'vsqx' | 'svp' | 'midi') => {
+    if (format === 'vose') {
+      if (tracks.length === 0) {
+        setToast({ type: 'error', title: '保存エラー', desc: '保存するトラックがありません。' });
+        return;
+      }
+      try {
+        const state: VoseProjectState = {
+          projectName: projectName || 'VO-SE Project',
+          tempo,
+          currentTrackIndex: Math.max(0, tracks.findIndex((track) => track.id === currentTrackId)),
+          currentVoiceId: tracks.find((track) => track.id === currentTrackId)?.voicebankId,
+          currentVoiceName: tracks.find((track) => track.id === currentTrackId)?.voicebank,
+          currentTime: currentTick / Math.max(1, tempo * 480 / 60),
+          tracks: tracks.map((track) => ({
+            ...track,
+            effects: track.effects ?? [],
+          })),
+          masterEffects: projectMasterEffects,
+          parameters: projectAutomation,
+        };
+        const json = serializeVoseProjectJson(state);
+        const safeName = (projectName || 'VO-SE_Project').replace(/\\s+/g, '_');
+        const browserOnlyAudioTracks = tracks.filter(
+          (track) => track.type === 'wave'
+            && Boolean(track.audioUrl?.startsWith('blob:'))
+            && !track.sourcePath
+        );
+        downloadBlob(new Blob([json], { type: 'application/json;charset=utf-8' }), `${safeName}.vose`);
+        setToast({
+          type: browserOnlyAudioTracks.length > 0 ? 'warning' : 'success',
+          title: 'VO-SEプロジェクト保存完了',
+          desc: browserOnlyAudioTracks.length > 0
+            ? `${safeName}.vose を保存しました。ブラウザ内だけのWAVデータはJSONに含まれないため、${browserOnlyAudioTracks.length}トラックは再読み込み時に再リンクが必要です。`
+            : `${safeName}.vose に全${tracks.length}トラックとエフェクト設定を保存しました。`,
+        });
+      } catch (err: any) {
+        setToast({ type: 'error', title: '保存エラー', desc: err?.message || 'VO-SEプロジェクトを保存できませんでした。' });
+      }
+      return;
+    }
+
     if (notes.length === 0) {
       setToast({
         type: 'error',
@@ -2178,7 +2682,10 @@ export default function App() {
     note: Note,
     noteStartCtxTime: number,
     trackVol: number = 1.0,
-    prevLyric?: string
+    prevLyric?: string,
+    trackPan: number = 0,
+    trackId: string = 'preview',
+    trackEffects: TrackEffect[] = []
   ) => {
     if (isRestLyric(note.lyric)) {
       return;
@@ -2186,6 +2693,9 @@ export default function App() {
     const durSec = (note.length / 480) * (60 / tempo);
     const cacheKey = getSampleCacheKey(targetVb, note.lyric, prevLyric, note.noteNum);
     const cached = sampleCacheRef.current.get(cacheKey);
+    const trackBusInput = getTrackBusInput(
+      ctx, trackId, trackEffects, trackVol, trackPan
+    );
 
     if (cached && cached.buffer) {
       try {
@@ -2276,7 +2786,7 @@ export default function App() {
         }
 
         const gain = ctx.createGain();
-        const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.92 * Math.min(1.5, trackVol);
+        const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.92;
 
         const tStart = Math.max(ctx.currentTime, actualStartTime);
 
@@ -2318,11 +2828,7 @@ export default function App() {
           hpf.connect(gain);
         }
 
-        if (masterGainRef.current) {
-          gain.connect(masterGainRef.current);
-        } else {
-          gain.connect(ctx.destination);
-        }
+        gain.connect(trackBusInput);
 
         const activeNodeWrapper: ActiveAudioNode = {
           stop: () => {
@@ -2431,7 +2937,7 @@ export default function App() {
       filter2.Q.setValueAtTime(2.0, noteStartCtxTime);
 
       const gain = ctx.createGain();
-      const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.35 * Math.min(1.5, trackVol);
+      const volGain = Math.max(0.05, Math.min(1.5, (note.intensity || 120) / 120)) * 0.35;
       
       const tStart = Math.max(ctx.currentTime, noteStartCtxTime);
       const tAttack = tStart + 0.012;
@@ -2448,11 +2954,7 @@ export default function App() {
       filter1.connect(gain);
       filter2.connect(gain);
 
-      if (masterGainRef.current) {
-        gain.connect(masterGainRef.current);
-      } else {
-        gain.connect(ctx.destination);
-      }
+      gain.connect(trackBusInput);
 
       const activeNodeWrapper: ActiveAudioNode = {
         stop: () => {
@@ -2531,8 +3033,11 @@ export default function App() {
         pby: pby || '0'
       },
       targetTime,
-      1.0,
-      prevLyric
+      currentTrack?.volume ?? 1.0,
+      prevLyric,
+      currentTrack?.pan ?? 0,
+      currentTrack?.id ?? 'preview',
+      currentTrack?.effects ?? []
     );
   };
 
@@ -2615,8 +3120,11 @@ export default function App() {
                   targetVb,
                   note,
                   noteStartCtxTime,
-                  track.volume ?? 0.8,
-                  prevLyric
+                  track.volume ?? 1.0,
+                  prevLyric,
+                  track.pan ?? 0,
+                  track.id,
+                  track.effects ?? []
                 );
                 ptr++;
               } else if (nowCtx < graceDeadline) {
@@ -2920,7 +3428,7 @@ export default function App() {
           <input
             ref={projectFileInputRef}
             type="file"
-            accept="*/*,.ust,.UST,.vsqx,.VSQX,.svp,.SVP,.mid,.MID,.midi,.MIDI,.txt,.TXT,text/plain,application/octet-stream"
+            accept="*/*,.vose,.VOSE,.ust,.UST,.vsqx,.VSQX,.svp,.SVP,.mid,.MID,.midi,.MIDI,.txt,.TXT,text/plain,application/octet-stream"
             onChange={handleProjectFileUpload}
             className="hidden"
           />

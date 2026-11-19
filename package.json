@@ -8,7 +8,7 @@
     "start": "node server.js",
     "lint": "npm run lint:web",
     "test": "npm run test:web",
-    "test:web": "node --test tests/test_voicebank_security.mjs tests/test_lyric_tokenization.mjs tests/test_web_multipitch_render_playback.mjs tests/test_web_render_progress.mjs tests/test_synthesis_quality.mjs",
+    "test:web": "node --test tests/test_voicebank_security.mjs tests/test_lyric_tokenization.mjs tests/test_web_multipitch_render_playback.mjs tests/test_web_render_progress.mjs tests/test_synthesis_quality.mjs tests/test_platform_parity.mjs",
     "lint:web": "eslint --max-warnings=0 assets/src/components/BatchLyricModal.tsx assets/src/components/InspectorPanel.tsx assets/src/utils/lyricTokens.js tests/test_lyric_tokenization.mjs",
     "lint:python": "python -m ruff check modules tests main.py"
   },

@@ -430,3 +430,35 @@ def test_project_worker_routes_each_vocal_through_its_voicebank_and_restores_eng
     assert engine.refresh_paths == [
         str(voice_a), str(global_voice), str(voice_b), str(global_voice)
     ]
+
+
+
+def test_project_mixdown_applies_track_effects_and_preserves_track_tail(tmp_path):
+    source = tmp_path / "vocal.wav"
+    impulse = np.zeros((128, 2), dtype=np.float32)
+    impulse[0] = (0.8, 0.8)
+    _write(source, impulse, sample_rate=8000)
+    output = tmp_path / "track-reverb.wav"
+    vocal = _track(
+        source,
+        track_type="vocal",
+        effects=[{
+            "id": "track-room",
+            "type": "reverb",
+            "enabled": True,
+            "params": {
+                "room_size": 0.55,
+                "damping": 0.4,
+                "wet": 0.5,
+                "dry": 0.5,
+                "width": 0.8,
+            },
+        }],
+    )
+
+    mixdown_tracks_to_wav([vocal], output, sample_rate=8000, block_size=128)
+    data, rate = sf.read(output, dtype="float32", always_2d=True)
+
+    assert rate == 8000
+    assert data.shape[0] > len(impulse)
+    assert float(np.max(np.abs(data[len(impulse):]))) > 1e-5

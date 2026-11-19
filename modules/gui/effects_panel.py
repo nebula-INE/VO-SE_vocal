@@ -1,4 +1,4 @@
-"""Desktop master-bus effects controls with real parameter ranges and units."""
+"""Desktop master/track effects controls with validated parameter ranges and units."""
 from __future__ import annotations
 
 import copy
@@ -50,13 +50,14 @@ PARAMETER_LABELS = {
 
 
 class EffectsPanel(QWidget):
-    """Manage a single post-track master-bus chain.
+    """Manage the master-bus or selected-track effect chain.
 
-    The controls never alter individual vocal renders. The same serialized
-    chain is consumed by the live AudioMixer and offline project mixdown.
+    The controls never alter individual vocal renders. Track and master chains
+    are consumed by the live AudioMixer and offline project mixdown.
     """
 
     effect_parameters_changed = Signal(str, dict)
+    scope_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -68,10 +69,33 @@ class EffectsPanel(QWidget):
 
     def init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        scope_label = QLabel("マスターバス（全トラックの合成後に適用）")
-        scope_label.setWordWrap(True)
-        scope_label.setObjectName("EffectsScopeLabel")
-        layout.addWidget(scope_label)
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(QLabel("適用先:"))
+        self.scope_selector = QComboBox()
+        self.scope_selector.addItem("マスターバス", "master")
+        self.scope_selector.addItem("選択トラック", "track")
+        self.scope_selector.currentIndexChanged.connect(
+            lambda _index: self.scope_changed.emit(self.get_scope())
+        )
+        scope_row.addWidget(self.scope_selector, 1)
+        layout.addLayout(scope_row)
+        self.scope_label = QLabel("マスターバス（全トラックの合成後に適用）")
+        self.scope_label.setWordWrap(True)
+        self.scope_label.setObjectName("EffectsScopeLabel")
+        layout.addWidget(self.scope_label)
+
+        preset_row = QHBoxLayout()
+        self.preset_selector = QComboBox()
+        self.preset_selector.addItem("プリセットを選択...", "")
+        self.preset_selector.addItem("Vocal Clean", "vocal_clean")
+        self.preset_selector.addItem("Warm Room", "warm_room")
+        self.preset_selector.addItem("Vocal Presence", "vocal_presence")
+        self.apply_preset_btn = QPushButton("適用")
+        self.apply_preset_btn.clicked.connect(self.on_apply_preset)
+        preset_row.addWidget(QLabel("プリセット:"))
+        preset_row.addWidget(self.preset_selector, 1)
+        preset_row.addWidget(self.apply_preset_btn)
+        layout.addLayout(preset_row)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -106,6 +130,72 @@ class EffectsPanel(QWidget):
         effect_type = str(self.effect_selector.currentData() or "compressor")
         self.add_effect(effect_type)
 
+    def on_apply_preset(self) -> None:
+        preset_id = str(self.preset_selector.currentData() or "")
+        presets = {
+            "vocal_clean": [
+                {
+                    "type": "eq",
+                    "params": {"frequency_hz": 350.0, "gain_db": -1.5, "q": 1.0},
+                },
+                {
+                    "type": "compressor",
+                    "params": {
+                        "threshold_db": -18.0,
+                        "ratio": 3.0,
+                        "attack_ms": 12.0,
+                        "release_ms": 120.0,
+                        "makeup_gain_db": 1.0,
+                    },
+                },
+            ],
+            "warm_room": [
+                {
+                    "type": "eq",
+                    "params": {"frequency_hz": 240.0, "gain_db": 1.5, "q": 0.8},
+                },
+                {
+                    "type": "reverb",
+                    "params": {
+                        "room_size": 0.42,
+                        "damping": 0.55,
+                        "wet": 0.16,
+                        "dry": 0.9,
+                        "width": 0.8,
+                    },
+                },
+            ],
+            "vocal_presence": [
+                {
+                    "type": "eq",
+                    "params": {"frequency_hz": 3200.0, "gain_db": 2.0, "q": 1.2},
+                },
+                {
+                    "type": "compressor",
+                    "params": {
+                        "threshold_db": -22.0,
+                        "ratio": 4.0,
+                        "attack_ms": 8.0,
+                        "release_ms": 90.0,
+                        "makeup_gain_db": 1.5,
+                    },
+                },
+            ],
+        }
+        template = presets.get(preset_id)
+        if template is None:
+            return
+        chain = []
+        for index, item in enumerate(template, start=1):
+            chain.append({
+                "id": f"{preset_id}_{index}",
+                "type": item["type"],
+                "enabled": True,
+                "params": dict(item["params"]),
+            })
+        self.set_effect_chain(chain)
+        self._emit_change(chain[0]["id"] if chain else preset_id)
+
     def add_effect(self, effect_type: str) -> None:
         effect_type = str(effect_type).strip().lower()
         if effect_type not in EFFECT_DEFAULTS:
@@ -130,6 +220,15 @@ class EffectsPanel(QWidget):
         self.effect_widgets[effect_id] = widget
         self._emit_change(effect_id)
 
+    def get_scope(self) -> str:
+        return str(self.scope_selector.currentData() or "master")
+
+    def set_scope(self, scope: str) -> None:
+        value = "track" if str(scope).lower() == "track" else "master"
+        index = self.scope_selector.findData(value)
+        if index >= 0:
+            self.scope_selector.setCurrentIndex(index)
+
     def get_effect_chain(self) -> list[dict[str, Any]]:
         """Return a validated detached copy suitable for threading or JSON."""
         return normalize_effect_chain(copy.deepcopy(self.effects))
@@ -151,6 +250,11 @@ class EffectsPanel(QWidget):
                 self.container_layout.addWidget(widget)
                 self.effect_widgets[data["id"]] = widget
             self.empty_label.setVisible(not self.effects)
+            self.scope_label.setText(
+                "選択トラック（エフェクトはトラックの音量・パン調整前に適用）"
+                if self.get_scope() == "track"
+                else "マスターバス（全トラックの合成後に適用）"
+            )
         finally:
             self._suppress_changes = False
 

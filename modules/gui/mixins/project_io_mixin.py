@@ -42,11 +42,29 @@ def _clone_track_collection(tracks: List[Any]) -> List[Any]:
             notes = getattr(track, "notes", None)
             if isinstance(notes, list):
                 track_snapshot.notes = list(notes)
+            effects = getattr(track, "effects", None)
+            if isinstance(effects, list):
+                track_snapshot.effects = deepcopy(effects)
             snapshots.append(track_snapshot)
         except Exception:
             logger.exception("トラックの軽量コピーに失敗。deepcopyへフォールバック")
             snapshots.append(deepcopy(track))
     return snapshots
+
+
+def _get_master_effect_chain(window: Any) -> list[dict[str, Any]]:
+    """Return the project master chain, never the selected track's chain."""
+    mixer = getattr(window, "audio_mixer", None)
+    getter = getattr(mixer, "get_effect_chain", None)
+    if callable(getter):
+        return normalize_effect_chain(getter())
+
+    panel = getattr(window, "effects_panel", None)
+    scope_getter = getattr(panel, "get_scope", None)
+    if callable(scope_getter) and scope_getter() == "track":
+        return []
+    panel_getter = getattr(panel, "get_effect_chain", None)
+    return normalize_effect_chain(panel_getter() if callable(panel_getter) else [])
 
 
 def _prepare_project_note(note_data: Dict[str, Any], description: str) -> NoteEvent:
@@ -508,9 +526,7 @@ class ProjectIOMixin:
             "current_voice_id": str(getattr(self, "current_voice_id", "NONE") or "NONE"),
             "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
             "current_project_path": str(getattr(self, "current_project_path", "") or ""),
-            "effect_chain": deepcopy(
-                getattr(getattr(self, "effects_panel", None), "get_effect_chain", lambda: [])()
-            ),
+            "effect_chain": _get_master_effect_chain(self),
         }
 
     def _restore_project_edit_state(self: Any, state: Dict[str, Any]) -> None:
@@ -558,15 +574,21 @@ class ProjectIOMixin:
             set_tempo(tempo)
 
         self.current_project_path = str(state.get("current_project_path", "") or "")
+        audio_mixer = getattr(self, "audio_mixer", None)
+        restore_tracks = getattr(audio_mixer, "restore_tracks_preserving_sources", None)
+        if callable(restore_tracks):
+            restore_tracks(self.tracks)
         effect_chain = normalize_effect_chain(state.get("effect_chain", []))
         effects_panel = getattr(self, "effects_panel", None)
         set_panel_chain = getattr(effects_panel, "set_effect_chain", None)
         if callable(set_panel_chain):
             set_panel_chain(effect_chain)
-        audio_mixer = getattr(self, "audio_mixer", None)
         set_mixer_chain = getattr(audio_mixer, "set_effect_chain", None)
         if callable(set_mixer_chain):
             set_mixer_chain(effect_chain)
+        sync_effect_panel = getattr(self, "_sync_effect_panel_to_active_target", None)
+        if callable(sync_effect_panel):
+            sync_effect_panel()
         self.current_playback_time = float(state.get("current_playback_time", 0.0))
         set_time = getattr(self, "_set_transport_time", None)
         if callable(set_time):
@@ -1639,6 +1661,8 @@ class ProjectIOMixin:
                         str(raw.get("name", f"Track {index + 1}")),
                         track_type,
                     )
+                    track.web_track_id = str(raw.get("web_track_id", "") or "")
+                    track.voicebank_name = str(raw.get("voicebank_name", "") or "")
                     if track_type.lower() == "vocal":
                         raw_voicebank_id = raw.get(
                             "voicebank_id", saved_voice_id or getattr(self, "current_voice_id", "")
@@ -1675,6 +1699,7 @@ class ProjectIOMixin:
                     track.pan = pan
                     track.is_muted = bool(raw.get("is_muted", False))
                     track.is_solo = bool(raw.get("is_solo", False))
+                    track.effects = normalize_effect_chain(raw.get("effects", []))
                     if "engine_type" in raw:
                         track.engine_type = str(raw["engine_type"])
                     if "color_label" in raw:
@@ -1743,6 +1768,9 @@ class ProjectIOMixin:
             set_mixer_chain = getattr(audio_mixer, "set_effect_chain", None)
             if callable(set_mixer_chain):
                 set_mixer_chain(restored_effect_chain)
+            sync_effect_panel = getattr(self, "_sync_effect_panel_to_active_target", None)
+            if callable(sync_effect_panel):
+                sync_effect_panel()
 
             timeline = getattr(self, "timeline_widget", None)
             active_notes = self.tracks[self.current_track_idx].notes
@@ -2332,6 +2360,9 @@ class ProjectIOMixin:
                     "engine_type": str(getattr(track, "engine_type", "Aural")),
                     "color_label": str(getattr(track, "color_label", "")),
                     "voicebank_id": str(getattr(track, "voicebank_id", "") or ""),
+                    "voicebank_name": str(getattr(track, "voicebank_name", "") or ""),
+                    "web_track_id": str(getattr(track, "web_track_id", "") or ""),
+                    "effects": normalize_effect_chain(getattr(track, "effects", []) or []),
                     "notes": [n.to_dict() if hasattr(n, "to_dict") else dict(n)
                               for n in (getattr(track, "notes", []) or [])],
                 })
@@ -2359,9 +2390,7 @@ class ProjectIOMixin:
                 "current_time": float(getattr(self, "current_playback_time", 0.0)),
                 "current_voice_id": current_voice_id,
                 "current_voice": str(getattr(self, "current_voice", "未選択") or "未選択"),
-                "effect_chain": normalize_effect_chain(
-                    getattr(getattr(self, "effects_panel", None), "get_effect_chain", lambda: [])()
-                ),
+                "effect_chain": _get_master_effect_chain(self),
                 "parameters": serialized_parameters,
                 "tracks": serialized_tracks,
             }
@@ -2717,11 +2746,7 @@ class ProjectIOMixin:
         if not math.isfinite(tempo) or tempo <= 0.0:
             tempo = 120.0
 
-        effects_panel = getattr(self, "effects_panel", None)
-        get_effect_chain = getattr(effects_panel, "get_effect_chain", None)
-        effect_chain = normalize_effect_chain(
-            get_effect_chain() if callable(get_effect_chain) else []
-        )
+        effect_chain = _get_master_effect_chain(self)
 
         worker = _ProjectMixdownWorker(
             getattr(self, "vo_se_engine", None),

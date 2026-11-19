@@ -1,14 +1,22 @@
 import React from 'react';
 import { Layers, Plus, Volume2, VolumeX, Eye, EyeOff, Music, Trash2, Copy, Sliders, ChevronDown, ChevronRight, Disc, Upload } from 'lucide-react';
 
+interface TrackEffect {
+  id: string;
+  type: 'compressor' | 'eq' | 'reverb';
+  enabled: boolean;
+  params: Record<string, number>;
+}
+
 export interface Track {
   id: string;
   name: string;
   type: 'vocal' | 'wave';
   voicebank?: string;
   notes: any[];
-  volume: number; // 0.0 ~ 1.2
+  volume: number; // 0.0 ~ 1.0
   pan?: number; // -1.0 ~ 1.0
+  effects?: TrackEffect[];
   isMuted: boolean;
   isSolo: boolean;
   color?: string;
@@ -30,6 +38,98 @@ export interface MultiTrackPanelProps {
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
 }
+
+const TRACK_EFFECT_PRESETS: Record<string, TrackEffect[]> = {
+  vocal_clean: [
+    {
+      id: 'vocal_clean_1',
+      type: 'eq',
+      enabled: true,
+      params: { frequency_hz: 350, gain_db: -1.5, q: 1.0 },
+    },
+    {
+      id: 'vocal_clean_2',
+      type: 'compressor',
+      enabled: true,
+      params: {
+        threshold_db: -18,
+        ratio: 3,
+        attack_ms: 12,
+        release_ms: 120,
+        makeup_gain_db: 1,
+      },
+    },
+  ],
+  warm_room: [
+    {
+      id: 'warm_room_1',
+      type: 'eq',
+      enabled: true,
+      params: { frequency_hz: 240, gain_db: 1.5, q: 0.8 },
+    },
+    {
+      id: 'warm_room_2',
+      type: 'reverb',
+      enabled: true,
+      params: { room_size: 0.42, damping: 0.55, wet: 0.16, dry: 0.9, width: 0.8 },
+    },
+  ],
+  vocal_presence: [
+    {
+      id: 'vocal_presence_1',
+      type: 'eq',
+      enabled: true,
+      params: { frequency_hz: 3200, gain_db: 2, q: 1.2 },
+    },
+    {
+      id: 'vocal_presence_2',
+      type: 'compressor',
+      enabled: true,
+      params: {
+        threshold_db: -22,
+        ratio: 4,
+        attack_ms: 8,
+        release_ms: 90,
+        makeup_gain_db: 1.5,
+      },
+    },
+  ],
+};
+
+const TRACK_EFFECT_PARAM_RANGES: Record<string, {
+  min: number;
+  max: number;
+  step: number;
+  label: string;
+}> = {
+  threshold_db: { min: -60, max: 0, step: 0.5, label: 'Threshold (dB)' },
+  ratio: { min: 1, max: 20, step: 0.1, label: 'Ratio' },
+  attack_ms: { min: 1, max: 200, step: 0.1, label: 'Attack (ms)' },
+  release_ms: { min: 10, max: 1000, step: 1, label: 'Release (ms)' },
+  makeup_gain_db: { min: -12, max: 12, step: 0.1, label: 'Makeup (dB)' },
+  frequency_hz: { min: 20, max: 20000, step: 1, label: 'Frequency (Hz)' },
+  gain_db: { min: -18, max: 18, step: 0.1, label: 'Gain (dB)' },
+  q: { min: 0.2, max: 10, step: 0.1, label: 'Q' },
+  room_size: { min: 0, max: 0.9, step: 0.01, label: 'Room size' },
+  damping: { min: 0, max: 0.95, step: 0.01, label: 'Damping' },
+  wet: { min: 0, max: 1, step: 0.01, label: 'Wet' },
+  dry: { min: 0, max: 1, step: 0.01, label: 'Dry' },
+  width: { min: 0, max: 1, step: 0.01, label: 'Width' },
+};
+
+const getTrackEffectPreset = (effects?: TrackEffect[]): string => {
+  const firstId = effects?.[0]?.id || '';
+  if (firstId.startsWith('vocal_clean_')) return 'vocal_clean';
+  if (firstId.startsWith('warm_room_')) return 'warm_room';
+  if (firstId.startsWith('vocal_presence_')) return 'vocal_presence';
+  return effects?.length ? 'custom' : 'none';
+};
+
+const createTrackEffectPreset = (preset: string): TrackEffect[] =>
+  (TRACK_EFFECT_PRESETS[preset] || []).map((effect) => ({
+    ...effect,
+    params: { ...effect.params },
+  }));
 
 const TRACK_COLORS = [
   '#0a84ff', // Electric Blue (Primary)
@@ -56,6 +156,7 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
   onToggleCollapse,
 }) => {
   const currentTrack = tracks.find((t) => t.id === currentTrackId) || tracks[0];
+  const [expandedFxTrackId, setExpandedFxTrackId] = React.useState<string | null>(null);
 
   return (
     <div className="bg-[var(--vose-bg-panel)] border-b border-[var(--vose-border)] flex flex-col shrink-0 select-none transition-all">
@@ -140,6 +241,18 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
         {tracks.map((t, idx) => {
           const isSelected = t.id === currentTrackId;
           const trackColor = t.color || TRACK_COLORS[idx % TRACK_COLORS.length];
+          const updateEffect = (effectId: string, changes: Partial<TrackEffect>) => {
+            const updatedEffects = (t.effects || []).map((effect) =>
+              effect.id === effectId
+                ? {
+                    ...effect,
+                    ...changes,
+                    params: { ...effect.params, ...(changes.params || {}) },
+                  }
+                : effect
+            );
+            onUpdateTrack(t.id, { effects: updatedEffects });
+          };
 
           return (
             <div
@@ -245,6 +358,89 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                 </div>
               )}
 
+              {/* Track effect preset uses the same serialized chain as Desktop. */}
+              <div
+                className="rounded-md bg-[var(--vose-bg-base)]/80 border border-[var(--vose-border)] px-2 py-1.5 space-y-2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-semibold tracking-wide text-[var(--vose-text-secondary)] shrink-0">TRACK FX</span>
+                  <select
+                    value={getTrackEffectPreset(t.effects)}
+                    onChange={(e) => {
+                      const preset = e.target.value;
+                      if (preset !== 'custom') {
+                        onUpdateTrack(t.id, { effects: createTrackEffectPreset(preset) });
+                      }
+                    }}
+                    className="min-w-0 flex-1 bg-[var(--vose-bg-base)] text-[var(--vose-text-primary)] text-[10px] border border-[var(--vose-border)] rounded px-1.5 py-1 focus:border-[#0a84ff] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+                    title="選択トラックに適用するEQ / Compressor / Reverb"
+                  >
+                    <option value="none">Off</option>
+                    <option value="vocal_clean">Vocal Clean</option>
+                    <option value="warm_room">Warm Room</option>
+                    <option value="vocal_presence">Vocal Presence</option>
+                    {getTrackEffectPreset(t.effects) === 'custom' && (
+                      <option value="custom" disabled>{'Custom (' + (t.effects?.length ?? 0) + ')'}</option>
+                    )}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={!t.effects?.length}
+                    onClick={() => setExpandedFxTrackId(
+                      expandedFxTrackId === t.id ? null : t.id
+                    )}
+                    className="text-[9px] px-1.5 py-1 rounded border border-[var(--vose-border)] text-[var(--vose-text-secondary)] disabled:opacity-40 hover:text-[var(--vose-text-primary)]"
+                    aria-expanded={expandedFxTrackId === t.id}
+                    title="各エフェクトのパラメータを編集"
+                  >
+                    {expandedFxTrackId === t.id ? '閉じる' : '調整'}
+                  </button>
+                </div>
+                {expandedFxTrackId === t.id && (t.effects?.length ?? 0) > 0 && (
+                  <div className="space-y-2 border-t border-[var(--vose-border)] pt-2">
+                    {t.effects?.map((effect) => (
+                      <div key={effect.id} className="space-y-1.5">
+                        <label className="flex items-center gap-1.5 text-[9px] font-semibold text-[var(--vose-text-primary)]">
+                          <input
+                            type="checkbox"
+                            checked={effect.enabled}
+                            onChange={(e) => updateEffect(effect.id, { enabled: e.target.checked })}
+                            className="accent-[#0a84ff]"
+                          />
+                          <span>{effect.type.toUpperCase()}</span>
+                        </label>
+                        {Object.entries(effect.params).map(([parameter, value]) => {
+                          const range = TRACK_EFFECT_PARAM_RANGES[parameter] || {
+                            min: 0, max: 1, step: 0.01, label: parameter,
+                          };
+                          const safeValue = Math.min(range.max, Math.max(range.min, value));
+                          return (
+                            <label key={parameter} className="block space-y-0.5">
+                              <span className="flex items-center justify-between gap-2 text-[8px] text-[var(--vose-text-secondary)]">
+                                <span>{range.label}</span>
+                                <span className="font-mono">{Number(value).toFixed(2)}</span>
+                              </span>
+                              <input
+                                type="range"
+                                min={range.min}
+                                max={range.max}
+                                step={range.step}
+                                value={safeValue}
+                                onChange={(e) => updateEffect(effect.id, {
+                                  params: { [parameter]: parseFloat(e.target.value) },
+                                })}
+                                className="w-full h-1 accent-[#0a84ff]"
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Volume Slider & Mute / Solo Controls */}
               <div className="flex items-center justify-between pt-1.5 sm:pt-2 border-t border-[var(--vose-border)]" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
@@ -266,10 +462,20 @@ export const MultiTrackPanel: React.FC<MultiTrackPanelProps> = ({
                   </button>
                   <input
                     type="range"
+                    min="-1"
+                    max="1"
+                    step="0.01"
+                    value={Math.max(-1, Math.min(1, t.pan ?? 0))}
+                    onChange={(e) => onUpdateTrack(t.id, { pan: parseFloat(e.target.value) })}
+                    className="w-14 accent-[#0a84ff] h-1.5 bg-[var(--vose-bg-base)] rounded"
+                    title={`Pan: ${Math.round((t.pan ?? 0) * 100)}`}
+                  />
+                  <input
+                    type="range"
                     min="0"
-                    max="1.2"
-                    step="0.05"
-                    value={t.volume}
+                    max="1"
+                    step="0.01"
+                    value={Math.max(0, Math.min(1, t.volume))}
                     onChange={(e) => onUpdateTrack(t.id, { volume: parseFloat(e.target.value) })}
                     className="w-full accent-[#0a84ff] h-1.5 bg-[var(--vose-bg-base)] rounded"
                     title={`音量: ${Math.round(t.volume * 100)}%`}

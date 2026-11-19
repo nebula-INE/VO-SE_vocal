@@ -529,3 +529,365 @@ def test_resume_resets_effect_history_after_discarding_prefetched_blocks(monkeyp
     assert reset_count == 2
     assert mixer.position_sec == 1.0
     mixer.stop()
+
+
+
+def test_track_compressor_is_applied_before_master_bus_and_only_to_its_track():
+    mixer = AudioMixer(sample_rate=1000, block_size=256)
+    compressed = _track()
+    clean = _track()
+    compressed.effects = [{
+        "id": "track-compressor",
+        "type": "compressor",
+        "enabled": True,
+        "params": {
+            "threshold_db": -12.0,
+            "ratio": 8.0,
+            "attack_ms": 2.0,
+            "release_ms": 80.0,
+            "makeup_gain_db": 0.0,
+        },
+    }]
+    _install_memory_sources(
+        mixer,
+        (compressed, np.full((256, 2), 0.5, dtype=np.float32)),
+        (clean, np.full((256, 2), 0.1, dtype=np.float32)),
+    )
+    mixer._configure_track_effects([compressed, clean])
+    mixed = mixer._mix_block(0, 256)
+
+    reference = AudioMixer(sample_rate=1000, block_size=256)
+    reference_a = _track()
+    reference_b = _track()
+    _install_memory_sources(
+        reference,
+        (reference_a, np.full((256, 2), 0.5, dtype=np.float32)),
+        (reference_b, np.full((256, 2), 0.1, dtype=np.float32)),
+    )
+    reference._configure_track_effects([reference_a, reference_b])
+    plain = reference._mix_block(0, 256)
+
+    assert mixed.shape == plain.shape
+    assert float(np.mean(np.abs(mixed[-100:]))) < float(np.mean(np.abs(plain[-100:])))
+
+
+def test_track_reverb_extends_duration_and_renders_its_own_tail():
+    mixer = AudioMixer(sample_rate=8000, block_size=128)
+    track = _track()
+    impulse = np.zeros((128, 2), dtype=np.float32)
+    impulse[0] = (0.8, 0.8)
+    track.effects = [{
+        "id": "track-room",
+        "type": "reverb",
+        "enabled": True,
+        "params": {
+            "room_size": 0.55,
+            "damping": 0.4,
+            "wet": 0.5,
+            "dry": 0.5,
+            "width": 0.8,
+        },
+    }]
+    _install_memory_sources(mixer, (track, impulse))
+    mixer._configure_track_effects([track])
+    mixer._track_total_frames = mixer._calculate_track_total_frames(mixer._sources)
+    mixer._total_frames = mixer._track_total_frames + mixer._effects.tail_frames
+
+    assert mixer._track_total_frames > len(impulse)
+    mixer._mix_block(0, 128)
+    tail = mixer._mix_block(128, 512)
+    assert float(np.max(np.abs(tail))) > 1e-5
+
+
+def test_track_effect_chain_is_validated_and_returns_detached_copy():
+    mixer = AudioMixer()
+    track = _track()
+    mixer._tracks = [track]
+    chain = [{
+        "id": "track-eq",
+        "type": "eq",
+        "enabled": True,
+        "params": {"frequency_hz": 1200.0, "gain_db": 3.0, "q": 1.0},
+    }]
+    mixer.set_track_effect_chain(track, chain)
+    returned = mixer.get_track_effect_chain(track)
+    returned[0]["params"]["gain_db"] = 18.0
+
+    assert mixer.get_track_effect_chain(track)[0]["params"]["gain_db"] == 3.0
+
+
+def test_audio_output_configuration_updates_device_rate_and_buffer(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    queried = []
+
+    class FakeSoundDevice:
+        @staticmethod
+        def query_devices(device=None, kind=None):
+            queried.append((device, kind))
+            if device is None:
+                return {"name": "Default", "max_output_channels": 2, "default_samplerate": 44100.0}
+            return {"name": "Selected Interface", "max_output_channels": 2, "default_samplerate": 96000.0}
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer(sample_rate=44100, block_size=256)
+
+    diagnostics = mixer.configure_output(
+        output_device=3,
+        sample_rate=96000,
+        block_size=512,
+    )
+
+    assert mixer.output_device == 3
+    assert mixer.sample_rate == 96000
+    assert mixer.block_size == 512
+    assert diagnostics["output_device_name"] == "Selected Interface"
+    assert diagnostics["sample_rate"] == 96000
+    assert diagnostics["block_size"] == 512
+    assert queried[-1] == (3, "output")
+
+
+def test_audio_output_configuration_rolls_back_when_device_is_invalid(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class FakeSoundDevice:
+        @staticmethod
+        def query_devices(device=None, kind=None):
+            if device == 7:
+                raise OSError("device disappeared")
+            return {"name": "Default", "max_output_channels": 2, "default_samplerate": 44100.0}
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer(sample_rate=44100, block_size=256)
+
+    try:
+        mixer.configure_output(output_device=7, sample_rate=48000, block_size=512)
+    except RuntimeError as exc:
+        assert "音声出力デバイス" in str(exc)
+    else:
+        raise AssertionError("invalid device must be rejected")
+
+    assert mixer.output_device is None
+    assert mixer.sample_rate == 44100
+    assert mixer.block_size == 256
+
+
+def test_list_output_devices_filters_input_only_devices(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class FakeSoundDevice:
+        @staticmethod
+        def query_devices():
+            return [
+                {"name": "Duplex", "max_output_channels": 2, "hostapi": 0, "default_samplerate": 48000},
+                {"name": "Input only", "max_output_channels": 0, "hostapi": 0, "default_samplerate": 44100},
+            ]
+
+        @staticmethod
+        def query_hostapis():
+            return [{"name": "WASAPI"}]
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    devices = AudioMixer.list_output_devices()
+
+    assert len(devices) == 1
+    assert devices[0]["index"] == 0
+    assert devices[0]["host_api"] == "WASAPI"
+
+
+
+def test_configure_output_preserves_playback_position_across_safe_restart(
+    monkeypatch, tmp_path
+):
+    import soundfile as sf
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    created = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.callback = kwargs["callback"]
+            self.channels = kwargs["channels"]
+            self.blocksize = kwargs["blocksize"]
+            self.latency = 0.025
+            self.active = False
+            created.append(self)
+
+        def start(self):
+            self.active = True
+
+        def stop(self):
+            self.active = False
+
+        def close(self):
+            self.active = False
+
+    class FakeSoundDevice:
+        CallbackStop = RuntimeError
+
+        @staticmethod
+        def query_devices(device=None, kind=None):
+            return {
+                "name": f"Output {device if device is not None else 'Default'}",
+                "max_output_channels": 2,
+                "default_samplerate": 48000.0,
+            }
+
+        @staticmethod
+        def OutputStream(**kwargs):
+            return FakeStream(**kwargs)
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    audio_path = tmp_path / "source.wav"
+    sf.write(
+        audio_path,
+        np.full((512, 2), 0.25, dtype=np.float32),
+        64,
+        subtype="FLOAT",
+    )
+    track = _track(audio_path=str(audio_path))
+    mixer = AudioMixer(sample_rate=64, block_size=64)
+    mixer.set_tracks([track])
+    mixer.play(0.0)
+    output = np.zeros((32, 2), dtype=np.float32)
+    created[0].callback(output, 32, None, None)
+    previous_position = mixer.position_sec
+
+    mixer.configure_output(output_device=2, sample_rate=48000, block_size=128)
+
+    assert len(created) == 2
+    assert created[0].active is False
+    assert created[1].active is True
+    assert created[1].blocksize == 128
+    assert abs(mixer.position_sec - previous_position) < 1e-6
+    assert mixer.get_diagnostics()["output_latency_ms"] == 25.0
+    mixer.stop()
+
+
+
+def test_audio_output_configuration_rejects_unsupported_device_sample_rate(monkeypatch):
+    import modules.backend.audio_mixer as audio_mixer_module
+
+    class FakeSoundDevice:
+        @staticmethod
+        def query_devices(device=None, kind=None):
+            return {
+                "name": "48kHz only",
+                "max_output_channels": 2,
+                "default_samplerate": 48000.0,
+            }
+
+        @staticmethod
+        def check_output_settings(**kwargs):
+            if kwargs["samplerate"] == 96000:
+                raise OSError("unsupported sample rate")
+
+    monkeypatch.setattr(audio_mixer_module, "sd", FakeSoundDevice)
+    mixer = AudioMixer(sample_rate=44100, block_size=256)
+
+    try:
+        mixer.configure_output(output_device=1, sample_rate=96000, block_size=512)
+    except RuntimeError as exc:
+        assert "対応していません" in str(exc)
+    else:
+        raise AssertionError("unsupported device sample rate must be rejected")
+
+    assert mixer.sample_rate == 44100
+    assert mixer.block_size == 256
+    assert mixer.output_device is None
+
+
+def test_restore_tracks_preserving_sources_rebinds_cloned_track_and_effect_chain(tmp_path):
+    import soundfile as sf
+
+    source_path = tmp_path / "history-source.wav"
+    audio = np.full((64, 2), 0.2, dtype=np.float32)
+    sf.write(source_path, audio, 8000, subtype="FLOAT")
+
+    original = _track(audio_path=str(source_path))
+    original.effects = [{
+        "id": "history-compressor",
+        "type": "compressor",
+        "enabled": True,
+        "params": {
+            "threshold_db": -20.0,
+            "ratio": 2.5,
+            "attack_ms": 5.0,
+            "release_ms": 100.0,
+            "makeup_gain_db": 0.0,
+        },
+    }]
+    mixer = AudioMixer(sample_rate=8000, block_size=64)
+    mixer.set_tracks([original])
+    source_before = mixer._sources[id(original)]
+
+    restored = _track(audio_path=str(source_path), volume=0.6)
+    restored.effects = [{
+        "id": "history-eq",
+        "type": "eq",
+        "enabled": True,
+        "params": {"frequency_hz": 1800.0, "gain_db": 2.0, "q": 1.0},
+    }]
+    mixer.restore_tracks_preserving_sources([restored])
+
+    assert mixer._tracks == [restored]
+    assert id(restored) in mixer._sources
+    assert mixer._sources[id(restored)].track is restored
+    assert mixer._sources[id(restored)].path == source_before.path
+    assert mixer.get_track_effect_chain(restored) == restored.effects
+    assert mixer._track_total_frames == source_before.output_frames
+
+
+def test_saved_output_device_resolves_by_name_and_host_api_after_index_changes():
+    devices = [
+        {"index": 0, "name": "USB Headset", "host_api": "WASAPI"},
+        {"index": 4, "name": "Studio Interface", "host_api": "ASIO"},
+    ]
+
+    resolved = AudioMixer.resolve_output_device(
+        devices,
+        preferred_index=1,
+        preferred_name="Studio Interface",
+        preferred_host_api="ASIO",
+    )
+
+    assert resolved == 4
+
+
+def test_saved_output_device_does_not_silently_select_a_different_device():
+    devices = [
+        {"index": 1, "name": "USB Headset", "host_api": "WASAPI"},
+        {"index": 2, "name": "Laptop Speakers", "host_api": "CoreAudio"},
+    ]
+
+    resolved = AudioMixer.resolve_output_device(
+        devices,
+        preferred_index=1,
+        preferred_name="Studio Interface",
+        preferred_host_api="ASIO",
+    )
+
+    assert resolved is None
+
+
+def test_saved_output_device_uses_existing_index_for_legacy_preferences():
+    devices = [
+        {"index": 0, "name": "Default", "host_api": "WASAPI"},
+        {"index": 3, "name": "USB Headset", "host_api": "WASAPI"},
+    ]
+
+    assert AudioMixer.resolve_output_device(devices, 3) == 3
+    assert AudioMixer.resolve_output_device(devices, 9) is None
+
+
+def test_os_default_output_preference_remains_os_default_even_with_saved_device_label():
+    devices = [
+        {"index": 0, "name": "Current Default", "host_api": "CoreAudio"},
+    ]
+
+    assert AudioMixer.resolve_output_device(
+        devices,
+        preferred_index=None,
+        preferred_name="Previously Default",
+        preferred_host_api="WASAPI",
+    ) is None

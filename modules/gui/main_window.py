@@ -349,6 +349,8 @@ class VoseTrack:
         self.name = name
         self.track_type = track_type  # "vocal"（歌声） または "wave"（オケ）
         self.voicebank_id = str(voicebank_id or "")
+        self.voicebank_name = ""
+        self.web_track_id = ""
         
         # --- 基本データ ---
         self.notes = []               # 歌声トラック用のノートリスト
@@ -375,6 +377,8 @@ class VoseTrack:
             "name": self.name,
             "type": self.track_type,
             "voicebank_id": self.voicebank_id,
+            "voicebank_name": self.voicebank_name,
+            "web_track_id": self.web_track_id,
             "audio_path": self.audio_path,
             "volume": self.volume,
             "pan": self.pan,
@@ -382,6 +386,7 @@ class VoseTrack:
             "is_solo": self.is_solo,
             "engine_type": self.engine_type,
             "color_label": self.color_label,
+            "effects": self.effects,
             # ノートがオブジェクトなら辞書化、そうでなければそのまま
             "notes": [n.to_dict() if hasattr(n, 'to_dict') else n for n in self.notes]
         }
@@ -2018,6 +2023,8 @@ class _AudioMixerCommandThread(QThread):
         tracks: Optional[List[Any]] = None,
         start_sec: float = 0.0,
         block_size: Optional[int] = None,
+        output_device: int | None = None,
+        sample_rate: Optional[int] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -2026,6 +2033,8 @@ class _AudioMixerCommandThread(QThread):
         self.tracks = list(tracks or [])
         self.start_sec = float(start_sec)
         self.block_size = int(block_size) if block_size is not None else None
+        self.output_device = output_device
+        self.sample_rate = int(sample_rate) if sample_rate is not None else None
 
     @Slot()
     def run(self) -> None:
@@ -2071,6 +2080,15 @@ class _AudioMixerCommandThread(QThread):
                         "is_playing": self.mixer.is_playing,
                     },
                 )
+            elif self.operation == "configure_audio":
+                if self.sample_rate is None or self.block_size is None:
+                    raise ValueError("Audio sample rate and buffer size are required")
+                diagnostics = self.mixer.configure_output(
+                    output_device=self.output_device,
+                    sample_rate=self.sample_rate,
+                    block_size=self.block_size,
+                )
+                self.completed.emit(self.operation, {"diagnostics": diagnostics})
             else:
                 raise ValueError(f"Unsupported audio mixer operation: {self.operation}")
         except Exception as exc:
@@ -3561,6 +3579,10 @@ class MainWindow(
         edit_menu.addAction(self.paste_action)
 
         tools_menu = self.menuBar().addMenu("ツール(&T)")
+        audio_settings_action = QAction("オーディオ設定...", self)
+        audio_settings_action.triggered.connect(self.open_audio_settings)
+        tools_menu.addAction(audio_settings_action)
+        tools_menu.addSeparator()
         oto_inspector_action = QAction("UTAU 原音設定 (oto.ini)...", self)
         oto_inspector_action.triggered.connect(self.open_oto_inspector)
         tools_menu.addAction(oto_inspector_action)
@@ -3617,6 +3639,7 @@ class MainWindow(
             self.effects_panel.effect_parameters_changed.connect(
                 self.on_effect_parameters_changed
             )
+            self.effects_panel.scope_changed.connect(self.on_effect_scope_changed)
 
         # 音源選択シグナルは setup_voice_gallery() 側で一度だけ接続する。
         # ここで再接続すると1回の選択で音源再ロードとキャッシュ更新が二重実行される。
@@ -4088,12 +4111,14 @@ class MainWindow(
     @Slot()
     def undo(self):
         """Ctrl+Z で呼び出し"""
+        self._flush_pending_effect_history()
         self.history.undo()
         self.statusBar().showMessage("Undo executed")
 
     @Slot()
     def redo(self):
         """Ctrl+Y で呼び出し"""
+        self._flush_pending_effect_history()
         self.history.redo()
         self.statusBar().showMessage("Redo executed")
 
@@ -4199,6 +4224,7 @@ class MainWindow(
         トラック切り替え時のデータ保護と読み込み。
         代表の設計に基づき、編集中のデータを退避させてから新しいトラックをロードします。
         """
+        self._flush_pending_effect_history()
         # 1. 境界チェック（絶対に安全に）
         # self.tracks がリストであることを型ヒントで保証
         tracks_list: List[Any] = getattr(self, 'tracks', [])
@@ -4226,8 +4252,10 @@ class MainWindow(
         if hasattr(self, 'timeline_widget') and self.timeline_widget is not None:
             self.timeline_widget.set_notes(target_tr.notes)
             # 背景の波形などを再描画
-            if self.timeline_widget: 
+            if self.timeline_widget:
                 self.timeline_widget.update()
+
+        self._sync_effect_panel_to_active_target()
 
         # 5. 各ストリップの選択枠・ディミング状態を更新
         self._sync_track_strips()
@@ -4688,12 +4716,82 @@ class MainWindow(
             play_btn.setText("⏸ 停止" if is_playing else "▶ 再生")
 
     def setup_audio_interface(self) -> None:
-        """Initialize the single desktop callback-based AudioMixer path."""
+        """Initialize the mixer using stable PortAudio device identity when available."""
+        from PySide6.QtCore import QSettings
         from modules.backend.audio_mixer import AudioMixer
 
-        self.audio_mixer = AudioMixer(sample_rate=44100, block_size=256)
+        settings = QSettings("VO-SE", "vocal")
+        raw_device = settings.value("audio/output_device", -1)
+        try:
+            preferred_index = int(str(raw_device))
+        except (TypeError, ValueError, OverflowError):
+            preferred_index = -1
+        preferred_index = preferred_index if preferred_index >= 0 else None
+        preferred_name = str(settings.value("audio/output_device_name", "") or "")
+        preferred_host_api = str(settings.value("audio/output_device_host_api", "") or "")
+        devices = AudioMixer.list_output_devices()
+        output_device = AudioMixer.resolve_output_device(
+            devices,
+            preferred_index,
+            preferred_name,
+            preferred_host_api,
+        )
+        device_fallback = preferred_index is not None and output_device is None
+
+        try:
+            sample_rate = int(str(settings.value("audio/sample_rate", 44100)))
+        except (TypeError, ValueError, OverflowError):
+            sample_rate = 44100
+        try:
+            block_size = int(str(settings.value("audio/block_size", 256)))
+        except (TypeError, ValueError, OverflowError):
+            block_size = 256
+        if sample_rate not in AudioMixer.SUPPORTED_SAMPLE_RATES:
+            sample_rate = 44100
+        if block_size not in AudioMixer.SUPPORTED_BLOCK_SIZES:
+            block_size = 256
+
+        self.audio_mixer = AudioMixer(
+            sample_rate=sample_rate,
+            block_size=block_size,
+            output_device=output_device,
+        )
         self.audio_player = self.audio_mixer
         self.audio_output = None
+        if device_fallback:
+            self.statusBar().showMessage(
+                "保存されていた音声出力デバイスが見つからないため、OSの既定デバイスを使用します。",
+                8000,
+            )
+
+    def open_audio_settings(self) -> None:
+        """Open the output-device/rate/buffer dialog and reconfigure off the GUI thread."""
+        from modules.gui.settings_dialog import AudioSettingsDialog
+
+        mixer = getattr(self, "audio_mixer", None)
+        if mixer is None:
+            self.statusBar().showMessage("AudioMixerを初期化できません。", 3000)
+            return
+        dialog = AudioSettingsDialog(
+            self,
+            devices=mixer.list_output_devices(),
+            current_device=mixer.output_device,
+            sample_rate=mixer.sample_rate,
+            block_size=mixer.block_size,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        self._pending_audio_settings = values
+        started = self._start_audio_mixer_command(
+            "configure_audio",
+            output_device=values["output_device"],
+            sample_rate=values["sample_rate"],
+            block_size=values["block_size"],
+        )
+        if not started:
+            self._pending_audio_settings = None
+
     def get_current_playback_state(self) -> bool:
         """Return whether the unified desktop mixer is actively playing."""
         mixer = getattr(self, "audio_mixer", None)
@@ -5690,6 +5788,57 @@ class MainWindow(
     def _on_audio_mixer_command_completed(self, operation: str, result: object) -> None:
         details = result if isinstance(result, dict) else {}
 
+        if operation == "configure_audio":
+            from PySide6.QtCore import QSettings
+
+            values = getattr(self, "_pending_audio_settings", None) or {}
+            settings = QSettings("VO-SE", "vocal")
+            device_index = values.get("output_device")
+            settings.setValue("audio/output_device", -1 if device_index is None else int(device_index))
+            settings.setValue("audio/sample_rate", int(values.get("sample_rate", 44100)))
+            settings.setValue("audio/block_size", int(values.get("block_size", 256)))
+            mixer = getattr(self, "audio_mixer", None)
+            settings.setValue(
+                "audio/output_device_name",
+                str(getattr(mixer, "output_device_name", "") or ""),
+            )
+            settings.setValue(
+                "audio/output_device_host_api",
+                str(getattr(mixer, "output_device_host_api", "") or ""),
+            )
+            self._pending_audio_settings = None
+            self.is_playing = bool(getattr(mixer, "is_playing", False))
+            self._set_mixer_transport_busy(False)
+            if self.is_playing:
+                self.playback_timer.start()
+            self._refresh_transport_button_states()
+            diagnostics = details.get("diagnostics", {})
+            if not isinstance(diagnostics, dict):
+                diagnostics = {}
+            applied_block = int(diagnostics.get("block_size", 256))
+            self.buffer_label.setText(f"{applied_block} samples")
+            block_sizes = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+            buffer_slider = getattr(self, "buffer_slider", None)
+            if buffer_slider is not None and applied_block in block_sizes:
+                previous_signals = buffer_slider.blockSignals(True)
+                buffer_slider.setValue(block_sizes.index(applied_block) + 1)
+                buffer_slider.blockSignals(previous_signals)
+            rate = int(diagnostics.get("sample_rate", 44100))
+            block = int(diagnostics.get("block_size", 256))
+            measured_latency_ms = float(diagnostics.get("output_latency_ms", 0.0) or 0.0)
+            estimated_latency_ms = block / float(max(1, rate)) * 1000.0
+            latency_label = (
+                f"デバイス遅延 約{measured_latency_ms:.1f} ms"
+                if measured_latency_ms > 0.0
+                else f"1ブロック 約{estimated_latency_ms:.1f} ms"
+            )
+            self.statusBar().showMessage(
+                f"オーディオ設定: {diagnostics.get('output_device_name', '既定のデバイス')} / "
+                f"{rate} Hz / {block} frames / {latency_label}",
+                8000,
+            )
+            return
+
         if operation == "set_buffer_size":
             mixer = getattr(self, "audio_mixer", None)
             applied_size = int(details.get("block_size", getattr(mixer, "block_size", 256)))
@@ -5761,6 +5910,17 @@ class MainWindow(
     def _on_audio_mixer_command_failed(self, operation: str, error_message: str) -> None:
         mixer = getattr(self, "audio_mixer", None)
         self.is_playing = bool(getattr(mixer, "is_playing", False))
+        if operation == "configure_audio":
+            self._pending_audio_settings = None
+            self._set_mixer_transport_busy(False)
+            if self.is_playing:
+                self.playback_timer.start()
+            self._refresh_transport_button_states()
+            self.statusBar().showMessage(
+                f"オーディオ設定を適用できませんでした。旧設定を維持しました: {error_message}",
+                8000,
+            )
+            return
         if operation == "set_buffer_size":
             self._pending_audio_buffer_size = None
             actual_size = int(getattr(mixer, "block_size", 256))
@@ -5811,6 +5971,8 @@ class MainWindow(
         tracks: Optional[List[Any]] = None,
         start_sec: float = 0.0,
         block_size: Optional[int] = None,
+        output_device: int | None = None,
+        sample_rate: Optional[int] = None,
     ) -> bool:
         existing = getattr(self, "_audio_mixer_command_thread", None)
         if existing is not None and existing.isRunning():
@@ -5827,6 +5989,8 @@ class MainWindow(
             tracks=tracks,
             start_sec=start_sec,
             block_size=block_size,
+            output_device=output_device,
+            sample_rate=sample_rate,
             parent=self,
         )
         worker.completed.connect(self._on_audio_mixer_command_completed)
@@ -5845,6 +6009,8 @@ class MainWindow(
             self.playback_timer.stop()
             if operation == "set_buffer_size":
                 self.statusBar().showMessage("音声出力バッファを安全に再設定中...", 0)
+            elif operation == "configure_audio":
+                self.statusBar().showMessage("音声デバイスを安全に再初期化中...", 0)
             else:
                 self.statusBar().showMessage("音声出力を停止中...", 0)
         worker.start()
@@ -6562,26 +6728,102 @@ class MainWindow(
             self.graph_editor_widget._restore_parameters_snapshot(before)
         self.history.push(EditCommand(redo, undo, description))
 
+    def _queue_effect_history_snapshot(self, before_state: dict) -> None:
+        """Coalesce a slider drag into one project Undo command."""
+        if not isinstance(before_state, dict):
+            return
+        if not isinstance(getattr(self, "_pending_effect_history_before", None), dict):
+            self._pending_effect_history_before = before_state
+        timer = getattr(self, "_effect_history_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(400)
+            timer.timeout.connect(self._flush_pending_effect_history)
+            self._effect_history_timer = timer
+        timer.start()
+
+    def _flush_pending_effect_history(self) -> None:
+        """Commit the final state of a master/track effects edit to Undo history."""
+        timer = getattr(self, "_effect_history_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        before_state = getattr(self, "_pending_effect_history_before", None)
+        self._pending_effect_history_before = None
+        if not isinstance(before_state, dict):
+            return
+        capture = getattr(self, "_capture_project_edit_state", None)
+        record = getattr(self, "_record_project_state_edit", None)
+        if callable(capture) and callable(record):
+            try:
+                after_state = capture()
+                record(before_state, after_state, "エフェクト設定")
+            except Exception as exc:
+                self.statusBar().showMessage(
+                    f"エフェクトUndo履歴の登録に失敗しました: {exc}", 5000
+                )
+
+    def _sync_effect_panel_to_active_target(self) -> None:
+        """Show the chain belonging to the current scope and selected track."""
+        panel = getattr(self, "effects_panel", None)
+        if panel is None:
+            return
+        if panel.get_scope() == "track":
+            tracks = list(getattr(self, "tracks", []) or [])
+            index = int(getattr(self, "current_track_idx", 0))
+            chain = getattr(tracks[index], "effects", []) if 0 <= index < len(tracks) else []
+        else:
+            mixer = getattr(self, "audio_mixer", None)
+            getter = getattr(mixer, "get_effect_chain", None)
+            chain = getter() if callable(getter) else []
+        panel.set_effect_chain(chain)
+
+    def on_effect_scope_changed(self, _scope: str = "master") -> None:
+        self._flush_pending_effect_history()
+        self._sync_effect_panel_to_active_target()
+
     @Slot(str, dict)
     def on_effect_parameters_changed(self, effect_id: str, params: dict):
-        """Apply the current master-bus chain to live playback and project mixdown."""
+        """Apply the edited chain to the master bus or selected project track."""
         from modules.audio.master_effects import normalize_effect_chain
 
-        effects_panel = getattr(self, "effects_panel", None)
-        get_chain = getattr(effects_panel, "get_effect_chain", None)
-        audio_mixer = getattr(self, "audio_mixer", None)
-        set_chain = getattr(audio_mixer, "set_effect_chain", None)
+        panel = getattr(self, "effects_panel", None)
+        mixer = getattr(self, "audio_mixer", None)
+        before_state = None
         try:
-            chain = normalize_effect_chain(
-                get_chain() if callable(get_chain) else []
+            pending_before = getattr(self, "_pending_effect_history_before", None)
+            capture = getattr(self, "_capture_project_edit_state", None)
+            before_state = (
+                pending_before
+                if isinstance(pending_before, dict)
+                else capture() if callable(capture) else None
             )
-            if callable(set_chain):
-                set_chain(chain, preserve_state=True)
-        except (TypeError, ValueError, RuntimeError) as exc:
+            chain = normalize_effect_chain(
+                panel.get_effect_chain() if panel is not None else []
+            )
+            if panel is not None and panel.get_scope() == "track":
+                tracks = list(getattr(self, "tracks", []) or [])
+                index = int(getattr(self, "current_track_idx", 0))
+                if not 0 <= index < len(tracks):
+                    raise ValueError("エフェクトを適用するトラックが選択されていません。")
+                track = tracks[index]
+                track.effects = chain
+                setter = getattr(mixer, "set_track_effect_chain", None)
+                if callable(setter):
+                    setter(track, chain, preserve_state=True)
+                scope_name = f"トラック「{track.name}」"
+            else:
+                setter = getattr(mixer, "set_effect_chain", None)
+                if callable(setter):
+                    setter(chain, preserve_state=True)
+                scope_name = "マスターバス"
+        except (TypeError, ValueError, RuntimeError, AttributeError) as exc:
             self.statusBar().showMessage(f"エフェクト設定エラー: {exc}", 5000)
             return
+        if isinstance(before_state, dict):
+            self._queue_effect_history_snapshot(before_state)
         self.statusBar().showMessage(
-            f"マスターバスを更新: {len(chain)} エフェクト", 2000
+            f"{scope_name}を更新: {len(chain)} エフェクト", 2000
         )
     
     @Slot()
