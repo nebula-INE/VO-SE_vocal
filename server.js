@@ -1521,8 +1521,11 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   // pitch subbank. Only exact untagged aliases are safe there; do not allow
   // pitch-suffix or filename fallbacks to borrow another layer.
   const requestedMidi = Number(noteNum);
+  const hasRequestedMidi =
+    noteNum !== null && noteNum !== undefined && noteNum !== '' &&
+    Number.isFinite(requestedMidi);
   const hasPrefixMap = indexed.prefixMap instanceof Map && indexed.prefixMap.size > 0;
-  const hasMappedRange = hasPrefixMap && Number.isFinite(requestedMidi) &&
+  const hasMappedRange = hasPrefixMap && hasRequestedMidi &&
     Array.from(indexed.prefixMap.keys()).some((boundary) =>
       Number(boundary) <= Math.max(0, Math.min(127, Math.round(requestedMidi)))
     );
@@ -1531,7 +1534,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
     /(?:_?[A-Ga-g][#b]?-?\d+|_[0-9]+|[↑↓強弱SP]+)$/i.test(alias);
   if (
     hasPrefixMap &&
-    Number.isFinite(requestedMidi) &&
+    hasRequestedMidi &&
     !hasMappedRange &&
     !explicitlyScoped &&
     !explicitlyPitchTagged
