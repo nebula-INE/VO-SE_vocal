@@ -448,8 +448,8 @@ def test_resolve_alias_selects_closest_pitch_suffix_without_prefix_map(tmp_path)
     voice_dir = tmp_path / "voice"
     voice_dir.mkdir()
     (voice_dir / "oto.ini").write_text(
-        "a_c4.wav=あ_C4,0,0,0,50,0\\n"
-        "a_f4.wav=あ_F4,0,0,0,60,0\\n",
+        "a_c4.wav=あ_C4,0,0,0,50,0\n"
+        "a_f4.wav=あ_F4,0,0,0,60,0\n",
         encoding="utf-8",
     )
     for name in ("a_c4.wav", "a_f4.wav"):
@@ -476,12 +476,12 @@ def test_load_voice_dir_finds_prefix_map_case_insensitively(tmp_path):
     voice_dir = tmp_path / "voice"
     voice_dir.mkdir()
     (voice_dir / "PREFIX.MAP").write_text(
-        "C1\\t_C4\\nF4\\t_F4\\n",
+        "C1\t_C4\nF4\t_F4\n",
         encoding="utf-8",
     )
     (voice_dir / "oto.ini").write_text(
-        "a_c4.wav=あ_C4,0,0,0,50,0\\n"
-        "a_f4.wav=あ_F4,0,0,0,60,0\\n",
+        "a_c4.wav=あ_C4,0,0,0,50,0\n"
+        "a_f4.wav=あ_F4,0,0,0,60,0\n",
         encoding="utf-8",
     )
     for name in ("a_c4.wav", "a_f4.wav"):
