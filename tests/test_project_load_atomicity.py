@@ -1,7 +1,7 @@
-from typing import cast
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 from modules.data.data_models import NoteEvent
 from modules.gui.mixins.project_io_mixin import ProjectIOMixin
