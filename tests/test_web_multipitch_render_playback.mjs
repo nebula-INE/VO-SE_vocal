@@ -171,10 +171,10 @@ test('Web loads uppercase PREFIX.MAP and parses the legacy two-column suffix for
   const c4 = makeWav(31);
   const f4 = makeWav(121);
   await mkdir(voiceDir, { recursive: true });
-  await writeFile(join(voiceDir, 'PREFIX.MAP'), 'C1\\t_C4\\n', 'utf8');
+  await writeFile(join(voiceDir, 'PREFIX.MAP'), 'C1\t_C4\n', 'utf8');
   await writeFile(
     join(voiceDir, 'oto.ini'),
-    'c4.wav=あ_C4,0,0,0,0,0\\nf4.wav=あ_F4,0,0,0,0,0\\n',
+    'c4.wav=あ_C4,0,0,0,0,0\nf4.wav=あ_F4,0,0,0,0,0\n',
     'utf8'
   );
   await writeFile(join(voiceDir, 'c4.wav'), c4);
@@ -217,10 +217,10 @@ test('Web does not borrow a pitch layer below the first PREFIX.MAP boundary', as
   const voiceDir = join(VOICEBANKS, voicebank);
   const c5 = makeWav(41);
   await mkdir(voiceDir, { recursive: true });
-  await writeFile(join(voiceDir, 'Prefix.map'), 'C5\\t\\t_C5\\n', 'utf8');
+  await writeFile(join(voiceDir, 'Prefix.map'), 'C5\t\t_C5\n', 'utf8');
   await writeFile(
     join(voiceDir, 'oto.ini'),
-    'a_c5.wav=あ_C5,0,0,0,0,0\\nplain.wav=さ,0,0,0,0,0\\n',
+    'a_c5.wav=あ_C5,0,0,0,0,0\nplain.wav=さ,0,0,0,0,0\n',
     'utf8'
   );
   const defaultSample = makeWav(63);
@@ -278,7 +278,7 @@ test('Web VCV predecessor vowel detection includes を', async (t) => {
   await mkdir(voiceDir, { recursive: true });
   await writeFile(
     join(voiceDir, 'oto.ini'),
-    'o_ka.wav=o か,0,0,0,0,0\\n- ka.wav=- か,0,0,0,0,0\\n',
+    'o_ka.wav=o か,0,0,0,0,0\n- ka.wav=- か,0,0,0,0,0\n',
     'utf8'
   );
   await writeFile(join(voiceDir, 'o_ka.wav'), vcv);
