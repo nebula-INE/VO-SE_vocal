@@ -17,7 +17,12 @@ import logging
 import gc
 import time
 from dataclasses import dataclass
-from modules.data.prefix_map import PrefixMapEntry, map_alias, note_name_to_midi, parse_prefix_map
+from modules.data.prefix_map import (
+    PrefixMapEntry,
+    map_alias,
+    note_name_to_midi,
+    parse_prefix_map,
+)
 from typing import Callable, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
@@ -486,7 +491,7 @@ class OtoParser:
                 # prefix.map is present. Without a map, use its explicit pitch
                 # tag and the requested MIDI note to choose the closest layer.
                 pitch_midi = _extract_pitch_midi(
-                    alias, candidate.filename, candidate.wav_path, candidate.voice_dir
+                    alias, candidate.filename, candidate.voice_dir
                 )
                 if _PITCH_SUFFIX_RE.search(alias.strip()) or pitch_midi is not None:
                     if not self._prefix_map and pitch_midi is not None:
