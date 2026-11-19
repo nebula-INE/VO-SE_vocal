@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 from modules.data.data_models import NoteEvent
 from modules.gui.mixins.project_io_mixin import ProjectIOMixin
@@ -832,14 +833,14 @@ def test_effect_slider_history_is_coalesced_and_flushed_before_undo(qtbot):
     window = FakeWindow()
     before = {"track_effects": ["initial"]}
     # Repeated slider changes share the original state snapshot and one timer.
-    MainWindow._queue_effect_history_snapshot(window, before)
+    MainWindow._queue_effect_history_snapshot(cast(MainWindow, window), before)
     timer = window._effect_history_timer
-    MainWindow._queue_effect_history_snapshot(window, {"track_effects": ["intermediate"]})
+    MainWindow._queue_effect_history_snapshot(cast(MainWindow, window), {"track_effects": ["intermediate"]})
     assert window._effect_history_timer is timer
     assert timer.isActive()
 
     # The actual Undo entry point must flush the pending gesture before undoing.
-    MainWindow.undo(window)
+    MainWindow.undo(cast(MainWindow, window))
 
     assert window.history.undo_called is True
     assert window._pending_effect_history_before is None
