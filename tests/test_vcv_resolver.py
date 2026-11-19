@@ -98,3 +98,14 @@ def test_vcv_resolver_continuity_threshold_follows_tempo():
     notes[1].start_time = 0.69
     assert resolver.resolve(notes, tempo_bpm=120.0)[1].alias == "a い"
     assert resolver.resolve(notes, tempo_bpm=180.0)[1].alias == "- い"
+
+
+
+def test_vowel_classifier_covers_wo_and_vu_kana():
+    from modules.audio.vcv_resolver import VowelClassifier
+
+    classifier = VowelClassifier(use_g2p=False)
+    assert classifier.trailing_vowel("を") == "o"
+    assert classifier.trailing_vowel("ヲ") == "o"
+    assert classifier.trailing_vowel("ゔ") == "u"
+    assert classifier.trailing_vowel("ヴ") == "u"

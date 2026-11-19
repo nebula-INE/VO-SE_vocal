@@ -278,14 +278,9 @@ public:
         if (prevVowel.isNotEmpty())
             return nullptr;
 
-        // 末尾一致の部分一致フォールバック（Python版の
-        // match_pref(cleanLyric) 相当）。異なる歌詞を誤選択しないよう、
-        // alias全体ではなく「区切り付き末尾一致」に限定する。
-        const auto suffix = " " + cleanLyric;
-        for (const auto& [alias, entry] : db)
-            if (alias == lyric || alias == cleanLyric || alias.endsWith (suffix))
-                return &entry;
-
+        // Do not guess a VCV context when no previous vowel was supplied.
+        // Exact CV/default candidates above are safe; choosing the first
+        // suffix match (for example "a い" instead of "u い") is not.
         return nullptr;
     }
 
@@ -387,7 +382,29 @@ private:
     void loadPrefixMap (const juce::File& voiceDir)
     {
         prefixMap.clear();
-        const auto mapFile = voiceDir.getChildFile ("prefix.map");
+
+        // Voicebanks are often authored on Windows and moved to a
+        // case-sensitive filesystem. Find the root-level prefix.map without
+        // assuming its filename casing.
+        auto children = voiceDir.findChildFiles (
+            juce::File::findFiles, false, "*");
+        std::sort (
+            children.begin(),
+            children.end(),
+            [] (const juce::File& a, const juce::File& b)
+            {
+                return a.getFileName() < b.getFileName();
+            });
+
+        juce::File mapFile;
+        for (const auto& child : children)
+        {
+            if (child.getFileName().equalsIgnoreCase ("prefix.map"))
+            {
+                mapFile = child;
+                break;
+            }
+        }
         if (! mapFile.existsAsFile())
             return;
 

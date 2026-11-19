@@ -441,3 +441,56 @@ def test_resolve_alias_does_not_borrow_mapped_pitch_layer_below_first_boundary(t
     selected = parser.resolve_alias("あ", None, note_num=72)
     assert selected is not None
     assert selected.alias == "あ_C5"
+
+
+
+def test_resolve_alias_selects_closest_pitch_suffix_without_prefix_map(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "oto.ini").write_text(
+        "a_c4.wav=あ_C4,0,0,0,50,0\\n"
+        "a_f4.wav=あ_F4,0,0,0,60,0\\n",
+        encoding="utf-8",
+    )
+    for name in ("a_c4.wav", "a_f4.wav"):
+        (voice_dir / name).write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    selected = parser.resolve_alias("あ", None, note_num=65)
+    assert selected is not None
+    assert selected.alias == "あ_F4"
+
+
+def test_resolve_alias_does_not_guess_vcv_context_without_previous_vowel():
+    parser = OtoParser()
+    parser._db["a い"] = _entry("a い")
+    parser._db["u い"] = _entry("u い")
+
+    # A first note or a note after a rest has no previous-vowel context.
+    assert parser.resolve_alias("い", None, note_num=60) is None
+
+
+def test_load_voice_dir_finds_prefix_map_case_insensitively(tmp_path):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "PREFIX.MAP").write_text(
+        "C1\\t_C4\\nF4\\t_F4\\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "oto.ini").write_text(
+        "a_c4.wav=あ_C4,0,0,0,50,0\\n"
+        "a_f4.wav=あ_F4,0,0,0,60,0\\n",
+        encoding="utf-8",
+    )
+    for name in ("a_c4.wav", "a_f4.wav"):
+        (voice_dir / name).write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(str(voice_dir), use_cache=False)
+
+    assert len(parser._prefix_map) == 2
+    selected = parser.resolve_alias("あ", None, note_num=65)
+    assert selected is not None
+    assert selected.alias == "あ_F4"
