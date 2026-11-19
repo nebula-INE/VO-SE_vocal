@@ -168,17 +168,17 @@ test('Web multi-pitch aliases with identical oto aliases select the closest pitc
 test('Web loads uppercase PREFIX.MAP and parses the legacy two-column suffix form', async (t) => {
   const voicebank = '__test_prefixmap_case_' + process.pid;
   const voiceDir = join(VOICEBANKS, voicebank);
-  const plain = makeWav(31);
-  const mapped = makeWav(121);
+  const c4 = makeWav(31);
+  const f4 = makeWav(121);
   await mkdir(voiceDir, { recursive: true });
   await writeFile(join(voiceDir, 'PREFIX.MAP'), 'C1\\t_C4\\n', 'utf8');
   await writeFile(
     join(voiceDir, 'oto.ini'),
-    'plain.wav=あ,0,0,0,0,0\\nmapped.wav=あ_C4,0,0,0,0,0\\n',
+    'c4.wav=あ_C4,0,0,0,0,0\\nf4.wav=あ_F4,0,0,0,0,0\\n',
     'utf8'
   );
-  await writeFile(join(voiceDir, 'plain.wav'), plain);
-  await writeFile(join(voiceDir, 'mapped.wav'), mapped);
+  await writeFile(join(voiceDir, 'c4.wav'), c4);
+  await writeFile(join(voiceDir, 'f4.wav'), f4);
 
   const port = 35000 + (process.pid % 1000);
   const child = spawn(process.execPath, ['server.js', '--port', String(port)], {
@@ -204,7 +204,7 @@ test('Web loads uppercase PREFIX.MAP and parses the legacy two-column suffix for
     );
     assert.equal(sample.status, 200, sample.body.toString());
     assert.equal(decodeURIComponent(sample.headers['x-alias-matched']), 'あ_C4');
-    assert.deepEqual(sample.body, mapped);
+    assert.deepEqual(sample.body, c4);
   } catch (error) {
     error.message += '\nserver stderr:\n' + stderr;
     throw error;
