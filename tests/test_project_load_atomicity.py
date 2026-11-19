@@ -824,6 +824,9 @@ def test_effect_slider_history_is_coalesced_and_flushed_before_undo(qtbot):
                 lambda before, after, description:
                     setattr(self, "recorded", (before, after, description))
             )
+            self._flush_pending_effect_history = (
+                MainWindow._flush_pending_effect_history.__get__(self, FakeWindow)
+            )
             self.statusBar = lambda: FakeStatusBar()
 
     window = FakeWindow()
