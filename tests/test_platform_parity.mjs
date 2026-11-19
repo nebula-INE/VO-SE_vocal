@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import vm from 'node:vm';
+import ts from 'typescript';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,6 +26,22 @@ const projectSheet = fs.readFileSync(
   path.join(root, 'assets', 'src', 'components', 'ProjectSheet.tsx'),
   'utf8'
 );
+
+const codecPath = path.join(root, 'assets', 'src', 'utils', 'voseProject.ts');
+const compiledCodec = ts.transpileModule(voseCodec, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+  },
+  fileName: codecPath,
+});
+const codecModule = { exports: {} };
+vm.runInNewContext(
+  compiledCodec.outputText,
+  { module: codecModule, exports: codecModule.exports },
+  { filename: codecPath }
+);
+const { parseVoseProjectJson, serializeVoseProjectJson } = codecModule.exports;
 
 test('shared track mixer cases use normalized gain and pan values', () => {
   for (const item of fixture.cases) {
@@ -200,4 +218,71 @@ test('VO-SE Web project parser rejects unknown track/effect types and string boo
 test('Web .vose export warns when uploaded WAV data is only a browser blob', () => {
   assert.match(app, /browserOnlyAudioTracks/);
   assert.match(app, /ブラウザ内だけのWAVデータはJSONに含まれない/);
+});
+
+
+test('Web VO-SE codec performs a real Desktop/Web shared-fixture round trip', () => {
+  const parsed = parseVoseProjectJson(JSON.stringify(voseFixture));
+  assert.equal(parsed.projectName, voseFixture.project_name);
+  assert.equal(parsed.tempo, voseFixture.tempo);
+  assert.equal(parsed.currentTrackIndex, voseFixture.current_track_idx);
+  assert.equal(parsed.currentTime, voseFixture.current_time);
+  assert.equal(parsed.currentVoiceId, voseFixture.current_voice_id);
+  assert.equal(parsed.currentVoiceName, voseFixture.current_voice);
+  assert.equal(parsed.tracks.length, 2);
+
+  const lead = parsed.tracks[0];
+  assert.equal(lead.id, 'track_lead');
+  assert.equal(lead.volume, 0.72);
+  assert.equal(lead.pan, -0.25);
+  assert.equal(lead.effects.length, 2);
+  assert.equal(lead.notes[0].noteNum, 64);
+  assert.equal(lead.notes[0].tick, 240);
+  assert.equal(lead.notes[0].length, 480);
+  assert.equal(lead.notes[0].ustExtras._ust_pbm, undefined);
+  assert.equal(lead.notes[0].pbm, '0');
+
+  const backing = parsed.tracks[1];
+  assert.equal(backing.type, 'wave');
+  assert.equal(backing.sourcePath, 'backing.wav');
+  assert.equal(backing.volume, 0.35);
+  assert.equal(backing.pan, 0.6);
+  assert.equal(backing.isMuted, true);
+  assert.equal(backing.effects[0].type, 'reverb');
+
+  const serialized = JSON.parse(serializeVoseProjectJson(parsed));
+  const reparsed = parseVoseProjectJson(JSON.stringify(serialized));
+  assert.equal(reparsed.tracks[0].notes[0].noteNum, 64);
+  assert.equal(reparsed.tracks[0].notes[0].tick, 240);
+  assert.equal(reparsed.tracks[0].notes[0].length, 480);
+  assert.equal(reparsed.tracks[0].notes[0].flags, 'g-5');
+  assert.equal(reparsed.tracks[0].notes[0].pbs, '0;0');
+  assert.equal(reparsed.tracks[0].notes[0].pbm, '0');
+  assert.equal(reparsed.tracks[0].effects[1].params.ratio, 3.5);
+  assert.equal(reparsed.tracks[1].audioUrl, undefined);
+  assert.equal(reparsed.masterEffects[0].id, 'master-eq');
+  assert.deepEqual(JSON.parse(JSON.stringify(reparsed.parameters)), voseFixture.parameters);
+});
+
+test('Web VO-SE codec rejects malformed effect and track types at runtime', () => {
+  const invalidEffect = structuredClone(voseFixture);
+  invalidEffect.tracks[0].effects[0].type = 'unknown-effect';
+  assert.throws(
+    () => parseVoseProjectJson(JSON.stringify(invalidEffect)),
+    /Unsupported effect type/
+  );
+
+  const invalidTrack = structuredClone(voseFixture);
+  invalidTrack.tracks[0].type = 'instrument';
+  assert.throws(
+    () => parseVoseProjectJson(JSON.stringify(invalidTrack)),
+    /Unsupported track type/
+  );
+
+  const invalidBoolean = structuredClone(voseFixture);
+  invalidBoolean.tracks[0].is_muted = 'false';
+  assert.throws(
+    () => parseVoseProjectJson(JSON.stringify(invalidBoolean)),
+    /must be booleans/
+  );
 });
