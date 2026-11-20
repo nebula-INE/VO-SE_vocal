@@ -399,11 +399,11 @@ void VoseAudioProcessor::syncFromHostTransportIfEnabled()
     if (! syncToHostTransport.load())
         return;
 
-    auto* playHead = getPlayHead();
-    if (playHead == nullptr)
+    auto* hostPlayHead = getPlayHead();
+    if (hostPlayHead == nullptr)
         return;
 
-    const auto position = playHead->getPosition();
+    const auto position = hostPlayHead->getPosition();
     if (! position.hasValue())
         return;
 
