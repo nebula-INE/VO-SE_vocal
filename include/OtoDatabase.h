@@ -330,7 +330,7 @@ public:
             pitchBases.add (cleanLyric);
 
             const OtoEntryCpp* bestEntry = nullptr;
-            int bestDistance = std::numeric_limits<int>::max();
+            int bestDistance = (std::numeric_limits<int>::max)();
             bool ambiguousBest = false;
             for (const auto& base : pitchBases)
             {
