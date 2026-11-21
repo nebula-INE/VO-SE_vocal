@@ -49,6 +49,38 @@ def patch_main_window(window) -> None:
 # [P1-1, P1-2] エンジン: VCV + 先行発声
 # ---------------------------------------------------------------------------
 
+def _export_to_wav_compat(
+    self,
+    notes,
+    params,
+    path,
+    mode_flag=0,
+    progress_callback=None,
+    cancel_check=None,
+    **kwargs,
+):
+    """Keep the public export_to_wav API while using the VCV-aware renderer.
+
+    The compatibility bridge deliberately preserves the renderer's optional
+    arguments. Older three-argument callers continue to work, while newer
+    callers can pass progress, cancellation and tempo metadata without losing
+    those options at the GUI patch boundary.
+    """
+    exporter = getattr(self, "export_to_wav_v2", None)
+    if not callable(exporter):
+        raise RuntimeError("VO-SE の export_to_wav_v2 が初期化されていません。")
+
+    return exporter(
+        notes,
+        params,
+        path,
+        mode_flag=mode_flag,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+        **kwargs,
+    )
+
+
 def _patch_engine(window) -> None:
     """vo_se_engine に VCV リゾルバーと新 export を適用する"""
     engine = getattr(window, "vo_se_engine", None)
@@ -59,12 +91,10 @@ def _patch_engine(window) -> None:
     from modules.audio.vo_se_engine_patch import ensure_desktop_export_ready
     ensure_desktop_export_ready(engine)
 
-    # export_to_wav を v2 に差し替え
+    # Keep export_to_wav as the stable public API and route it to the VCV-aware
+    # implementation without narrowing its historical optional-argument set.
     import types
-    engine.export_to_wav = types.MethodType(
-        lambda self, notes, params, path: self.export_to_wav_v2(notes, params, path),
-        engine,
-    )
+    engine.export_to_wav = types.MethodType(_export_to_wav_compat, engine)
 
     logger.info("エンジンパッチ: VCV + 先行発声 + ビブラートカーブ 適用")
 
