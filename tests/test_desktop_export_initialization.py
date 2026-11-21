@@ -38,7 +38,10 @@ def test_public_export_to_wav_forwards_all_v2_options(monkeypatch, tmp_path):
     params = {"Pitch": []}
     destination = tmp_path / "render.wav"
 
-    result = engine.export_to_wav(
+    # Resolve the patched public API dynamically because its compatibility
+    # wrapper intentionally accepts renderer-specific keyword extensions.
+    export_to_wav = getattr(engine, "export_to_wav")
+    result = export_to_wav(
         notes,
         params,
         str(destination),
