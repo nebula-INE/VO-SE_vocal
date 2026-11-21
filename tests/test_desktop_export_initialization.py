@@ -3,12 +3,13 @@ import pytest
 from modules.audio import vo_se_engine_patch
 from modules.audio.vo_se_engine import VO_SE_Engine
 
+
 def test_public_export_to_wav_forwards_all_v2_options(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from modules.gui.main_window_patch import _patch_engine
 
-    calls = {}
+    calls: dict[str, object] = {}
 
     def fake_export_v2(notes, params, path, **kwargs):
         calls["notes"] = notes
@@ -27,10 +28,10 @@ def test_public_export_to_wav_forwards_all_v2_options(monkeypatch, tmp_path):
 
     _patch_engine(SimpleNamespace(vo_se_engine=engine))
 
-    def report_progress(percent):
+    def report_progress(percent: int) -> None:
         return None
 
-    def is_cancelled():
+    def is_cancelled() -> bool:
         return False
 
     notes = [object()]
