@@ -3,6 +3,59 @@ import pytest
 from modules.audio import vo_se_engine_patch
 from modules.audio.vo_se_engine import VO_SE_Engine
 
+def test_public_export_to_wav_forwards_all_v2_options(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from modules.audio import vo_se_engine_patch
+    from modules.gui.main_window_patch import _patch_engine
+
+    calls = {}
+
+    def fake_export_v2(notes, params, path, **kwargs):
+        calls["notes"] = notes
+        calls["params"] = params
+        calls["path"] = path
+        calls["kwargs"] = kwargs
+        return str(path)
+
+    engine = VO_SE_Engine.__new__(VO_SE_Engine)
+    engine.export_to_wav_v2 = fake_export_v2
+    monkeypatch.setattr(
+        vo_se_engine_patch,
+        "ensure_desktop_export_ready",
+        lambda target: None,
+    )
+
+    _patch_engine(SimpleNamespace(vo_se_engine=engine))
+
+    progress = lambda percent: None
+    cancelled = lambda: False
+    notes = [object()]
+    params = {"Pitch": []}
+    destination = tmp_path / "render.wav"
+
+    result = engine.export_to_wav(
+        notes,
+        params,
+        str(destination),
+        mode_flag=1,
+        progress_callback=progress,
+        cancel_check=cancelled,
+        tempo_bpm=137.5,
+    )
+
+    assert result == str(destination)
+    assert calls["notes"] is notes
+    assert calls["params"] is params
+    assert calls["path"] == str(destination)
+    assert calls["kwargs"] == {
+        "mode_flag": 1,
+        "progress_callback": progress,
+        "cancel_check": cancelled,
+        "tempo_bpm": 137.5,
+    }
+
+
 
 def test_ensure_desktop_export_ready_patches_and_refreshes_once(monkeypatch):
     calls = {"patch": 0, "refresh": 0}
