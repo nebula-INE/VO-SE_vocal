@@ -61,7 +61,7 @@ cat > "$package_root/usr/share/applications/vo-se-vocal.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
 Name=VO-SE vocal
-Comment=AI vocal synthesis
+Comment=Vocal synthesis and editing
 Exec=/opt/vo-se-vocal/VO-SE_vocal_Linux
 Terminal=false
 Categories=AudioVideo;Audio;Music;
