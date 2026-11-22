@@ -327,7 +327,8 @@ def _refresh_voice_library_v2_unlocked(self) -> None:
 
     # Sort oto.ini paths so duplicate aliases resolve deterministically across
     # Windows/macOS/Linux instead of depending on os.walk traversal order.
-    for ini_path in sorted(oto_files):
+    self._loaded_oto_ini_paths = tuple(sorted(oto_files))
+    for ini_path in self._loaded_oto_ini_paths:
         loaded = self.oto_parser.load_oto_file(
             ini_path,
             voice_root=self.voice_lib_path,
@@ -363,13 +364,42 @@ def _note_duration_frames(note, frame_period_ms: float = 5.0) -> int:
     return max(1, int(round(duration_sec * 1000.0 / frame_period_ms)))
 
 
-def _lookup_oto_map_fallback(oto_map: Any, lyric: Any, phonemes: Any) -> str:
-    """Look up a legacy WAV basename without treating a phoneme list as a key.
+def _phoneme_sequence_aliases(phonemes: Any) -> List[str]:
+    """Return conservative CV alias spellings for one consonant + one vowel.
 
-    A multi-phoneme sequence is not a single alias, so it is deliberately not
-    reduced to an arbitrary first/last phoneme. A one-item sequence remains
-    compatible with callers that represent a single phoneme as a list.
+    OpenJTalk emits phone lists such as ["j", "i"] for "じ". Some voicebanks
+    store the same sample under the romanized alias "ji". Never collapse a
+    longer or ambiguous phone sequence into one sample name.
     """
+    if isinstance(phonemes, str):
+        phones = phonemes.split()
+    elif isinstance(phonemes, (list, tuple)):
+        phones = [str(phone or "").strip() for phone in phonemes]
+    else:
+        return []
+
+    phones = [phone.lower() for phone in phones if phone]
+    if len(phones) != 2:
+        return []
+
+    consonant, vowel = phones
+    if vowel not in {"a", "i", "u", "e", "o"}:
+        return []
+    if (
+        not consonant
+        or not consonant.isascii()
+        or not consonant.isalpha()
+        or any(char in "aeiou" for char in consonant)
+    ):
+        return []
+
+    joined = f"{consonant}{vowel}"
+    spaced = f"{consonant} {vowel}"
+    return [joined, spaced]
+
+
+def _lookup_oto_map_fallback(oto_map: Any, lyric: Any, phonemes: Any) -> str:
+    """Look up exact lyric/phoneme-derived WAV basenames without guessing phones."""
     if not isinstance(oto_map, dict):
         return ""
 
@@ -379,15 +409,17 @@ def _lookup_oto_map_fallback(oto_map: Any, lyric: Any, phonemes: Any) -> str:
 
     if isinstance(phonemes, str) and phonemes:
         aliases.append(phonemes)
-    elif (
-        isinstance(phonemes, (list, tuple))
-        and len(phonemes) == 1
-        and isinstance(phonemes[0], str)
-        and phonemes[0]
-    ):
-        aliases.append(phonemes[0])
+        aliases.extend(_phoneme_sequence_aliases(phonemes))
+    elif isinstance(phonemes, (list, tuple)):
+        if (
+            len(phonemes) == 1
+            and isinstance(phonemes[0], str)
+            and phonemes[0]
+        ):
+            aliases.append(phonemes[0])
+        aliases.extend(_phoneme_sequence_aliases(phonemes))
 
-    for alias in aliases:
+    for alias in dict.fromkeys(aliases):
         candidate = oto_map.get(alias)
         if isinstance(candidate, os.PathLike):
             candidate = os.fspath(candidate)
@@ -536,7 +568,34 @@ def _render_to_wav_v2(
         vcv_resolver = getattr(self, "vcv_resolver", None)
         wav_path = ""
         resolved_oto_entry = None
-        note_num = 60
+
+        prev_note = notes[i - 1] if i > 0 else None
+        prev_lyric = getattr(prev_note, "lyric", None) if prev_note is not None else None
+        gap_sec = float("inf")
+        if prev_note is not None:
+            try:
+                prev_end = float(prev_note.start_time) + max(0.0, float(prev_note.duration))
+                gap_sec = max(0.0, float(note.start_time) - prev_end)
+            except (TypeError, ValueError, AttributeError):
+                gap_sec = float("inf")
+        note_tempo_raw = getattr(note, "_ust_tempo", None)
+        try:
+            note_tempo = float(note_tempo_raw) if note_tempo_raw is not None else tempo_bpm
+        except (TypeError, ValueError):
+            note_tempo = tempo_bpm
+        if note_tempo <= 0.0:
+            note_tempo = 120.0
+        continuity_gap_sec = 30.0 / note_tempo
+        is_continuous = prev_note is not None and gap_sec <= continuity_gap_sec
+
+        # Multi-pitch voicebanks require the MIDI note number for prefix.map /
+        # pitch-suffixed alias selection on every resolution path.
+        try:
+            note_num = int(
+                getattr(note, "note_number", getattr(note, "note_num", 60))
+            )
+        except (TypeError, ValueError):
+            note_num = 60
 
         if render_alias:
             cvvc_entry = getattr(oto_parser, "_db", {}).get(render_alias) if oto_parser is not None else None
@@ -544,34 +603,6 @@ def _render_to_wav_v2(
                 wav_path = cvvc_entry.wav_path
                 resolved_oto_entry = cvvc_entry
         elif vcv_resolver is not None:
-            prev_note = notes[i - 1] if i > 0 else None
-            prev_lyric = getattr(prev_note, "lyric", None) if prev_note is not None else None
-            gap_sec = float("inf")
-            if prev_note is not None:
-                try:
-                    prev_end = float(prev_note.start_time) + max(0.0, float(prev_note.duration))
-                    gap_sec = max(0.0, float(note.start_time) - prev_end)
-                except (TypeError, ValueError, AttributeError):
-                    gap_sec = float("inf")
-            note_tempo_raw = getattr(note, "_ust_tempo", None)
-            try:
-                note_tempo = float(note_tempo_raw) if note_tempo_raw is not None else tempo_bpm
-            except (TypeError, ValueError):
-                note_tempo = tempo_bpm
-            if note_tempo <= 0.0:
-                note_tempo = 120.0
-            continuity_gap_sec = 30.0 / note_tempo
-            is_continuous = prev_note is not None and gap_sec <= continuity_gap_sec
-            # Multi-pitch voicebanks require the MIDI note number when
-            # resolving prefix.map / pitch-suffixed aliases (e.g. a_C4.wav
-            # versus a_F4.wav). Without note_num the resolver falls back to
-            # the first matching alias and the rendered source can be wrong.
-            try:
-                note_num = int(
-                    getattr(note, "note_number", getattr(note, "note_num", 60))
-                )
-            except (TypeError, ValueError):
-                note_num = 60
             _alias, oto_entry = vcv_resolver.resolve_note(
                 note.lyric,
                 prev_lyric,
@@ -581,6 +612,31 @@ def _render_to_wav_v2(
             if oto_entry is not None:
                 wav_path = oto_entry.wav_path
                 resolved_oto_entry = oto_entry
+
+        # Lyrics remain the primary alias source. If they do not resolve,
+        # retry only unambiguous single-CV aliases represented by the analyzed
+        # phones (e.g. ["j", "i"] -> "ji" / "j i"). The OTO resolver still
+        # applies previous-vowel context and pitch selection to the candidate.
+        if (
+            vcv_resolver is not None
+            and (not wav_path or not os.path.isfile(wav_path))
+        ):
+            for phone_alias in _phoneme_sequence_aliases(
+                getattr(note, "phonemes", None)
+            ):
+                _alias, phone_entry = vcv_resolver.resolve_note(
+                    phone_alias,
+                    prev_lyric,
+                    is_continuous=is_continuous,
+                    note_num=note_num,
+                )
+                if phone_entry is None:
+                    continue
+                candidate_path = str(getattr(phone_entry, "wav_path", "") or "")
+                if candidate_path and os.path.isfile(candidate_path):
+                    wav_path = candidate_path
+                    resolved_oto_entry = phone_entry
+                    break
 
         if not wav_path or not os.path.exists(wav_path):
             # VCV/prefix.map 解決に失敗した場合でも、明示 alias の OTO エントリを
@@ -830,9 +886,19 @@ def _render_to_wav_v2(
     if note_count > 0 and resolved_voice_count == 0:
         examples = "; ".join(unresolved_note_diagnostics[:5])
         detail = f" 未解決ノート: {examples}" if examples else ""
+        voice_root = str(getattr(self, "voice_lib_path", "") or "(未設定)")
+        oto_db = getattr(oto_parser, "_db", {}) if oto_parser is not None else {}
+        oto_alias_count = len(oto_db) if isinstance(oto_db, dict) else 0
+        prefix_map_count = len(getattr(oto_parser, "_prefix_map", []) or [])
+        oto_ini_count = len(getattr(self, "_loaded_oto_ini_paths", []) or [])
+        diagnostic = (
+            f" 音源パス={voice_root!r} / oto.ini={oto_ini_count}件"
+            f" / OTO alias={oto_alias_count}件 / prefix.map={prefix_map_count}行。"
+        )
         raise RuntimeError(
             "レンダリング対象の音源WAVを1件も解決できませんでした。"
             " 音源フォルダ・oto.ini・prefix.mapを確認してください。"
+            + diagnostic
             + detail
         )
 
