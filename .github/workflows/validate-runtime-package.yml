@@ -453,10 +453,15 @@ jobs:
             "dist_out/vo-se-vocal_amd64.deb" \
             "0.0.0-ci"
 
-          # Validate the desktop entry and its installed Exec target.
+          # Validate the desktop entry, user-facing description, and installed Exec target.
           sudo apt-get install -y "./dist_out/vo-se-vocal_amd64.deb"
           test -x "/opt/vo-se-vocal/VO-SE_vocal_Linux"
           desktop-file-validate /usr/share/applications/vo-se-vocal.desktop
+          grep -Fqx "Comment=Vocal synthesis and editing" /usr/share/applications/vo-se-vocal.desktop
+          if grep -Eq "^Comment=.*AI" /usr/share/applications/vo-se-vocal.desktop; then
+            echo "The desktop application description must not contain AI branding."
+            exit 1
+          fi
 
           MISSING="$(ldd /opt/vo-se-vocal/VO-SE_vocal_Linux 2>&1 | grep 'not found' || true)"
           if [ -n "$MISSING" ]; then
