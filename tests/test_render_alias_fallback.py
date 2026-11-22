@@ -185,3 +185,114 @@ def test_render_keeps_resolved_notes_and_skips_unresolved_multi_phoneme_fallback
     assert result == str(output_path.resolve())
     assert output_path.is_file()
     assert captured_paths == [str(resolved_sample).encode("utf-8"), None]
+
+
+
+def test_oto_map_fallback_uses_only_unambiguous_cv_phone_pair():
+    assert _lookup_oto_map_fallback(
+        {"ji": "/voice/ji.wav"},
+        "見つからない歌詞",
+        ["j", "i"],
+    ) == "/voice/ji.wav"
+    assert _lookup_oto_map_fallback(
+        {"eii": "/voice/eii.wav"},
+        "a い",
+        ["e", "i", "i"],
+    ) == ""
+
+
+def test_render_resolves_cv_aliases_from_g2p_phone_pairs(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from modules.audio.vcv_resolver import VcvResolver
+    from modules.data.oto_parser import OtoParser
+
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    samples = {
+        "ji_C4.wav": "ji_C4",
+        "i_sa_C4.wav": "i sa_C4",
+        "a_i_C4.wav": "a い_C4",
+        "i_no_C4.wav": "i no_C4",
+        "o_ka_C4.wav": "o か_C4",
+    }
+    for filename in samples:
+        (voice_dir / filename).write_bytes(b"RIFF")
+    (voice_dir / "prefix.map").write_text(
+        "C1\\t\\t_C4\\n",
+        encoding="utf-8",
+    )
+    (voice_dir / "oto.ini").write_text(
+        "".join(
+            f"{filename}={alias},0,0,0,50,0\\n"
+            for filename, alias in samples.items()
+        ),
+        encoding="utf-8",
+    )
+
+    parser = OtoParser()
+    parser._load_prefix_map(str(voice_dir))
+    parser.load_oto_file(str(voice_dir / "oto.ini"), voice_root=str(voice_dir))
+
+    notes = [
+        NoteEvent(note_number=70, start_time=0.0, duration=0.5, lyric="じ", phonemes=["j", "i"]),
+        NoteEvent(note_number=65, start_time=0.5, duration=0.5, lyric="さ", phonemes=["s", "a"]),
+        NoteEvent(note_number=65, start_time=1.0, duration=0.5, lyric="a い", phonemes=["e", "i", "i"]),
+        NoteEvent(note_number=65, start_time=1.5, duration=0.5, lyric="の", phonemes=["n", "o"]),
+        NoteEvent(note_number=65, start_time=2.0, duration=0.5, lyric="か", phonemes=["k", "a"]),
+    ]
+
+    class FakeAnalyzer:
+        @staticmethod
+        def align_vocal_timing(note_events, _oto_parser, *, tempo_bpm):
+            assert tempo_bpm == 120.0
+            return note_events, []
+
+    class FakeNativeLibrary:
+        @staticmethod
+        def execute_render(c_notes, note_count, encoded_path, _mode_flag):
+            captured_paths.extend(
+                c_notes[index].wav_path.decode("utf-8")
+                if c_notes[index].wav_path else ""
+                for index in range(int(note_count))
+            )
+            Path(encoded_path.decode("utf-8")).write_bytes(b"fake-rendered-wav")
+
+    captured_paths = []
+
+    def sampled_curve(_events, _note, resolution, is_pitch=False):
+        return np.zeros(resolution, dtype=np.float32)
+
+    monkeypatch.setattr(
+        "modules.audio.vo_se_engine_patch._validate_rendered_wav",
+        lambda *_args: None,
+    )
+    engine = SimpleNamespace(
+        lib=FakeNativeLibrary(),
+        text_analyzer=FakeAnalyzer(),
+        oto_parser=parser,
+        cvvc_resolver=None,
+        vcv_resolver=VcvResolver(parser, use_g2p=False),
+        oto_map={},
+        voice_lib_path=str(voice_dir),
+        _temp_refs=[],
+        _get_sampled_curve=sampled_curve,
+    )
+    parameters = {"Pitch": [], "Gender": [], "Tension": [], "Breath": []}
+
+    result = _render_to_wav_v2(
+        engine,
+        notes,
+        parameters,
+        str(tmp_path / "five-note-render.wav"),
+        tempo_bpm=120.0,
+    )
+
+    assert result == str((tmp_path / "five-note-render.wav").resolve())
+    assert captured_paths == [
+        str(voice_dir / "ji_C4.wav"),
+        str(voice_dir / "i_sa_C4.wav"),
+        str(voice_dir / "a_i_C4.wav"),
+        str(voice_dir / "i_no_C4.wav"),
+        str(voice_dir / "o_ka_C4.wav"),
+    ]
