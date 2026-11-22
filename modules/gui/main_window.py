@@ -415,7 +415,7 @@ class CreditsDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        version = QLabel("Version 1.0.0 Alpha | Aura AI Engine Loaded") # エンジン名
+        version = QLabel("Version 1.0.0 Alpha | VO-SE Vocal Engine Loaded") # Engine status
         version.setFont(QFont("Consolas", 9))
         version.setStyleSheet("color: #666;")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
