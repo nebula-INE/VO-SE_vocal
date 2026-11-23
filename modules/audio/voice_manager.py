@@ -305,7 +305,6 @@ class VoiceManager:
             and name not in ("", ".", "..")
             and "/" not in name
             and "\\" not in name
-            and "\\\\" not in name
         }
 
     def _write_managed_voice_registry(self, names):
@@ -376,8 +375,8 @@ class VoiceManager:
             # only after verifying that its lexical parent is the managed root.
             if not isinstance(voice_path, str):
                 return
-            raw_path = os.path.abspath(os.path.expanduser(voice_path.strip()))
-            root = os.path.abspath(self.user_voice_dir)
+            raw_path = os.path.realpath(os.path.abspath(os.path.expanduser(voice_path.strip())))
+            root = os.path.realpath(self.user_voice_dir)
             if os.path.dirname(raw_path) != root or os.path.islink(raw_path):
                 return
             name = os.path.basename(raw_path)
