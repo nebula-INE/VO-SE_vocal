@@ -1433,6 +1433,27 @@ class _VoiceImportWorker(QThread):
         self.succeeded.emit(str(name), voices)
 
 
+class _VoiceDeleteWorker(QThread):
+    """Remove one managed Voicebank and rebuild the voice index off the UI thread."""
+
+    succeeded = Signal(str, object)
+    failed = Signal(str)
+
+    def __init__(self, manager, voice_path: str, parent=None):
+        super().__init__(parent)
+        self.manager = manager
+        self.voice_path = voice_path
+
+    def run(self):
+        try:
+            name = self.manager.delete_user_voice(self.voice_path)
+            voices = dict(getattr(self.manager, "voices", {}) or {})
+        except Exception as exc:  # noqa: BLE001 - surface filesystem failures to the user
+            self.failed.emit(str(exc) or exc.__class__.__name__)
+            return
+        self.succeeded.emit(str(name), voices)
+
+
 class _VoiceScanWorker(QThread):
     """Run the recursive VoiceManager scan without blocking the GUI."""
 
@@ -1486,6 +1507,7 @@ class VoiceCardGallery(QWidget):
         self._last_columns = None
         self._import_worker = None
         self._scan_worker = None
+        self._delete_worker = None
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -1553,6 +1575,9 @@ class VoiceCardGallery(QWidget):
         act_folder.triggered.connect(self.import_voice_folder)
         act_zip.triggered.connect(self.import_voice_zip)
         act_rescan.triggered.connect(self.setup_gallery)
+        menu.addSeparator()
+        self.delete_voice_menu = menu.addMenu("取り込んだ音源を削除")
+        self.delete_voice_menu.aboutToShow.connect(self._populate_delete_menu)
         self.import_button.setMenu(menu)
         top.addWidget(self.import_button)
         outer.addLayout(top)
@@ -1609,6 +1634,9 @@ class VoiceCardGallery(QWidget):
         from PySide6.QtWidgets import QProgressDialog
         if self._import_worker is not None and self._import_worker.isRunning():
             return
+        delete_worker = getattr(self, "_delete_worker", None)
+        if delete_worker is not None and delete_worker.isRunning():
+            return
         scan_worker = getattr(self, "_scan_worker", None)
         if scan_worker is not None and scan_worker.isRunning():
             return
@@ -1655,6 +1683,165 @@ class VoiceCardGallery(QWidget):
         dlg.close()
         QMessageBox.warning(self.window(), "音源を追加できませんでした", message)
 
+    @staticmethod
+    def _normalized_voice_path(path):
+        if not path or str(path).startswith("__INTERNAL__"):
+            return ""
+        try:
+            return os.path.normcase(os.path.realpath(os.path.abspath(os.path.expanduser(str(path)))))
+        except (OSError, TypeError, ValueError):
+            return ""
+
+    def _populate_delete_menu(self):
+        """List only imported banks; disable entries that are still used by the project."""
+        menu = getattr(self, "delete_voice_menu", None)
+        if menu is None:
+            return
+        menu.clear()
+        checker = getattr(self.manager, "is_managed_voice", None)
+        voices = getattr(self.manager, "voices", {})
+        voices = voices if isinstance(voices, dict) else {}
+        active_workers = False
+        for worker_name in ("_import_worker", "_scan_worker", "_delete_worker", "_voice_bank_import_worker"):
+            worker = getattr(self if worker_name != "_voice_bank_import_worker" else self.window(), worker_name, None)
+            if worker is not None:
+                try:
+                    active_workers = active_workers or bool(worker.isRunning())
+                except RuntimeError:
+                    pass
+
+        managed_entries = []
+        if callable(checker):
+            for name, record in voices.items():
+                voice_path = record.get("path", "") if isinstance(record, dict) else record
+                if isinstance(voice_path, str) and checker(voice_path):
+                    managed_entries.append((str(name), voice_path))
+        for display_name, voice_path in sorted(managed_entries, key=lambda item: item[0].casefold()):
+            action = menu.addAction(display_name)
+            reason = self._voice_in_use_reason(voice_path)
+            action.setEnabled(not reason and not active_workers)
+            if reason:
+                action.setToolTip(reason)
+            elif active_workers:
+                action.setToolTip("音源の取り込み・スキャン・削除中は操作できません。")
+            else:
+                action.setToolTip("VO-SEの保存先にある取り込み済み音源を削除します。")
+            action.triggered.connect(
+                lambda checked=False, name=display_name, path=voice_path:
+                    self._confirm_delete_voice(name, path)
+            )
+
+        if not managed_entries:
+            empty = menu.addAction("削除できる取り込み済み音源はありません")
+            empty.setEnabled(False)
+
+    def _voice_in_use_reason(self, voice_path: str) -> str:
+        """Prevent removal while the global voice or any vocal track still references it."""
+        owner = self.window()
+        target = self._normalized_voice_path(voice_path)
+        if not target:
+            return "削除対象の音源パスを確認できません。"
+
+        resolver = getattr(owner, "_resolve_voicebank_binding", None)
+
+        def resolve_path(voice_id):
+            if callable(resolver):
+                try:
+                    binding = resolver(voice_id)
+                    if isinstance(binding, dict):
+                        path = self._normalized_voice_path(binding.get("path", ""))
+                        if path:
+                            return path
+                except Exception:
+                    pass
+            return self._normalized_voice_path(voice_id)
+
+        current_id = getattr(owner, "current_voice_id", "")
+        if resolve_path(current_id) == target:
+            return "現在選択中の音源です。先に別の音源へ切り替えてください。"
+
+        for track in list(getattr(owner, "tracks", []) or []):
+            if str(getattr(track, "track_type", "vocal")).lower() != "vocal":
+                continue
+            track_id = getattr(track, "voicebank_id", "") or current_id
+            if resolve_path(track_id) == target:
+                track_name = str(getattr(track, "name", "Vocal") or "Vocal")
+                return (
+                    f"トラック「{track_name}」で使用中です。"
+                    "そのトラックの音源を別のものへ切り替えてください。"
+                )
+        return ""
+
+    def _confirm_delete_voice(self, display_name: str, voice_path: str):
+        """Revalidate use and ownership, then ask before permanent removal."""
+        checker = getattr(self.manager, "is_managed_voice", None)
+        if not callable(checker) or not checker(voice_path):
+            QMessageBox.warning(
+                self.window(),
+                "音源を削除できません",
+                "削除できるのはVO-SEの音源保存先に取り込んだUTAU音源だけです。"
+                "OpenUTAUなど外部フォルダの音源や内蔵音源は削除できません。",
+            )
+            return
+
+        in_use = self._voice_in_use_reason(voice_path)
+        if in_use:
+            QMessageBox.warning(self.window(), "音源を削除できません", in_use)
+            return
+
+        answer = QMessageBox.question(
+            self.window(),
+            "音源を削除",
+            f"音源「{display_name}」をVO-SEの保存先から削除します。\n\n"
+            "削除した音源は元に戻せません。元のインポート元フォルダには影響しません。\n"
+            "本当に削除しますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._run_delete(display_name, voice_path)
+
+    def _run_delete(self, display_name: str, voice_path: str):
+        from PySide6.QtWidgets import QProgressDialog
+
+        for worker_name in ("_import_worker", "_scan_worker", "_delete_worker", "_voice_bank_import_worker"):
+            worker = getattr(self if worker_name != "_voice_bank_import_worker" else self.window(), worker_name, None)
+            if worker is not None:
+                try:
+                    if worker.isRunning():
+                        return
+                except RuntimeError:
+                    pass
+
+        dlg = QProgressDialog("音源を削除しています…", "", 0, 0, self.window())
+        dlg.setWindowTitle("音源を削除")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setCancelButton(None)
+        dlg.setMinimumDuration(0)
+        dlg.show()
+
+        worker = _VoiceDeleteWorker(self.manager, voice_path, self)
+        worker.succeeded.connect(
+            lambda name, voices, d=dlg: self._on_delete_done(name, d, voices)
+        )
+        worker.failed.connect(lambda message, d=dlg: self._on_delete_failed(message, d))
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda: setattr(self, "_delete_worker", None))
+        self._delete_worker = worker
+        worker.start()
+
+    def _on_delete_done(self, name: str, dlg, voices=None):
+        dlg.close()
+        self.setup_gallery(voices=voices if isinstance(voices, dict) else None)
+        status_bar = getattr(self.window(), "statusBar", lambda: None)()
+        if status_bar is not None:
+            status_bar.showMessage(f"音源「{name}」を削除しました", 5000)
+
+    def _on_delete_failed(self, message: str, dlg):
+        dlg.close()
+        QMessageBox.warning(self.window(), "音源を削除できませんでした", message)
+
     # ------------------------------------------------------------------
     # 一覧の構築
     # ------------------------------------------------------------------
@@ -1671,6 +1858,9 @@ class VoiceCardGallery(QWidget):
 
             import_worker = getattr(self, "_import_worker", None)
             if import_worker is not None and import_worker.isRunning():
+                return
+            delete_worker = getattr(self, "_delete_worker", None)
+            if delete_worker is not None and delete_worker.isRunning():
                 return
             owner = self.window()
             voice_bank_worker = getattr(owner, "_voice_bank_import_worker", None)
@@ -7377,6 +7567,7 @@ class MainWindow(
         gallery = getattr(self, "voice_gallery", None)
         import_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
         voice_scan_worker = getattr(gallery, "_scan_worker", None) if gallery is not None else None
+        voice_delete_worker = getattr(gallery, "_delete_worker", None) if gallery is not None else None
         voice_bank_worker = getattr(self, "_voice_bank_import_worker", None)
         for worker, title, message in (
             (
@@ -7399,6 +7590,11 @@ class MainWindow(
                 "音源一覧スキャン終了待ち",
                 "音源一覧のスキャンがまだ実行中です。スキャン完了後に、もう一度終了してください。",
             ),
+            (
+                voice_delete_worker,
+                "音源削除終了待ち",
+                "音源の削除がまだ実行中です。削除完了後に、もう一度終了してください。",
+            ),
         ):
             if worker is None:
                 continue
@@ -7416,6 +7612,7 @@ class MainWindow(
         if gallery is not None:
             gallery._import_worker = None
             gallery._scan_worker = None
+            gallery._delete_worker = None
         self._voice_bank_import_worker = None
 
         # Stop the legacy playback thread, if an older entry point started it.

@@ -164,3 +164,127 @@ def test_scanned_voices_include_imported_one(vm, tmp_path):
     voices = vm.scan_voices()
     assert "VoiceA" in voices
     assert voices["VO-SE Official (Embedded)"] == "__INTERNAL__"
+
+
+
+@pytest.mark.unit
+def test_delete_imported_voice_removes_only_managed_copy(vm, tmp_path):
+    src = _make_voice(str(tmp_path / "source"), "VoiceToDelete")
+    name = vm.install_voice_from_folder(src)
+    installed_path = vm.voices[name]
+
+    assert vm.is_managed_voice(installed_path)
+    assert vm.delete_user_voice(installed_path) == "VoiceToDelete"
+
+    assert not os.path.exists(installed_path)
+    assert os.path.exists(os.path.join(src, "oto.ini")), "インポート元は削除しない"
+    assert "VoiceToDelete" not in vm.voices
+
+
+@pytest.mark.unit
+def test_delete_rejects_external_voice_folder(vm, tmp_path):
+    external = _make_voice(str(tmp_path / "external"), "ExternalVoice")
+    with pytest.raises(ValueError, match="VO-SEの音源保存先"):
+        vm.delete_user_voice(external)
+    assert os.path.exists(os.path.join(external, "oto.ini"))
+
+
+@pytest.mark.unit
+def test_delete_rejects_managed_store_root(vm, tmp_path):
+    os.makedirs(vm.user_voice_dir, exist_ok=True)
+    with pytest.raises(ValueError, match="VO-SEの音源保存先"):
+        vm.delete_user_voice(vm.user_voice_dir)
+    assert os.path.isdir(vm.user_voice_dir)
+
+
+@pytest.mark.unit
+def test_delete_rejects_nested_or_symlinked_voice_targets(vm, tmp_path):
+    outside = _make_voice(str(tmp_path / "outside"), "OutsideVoice")
+    os.makedirs(vm.user_voice_dir, exist_ok=True)
+    outer = os.path.join(vm.user_voice_dir, "outer")
+    nested = os.path.join(outer, "nested")
+    os.makedirs(nested, exist_ok=True)
+    with open(os.path.join(nested, "oto.ini"), "w", encoding="utf-8") as handle:
+        handle.write("a.wav=a,0,0,0,0,0\n")
+
+    assert not vm.is_managed_voice(nested)
+    with pytest.raises(ValueError):
+        vm.delete_user_voice(nested)
+    assert os.path.isdir(nested)
+
+    link = os.path.join(vm.user_voice_dir, "linked")
+    try:
+        os.symlink(outside, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("この環境ではディレクトリシンボリックリンクを作成できません")
+    assert not vm.is_managed_voice(link)
+    with pytest.raises(ValueError):
+        vm.delete_user_voice(link)
+    assert os.path.exists(os.path.join(outside, "oto.ini"))
+
+
+
+@pytest.mark.unit
+def test_in_place_voice_under_managed_root_is_not_deletable(vm):
+    os.makedirs(vm.user_voice_dir, exist_ok=True)
+    src = _make_voice(vm.user_voice_dir, "ExistingVoice")
+
+    assert vm.install_voice_from_folder(vm.user_voice_dir) == "ExistingVoice"
+    installed_path = vm.voices["ExistingVoice"]
+
+    assert installed_path == src
+    assert not vm.is_managed_voice(installed_path)
+    with pytest.raises(ValueError, match="VO-SEの音源保存先"):
+        vm.delete_user_voice(installed_path)
+    assert os.path.exists(os.path.join(src, "oto.ini"))
+
+
+@pytest.mark.unit
+def test_copy_registers_only_app_managed_voicebank(vm, tmp_path):
+    src = _make_voice(str(tmp_path / "source"), "MarkedVoice")
+    name = vm.install_voice_from_folder(src)
+    installed_path = vm.voices[name]
+
+    import json
+
+    registry_path = os.path.join(vm.user_voice_dir, vm.MANAGED_VOICE_REGISTRY)
+    with open(registry_path, "r", encoding="utf-8") as registry_file:
+        registry = json.load(registry_file)
+
+    assert os.path.basename(installed_path) in registry["managed_voicebanks"]
+    assert not os.path.exists(os.path.join(installed_path, ".vose-managed-voicebank"))
+    assert vm.is_managed_voice(installed_path)
+
+
+@pytest.mark.unit
+def test_managed_voice_registry_tracks_repaired_top_level_name(vm, tmp_path, monkeypatch):
+    from modules.utils import text_encoding
+
+    src = _make_voice(str(tmp_path / "source"), "BrokenVoice")
+
+    def rename_managed_bank(root):
+        if os.path.normcase(os.path.abspath(root)) != os.path.normcase(os.path.abspath(vm.user_voice_dir)):
+            return []
+        old_path = os.path.join(root, "BrokenVoice")
+        new_path = os.path.join(root, "FixedVoice")
+        if not os.path.isdir(old_path):
+            return []
+        os.rename(old_path, new_path)
+        return [(old_path, new_path)]
+
+    monkeypatch.setattr(text_encoding, "repair_mojibake_tree", rename_managed_bank)
+
+    installed_name = vm.install_voice_from_folder(src)
+    assert installed_name == "FixedVoice"
+    installed_path = vm.voices[installed_name]
+
+    import json
+
+    registry_path = os.path.join(vm.user_voice_dir, vm.MANAGED_VOICE_REGISTRY)
+    with open(registry_path, "r", encoding="utf-8") as registry_file:
+        registry = json.load(registry_file)
+
+    assert registry["managed_voicebanks"] == ["FixedVoice"]
+    assert vm.is_managed_voice(installed_path)
+    assert vm.delete_user_voice(installed_path) == "FixedVoice"
+    assert os.path.exists(os.path.join(src, "oto.ini"))

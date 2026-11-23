@@ -109,6 +109,33 @@ def test_voice_panel_has_import_button_with_menu(app, window):
     assert any("フォルダ" in t for t in labels)
     assert any("ZIP" in t for t in labels)
     assert any("再スキャン" in t for t in labels)
+    assert g.delete_voice_menu.title() == "取り込んだ音源を削除"
+
+
+@pytest.mark.unit
+def test_gallery_reports_vocal_track_voicebank_as_in_use(app, window, tmp_path):
+    from types import SimpleNamespace
+
+    voice_path = tmp_path / "ManagedVoice"
+    voice_path.mkdir()
+    (voice_path / "oto.ini").write_text("a.wav=a,0,0,0,0,0\\n", encoding="utf-8")
+
+    previous_tracks = window.tracks
+    previous_voice_id = window.current_voice_id
+    try:
+        window.current_voice_id = "__INTERNAL__"
+        window.tracks = [
+            SimpleNamespace(
+                track_type="vocal",
+                voicebank_id=str(voice_path),
+                name="Lead Vocal",
+            )
+        ]
+        reason = window.voice_gallery._voice_in_use_reason(str(voice_path))
+        assert "Lead Vocal" in reason
+    finally:
+        window.tracks = previous_tracks
+        window.current_voice_id = previous_voice_id
 
 
 @pytest.mark.smoke
