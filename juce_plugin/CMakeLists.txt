@@ -54,6 +54,10 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
     GIT_TAG 8.0.5
     GIT_SHALLOW TRUE
+    # JUCE is public. Do not forward a runner/user GitHub auth header to this
+    # third-party clone: stale or repository-scoped credentials can make GitHub
+    # reject the request and trigger an interactive username prompt on CI.
+    GIT_CONFIG "http.https://github.com/.extraheader="
 )
 FetchContent_MakeAvailable(JUCE)
 

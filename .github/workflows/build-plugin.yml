@@ -10,8 +10,8 @@ on:
 env:
   # ★ キャッシュキーに焼き込む JUCE バージョン（CMakeLists.txt と必ず同期させる）
   JUCE_VERSION: "8.0.5"
-  # ★ キャッシュのスキーマバージョン（path や構造を変えたら上げる）
-  CACHE_SCHEMA: "v3"
+  # ★ Git取得条件を変更したため、旧キャッシュを復元しない
+  CACHE_SCHEMA: "v4"
 
 jobs:
   build:
@@ -64,16 +64,14 @@ jobs:
       # ============================================================
       # ★ キャッシュ復元（新ロケーション: ~/.cache/juce-fetchcontent）
       #   CMakeLists.txt の FETCHCONTENT_BASE_DIR と一致させること。
-      #   キーには JUCE バージョンと CACHE_SCHEMA を含め、バージョン
-      #   が上がったら自動的に別キャッシュになるようにする。
+      #   キーには JUCE バージョンと CACHE_SCHEMA を含める。
+      #   schema v4 は旧 v3 キャッシュを復元せず、新規取得で検証する。
       # ============================================================
       - name: Cache JUCE FetchContent
         uses: actions/cache@v4
         with:
           path: ~/.cache/juce-fetchcontent
           key: juce-fetchcontent-${{ matrix.os }}-${{ env.JUCE_VERSION }}-${{ env.CACHE_SCHEMA }}
-          restore-keys: |
-            juce-fetchcontent-${{ matrix.os }}-${{ env.JUCE_VERSION }}-
 
       # ============================================================
       # ★ 解決策 A: 復元された stale な CMake 状態を必ず破棄
