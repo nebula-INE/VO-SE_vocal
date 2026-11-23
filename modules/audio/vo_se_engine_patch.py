@@ -432,6 +432,8 @@ def _lookup_oto_map_fallback(oto_map: Any, lyric: Any, phonemes: Any) -> str:
         if isinstance(candidate, str) and candidate:
             return candidate
     return ""
+
+
 def _expected_render_duration_sec(notes) -> float:
     """v2 の絶対タイムラインから期待される WAV 長を秒で求める。"""
     end_sec = 0.0
