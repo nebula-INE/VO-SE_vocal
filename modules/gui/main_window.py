@@ -1792,8 +1792,8 @@ class VoiceCardGallery(QWidget):
         answer = QMessageBox.question(
             self.window(),
             "音源を削除",
-            f"音源「{display_name}」をVO-SEの保存先から削除します。\\n\\n"
-            "削除した音源は元に戻せません。元のインポート元フォルダには影響しません。\\n"
+            f"音源「{display_name}」をVO-SEの保存先から削除します。\n\n"
+            "削除した音源は元に戻せません。元のインポート元フォルダには影響しません。\n"
             "本当に削除しますか？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
