@@ -254,3 +254,37 @@ def test_copy_registers_only_app_managed_voicebank(vm, tmp_path):
     assert os.path.basename(installed_path) in registry["managed_voicebanks"]
     assert not os.path.exists(os.path.join(installed_path, ".vose-managed-voicebank"))
     assert vm.is_managed_voice(installed_path)
+
+
+@pytest.mark.unit
+def test_managed_voice_registry_tracks_repaired_top_level_name(vm, tmp_path, monkeypatch):
+    from modules.utils import text_encoding
+
+    src = _make_voice(str(tmp_path / "source"), "BrokenVoice")
+
+    def rename_managed_bank(root):
+        if os.path.normcase(os.path.abspath(root)) != os.path.normcase(os.path.abspath(vm.user_voice_dir)):
+            return []
+        old_path = os.path.join(root, "BrokenVoice")
+        new_path = os.path.join(root, "FixedVoice")
+        if not os.path.isdir(old_path):
+            return []
+        os.rename(old_path, new_path)
+        return [(old_path, new_path)]
+
+    monkeypatch.setattr(text_encoding, "repair_mojibake_tree", rename_managed_bank)
+
+    installed_name = vm.install_voice_from_folder(src)
+    assert installed_name == "FixedVoice"
+    installed_path = vm.voices[installed_name]
+
+    import json
+
+    registry_path = os.path.join(vm.user_voice_dir, vm.MANAGED_VOICE_REGISTRY)
+    with open(registry_path, "r", encoding="utf-8") as registry_file:
+        registry = json.load(registry_file)
+
+    assert registry["managed_voicebanks"] == ["FixedVoice"]
+    assert vm.is_managed_voice(installed_path)
+    assert vm.delete_user_voice(installed_path) == "FixedVoice"
+    assert os.path.exists(os.path.join(src, "oto.ini"))
