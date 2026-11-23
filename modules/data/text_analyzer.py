@@ -14,9 +14,9 @@ VO-SE Vocal — テキスト解析 / 発声タイミング整合
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
-import logging
 from typing import TYPE_CHECKING,Tuple, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
