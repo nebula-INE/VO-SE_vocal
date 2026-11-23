@@ -7567,6 +7567,7 @@ class MainWindow(
         gallery = getattr(self, "voice_gallery", None)
         import_worker = getattr(gallery, "_import_worker", None) if gallery is not None else None
         voice_scan_worker = getattr(gallery, "_scan_worker", None) if gallery is not None else None
+        voice_delete_worker = getattr(gallery, "_delete_worker", None) if gallery is not None else None
         voice_bank_worker = getattr(self, "_voice_bank_import_worker", None)
         for worker, title, message in (
             (
@@ -7589,6 +7590,11 @@ class MainWindow(
                 "音源一覧スキャン終了待ち",
                 "音源一覧のスキャンがまだ実行中です。スキャン完了後に、もう一度終了してください。",
             ),
+            (
+                voice_delete_worker,
+                "音源削除終了待ち",
+                "音源の削除がまだ実行中です。削除完了後に、もう一度終了してください。",
+            ),
         ):
             if worker is None:
                 continue
@@ -7606,6 +7612,7 @@ class MainWindow(
         if gallery is not None:
             gallery._import_worker = None
             gallery._scan_worker = None
+            gallery._delete_worker = None
         self._voice_bank_import_worker = None
 
         # Stop the legacy playback thread, if an older entry point started it.
