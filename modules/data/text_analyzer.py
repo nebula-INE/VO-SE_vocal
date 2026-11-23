@@ -14,8 +14,9 @@ VO-SE Vocal — テキスト解析 / 発声タイミング整合
 """
 from __future__ import annotations
 
-import os
 import logging
+import os
+import re
 from typing import TYPE_CHECKING,Tuple, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -292,15 +293,36 @@ class TextAnalyzer:
     # ------------------------------------------------------------------
 
     def _lyric_to_phonemes(self, lyric: str) -> List[str]:
-        """歌詞から音素リストを返す"""
+        """歌詞から音素リストを返す。VCV alias の先行母音は発音対象から除く。"""
         if not lyric or not lyric.strip():
             return ["pau"]
+
+        pronunciation_text = lyric.strip()
+        # UTAU VCV aliases use the leading vowel only as transition context:
+        # "a い" / "a_い" pronounce the tail "い", not the Latin letter "a".
+        vcv_match = re.match(
+            r"^[aiueo](?:\s+|_+)(.+)$",
+            pronunciation_text,
+            flags=re.IGNORECASE,
+        )
+        if vcv_match:
+            pronunciation_text = vcv_match.group(1).strip()
+        elif pronunciation_text.startswith("_") and len(pronunciation_text) > 1:
+            pronunciation_text = pronunciation_text[1:].strip()
+        elif pronunciation_text.startswith("-"):
+            pronunciation_text = pronunciation_text[1:].strip()
+
         try:
-            raw = pyopenjtalk.g2p(lyric, kana=False)
+            raw = pyopenjtalk.g2p(pronunciation_text, kana=False)
             if raw:
                 return [p for p in raw.split() if p not in ("sil", "pau")]
         except Exception as exc:
-            logger.warning("[TextAnalyzer] g2p 変換失敗 '%s': %s", lyric, exc)
+            logger.warning(
+                "[TextAnalyzer] g2p 変換失敗 '%s' (解析対象 '%s'): %s",
+                lyric,
+                pronunciation_text,
+                exc,
+            )
         return ["pau"]
 
     def midi_to_hz(self, midi_note: int) -> float:
