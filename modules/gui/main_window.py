@@ -1575,11 +1575,20 @@ class VoiceCardGallery(QWidget):
         act_folder.triggered.connect(self.import_voice_folder)
         act_zip.triggered.connect(self.import_voice_zip)
         act_rescan.triggered.connect(self.setup_gallery)
-        menu.addSeparator()
-        self.delete_voice_menu = menu.addMenu("取り込んだ音源を削除")
-        self.delete_voice_menu.aboutToShow.connect(self._populate_delete_menu)
         self.import_button.setMenu(menu)
         top.addWidget(self.import_button)
+
+        # Deletion is a separate, visible action rather than a submenu hidden
+        # inside "音源を追加".
+        self.delete_button = QPushButton("音源を削除")
+        self.delete_button.setObjectName("PrimaryButton")
+        self.delete_button.setToolTip(
+            "VO-SEの保存先にあるUTAU音源フォルダを削除します。"
+        )
+        self.delete_voice_menu = QMenu("音源を削除", self.delete_button)
+        self.delete_voice_menu.aboutToShow.connect(self._populate_delete_menu)
+        self.delete_button.setMenu(self.delete_voice_menu)
+        top.addWidget(self.delete_button)
         outer.addLayout(top)
 
         # --- 2行目: カテゴリチップ（幅が足りなければ折り返す） ---
@@ -1693,12 +1702,12 @@ class VoiceCardGallery(QWidget):
             return ""
 
     def _populate_delete_menu(self):
-        """List only imported banks; disable entries that are still used by the project."""
+        """List local voicebank folders and disable entries still used by the project."""
         menu = getattr(self, "delete_voice_menu", None)
         if menu is None:
             return
         menu.clear()
-        checker = getattr(self.manager, "is_managed_voice", None)
+        checker = getattr(self.manager, "is_local_voice", None)
         voices = getattr(self.manager, "voices", {})
         voices = voices if isinstance(voices, dict) else {}
         active_workers = False
@@ -1710,13 +1719,13 @@ class VoiceCardGallery(QWidget):
                 except RuntimeError:
                     pass
 
-        managed_entries = []
+        local_entries = []
         if callable(checker):
             for name, record in voices.items():
                 voice_path = record.get("path", "") if isinstance(record, dict) else record
                 if isinstance(voice_path, str) and checker(voice_path):
-                    managed_entries.append((str(name), voice_path))
-        for display_name, voice_path in sorted(managed_entries, key=lambda item: item[0].casefold()):
+                    local_entries.append((str(name), voice_path))
+        for display_name, voice_path in sorted(local_entries, key=lambda item: item[0].casefold()):
             action = menu.addAction(display_name)
             reason = self._voice_in_use_reason(voice_path)
             action.setEnabled(not reason and not active_workers)
@@ -1725,14 +1734,14 @@ class VoiceCardGallery(QWidget):
             elif active_workers:
                 action.setToolTip("音源の取り込み・スキャン・削除中は操作できません。")
             else:
-                action.setToolTip("VO-SEの保存先にある取り込み済み音源を削除します。")
+                action.setToolTip("VO-SEの保存先直下にある音源フォルダを削除します。")
             action.triggered.connect(
                 lambda checked=False, name=display_name, path=voice_path:
                     self._confirm_delete_voice(name, path)
             )
 
-        if not managed_entries:
-            empty = menu.addAction("削除できる取り込み済み音源はありません")
+        if not local_entries:
+            empty = menu.addAction("削除できる音源はありません")
             empty.setEnabled(False)
 
     def _voice_in_use_reason(self, voice_path: str) -> str:
@@ -1773,13 +1782,13 @@ class VoiceCardGallery(QWidget):
         return ""
 
     def _confirm_delete_voice(self, display_name: str, voice_path: str):
-        """Revalidate use and ownership, then ask before permanent removal."""
-        checker = getattr(self.manager, "is_managed_voice", None)
+        """Revalidate the local path and current project use before permanent removal."""
+        checker = getattr(self.manager, "is_local_voice", None)
         if not callable(checker) or not checker(voice_path):
             QMessageBox.warning(
                 self.window(),
                 "音源を削除できません",
-                "削除できるのはVO-SEの音源保存先に取り込んだUTAU音源だけです。"
+                "削除できるのはVO-SEの音源保存先直下にあるUTAU音源だけです。"
                 "OpenUTAUなど外部フォルダの音源や内蔵音源は削除できません。",
             )
             return
@@ -1793,7 +1802,8 @@ class VoiceCardGallery(QWidget):
             self.window(),
             "音源を削除",
             f"音源「{display_name}」をVO-SEの保存先から削除します。\n\n"
-            "削除した音源は元に戻せません。元のインポート元フォルダには影響しません。\n"
+            "削除されるのはVO-SE保存先内のフォルダです。別の場所にある元音源には影響しません。\n"
+            "このフォルダが唯一の保存場所の場合、削除後は復元できません。\n"
             "本当に削除しますか？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
