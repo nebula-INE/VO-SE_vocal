@@ -221,3 +221,30 @@ def test_delete_rejects_nested_or_symlinked_voice_targets(vm, tmp_path):
     with pytest.raises(ValueError):
         vm.delete_user_voice(link)
     assert os.path.exists(os.path.join(outside, "oto.ini"))
+
+
+
+@pytest.mark.unit
+def test_in_place_voice_under_managed_root_is_not_deletable(vm):
+    os.makedirs(vm.user_voice_dir, exist_ok=True)
+    src = _make_voice(vm.user_voice_dir, "ExistingVoice")
+
+    assert vm.install_voice_from_folder(vm.user_voice_dir) == "ExistingVoice"
+    installed_path = vm.voices["ExistingVoice"]
+
+    assert installed_path == src
+    assert not vm.is_managed_voice(installed_path)
+    with pytest.raises(ValueError, match="VO-SEの音源保存先"):
+        vm.delete_user_voice(installed_path)
+    assert os.path.exists(os.path.join(src, "oto.ini"))
+
+
+@pytest.mark.unit
+def test_copy_marks_only_app_managed_voicebank(vm, tmp_path):
+    src = _make_voice(str(tmp_path / "source"), "MarkedVoice")
+    name = vm.install_voice_from_folder(src)
+    installed_path = vm.voices[name]
+
+    marker_path = os.path.join(installed_path, vm.MANAGED_VOICE_MARKER)
+    assert os.path.isfile(marker_path)
+    assert vm.is_managed_voice(installed_path)
