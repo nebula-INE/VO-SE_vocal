@@ -201,7 +201,8 @@ def test_delete_rejects_managed_store_root(vm, tmp_path):
 def test_delete_rejects_nested_or_symlinked_voice_targets(vm, tmp_path):
     outside = _make_voice(str(tmp_path / "outside"), "OutsideVoice")
     os.makedirs(vm.user_voice_dir, exist_ok=True)
-    nested = os.path.join(vm.user_voice_dir, "nested")
+    outer = os.path.join(vm.user_voice_dir, "outer")
+    nested = os.path.join(outer, "nested")
     os.makedirs(nested, exist_ok=True)
     with open(os.path.join(nested, "oto.ini"), "w", encoding="utf-8") as handle:
         handle.write("a.wav=a,0,0,0,0,0\\n")
