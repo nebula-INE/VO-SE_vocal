@@ -189,3 +189,28 @@ def test_vcv_continuity_uses_tempo_bpm(monkeypatch):
         tempo_bpm=120.0,
     )
     assert calls[1][1]["is_continuous"] is True
+
+
+
+def test_lyric_to_phonemes_ignores_vcv_context_prefix(monkeypatch):
+    import modules.data.text_analyzer as text_analyzer_module
+
+    analyzed = []
+
+    def fake_g2p(text, kana=False):
+        analyzed.append((text, kana))
+        return "i"
+
+    monkeypatch.setattr(text_analyzer_module.pyopenjtalk, "g2p", fake_g2p)
+    analyzer = TextAnalyzer()
+
+    assert analyzer._lyric_to_phonemes("a い") == ["i"]
+    assert analyzer._lyric_to_phonemes("a_い") == ["i"]
+    assert analyzer._lyric_to_phonemes("_あ") == ["i"]
+    assert analyzer._lyric_to_phonemes("- い") == ["i"]
+    assert analyzed == [
+        ("い", False),
+        ("い", False),
+        ("あ", False),
+        ("い", False),
+    ]
