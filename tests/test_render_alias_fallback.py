@@ -236,13 +236,16 @@ def test_render_resolves_reported_five_note_sequence_from_cv_aliases(tmp_path, m
             f"{filename}={alias},0,0,0,50,0\n"
             for filename, alias in samples.items()
         ),
-        encoding="utf-8",
+        # Standard UTAU voicebank metadata is commonly Shift-JIS/CP932.
+        # OtoParser intentionally checks CP932 before UTF-8 for compatibility.
+        encoding="cp932",
     )
 
     parser = OtoParser()
     parser._load_prefix_map(str(voice_dir))
     assert len(parser._prefix_map) == 1
     assert parser.load_oto_file(str(voice_dir / "oto.ini"), voice_root=str(voice_dir)) == 5
+    assert parser.get("a い_C4") is not None
 
     notes = [
         NoteEvent(note_number=70, start_time=0.0, duration=0.5, lyric="じ", phonemes=["j", "i"]),
