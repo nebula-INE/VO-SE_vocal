@@ -326,3 +326,14 @@ def test_performance_mode_changes_mixer_buffer_without_legacy_native_symbols():
     assert "slider.setValue" in handler
     assert "vose_set_buffer_size" not in handler
     assert "vose_set_performance_mode" not in handler
+
+
+
+def test_close_event_waits_for_voice_delete_worker():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    close_handler = source.split("def closeEvent(self, event):", 1)[1].split(
+        "# レリタリング実行メゾット", 1
+    )[0]
+    assert 'voice_delete_worker = getattr(gallery, "_delete_worker", None)' in close_handler
+    assert '"音源削除終了待ち"' in close_handler
+    assert "voice_delete_worker," in close_handler
