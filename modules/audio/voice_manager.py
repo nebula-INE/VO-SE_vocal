@@ -5,6 +5,8 @@ import platform
 import glob
 import sys
 import logging
+import json
+import tempfile
 
 
 
@@ -28,8 +30,10 @@ def get_resource_path(relative_path: str) -> str:
     return os.path.normpath(full_path)
 
 class VoiceManager:
-    MANAGED_VOICE_MARKER = ".vose-managed-voicebank"
-    MANAGED_VOICE_MARKER_CONTENT = "VO-SE managed voicebank v1"
+    # Ownership metadata is kept outside voicebank folders so the installed UTAU
+    # payload remains byte-for-byte/structure compatible with the source bank.
+    MANAGED_VOICE_REGISTRY = ".vose-managed-voicebanks.json"
+    MANAGED_VOICE_REGISTRY_VERSION = 1
 
     def __init__(self):
         self.system = platform.system()
@@ -262,50 +266,140 @@ class VoiceManager:
 
         try:
             shutil.copytree(src_dir, dest_dir)
-            # Mark only directories actually copied by VO-SE. A folder that was
-            # already inside user_voice_dir is an in-place source and stays protected.
-            marker_path = os.path.join(dest_dir, self.MANAGED_VOICE_MARKER)
-            with open(marker_path, "w", encoding="utf-8") as marker_file:
-                marker_file.write(self.MANAGED_VOICE_MARKER_CONTENT)
+            # Register only folders that VO-SE itself copied. Keep this index
+            # outside the voicebank so its original file list is not modified.
+            self._register_managed_voice(dest_dir)
         except Exception:
             # 途中まで作られたコピーを残さない（次回スキャンで壊れた音源として出るため）
             shutil.rmtree(dest_dir, ignore_errors=True)
+            try:
+                self._unregister_managed_voice(dest_dir)
+            except OSError:
+                logging.exception("Failed to clean up Voicebank ownership registry")
             raise
         return dest_dir
 
-    def is_managed_voice(self, voice_path):
-        """Return whether voice_path is one imported bank directly inside our writable store.
+    def _managed_voice_registry_path(self):
+        return os.path.join(self.user_voice_dir, self.MANAGED_VOICE_REGISTRY)
 
-        System/OpenUTAU voice folders, embedded assets, the store root itself, nested
-        paths, and symlinks are deliberately not deletable from the desktop UI.
-        """
-        if not isinstance(voice_path, str):
-            return False
-        raw_path = os.path.expanduser(voice_path.strip())
-        if not raw_path or raw_path.startswith("__INTERNAL__"):
-            return False
-
+    def _read_managed_voice_registry(self):
+        """Read the app-owned list of copied bank directory names."""
+        registry_path = self._managed_voice_registry_path()
+        if os.path.islink(registry_path) or not os.path.isfile(registry_path):
+            return set()
         try:
-            if os.path.islink(raw_path):
-                return False
-            root = os.path.realpath(self.user_voice_dir)
-            target = os.path.realpath(os.path.abspath(raw_path))
-            if not root or target == root:
-                return False
-            if os.path.dirname(target) != root:
-                return False
+            with open(registry_path, "r", encoding="utf-8") as registry_file:
+                data = json.load(registry_file)
+        except (OSError, UnicodeError, ValueError):
+            logging.warning("Voicebank ownership registry is unreadable: %s", registry_path)
+            return set()
+
+        if not isinstance(data, dict) or data.get("version") != self.MANAGED_VOICE_REGISTRY_VERSION:
+            return set()
+        names = data.get("managed_voicebanks", [])
+        if not isinstance(names, list):
+            return set()
+        return {
+            name for name in names
+            if isinstance(name, str)
+            and name not in ("", ".", "..")
+            and "/" not in name
+            and "\\\\" not in name
+        }
+
+    def _write_managed_voice_registry(self, names):
+        """Atomically persist the set of managed voicebank directory names."""
+        root = self.user_voice_dir
+        os.makedirs(root, exist_ok=True)
+        registry_path = self._managed_voice_registry_path()
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".vose-managed-voicebanks-",
+            suffix=".tmp",
+            dir=root,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as registry_file:
+                json.dump(
+                    {
+                        "version": self.MANAGED_VOICE_REGISTRY_VERSION,
+                        "managed_voicebanks": sorted(names),
+                    },
+                    registry_file,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                registry_file.write("\\n")
+            os.replace(temp_path, registry_path)
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                logging.warning("Could not remove temporary Voicebank registry file: %s", temp_path)
+
+    def _managed_voice_directory_name(self, voice_path):
+        if not isinstance(voice_path, str):
+            return None
+        raw_path = os.path.expanduser(voice_path.strip())
+        if not raw_path or raw_path.startswith("__INTERNAL__") or os.path.islink(raw_path):
+            return None
+        root = os.path.realpath(self.user_voice_dir)
+        target = os.path.realpath(os.path.abspath(raw_path))
+        if not root or target == root:
+            return None
+        if os.path.dirname(target) != root:
+            return None
+        try:
             if os.path.commonpath([root, target]) != root:
+                return None
+        except ValueError:
+            return None
+        if not os.path.isdir(target) or os.path.islink(target):
+            return None
+        if not os.path.isfile(os.path.join(target, "oto.ini")):
+            return None
+        return os.path.basename(target)
+
+    def _register_managed_voice(self, voice_path):
+        name = self._managed_voice_directory_name(voice_path)
+        if name is None:
+            raise ValueError("VO-SE管理領域の直下にある音源フォルダを登録できません。")
+        names = self._read_managed_voice_registry()
+        names.add(name)
+        self._write_managed_voice_registry(names)
+
+    def _unregister_managed_voice(self, voice_path):
+        name = self._managed_voice_directory_name(voice_path)
+        if name is None:
+            # The folder may already have been removed; derive its direct-child name
+            # only after verifying that its lexical parent is the managed root.
+            if not isinstance(voice_path, str):
+                return
+            raw_path = os.path.abspath(os.path.expanduser(voice_path.strip()))
+            root = os.path.abspath(self.user_voice_dir)
+            if os.path.dirname(raw_path) != root or os.path.islink(raw_path):
+                return
+            name = os.path.basename(raw_path)
+        names = self._read_managed_voice_registry()
+        if name in names:
+            names.remove(name)
+            self._write_managed_voice_registry(names)
+
+    def is_managed_voice(self, voice_path):
+        """Return whether this is a copied bank registered by VO-SE.
+
+        The registry is outside voicebank folders. External/OpenUTAU folders,
+        in-place sources, embedded assets, nested paths, and symlinks are excluded.
+        """
+        try:
+            name = self._managed_voice_directory_name(voice_path)
+            if name is None or name not in self._read_managed_voice_registry():
                 return False
-            marker_path = os.path.join(target, self.MANAGED_VOICE_MARKER)
-            if os.path.islink(marker_path) or not os.path.isfile(marker_path):
-                return False
-            with open(marker_path, "r", encoding="utf-8") as marker_file:
-                marker_content = marker_file.read().strip()
+            target = os.path.realpath(os.path.abspath(os.path.expanduser(voice_path.strip())))
             return (
                 os.path.isdir(target)
                 and not os.path.islink(target)
                 and os.path.isfile(os.path.join(target, "oto.ini"))
-                and marker_content == self.MANAGED_VOICE_MARKER_CONTENT
             )
         except (OSError, TypeError, ValueError):
             return False
@@ -340,6 +434,7 @@ class VoiceManager:
         if not self.is_managed_voice(target):
             raise ValueError("削除対象の音源パスが安全でないため、中止しました。")
         shutil.rmtree(target)
+        self._unregister_managed_voice(target)
         self.scan_voices()
         return os.path.basename(target)
 
