@@ -205,7 +205,7 @@ def test_delete_rejects_nested_or_symlinked_voice_targets(vm, tmp_path):
     nested = os.path.join(outer, "nested")
     os.makedirs(nested, exist_ok=True)
     with open(os.path.join(nested, "oto.ini"), "w", encoding="utf-8") as handle:
-        handle.write("a.wav=a,0,0,0,0,0\\n")
+        handle.write("a.wav=a,0,0,0,0,0\n")
 
     assert not vm.is_managed_voice(nested)
     with pytest.raises(ValueError):
