@@ -265,5 +265,69 @@ class VoiceManager:
             raise
         return dest_dir
 
+    def is_managed_voice(self, voice_path):
+        """Return whether voice_path is one imported bank directly inside our writable store.
+
+        System/OpenUTAU voice folders, embedded assets, the store root itself, nested
+        paths, and symlinks are deliberately not deletable from the desktop UI.
+        """
+        if not isinstance(voice_path, (str, os.PathLike)):
+            return False
+        raw_path = os.path.expanduser(os.fspath(voice_path).strip())
+        if not raw_path or raw_path.startswith("__INTERNAL__"):
+            return False
+
+        try:
+            if os.path.islink(raw_path):
+                return False
+            root = os.path.realpath(self.user_voice_dir)
+            target = os.path.realpath(os.path.abspath(raw_path))
+            if not root or target == root:
+                return False
+            if os.path.dirname(target) != root:
+                return False
+            if os.path.commonpath([root, target]) != root:
+                return False
+            return (
+                os.path.isdir(target)
+                and not os.path.islink(target)
+                and os.path.isfile(os.path.join(target, "oto.ini"))
+            )
+        except (OSError, TypeError, ValueError):
+            return False
+
+    def delete_user_voice(self, voice_path):
+        """Delete one imported Voicebank, never a user-managed external source folder.
+
+        The target must still be registered by scan_voices() and must be a direct
+        child of user_voice_dir. The source folder originally imported by the user
+        is not touched; only VO-SE's copied installation is removed.
+        """
+        self.scan_voices()
+        if not self.is_managed_voice(voice_path):
+            raise ValueError(
+                "削除できるのはVO-SEの音源保存先に取り込んだUTAU音源だけです。"
+            )
+
+        target = os.path.realpath(os.path.abspath(os.path.expanduser(os.fspath(voice_path))))
+        registered_paths = set()
+        for registered in self.voices.values():
+            if isinstance(registered, (str, os.PathLike)):
+                value = os.fspath(registered)
+                if value and not value.startswith("__INTERNAL__"):
+                    registered_paths.add(os.path.realpath(os.path.abspath(os.path.expanduser(value))))
+        if target not in registered_paths:
+            raise ValueError("音源一覧に登録されていない音源は削除できません。")
+
+        import shutil
+
+        # Re-check immediately before removal so a stale selection or replaced
+        # symlink cannot redirect this operation outside the managed directory.
+        if not self.is_managed_voice(target):
+            raise ValueError("削除対象の音源パスが安全でないため、中止しました。")
+        shutil.rmtree(target)
+        self.scan_voices()
+        return os.path.basename(target)
+
     def get_voice_path(self, name):
         return self.voices.get(name)
