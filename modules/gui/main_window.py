@@ -1714,8 +1714,8 @@ class VoiceCardGallery(QWidget):
         if callable(checker):
             for name, record in voices.items():
                 voice_path = record.get("path", "") if isinstance(record, dict) else record
-                if isinstance(voice_path, (str, os.PathLike)) and checker(voice_path):
-                    managed_entries.append((str(name), os.fspath(voice_path)))
+                if isinstance(voice_path, str) and checker(voice_path):
+                    managed_entries.append((str(name), voice_path))
         for display_name, voice_path in sorted(managed_entries, key=lambda item: item[0].casefold()):
             action = menu.addAction(display_name)
             reason = self._voice_in_use_reason(voice_path)
