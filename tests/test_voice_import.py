@@ -245,6 +245,12 @@ def test_copy_marks_only_app_managed_voicebank(vm, tmp_path):
     name = vm.install_voice_from_folder(src)
     installed_path = vm.voices[name]
 
-    marker_path = os.path.join(installed_path, vm.MANAGED_VOICE_MARKER)
-    assert os.path.isfile(marker_path)
+    import json
+
+    registry_path = os.path.join(vm.user_voice_dir, vm.MANAGED_VOICE_REGISTRY)
+    with open(registry_path, "r", encoding="utf-8") as registry_file:
+        registry = json.load(registry_file)
+
+    assert os.path.basename(installed_path) in registry["managed_voicebanks"]
+    assert not os.path.exists(os.path.join(installed_path, ".vose-managed-voicebank"))
     assert vm.is_managed_voice(installed_path)
