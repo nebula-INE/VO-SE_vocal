@@ -1,4 +1,4 @@
-"""上部コントロールバーの折り返しと、音源パネル（取り込みボタン）の回帰テスト。"""
+"""上部コントロールバーの折り返しと、音源パネルの追加・削除操作の回帰テスト。"""
 import itertools
 import os
 
@@ -102,14 +102,18 @@ def test_piano_roll_is_not_squeezed_by_bottom_panel(app, window):
 
 
 @pytest.mark.smoke
-def test_voice_panel_has_import_button_with_menu(app, window):
+def test_voice_panel_has_separate_import_and_delete_buttons(app, window):
     g = window.voice_gallery
     assert g.import_button.text().strip() == "音源を追加"
-    labels = [a.text() for a in g.import_button.menu().actions() if not a.isSeparator()]
-    assert any("フォルダ" in t for t in labels)
-    assert any("ZIP" in t for t in labels)
-    assert any("再スキャン" in t for t in labels)
-    assert g.delete_voice_menu.title() == "取り込んだ音源を削除"
+    import_labels = [a.text() for a in g.import_button.menu().actions() if not a.isSeparator()]
+    assert any("フォルダ" in t for t in import_labels)
+    assert any("ZIP" in t for t in import_labels)
+    assert any("再スキャン" in t for t in import_labels)
+    assert not any("削除" in t for t in import_labels)
+
+    assert g.delete_button.text().strip() == "音源を削除"
+    assert g.delete_button.menu() is g.delete_voice_menu
+    assert g.delete_voice_menu.title() == "音源を削除"
 
 
 @pytest.mark.unit
