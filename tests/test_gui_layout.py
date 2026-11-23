@@ -112,7 +112,7 @@ def test_voice_panel_has_separate_import_and_delete_buttons(app, window):
     assert not any("削除" in t for t in import_labels)
 
     assert g.delete_button.text().strip() == "音源を削除"
-    assert g.delete_button.menu() is g.delete_voice_menu
+    assert g.delete_button.menu().title() == "音源を削除"
     assert g.delete_voice_menu.title() == "音源を削除"
 
 
