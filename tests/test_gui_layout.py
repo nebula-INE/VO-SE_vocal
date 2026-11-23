@@ -117,6 +117,33 @@ def test_voice_panel_has_separate_import_and_delete_buttons(app, window):
 
 
 @pytest.mark.unit
+def test_delete_menu_lists_legacy_local_voicebanks(app, window, tmp_path, monkeypatch):
+    gallery = window.voice_gallery
+    manager = gallery.manager
+    original_root = manager.internal_voice_dir
+
+    voice_root = tmp_path / "voice_banks"
+    voice_dir = voice_root / "LegacyVoice"
+    voice_dir.mkdir(parents=True)
+    (voice_dir / "oto.ini").write_text(
+        "a.wav=a,0,0,0,0,0\\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(manager, "internal_voice_dir", str(voice_root))
+    try:
+        voices = manager.scan_voices()
+        gallery.setup_gallery(voices=voices)
+        gallery._populate_delete_menu()
+        labels = [action.text() for action in gallery.delete_voice_menu.actions()]
+        assert "LegacyVoice" in labels
+    finally:
+        monkeypatch.setattr(manager, "internal_voice_dir", original_root)
+        voices = manager.scan_voices()
+        gallery.setup_gallery(voices=voices)
+
+
+@pytest.mark.unit
 def test_gallery_reports_vocal_track_voicebank_as_in_use(app, window, tmp_path):
     from types import SimpleNamespace
 
