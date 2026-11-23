@@ -109,8 +109,7 @@ def test_voice_panel_has_import_button_with_menu(app, window):
     assert any("フォルダ" in t for t in labels)
     assert any("ZIP" in t for t in labels)
     assert any("再スキャン" in t for t in labels)
-    delete_action = next(a for a in g.import_button.menu().actions() if "削除" in a.text())
-    assert not delete_action.isEnabled(), "未選択時は削除操作を無効にする"
+    assert g.delete_voice_menu.title() == "取り込んだ音源を削除"
 
 
 @pytest.mark.smoke
