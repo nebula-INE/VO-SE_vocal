@@ -70,10 +70,12 @@ class VoiceManager:
 
     def _sync_managed_voice_registry_rename(self, old_path, new_path):
         """Keep ownership records aligned when a managed bank's top-level name is repaired."""
-        root = os.path.normcase(os.path.abspath(self.user_voice_dir))
-        old_abs = os.path.normcase(os.path.abspath(old_path))
-        new_abs = os.path.normcase(os.path.abspath(new_path))
-        if os.path.dirname(old_abs) != root or os.path.dirname(new_abs) != root:
+        managed_root = os.path.normcase(os.path.realpath(os.path.abspath(self.user_voice_dir)))
+        old_abs = os.path.abspath(old_path)
+        new_abs = os.path.abspath(new_path)
+        old_parent = os.path.normcase(os.path.realpath(os.path.dirname(old_abs)))
+        new_parent = os.path.normcase(os.path.realpath(os.path.dirname(new_abs)))
+        if old_parent != managed_root or new_parent != managed_root:
             return
 
         old_name = os.path.basename(old_abs)
