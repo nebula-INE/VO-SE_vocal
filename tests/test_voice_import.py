@@ -240,7 +240,7 @@ def test_in_place_voice_under_managed_root_is_not_deletable(vm):
 
 
 @pytest.mark.unit
-def test_copy_marks_only_app_managed_voicebank(vm, tmp_path):
+def test_copy_registers_only_app_managed_voicebank(vm, tmp_path):
     src = _make_voice(str(tmp_path / "source"), "MarkedVoice")
     name = vm.install_voice_from_folder(src)
     installed_path = vm.voices[name]
