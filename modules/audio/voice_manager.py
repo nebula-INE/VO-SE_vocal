@@ -28,6 +28,9 @@ def get_resource_path(relative_path: str) -> str:
     return os.path.normpath(full_path)
 
 class VoiceManager:
+    MANAGED_VOICE_MARKER = ".vose-managed-voicebank"
+    MANAGED_VOICE_MARKER_CONTENT = "VO-SE managed voicebank v1"
+
     def __init__(self):
         self.system = platform.system()
         # 実行環境(PyInstaller)と開発環境のパス解決を統一
@@ -259,6 +262,11 @@ class VoiceManager:
 
         try:
             shutil.copytree(src_dir, dest_dir)
+            # Mark only directories actually copied by VO-SE. A folder that was
+            # already inside user_voice_dir is an in-place source and stays protected.
+            marker_path = os.path.join(dest_dir, self.MANAGED_VOICE_MARKER)
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                marker_file.write("VO-SE managed voicebank v1\\n")
         except Exception:
             # 途中まで作られたコピーを残さない（次回スキャンで壊れた音源として出るため）
             shutil.rmtree(dest_dir, ignore_errors=True)
@@ -288,10 +296,16 @@ class VoiceManager:
                 return False
             if os.path.commonpath([root, target]) != root:
                 return False
+            marker_path = os.path.join(target, self.MANAGED_VOICE_MARKER)
+            if os.path.islink(marker_path) or not os.path.isfile(marker_path):
+                return False
+            with open(marker_path, "r", encoding="utf-8") as marker_file:
+                marker_content = marker_file.read().strip()
             return (
                 os.path.isdir(target)
                 and not os.path.islink(target)
                 and os.path.isfile(os.path.join(target, "oto.ini"))
+                and marker_content == self.MANAGED_VOICE_MARKER_CONTENT
             )
         except (OSError, TypeError, ValueError):
             return False
