@@ -304,6 +304,7 @@ class VoiceManager:
             if isinstance(name, str)
             and name not in ("", ".", "..")
             and "/" not in name
+            and "\\" not in name
             and "\\\\" not in name
         }
 
@@ -328,7 +329,7 @@ class VoiceManager:
                     ensure_ascii=False,
                     indent=2,
                 )
-                registry_file.write("\\n")
+                registry_file.write("\n")
             os.replace(temp_path, registry_path)
         finally:
             try:
