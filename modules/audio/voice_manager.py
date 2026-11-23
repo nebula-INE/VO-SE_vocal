@@ -266,7 +266,7 @@ class VoiceManager:
             # already inside user_voice_dir is an in-place source and stays protected.
             marker_path = os.path.join(dest_dir, self.MANAGED_VOICE_MARKER)
             with open(marker_path, "w", encoding="utf-8") as marker_file:
-                marker_file.write("VO-SE managed voicebank v1\\n")
+                marker_file.write(self.MANAGED_VOICE_MARKER_CONTENT)
         except Exception:
             # 途中まで作られたコピーを残さない（次回スキャンで壊れた音源として出るため）
             shutil.rmtree(dest_dir, ignore_errors=True)
