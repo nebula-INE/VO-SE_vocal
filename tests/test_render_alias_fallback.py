@@ -309,3 +309,26 @@ def test_render_resolves_reported_five_note_sequence_from_cv_aliases(tmp_path, m
         str(voice_dir / "i_no_C4.wav"),
         str(voice_dir / "o_ka_C4.wav"),
     ]
+
+
+def test_oto_parser_preserves_initial_n_in_romanized_cv_alias(tmp_path):
+    from modules.data.oto_parser import OtoParser
+
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "prefix.map").write_text("C1\t\t_C4\n", encoding="utf-8")
+    (voice_dir / "oto.ini").write_text(
+        "i_no_C4.wav=i no_C4,0,0,0,50,0\n",
+        encoding="cp932",
+    )
+
+    parser = OtoParser()
+    parser._load_prefix_map(str(voice_dir))
+    assert parser.load_oto_file(
+        str(voice_dir / "oto.ini"),
+        voice_root=str(voice_dir),
+    ) == 1
+
+    resolved = parser.resolve_alias("no", "i", note_num=65)
+    assert resolved is not None
+    assert resolved.alias == "i no_C4"
