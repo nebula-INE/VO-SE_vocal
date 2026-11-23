@@ -63,9 +63,30 @@ class VoiceManager:
             seen.add(key)
             try:
                 for old, new in repair_mojibake_tree(root):
+                    self._sync_managed_voice_registry_rename(old, new)
                     print(f"[VoiceManager] 文字化けを修復: {os.path.basename(old)} -> {os.path.basename(new)}")
             except OSError as e:
                 print(f"[VoiceManager] 文字化けの修復をスキップ: {e}")
+
+    def _sync_managed_voice_registry_rename(self, old_path, new_path):
+        """Keep ownership records aligned when a managed bank's top-level name is repaired."""
+        root = os.path.normcase(os.path.abspath(self.user_voice_dir))
+        old_abs = os.path.normcase(os.path.abspath(old_path))
+        new_abs = os.path.normcase(os.path.abspath(new_path))
+        if os.path.dirname(old_abs) != root or os.path.dirname(new_abs) != root:
+            return
+
+        old_name = os.path.basename(old_abs)
+        new_name = os.path.basename(new_abs)
+        if not old_name or not new_name or old_name == new_name:
+            return
+
+        names = self._read_managed_voice_registry()
+        if old_name not in names:
+            return
+        names.discard(old_name)
+        names.add(new_name)
+        self._write_managed_voice_registry(names)
 
     @property
     def user_voice_dir(self) -> str:
@@ -245,9 +266,17 @@ class VoiceManager:
             self.scan_voices()
             return os.path.basename(real_src)
 
+        managed_before = self._read_managed_voice_registry()
         dest_dir = self._copy_voice_dir(src_dir)
         self.scan_voices()
-        return os.path.basename(dest_dir)
+
+        installed_name = os.path.basename(dest_dir)
+        managed_after = self._read_managed_voice_registry()
+        if installed_name not in managed_after:
+            added_names = managed_after - managed_before
+            if len(added_names) == 1:
+                installed_name = next(iter(added_names))
+        return installed_name
 
     def _copy_voice_dir(self, src_dir):
         """src_dir を user_voice_dir 配下へ重複しない名前でコピーし、コピー先パスを返す。"""
