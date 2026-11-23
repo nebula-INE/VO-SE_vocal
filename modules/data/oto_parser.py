@@ -459,8 +459,10 @@ class OtoParser:
             if exact_scoped is not None:
                 return exact_scoped
 
+        # Strip only a standalone VCV context marker. A leading "n" in a
+        # romanized CV syllable such as "no" is a consonant, not a prefix.
         clean_lyric = re.sub(
-            r"^[-aieuon_]\s*",
+            r"^(?:[-_]\s*|[aieuon](?:\s+|_))",
             "",
             lyric,
             flags=re.IGNORECASE,
