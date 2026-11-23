@@ -1708,8 +1708,8 @@ class VoiceCardGallery(QWidget):
                 enabled = bool(checker(selected[1]))
             except (OSError, TypeError, ValueError):
                 enabled = False
-        for worker_name in ("_import_worker", "_scan_worker", "_delete_worker"):
-            worker = getattr(self, worker_name, None)
+        for worker_name in ("_import_worker", "_scan_worker", "_delete_worker", "_voice_bank_import_worker"):
+            worker = getattr(self if worker_name != "_voice_bank_import_worker" else self.window(), worker_name, None)
             if worker is not None:
                 try:
                     if worker.isRunning():
@@ -1803,8 +1803,8 @@ class VoiceCardGallery(QWidget):
     def _run_delete(self, display_name: str, voice_path: str):
         from PySide6.QtWidgets import QProgressDialog
 
-        for worker_name in ("_import_worker", "_scan_worker", "_delete_worker"):
-            worker = getattr(self, worker_name, None)
+        for worker_name in ("_import_worker", "_scan_worker", "_delete_worker", "_voice_bank_import_worker"):
+            worker = getattr(self if worker_name != "_voice_bank_import_worker" else self.window(), worker_name, None)
             if worker is not None:
                 try:
                     if worker.isRunning():
