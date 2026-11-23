@@ -271,9 +271,9 @@ class VoiceManager:
         System/OpenUTAU voice folders, embedded assets, the store root itself, nested
         paths, and symlinks are deliberately not deletable from the desktop UI.
         """
-        if not isinstance(voice_path, (str, os.PathLike)):
+        if not isinstance(voice_path, str):
             return False
-        raw_path = os.path.expanduser(os.fspath(voice_path).strip())
+        raw_path = os.path.expanduser(voice_path.strip())
         if not raw_path or raw_path.startswith("__INTERNAL__"):
             return False
 
@@ -304,16 +304,16 @@ class VoiceManager:
         is not touched; only VO-SE's copied installation is removed.
         """
         self.scan_voices()
-        if not self.is_managed_voice(voice_path):
+        if not isinstance(voice_path, str) or not self.is_managed_voice(voice_path):
             raise ValueError(
                 "削除できるのはVO-SEの音源保存先に取り込んだUTAU音源だけです。"
             )
 
-        target = os.path.realpath(os.path.abspath(os.path.expanduser(os.fspath(voice_path))))
+        target = os.path.realpath(os.path.abspath(os.path.expanduser(voice_path)))
         registered_paths = set()
         for registered in self.voices.values():
             if isinstance(registered, (str, os.PathLike)):
-                value = os.fspath(registered)
+                value = str(registered)
                 if value and not value.startswith("__INTERNAL__"):
                     registered_paths.add(os.path.realpath(os.path.abspath(os.path.expanduser(value))))
         if target not in registered_paths:
