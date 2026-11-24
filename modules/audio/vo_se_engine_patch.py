@@ -299,42 +299,45 @@ def _refresh_voice_library_v2_unlocked(self) -> None:
     if not hasattr(self, "oto_parser") or self.oto_parser is None:
         self.oto_parser = OtoParser()
 
-    self.oto_parser.clear()
-    # refresh_voice_library_v2() は load_voice_dir() を経由しないため、
-    # prefix.map もここで明示的にロードする。これを行わないと
-    # multi-pitch alias (例: あ_C4 / あ_F4) が note_num に応じて切り替わらず、
-    # resolve_alias() が最初に見つかった pitch layer を返してしまう。
-    load_prefix_map = getattr(self.oto_parser, "_load_prefix_map", None)
-    if callable(load_prefix_map):
-        load_prefix_map(self.voice_lib_path)
-    oto_files = []
+    # OtoParser owns bounded root discovery and deterministic main/fallback
+    # ordering. Do not independently walk voice_lib_path here: that used to
+    # make Python and the native OTO database disagree about duplicate aliases.
+    self.oto_parser.load_voice_dir(
+        self.voice_lib_path,
+        use_cache=False,
+        reset=True,
+        write_cache=False,
+    )
+    self._loaded_oto_ini_paths = tuple(
+        getattr(self.oto_parser, "loaded_oto_ini_paths", ())
+    )
 
-    for root, _dirs, files in os.walk(self.voice_lib_path):
-        files_lower = [f.lower() for f in files]
-        if "oto.ini" in files_lower:
-            real_name = files[files_lower.index("oto.ini")]
-            ini_path = os.path.join(root, real_name)
-            oto_files.append(ini_path)
-
-        for fname in files:
-            if fname.lower().endswith(".wav"):
+    # Preserve the legacy basename fallback map, but walk each layer separately
+    # and prune nested oto.ini layers so a parent layer cannot steal a child
+    # layer's WAV path. The layer order is the same first-wins order as _db.
+    layer_dirs = tuple(getattr(self.oto_parser, "loaded_layers", ()))
+    layer_realpaths = {os.path.realpath(path) for path in layer_dirs}
+    for layer_dir in layer_dirs:
+        for root, dirs, files in os.walk(layer_dir, topdown=True, followlinks=False):
+            dirs[:] = sorted(
+                directory
+                for directory in dirs
+                if not os.path.islink(os.path.join(root, directory))
+                and os.path.realpath(os.path.join(root, directory)) not in layer_realpaths
+            )
+            for fname in files:
+                if not fname.lower().endswith(".wav"):
+                    continue
                 lyric = os.path.splitext(fname)[0]
-                # Do not overwrite an alias-derived mapping with a basename
-                # fallback when the same WAV filename exists in multiple locations.
                 self.oto_map.setdefault(
                     lyric,
                     os.path.abspath(os.path.join(root, fname)),
                 )
 
-    # Sort oto.ini paths so duplicate aliases resolve deterministically across
-    # Windows/macOS/Linux instead of depending on os.walk traversal order.
-    self._loaded_oto_ini_paths = tuple(sorted(oto_files))
-    for ini_path in self._loaded_oto_ini_paths:
-        loaded = self.oto_parser.load_oto_file(
-            ini_path,
-            voice_root=self.voice_lib_path,
-        )
-        logger.debug("oto.ini ロード: %d エントリ (%s)", loaded, ini_path)
+    # Include configured aliases even when their WAV filenames differ from the
+    # lyric. OtoEntry.wav_path remains relative to the oto.ini that declared it.
+    for alias, entry in getattr(self.oto_parser, "_db", {}).items():
+        self.oto_map.setdefault(alias, entry.wav_path)
 
     self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
     self.cvvc_resolver = CvvcResolver(self.oto_parser)
