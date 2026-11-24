@@ -248,7 +248,7 @@ class OtoParser:
             return candidate if os.path.isdir(candidate) else None
         current = os.path.abspath(start)
         while True:
-            if os.path.basename(current).casefold() == "voices" and os.path.isdir(current):
+            if os.path.basename(current).casefold() in {"voices", "voice_banks"} and os.path.isdir(current):
                 return current
             parent = os.path.dirname(current)
             if parent == current:
@@ -426,7 +426,10 @@ class OtoParser:
             item for item in main_layers
             if not item["selected_subtree"] and float(item["coverage"]) >= 0.55
         ]
-        selected_is_supplement = any(bool(item["supplement"]) for item in selected_items)
+        selected_is_supplement = any(
+            bool(item["supplement"]) and bool(item["selected"])
+            for item in selected_items
+        )
         if selected_items and (selected_coverage < 0.55 or selected_is_supplement) and sibling_main:
             sibling = sibling_main[0]
             if selected_is_supplement and any(
