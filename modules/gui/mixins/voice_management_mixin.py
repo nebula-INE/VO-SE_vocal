@@ -295,11 +295,28 @@ class VoiceManagementMixin:
             if voice_manager and hasattr(voice_manager, "get_character_color"):
                 char_color = voice_manager.get_character_color(path)
 
-            msg = f"【{character_name}】に切り替え完了 ({len(self.current_oto_data)} 音素ロード)"
+            loaded_entries = len(self.current_oto_data)
+            layer_notifications = []
+            if self.vo_se_engine is not None:
+                oto_parser = getattr(self.vo_se_engine, "oto_parser", None)
+                loaded_db = getattr(oto_parser, "_db", None)
+                if isinstance(loaded_db, dict):
+                    loaded_entries = len(loaded_db)
+                notifications = getattr(oto_parser, "layer_notifications", ())
+                if isinstance(notifications, (list, tuple)):
+                    layer_notifications = [
+                        str(message).strip()
+                        for message in notifications
+                        if str(message).strip()
+                    ]
+
+            msg = f"【{character_name}】に切り替え完了 ({loaded_entries} 音素ロード)"
+            if layer_notifications:
+                msg += f" / {layer_notifications[0]}"
 
             status_bar = self.statusBar()
             if status_bar:
-                status_bar.showMessage(msg, 5000)
+                status_bar.showMessage(msg, 8000 if layer_notifications else 5000)
 
             print(f"Selected voice: {character_name} at {path} (Color: {char_color})")
 
