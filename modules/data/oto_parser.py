@@ -363,7 +363,9 @@ class OtoParser:
             )
             oto_names = sorted(name for name in files if name.casefold() == "oto.ini")
             if oto_names:
-                found.append((os.path.abspath(current), os.path.join(current, oto_names[0])))
+                ini_path = os.path.join(current, oto_names[0])
+                if not os.path.islink(ini_path):
+                    found.append((os.path.abspath(current), ini_path))
 
         selected_has_layer = any(
             os.path.normcase(os.path.realpath(directory))
@@ -781,7 +783,7 @@ class OtoParser:
             if entry is not None:
                 return entry
 
-            prefix_lower = prefix.casefold()
+            prefix_lower = unicodedata.normalize("NFKC", prefix).casefold()
             default_matches: Dict[int, OtoEntry] = {}
             pitch_matches: Dict[int, Tuple[int, OtoEntry]] = {}
             for alias, candidate in self._db.items():
@@ -902,7 +904,7 @@ class OtoParser:
             return entry
 
         if self._lookup_alias(lyric) is not None:
-            return self._db[lyric]
+            return self._lookup_alias(lyric)
 
         entry = match_pref(clean_lyric)
         if entry is not None:
