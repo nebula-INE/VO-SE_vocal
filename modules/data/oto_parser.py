@@ -329,7 +329,9 @@ class OtoParser:
     @staticmethod
     def _is_supplement_layer(directory: str, root: str, coverage: float) -> Tuple[bool, str]:
         relative = os.path.relpath(directory, root)
-        parts = [part.casefold() for part in relative.split(os.sep) if part not in ("", ".")]
+        parts = [os.path.basename(root).casefold()] + [
+            part.casefold() for part in relative.split(os.sep) if part not in ("", ".")
+        ]
         marked = any(
             token in part
             for part in parts
@@ -363,11 +365,20 @@ class OtoParser:
             if oto_names:
                 found.append((os.path.abspath(current), os.path.join(current, oto_names[0])))
 
+        selected_has_layer = any(
+            os.path.normcase(os.path.realpath(directory))
+            == os.path.normcase(os.path.realpath(selected_path))
+            for directory, _ini_path in found
+        )
         info: List[Dict[str, object]] = []
         for directory, ini_path in found:
             covered, coverage = self._layer_aliases_and_coverage(ini_path)
             supplement, reason = self._is_supplement_layer(directory, root, coverage)
-            selected_subtree = self._is_within(directory, selected_path)
+            selected_subtree = (
+                os.path.normcase(os.path.realpath(directory))
+                == os.path.normcase(os.path.realpath(selected_path))
+                or (not selected_has_layer and self._is_within(directory, selected_path))
+            )
             exact_selected = (
                 os.path.normcase(os.path.realpath(directory))
                 == os.path.normcase(os.path.realpath(selected_path))
