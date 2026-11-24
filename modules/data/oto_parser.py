@@ -429,10 +429,18 @@ class OtoParser:
         selected_is_supplement = any(bool(item["supplement"]) for item in selected_items)
         if selected_items and (selected_coverage < 0.55 or selected_is_supplement) and sibling_main:
             sibling = sibling_main[0]
-            message = (
-                f"選択音源 {os.path.basename(selected_path)} のCV充足率が低いため、"
-                f"兄弟音源 {os.path.basename(str(sibling['directory']))} をフォールバックとして併用しました"
-            )
+            if selected_is_supplement and any(
+                item["supplement_reason"] == "name" for item in selected_items
+            ):
+                message = (
+                    f"選択音源 {os.path.basename(selected_path)} は補助パックのため、"
+                    f"兄弟音源 {os.path.basename(str(sibling['directory']))} もフォールバックとして併用しました"
+                )
+            else:
+                message = (
+                    f"選択音源 {os.path.basename(selected_path)} のCV充足率が低いため、"
+                    f"兄弟音源 {os.path.basename(str(sibling['directory']))} もフォールバックとして併用しました"
+                )
             self.layer_notifications.append(message)
             logger.info(message)
 
@@ -483,6 +491,22 @@ class OtoParser:
             list(dict.fromkeys(unicodedata.normalize("NFKC", key) for key in tried_keys)),
             list(self.loaded_layers),
         )
+
+    def _log_resolution(
+        self,
+        entry: Optional[OtoEntry],
+        requested_alias: str,
+    ) -> Optional[OtoEntry]:
+        """Record the exact source layer selected for a successful alias lookup."""
+        if entry is not None:
+            logger.debug(
+                "音源エイリアス解決: requested=%r alias=%r layer=%s wav=%s",
+                requested_alias,
+                entry.alias,
+                entry.voice_dir,
+                entry.wav_path,
+            )
+        return entry
 
     # ------------------------------------------------------------------
     # 公開 API
@@ -745,7 +769,7 @@ class OtoParser:
         if "/" in scoped_lyric:
             exact_scoped = self._lookup_alias(scoped_lyric)
             if exact_scoped is not None:
-                return exact_scoped
+                return self._log_resolution(exact_scoped, lyric)
 
         # Strip only a standalone VCV context marker. A leading "n" in a
         # romanized CV syllable such as "no" is a consonant, not a prefix.
@@ -781,7 +805,7 @@ class OtoParser:
             attempted_keys.append(prefix)
             entry = self._lookup_alias(prefix)
             if entry is not None:
-                return entry
+                return self._log_resolution(entry, lyric)
 
             prefix_lower = unicodedata.normalize("NFKC", prefix).casefold()
             default_matches: Dict[int, OtoEntry] = {}
@@ -867,7 +891,7 @@ class OtoParser:
                 for candidate in dict.fromkeys(exact_candidates):
                     entry = self._lookup_alias(candidate)
                     if entry is not None:
-                        return entry
+                        return self._log_resolution(entry, lyric)
                 # No exact default alias exists. Keep the pitch-layer boundary
                 # strict instead of selecting a partially matching subbank.
                 self._warn_unresolved(lyric, prev_vowel, note_num, attempted_keys)
@@ -877,7 +901,7 @@ class OtoParser:
         if self._lookup_alias(lyric) is not None and (
             " " in lyric or "_" in lyric or lyric.startswith("-")
         ):
-            return self._lookup_alias(lyric)
+            return self._log_resolution(self._lookup_alias(lyric), lyric)
 
         if prev_vowel:
             entry = (
@@ -901,7 +925,7 @@ class OtoParser:
             or match_pref(f"-{clean_lyric}")
         )
         if entry is not None:
-            return entry
+            return self._log_resolution(entry, lyric)
 
         if self._lookup_alias(lyric) is not None:
             return self._lookup_alias(lyric)
