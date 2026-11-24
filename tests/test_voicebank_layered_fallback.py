@@ -176,3 +176,24 @@ def test_successful_alias_debug_log_identifies_the_source_layer(tmp_path, caplog
     assert "音源エイリアス解決" in caplog.text
     assert str(selected) in caplog.text
     assert str(entry.wav_path) in caplog.text
+
+
+def test_selected_folder_prefix_map_is_used_when_extracted_root_has_none(tmp_path):
+    root = tmp_path / "package"
+    root.mkdir()
+    (root / "character.txt").write_text("name=Example", encoding="utf-8")
+    selected = root / "Bank" / "Selected"
+    _write_layer(selected, ["あ"])
+    (selected / "prefix.map").write_text(
+        "C1\\t\\t_C4\\nF4\\t\\t_F4\\n",
+        encoding="utf-8",
+    )
+
+    parser = OtoParser()
+    parser.load_voice_dir(
+        str(selected),
+        use_cache=False,
+        write_cache=False,
+    )
+
+    assert len(parser._prefix_map) == 2
