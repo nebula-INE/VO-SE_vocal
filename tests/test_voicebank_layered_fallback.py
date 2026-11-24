@@ -151,3 +151,28 @@ def test_unresolved_alias_warning_lists_tried_keys_and_all_layers(tmp_path, capl
     assert "存在しない" in caplog.text
     assert str(selected) in caplog.text
     assert str(sibling) in caplog.text
+
+
+def test_successful_alias_debug_log_identifies_the_source_layer(tmp_path, caplog):
+    root = tmp_path / "bank"
+    root.mkdir()
+    (root / "character.txt").write_text("name=Example", encoding="utf-8")
+    selected = root / "selected"
+    sibling = root / "sibling"
+    _write_layer(selected, ["あ"])
+    _write_layer(sibling, ["い"])
+
+    parser = OtoParser()
+    parser.load_voice_dir(
+        str(selected),
+        use_cache=False,
+        write_cache=False,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="modules.data.oto_parser"):
+        entry = parser.resolve_alias("あ")
+
+    assert entry is not None
+    assert "音源エイリアス解決" in caplog.text
+    assert str(selected) in caplog.text
+    assert str(entry.wav_path) in caplog.text
