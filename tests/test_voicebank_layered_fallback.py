@@ -185,7 +185,7 @@ def test_selected_folder_prefix_map_is_used_when_extracted_root_has_none(tmp_pat
     selected = root / "Bank" / "Selected"
     _write_layer(selected, ["あ"])
     (selected / "prefix.map").write_text(
-        "C1\\t\\t_C4\\nF4\\t\\t_F4\\n",
+        "C1\t\t_C4\nF4\t\t_F4\n",
         encoding="utf-8",
     )
 
