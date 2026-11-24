@@ -416,11 +416,23 @@ class VoiceManager:
             names.remove(name)
             self._write_managed_voice_registry(names)
 
-    def is_managed_voice(self, voice_path):
-        """Return whether this is a copied bank registered by VO-SE.
+    def is_local_voice(self, voice_path):
+        """Return whether a voicebank is a direct, real folder in VO-SE's writable store.
 
-        The registry is outside voicebank folders. External/OpenUTAU folders,
-        in-place sources, embedded assets, nested paths, and symlinks are excluded.
+        This intentionally includes voicebanks imported by older releases before
+        the ownership registry existed. External/OpenUTAU folders, embedded assets,
+        nested paths, and symlinks are never considered local.
+        """
+        try:
+            return self._managed_voice_directory_name(voice_path) is not None
+        except (OSError, TypeError, ValueError):
+            return False
+
+    def is_managed_voice(self, voice_path):
+        """Return whether this is a copied bank registered by the current VO-SE release.
+
+        The registry is outside voicebank folders. Use is_local_voice() when the
+        caller needs to manage legacy folders already stored in user_voice_dir.
         """
         try:
             name = self._managed_voice_directory_name(voice_path)
@@ -436,16 +448,16 @@ class VoiceManager:
             return False
 
     def delete_user_voice(self, voice_path):
-        """Delete one imported Voicebank, never a user-managed external source folder.
+        """Delete one voicebank folder stored directly in VO-SE's writable voice directory.
 
-        The target must still be registered by scan_voices() and must be a direct
-        child of user_voice_dir. The source folder originally imported by the user
-        is not touched; only VO-SE's copied installation is removed.
+        This supports both registry-managed imports and local voicebanks installed by
+        older releases. Only the selected directory inside user_voice_dir is removed;
+        folders elsewhere (including OpenUTAU/system voice directories) are untouched.
         """
         self.scan_voices()
-        if not isinstance(voice_path, str) or not self.is_managed_voice(voice_path):
+        if not isinstance(voice_path, str) or not self.is_local_voice(voice_path):
             raise ValueError(
-                "削除できるのはVO-SEの音源保存先に取り込んだUTAU音源だけです。"
+                "削除できるのはVO-SEの音源保存先直下にあるUTAU音源だけです。"
             )
 
         target = os.path.realpath(os.path.abspath(os.path.expanduser(voice_path)))
@@ -461,8 +473,8 @@ class VoiceManager:
         import shutil
 
         # Re-check immediately before removal so a stale selection or replaced
-        # symlink cannot redirect this operation outside the managed directory.
-        if not self.is_managed_voice(target):
+        # symlink cannot redirect this operation outside the writable voice store.
+        if not self.is_local_voice(target):
             raise ValueError("削除対象の音源パスが安全でないため、中止しました。")
         shutil.rmtree(target)
         self._unregister_managed_voice(target)

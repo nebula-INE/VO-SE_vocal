@@ -225,7 +225,8 @@ def test_delete_rejects_nested_or_symlinked_voice_targets(vm, tmp_path):
 
 
 @pytest.mark.unit
-def test_in_place_voice_under_managed_root_is_not_deletable(vm):
+def test_legacy_in_place_voice_under_managed_root_can_be_deleted(vm):
+    """Old local banks without the new ownership registry remain manageable."""
     os.makedirs(vm.user_voice_dir, exist_ok=True)
     src = _make_voice(vm.user_voice_dir, "ExistingVoice")
 
@@ -234,9 +235,9 @@ def test_in_place_voice_under_managed_root_is_not_deletable(vm):
 
     assert installed_path == src
     assert not vm.is_managed_voice(installed_path)
-    with pytest.raises(ValueError, match="VO-SEの音源保存先"):
-        vm.delete_user_voice(installed_path)
-    assert os.path.exists(os.path.join(src, "oto.ini"))
+    assert vm.is_local_voice(installed_path)
+    assert vm.delete_user_voice(installed_path) == "ExistingVoice"
+    assert not os.path.exists(installed_path)
 
 
 @pytest.mark.unit

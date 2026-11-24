@@ -1,4 +1,4 @@
-"""上部コントロールバーの折り返しと、音源パネル（取り込みボタン）の回帰テスト。"""
+"""上部コントロールバーの折り返しと、音源パネルの追加・削除操作の回帰テスト。"""
 import itertools
 import os
 
@@ -102,14 +102,45 @@ def test_piano_roll_is_not_squeezed_by_bottom_panel(app, window):
 
 
 @pytest.mark.smoke
-def test_voice_panel_has_import_button_with_menu(app, window):
+def test_voice_panel_has_separate_import_and_delete_buttons(app, window):
     g = window.voice_gallery
     assert g.import_button.text().strip() == "音源を追加"
-    labels = [a.text() for a in g.import_button.menu().actions() if not a.isSeparator()]
-    assert any("フォルダ" in t for t in labels)
-    assert any("ZIP" in t for t in labels)
-    assert any("再スキャン" in t for t in labels)
-    assert g.delete_voice_menu.title() == "取り込んだ音源を削除"
+    import_labels = [a.text() for a in g.import_button.menu().actions() if not a.isSeparator()]
+    assert any("フォルダ" in t for t in import_labels)
+    assert any("ZIP" in t for t in import_labels)
+    assert any("再スキャン" in t for t in import_labels)
+    assert not any("削除" in t for t in import_labels)
+
+    assert g.delete_button.text().strip() == "音源を削除"
+    assert g.delete_button.menu().title() == "音源を削除"
+    assert g.delete_voice_menu.title() == "音源を削除"
+
+
+@pytest.mark.unit
+def test_delete_menu_lists_legacy_local_voicebanks(app, window, tmp_path, monkeypatch):
+    gallery = window.voice_gallery
+    manager = gallery.manager
+    original_root = manager.internal_voice_dir
+
+    voice_root = tmp_path / "voice_banks"
+    voice_dir = voice_root / "LegacyVoice"
+    voice_dir.mkdir(parents=True)
+    (voice_dir / "oto.ini").write_text(
+        "a.wav=a,0,0,0,0,0\\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(manager, "internal_voice_dir", str(voice_root))
+    try:
+        voices = manager.scan_voices()
+        gallery.setup_gallery(voices=voices)
+        gallery._populate_delete_menu()
+        labels = [action.text() for action in gallery.delete_voice_menu.actions()]
+        assert "LegacyVoice" in labels
+    finally:
+        monkeypatch.setattr(manager, "internal_voice_dir", original_root)
+        voices = manager.scan_voices()
+        gallery.setup_gallery(voices=voices)
 
 
 @pytest.mark.unit
