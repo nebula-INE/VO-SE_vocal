@@ -916,7 +916,7 @@ class OtoParser:
                 or match_pref(f"{prev_vowel}{clean_lyric}")
             )
             if entry is not None:
-                return entry
+                return self._log_resolution(entry, lyric)
 
         entry = (
             match_mapped(f"- {clean_lyric}")
