@@ -623,8 +623,15 @@ class OtoParser:
         self.loaded_layers = tuple(layers)
         self.loaded_oto_ini_paths = tuple(str(item["ini_path"]) for item in layer_info)
         self.layer_info = layer_info
+        prefix_map_path = (
+            _find_prefix_map_path(scan_root)
+            or _find_prefix_map_path(selected)
+        )
         if reset:
-            self._load_prefix_map(scan_root)
+            prefix_map_dir = (
+                os.path.dirname(prefix_map_path) if prefix_map_path else scan_root
+            )
+            self._load_prefix_map(prefix_map_dir)
             clear_voice_dir_file_map_cache()
 
         cache_path = os.path.join(selected, ".oto_cache.json")
@@ -642,7 +649,6 @@ class OtoParser:
             except OSError:
                 continue
 
-        prefix_map_path = _find_prefix_map_path(scan_root)
         if prefix_map_path is not None:
             try:
                 stat = os.stat(prefix_map_path)
