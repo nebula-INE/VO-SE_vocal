@@ -301,7 +301,14 @@ class VoiceManagementMixin:
                 oto_parser = getattr(self.vo_se_engine, "oto_parser", None)
                 loaded_db = getattr(oto_parser, "_db", None)
                 if isinstance(loaded_db, dict):
-                    loaded_entries = len(loaded_db)
+                    loaded_entries = len({
+                        (
+                            getattr(entry, "voice_dir", ""),
+                            getattr(entry, "alias", ""),
+                            getattr(entry, "filename", ""),
+                        )
+                        for entry in loaded_db.values()
+                    })
                 notifications = getattr(oto_parser, "layer_notifications", ())
                 if isinstance(notifications, (list, tuple)):
                     layer_notifications = [
