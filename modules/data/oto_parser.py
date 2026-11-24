@@ -805,7 +805,7 @@ class OtoParser:
             attempted_keys.append(prefix)
             entry = self._lookup_alias(prefix)
             if entry is not None:
-                return self._log_resolution(entry, lyric)
+                return entry
 
             prefix_lower = unicodedata.normalize("NFKC", prefix).casefold()
             default_matches: Dict[int, OtoEntry] = {}
@@ -927,12 +927,13 @@ class OtoParser:
         if entry is not None:
             return self._log_resolution(entry, lyric)
 
-        if self._lookup_alias(lyric) is not None:
-            return self._lookup_alias(lyric)
+        exact_entry = self._lookup_alias(lyric)
+        if exact_entry is not None:
+            return self._log_resolution(exact_entry, lyric)
 
         entry = match_pref(clean_lyric)
         if entry is not None:
-            return entry
+            return self._log_resolution(entry, lyric)
 
         # When a previous vowel is explicitly supplied, do not fall back to
         # an arbitrary VCV alias with the same lyric. That would silently
