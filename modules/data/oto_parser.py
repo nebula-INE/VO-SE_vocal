@@ -16,6 +16,7 @@ import re
 import logging
 import gc
 import time
+import unicodedata
 from dataclasses import dataclass
 from modules.data.prefix_map import (
     PrefixMapEntry,
@@ -215,9 +216,260 @@ class OtoParser:
     """
 
     def __init__(self) -> None:
-        # alias → OtoEntry の辞書（複数 oto.ini をマージして保持）
+        # alias → OtoEntry の辞書（読み込み順で first-wins）
         self._db: Dict[str, OtoEntry] = {}
+        self._normalized_db: Dict[str, OtoEntry] = {}
         self._prefix_map: List[PrefixMapEntry] = []
+        self.loaded_layers: Tuple[str, ...] = ()
+        self.loaded_oto_ini_paths: Tuple[str, ...] = ()
+        self.layer_info: List[Dict[str, object]] = []
+        self.layer_notifications: List[str] = []
+        self._unresolved_reported: set[Tuple[str, str, Optional[int]]] = set()
+
+    @staticmethod
+    def _is_within(path: str, root: str) -> bool:
+        try:
+            return os.path.commonpath([os.path.realpath(path), os.path.realpath(root)]) == os.path.realpath(root)
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _contains_root_marker(directory: str) -> bool:
+        try:
+            names = {name.casefold() for name in os.listdir(directory)}
+        except OSError:
+            return False
+        return any(marker in names for marker in ("character.txt", "readme.txt"))
+
+    @staticmethod
+    def _infer_voices_dir(start: str, voices_dir: Optional[str] = None) -> Optional[str]:
+        if voices_dir:
+            candidate = os.path.abspath(os.path.expanduser(voices_dir))
+            return candidate if os.path.isdir(candidate) else None
+        current = os.path.abspath(start)
+        while True:
+            if os.path.basename(current).casefold() == "voices" and os.path.isdir(current):
+                return current
+            parent = os.path.dirname(current)
+            if parent == current:
+                return None
+            current = parent
+
+    @classmethod
+    def find_voice_root(
+        cls,
+        start: str,
+        voices_dir: Optional[str] = None,
+        max_up: int = 3,
+    ) -> str:
+        """Find the extracted bank root without walking into unrelated voicebanks.
+
+        Search the selected directory and at most max_up parents for UTAU root
+        markers. If none exists, limit fallback to the direct child of voices/
+        containing the selection. Without a recognizable voices directory, the
+        selected directory itself is the search boundary.
+        """
+        selected = os.path.abspath(os.path.expanduser(start))
+        voices_root = cls._infer_voices_dir(selected, voices_dir)
+        current = selected
+        for _ in range(max(0, int(max_up)) + 1):
+            if cls._contains_root_marker(current):
+                return current
+            if voices_root and os.path.normcase(current) == os.path.normcase(voices_root):
+                break
+            if voices_root and not cls._is_within(current, voices_root):
+                break
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+
+        if voices_root and cls._is_within(selected, voices_root):
+            relative = os.path.relpath(selected, voices_root)
+            if relative in ("", "."):
+                return voices_root
+            first_child = relative.split(os.sep, 1)[0]
+            return os.path.join(voices_root, first_child)
+        return selected
+
+    @staticmethod
+    def _layer_aliases_and_coverage(ini_path: str) -> Tuple[set[str], float]:
+        """Return the hiragana CV units represented by one oto.ini and coverage."""
+        hiragana_cv = set(
+            "あいうえお"
+            "かきくけこさしすせそたちつてとなにぬねの"
+            "はひふへほまみむめもやゆよらりるれろわをん"
+            "がぎぐげござじずぜぞだぢづでどばびぶべぼ"
+            "ぱぴぷぺぽぁぃぅぇぉゃゅょゔっ"
+        )
+        covered: set[str] = set()
+        try:
+            text = OtoParser._read_safe(ini_path)
+        except OSError:
+            return covered, 0.0
+
+        for raw_line in text.splitlines():
+            if "=" not in raw_line:
+                continue
+            filename, params = raw_line.split("=", 1)
+            fields = params.split(",")
+            alias = fields[0].strip() if fields and fields[0].strip() else os.path.splitext(filename.strip())[0]
+            alias = unicodedata.normalize("NFKC", alias)
+            alias = re.sub(r"^(?:[-_]\s*|[aieuon](?:\s+|_))", "", alias, flags=re.IGNORECASE)
+            alias = re.sub(r"_?[A-Ga-g][#b]?-?\d+$", "", alias).strip()
+            if "/" in alias or "\\" in alias:
+                alias = re.split(r"[/\\]", alias)[-1]
+            tokens = alias.split()
+            mora = tokens[-1] if tokens else alias
+            if mora in hiragana_cv:
+                covered.add(mora)
+
+        return covered, len(covered) / max(len(hiragana_cv), 1)
+
+    @staticmethod
+    def _is_supplement_layer(directory: str, root: str, coverage: float) -> Tuple[bool, str]:
+        relative = os.path.relpath(directory, root)
+        parts = [part.casefold() for part in relative.split(os.sep) if part not in ("", ".")]
+        marked = any(
+            token in part
+            for part in parts
+            for token in ("エクストラ", "extra", "append")
+        )
+        if marked:
+            return True, "name"
+        if coverage < 0.55:
+            return True, "low_cv_coverage"
+        return False, ""
+
+    def collect_voice_layers(
+        self,
+        selected: str,
+        voices_dir: Optional[str] = None,
+        max_up: int = 3,
+    ) -> Tuple[List[str], str, List[Dict[str, object]]]:
+        """Collect bounded oto.ini layers and order main banks before supplements."""
+        selected_path = os.path.abspath(os.path.expanduser(selected))
+        if not os.path.isdir(selected_path):
+            return [], selected_path, []
+
+        root = self.find_voice_root(selected_path, voices_dir=voices_dir, max_up=max_up)
+        found: List[Tuple[str, str]] = []
+        for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
+            dirs[:] = sorted(
+                directory for directory in dirs
+                if not os.path.islink(os.path.join(current, directory))
+            )
+            oto_names = sorted(name for name in files if name.casefold() == "oto.ini")
+            if oto_names:
+                found.append((os.path.abspath(current), os.path.join(current, oto_names[0])))
+
+        info: List[Dict[str, object]] = []
+        for directory, ini_path in found:
+            covered, coverage = self._layer_aliases_and_coverage(ini_path)
+            supplement, reason = self._is_supplement_layer(directory, root, coverage)
+            selected_subtree = self._is_within(directory, selected_path)
+            exact_selected = (
+                os.path.normcase(os.path.realpath(directory))
+                == os.path.normcase(os.path.realpath(selected_path))
+            )
+            relative_depth = len(os.path.relpath(directory, root).split(os.sep))
+            info.append({
+                "directory": directory,
+                "ini_path": ini_path,
+                "coverage": coverage,
+                "covered": covered,
+                "supplement": supplement,
+                "supplement_reason": reason,
+                "selected": exact_selected,
+                "selected_subtree": selected_subtree,
+                "relative_depth": relative_depth,
+            })
+
+        def priority(item: Dict[str, object]) -> Tuple[int, int, str]:
+            selected_rank = 0 if item["selected"] else 1 if item["selected_subtree"] else 2
+            return (
+                selected_rank,
+                int(item["relative_depth"]),
+                str(item["directory"]).casefold(),
+            )
+
+        main_layers = sorted((item for item in info if not item["supplement"]), key=priority)
+        supplement_layers = sorted((item for item in info if item["supplement"]), key=priority)
+        ordered_info = main_layers + supplement_layers
+        layers = [str(item["directory"]) for item in ordered_info]
+
+        selected_items = [item for item in info if item["selected_subtree"]]
+        selected_covered: set[str] = set()
+        for item in selected_items:
+            selected_covered.update(item["covered"])
+        cv_universe = set(
+            "あいうえおかきくけこさしすせそたちつてとなにぬねの"
+            "はひふへほまみむめもやゆよらりるれろわをん"
+            "がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ"
+            "ぁぃぅぇぉゃゅょゔっ"
+        )
+        selected_coverage = len(selected_covered) / max(len(cv_universe), 1)
+        sibling_main = [
+            item for item in main_layers
+            if not item["selected_subtree"] and float(item["coverage"]) >= 0.55
+        ]
+        selected_is_supplement = any(bool(item["supplement"]) for item in selected_items)
+        if selected_items and (selected_coverage < 0.55 or selected_is_supplement) and sibling_main:
+            sibling = sibling_main[0]
+            message = (
+                f"選択音源 {os.path.basename(selected_path)} のCV充足率が低いため、"
+                f"兄弟音源 {os.path.basename(str(sibling['directory']))} をフォールバックとして併用しました"
+            )
+            self.layer_notifications.append(message)
+            logger.info(message)
+
+        self.layer_info = [
+            {key: value for key, value in item.items() if key != "covered"}
+            for item in ordered_info
+        ]
+        return layers, root, self.layer_info
+
+    def _lookup_alias(self, alias: str) -> Optional[OtoEntry]:
+        key = str(alias)
+        normalized = unicodedata.normalize("NFKC", key)
+        entry = self._normalized_db.get(normalized)
+        if entry is not None:
+            return entry
+        exact = self._db.get(key)
+        if exact is not None:
+            return exact
+        # Support callers/tests that populate _db directly instead of using loaders.
+        for existing_key, existing_entry in self._db.items():
+            if unicodedata.normalize("NFKC", existing_key) == normalized:
+                return existing_entry
+        return None
+
+    def _warn_unresolved(
+        self,
+        lyric: str,
+        prev_vowel: Optional[str],
+        note_num: Optional[int],
+        tried_keys: List[str],
+    ) -> None:
+        report_key = (
+            unicodedata.normalize("NFKC", str(lyric)),
+            str(prev_vowel or ""),
+            int(note_num) if note_num is not None else None,
+        )
+        if report_key in self._unresolved_reported:
+            return
+        self._unresolved_reported.add(report_key)
+        if len(self._unresolved_reported) > 256:
+            self._unresolved_reported.clear()
+            self._unresolved_reported.add(report_key)
+        logger.warning(
+            "音源エイリアス未解決: lyric=%r prev_vowel=%r note=%r tried_keys=%s layers=%s",
+            lyric,
+            prev_vowel,
+            note_num,
+            list(dict.fromkeys(unicodedata.normalize("NFKC", key) for key in tried_keys)),
+            list(self.loaded_layers),
+        )
 
     # ------------------------------------------------------------------
     # 公開 API
@@ -248,16 +500,20 @@ class OtoParser:
                 # 複数 oto.ini を再帰ロードしたとき、同名 alias を
                 # 後から読んだファイルで上書きしない。Web 側も同じ
                 # first-wins 方針なので、3経路の解決結果を一致させる。
-                if entry.alias in self._db:
-                    existing = self._db[entry.alias]
+                normalized_alias = unicodedata.normalize("NFKC", entry.alias)
+                if entry.alias in self._db or normalized_alias in self._normalized_db:
+                    existing = self._lookup_alias(entry.alias)
                     logger.warning(
-                        "重複 alias をスキップ: %s (%s) / 既存=%s",
+                        "重複 alias をスキップ (first-wins): %s (%s) / 既存=%s",
                         entry.alias,
                         entry.wav_path,
-                        existing.wav_path,
+                        existing.wav_path if existing is not None else "<unknown>",
                     )
                 else:
                     self._db[entry.alias] = entry
+                self._normalized_db.setdefault(
+                    normalized_alias, self._db.get(entry.alias, entry)
+                )
 
                 # UTAU/OpenUtau multi-pitch banks can address an entry with
                 # a folder-qualified lyric such as "D4/あ" or "D4\\あ".
@@ -275,6 +531,10 @@ class OtoParser:
                         prefix = rel_dir.replace(os.sep, "/").strip("/") + "/"
                         scoped_key = prefix + entry.alias
                         self._db.setdefault(scoped_key, entry)
+                        self._normalized_db.setdefault(
+                            unicodedata.normalize("NFKC", scoped_key),
+                            self._db[scoped_key],
+                        )
 
                 count += 1
 
@@ -297,137 +557,151 @@ class OtoParser:
         voice_dir: str,
         use_cache: bool = True,
         reset: bool = True,
+        voices_dir: Optional[str] = None,
+        write_cache: bool = True,
     ) -> int:
-        """
-        指定フォルダ（サブフォルダ含む）の oto.ini を全部ロードする。
+        """Load one voicebank and its bounded fallback layers.
 
-        load_oto_file() は複数ファイルを意図的にマージするAPIですが、
-        load_voice_dir() は通常「1つの音源バンクをロードする」APIです。
-        そのためデフォルトでは前の音源のエントリを破棄し、音源切替時の
-        エントリ混入を防ぎます。複数バンクを明示的に統合したい場合は
-        reset=False を指定してください。
-
-        Returns:
-            この呼び出しでロード対象になったエントリ数
+        Search is confined to the extracted bank root (character.txt/readme.txt)
+        or, when those markers are absent, the selected direct child of voices/.
+        The selected normal layer is first; append/extra/incomplete layers are
+        deliberately kept after every normal layer.
         """
+        selected = os.path.abspath(os.path.expanduser(voice_dir))
         if reset:
             self.clear()
-            self._load_prefix_map(voice_dir)
-            # 音源切替・再スキャン時に、前回のファイル一覧を使わない。
+
+        layers, scan_root, layer_info = self.collect_voice_layers(
+            selected,
+            voices_dir=voices_dir,
+        )
+        if not layers:
+            self.loaded_layers = ()
+            self.loaded_oto_ini_paths = ()
+            return 0
+
+        self.loaded_layers = tuple(layers)
+        self.loaded_oto_ini_paths = tuple(str(item["ini_path"]) for item in layer_info)
+        self.layer_info = layer_info
+        if reset:
+            self._load_prefix_map(scan_root)
             clear_voice_dir_file_map_cache()
 
-        if not os.path.exists(voice_dir):
-            return 0
+        cache_path = os.path.join(selected, ".oto_cache.json")
+        source_signature: List[List[object]] = []
+        for layer_index, item in enumerate(layer_info):
+            ini_path = str(item["ini_path"])
+            try:
+                stat = os.stat(ini_path)
+                source_signature.append([
+                    os.path.abspath(ini_path),
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                    layer_index,
+                ])
+            except OSError:
+                continue
 
-        cache_path = os.path.join(voice_dir, ".oto_cache.json")
-
-        if not os.path.exists(voice_dir):
-            return 0
-
-        cache_path = os.path.join(voice_dir, ".oto_cache.json")
-
-        # 1. Build a complete source signature. Checking only the newest mtime
-        #    leaves stale cache entries when an oto.ini is deleted or replaced.
-        ini_files = []
-        source_signature = []
-        for root, _dirs, files in os.walk(voice_dir):
-            for fname in files:
-                if fname.lower() == "oto.ini":
-                    full_p = os.path.abspath(os.path.join(root, fname))
-                    ini_files.append(full_p)
-                    try:
-                        stat = os.stat(full_p)
-                        source_signature.append(
-                            [full_p, stat.st_mtime_ns, stat.st_size]
-                        )
-                    except OSError:
-                        continue
-        ini_files.sort()
-        prefix_map_path = _find_prefix_map_path(voice_dir)
+        prefix_map_path = _find_prefix_map_path(scan_root)
         if prefix_map_path is not None:
             try:
                 stat = os.stat(prefix_map_path)
-                source_signature.append(
-                    [os.path.abspath(prefix_map_path), stat.st_mtime_ns, stat.st_size]
-                )
+                source_signature.append([
+                    os.path.abspath(prefix_map_path),
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                    -1,
+                ])
             except OSError:
                 pass
-        source_signature.sort(key=lambda item: item[0])
+        source_signature.sort(key=lambda item: str(item[0]))
 
-        # 2. Try loading from .oto_cache.json if valid
-        if use_cache and os.path.exists(cache_path):
+        if use_cache and reset and os.path.isfile(cache_path):
             try:
                 import json
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                cached_signature = cached_data.get("source_signature")
-                cached_version = cached_data.get("cache_version", 1)
-                if cached_version >= 2 and cached_signature == source_signature:
+                with open(cache_path, "r", encoding="utf-8") as cache_file:
+                    cached_data = json.load(cache_file)
+                if (
+                    cached_data.get("cache_version") == 3
+                    and cached_data.get("source_signature") == source_signature
+                ):
                     for item in cached_data.get("entries", []):
                         entry = OtoEntry(
                             alias=item["alias"],
                             filename=item["filename"],
-                            voice_dir=item.get("voice_dir", voice_dir),
+                            voice_dir=item.get("voice_dir", selected),
                             left_blank=float(item.get("left_blank", 0)),
                             fixed_range=float(item.get("fixed_range", 0)),
                             right_blank=float(item.get("right_blank", 0)),
                             preutterance=float(item.get("preutterance", 0)),
-                            overlap=float(item.get("overlap", 0))
+                            overlap=float(item.get("overlap", 0)),
                         )
-                        self._db[item.get("db_key", entry.alias)] = entry
+                        db_key = item.get("db_key", entry.alias)
+                        self._db[db_key] = entry
+                        self._normalized_db.setdefault(
+                            unicodedata.normalize("NFKC", db_key), entry
+                        )
                     logger.info(
-                        "oto.ini キャッシュから超高速ロード成功 (%d エントリ): %s",
+                        "oto.ini レイヤーキャッシュからロード (%d alias / %d 層): %s",
                         len(self._db),
-                        voice_dir,
+                        len(self.loaded_layers),
+                        selected,
                     )
                     return len(self._db)
-            except Exception as ex:
-                logger.warning("oto.ini キャッシュ読み込みスキップ (%s)", ex)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                logger.warning("oto.ini キャッシュ読み込みをスキップ (%s)", exc)
 
-        # 3. Cache missed / outdated -> Perform full parsing
         total = 0
-        for ini_p in ini_files:
-            total += self.load_oto_file(ini_p, voice_root=voice_dir)
+        for item in layer_info:
+            ini_path = str(item["ini_path"])
+            loaded = self.load_oto_file(ini_path, voice_root=scan_root)
+            total += loaded
+            logger.info(
+                "oto.ini レイヤー読込: %s (%d エントリ, CV %.0f%%, %s)",
+                item["directory"],
+                loaded,
+                float(item["coverage"]) * 100.0,
+                "補助" if item["supplement"] else "メイン",
+            )
             if IS_LOW_RAM:
                 time.sleep(0.005)
                 gc.collect()
 
-        # 4. Save cache asynchronously / safely
-        try:
-            import json
-            cache_entries = []
-            for alias_key, entry in self._db.items():
-                cache_entries.append({
-                    "db_key": alias_key,
-                    "alias": entry.alias,
-                    "filename": entry.filename,
-                    "voice_dir": entry.voice_dir,
-                    "left_blank": entry.left_blank,
-                    "fixed_range": entry.fixed_range,
-                    "right_blank": entry.right_blank,
-                    "preutterance": entry.preutterance,
-                    "overlap": entry.overlap
-                })
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "cache_version": 2,
-                        "entries": cache_entries,
-                        "source_signature": source_signature,
-                    },
-                    f,
-                    ensure_ascii=False,
-                )
-            logger.info("oto.ini 高速キャッシュ保存完了: %s", cache_path)
-        except Exception as ex_save:
-            logger.warning("oto.ini キャッシュ保存エラー (%s)", ex_save)
+        if write_cache and reset:
+            try:
+                import json
+                cache_entries = []
+                for alias_key, entry in self._db.items():
+                    cache_entries.append({
+                        "db_key": alias_key,
+                        "alias": entry.alias,
+                        "filename": entry.filename,
+                        "voice_dir": entry.voice_dir,
+                        "left_blank": entry.left_blank,
+                        "fixed_range": entry.fixed_range,
+                        "right_blank": entry.right_blank,
+                        "preutterance": entry.preutterance,
+                        "overlap": entry.overlap,
+                    })
+                with open(cache_path, "w", encoding="utf-8") as cache_file:
+                    json.dump(
+                        {
+                            "cache_version": 3,
+                            "entries": cache_entries,
+                            "source_signature": source_signature,
+                        },
+                        cache_file,
+                        ensure_ascii=False,
+                    )
+                logger.info("oto.ini レイヤーキャッシュ保存完了: %s", cache_path)
+            except (OSError, TypeError, ValueError) as exc:
+                logger.warning("oto.ini キャッシュ保存エラー (%s)", exc)
 
         return total
 
-
     def get(self, alias: str) -> Optional[OtoEntry]:
-        """Alias の完全一致検索。"""
-        return self._db.get(alias)
+        """Alias の完全一致検索。NFKC 同値も first-wins で検索する。"""
+        return self._lookup_alias(alias)
 
     def resolve_alias(
         self,
@@ -447,7 +721,8 @@ class OtoParser:
             "吸", "吸気", "息吸い", "", " ", "　", "休", "休符",
             "・", "-", "ー", "~", "null",
         }
-        if str(lyric).strip().lower() in {item.lower() for item in rest_lyrics}:
+        lyric = unicodedata.normalize("NFKC", str(lyric))
+        if lyric.strip().lower() in {item.lower() for item in rest_lyrics}:
             return None
 
         # Multi-pitch USTs may carry a folder-qualified lyric such as
@@ -455,7 +730,7 @@ class OtoParser:
         # VCV/CV normalization so another pitch folder cannot be selected.
         scoped_lyric = str(lyric).strip().replace("\\\\", "/").replace("\\", "/")
         if "/" in scoped_lyric:
-            exact_scoped = self._db.get(scoped_lyric)
+            exact_scoped = self._lookup_alias(scoped_lyric)
             if exact_scoped is not None:
                 return exact_scoped
 
@@ -473,8 +748,25 @@ class OtoParser:
             clean_lyric,
         ).strip() or clean_lyric
 
+        attempted_keys: List[str] = [lyric, clean_lyric]
+        if prev_vowel:
+            attempted_keys.extend((
+                f"{prev_vowel} {clean_lyric}",
+                f"{prev_vowel}_{clean_lyric}",
+                f"{prev_vowel}{clean_lyric}",
+            ))
+        attempted_keys.extend((
+            f"- {clean_lyric}", f"_{clean_lyric}", f"-{clean_lyric}", clean_lyric
+        ))
+        if note_num is not None:
+            for candidate_key in list(attempted_keys):
+                mapped_key = map_alias(candidate_key, note_num, self._prefix_map)
+                if mapped_key and mapped_key != candidate_key:
+                    attempted_keys.append(mapped_key)
+
         def match_pref(prefix: str) -> Optional[OtoEntry]:
-            entry = self._db.get(prefix)
+            attempted_keys.append(prefix)
+            entry = self._lookup_alias(prefix)
             if entry is not None:
                 return entry
 
@@ -482,7 +774,7 @@ class OtoParser:
             default_matches: Dict[int, OtoEntry] = {}
             pitch_matches: Dict[int, Tuple[int, OtoEntry]] = {}
             for alias, candidate in self._db.items():
-                alias_lower = alias.casefold()
+                alias_lower = unicodedata.normalize("NFKC", alias).casefold()
                 if not (
                     alias_lower.startswith(prefix_lower + "_")
                     or alias_lower.startswith(prefix_lower + " ")
@@ -530,7 +822,8 @@ class OtoParser:
             mapped = map_alias(alias, note_num, self._prefix_map)
             if mapped == alias:
                 return None
-            return self._db.get(mapped)
+            attempted_keys.append(mapped)
+            return self._lookup_alias(mapped)
 
         # When no prefix.map range covers this note, use only exact aliases
         # from the voicebank's unmarked/default layer. Do not run the broader
@@ -540,7 +833,7 @@ class OtoParser:
         if note_num is not None and self._prefix_map:
             from modules.data.prefix_map import select_prefix_map
             explicit_alias = (
-                str(lyric) in self._db
+                self._lookup_alias(str(lyric)) is not None
                 and (" " in str(lyric) or "_" in str(lyric) or str(lyric).startswith("-"))
             )
             if select_prefix_map(self._prefix_map, int(note_num)) is None and not explicit_alias:
@@ -559,18 +852,19 @@ class OtoParser:
                     str(lyric),
                 ))
                 for candidate in dict.fromkeys(exact_candidates):
-                    entry = self._db.get(candidate)
+                    entry = self._lookup_alias(candidate)
                     if entry is not None:
                         return entry
                 # No exact default alias exists. Keep the pitch-layer boundary
                 # strict instead of selecting a partially matching subbank.
+                self._warn_unresolved(lyric, prev_vowel, note_num, attempted_keys)
                 return None
 
         # 明示的な VCV/CV alias はそのまま優先する。
-        if lyric in self._db and (
+        if self._lookup_alias(lyric) is not None and (
             " " in lyric or "_" in lyric or lyric.startswith("-")
         ):
-            return self._db[lyric]
+            return self._lookup_alias(lyric)
 
         if prev_vowel:
             entry = (
@@ -596,7 +890,7 @@ class OtoParser:
         if entry is not None:
             return entry
 
-        if lyric in self._db:
+        if self._lookup_alias(lyric) is not None:
             return self._db[lyric]
 
         entry = match_pref(clean_lyric)
@@ -607,11 +901,13 @@ class OtoParser:
         # an arbitrary VCV alias with the same lyric. That would silently
         # replace the requested context (for example u い with a い).
         if prev_vowel:
+            self._warn_unresolved(lyric, prev_vowel, note_num, attempted_keys)
             return None
 
         # Do not infer a VCV predecessor when none was supplied. A first
         # note or a note after a rest must use an exact CV/default alias, never
         # whichever "a い" / "u い" entry happens to be indexed first.
+        self._warn_unresolved(lyric, prev_vowel, note_num, attempted_keys)
         return None
 
     def _build_lyric_index(self) -> None:
@@ -639,7 +935,13 @@ class OtoParser:
     def clear(self) -> None:
         """ロード済み oto.ini データをすべて破棄する。"""
         self._db.clear()
+        self._normalized_db.clear()
         self._prefix_map = []
+        self.loaded_layers = ()
+        self.loaded_oto_ini_paths = ()
+        self.layer_info = []
+        self.layer_notifications = []
+        self._unresolved_reported.clear()
         if hasattr(self, "_lyric_index"):
             self._lyric_index.clear()
         # 音源切替後に、削除・追加・リネームされた WAV の古い
