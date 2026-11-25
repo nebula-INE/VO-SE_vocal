@@ -165,6 +165,68 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
 
 
 
+
+@pytest.mark.skipif(
+    os.environ.get("VOSE_RUN_NATIVE_RENDER_TEST") != "1",
+    reason="native render integration tests are opt-in; CI enables them after building vose_core",
+)
+def test_large_note_batch_keeps_native_worker_memory_bounded(
+    multi_pitch_voicebank: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise many independent WORLD note jobs through the desktop native core."""
+    from modules.audio.vo_se_engine import VO_SE_Engine
+    from modules.audio.vo_se_engine_patch import apply_patch
+
+    monkeypatch.setenv("VOSE_RENDER_WORKERS", "2")
+    engine = VO_SE_Engine(voice_lib_dir=str(multi_pitch_voicebank))
+    apply_patch(type(engine))
+    engine.refresh_voice_library_v2()
+
+    notes = [
+        NoteEvent(
+            note_number=60 if index % 2 == 0 else 65,
+            start_time=index * 0.45,
+            duration=0.3,
+            lyric="あ",
+        )
+        for index in range(12)
+    ]
+    output = tmp_path / "bounded_worker_render.wav"
+    params = {
+        "Pitch": [],
+        "Gender": [],
+        "Tension": [],
+        "Breath": [],
+    }
+
+    rendered = engine.export_to_wav_v2(
+        notes,
+        params,
+        str(output),
+        tempo_bpm=120.0,
+    )
+
+    assert rendered == str(output.resolve())
+    assert output.is_file()
+    assert output.stat().st_size > 44
+
+    native_lib = engine.lib
+    assert native_lib is not None
+    native_api = cast(Any, native_lib)
+    worker_count_getter = getattr(native_api, "get_last_render_worker_count", None)
+    assert callable(worker_count_getter)
+    worker_count_getter.restype = ctypes.c_int
+    assert 1 <= int(worker_count_getter()) <= 2
+
+    error_getter = getattr(native_api, "get_last_render_error", None)
+    assert callable(error_getter)
+    error_getter.restype = ctypes.c_char_p
+    assert error_getter() in (None, b"")
+
+
+
 @pytest.mark.skipif(
     os.environ.get("VOSE_RUN_NATIVE_RENDER_TEST") != "1",
     reason="native render integration tests are opt-in; CI enables them after building vose_core",
