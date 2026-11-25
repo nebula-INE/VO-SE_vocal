@@ -621,7 +621,7 @@ class OtoParser:
         def katakana_to_hiragana(value: str) -> str:
             return "".join(
                 chr(ord(char) - 0x60)
-                if "\\u30a1" <= char <= "\\u30f6"
+                if "ァ" <= char <= "ヶ"
                 else char
                 for char in value
             )
