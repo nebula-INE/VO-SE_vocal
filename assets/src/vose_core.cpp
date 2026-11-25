@@ -3,6 +3,9 @@
 
 #include <vector>
 #include <string>
+#include <array>
+#include <cstdlib>
+#include <new>
 #include <map>
 #include <unordered_map>
 #include <list>
@@ -118,6 +121,21 @@ static VoseSharedMutex               g_bigvgan_mutex; // 前方で定義済み�
 
 static std::vector<VoseFrame> g_vocal_timeline;
 static VoseMutex g_timeline_mutex;
+
+// Keep C++ failures inside the C ABI. Python reads this immediately after the
+// synchronous native call, so thread-local storage is sufficient and race-free.
+static thread_local char g_last_render_error[1024] = {};
+static thread_local int g_last_render_worker_count = 0;
+
+static void record_render_error(const char* message) noexcept
+{
+    std::snprintf(
+        g_last_render_error,
+        sizeof(g_last_render_error),
+        "%s",
+        message ? message : "Unknown native render failure"
+    );
+}
 
 // ============================================================
 // FNV-1a ハッシュ
@@ -2793,8 +2811,27 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     //   full_song_bufferへは誰も書き込まず、note_bufs[idx] への書き込みは
     //   ノートごとに一意なので、これまで通りデータ競合はない。
     // ----------------------------------------------------------------
-    const int max_threads = static_cast<int>(
-        std::max(1u, std::thread::hardware_concurrency()));
+    const unsigned int hardware_threads = std::max(
+        1u, std::thread::hardware_concurrency());
+
+    // WORLD keeps multiple large spectrogram buffers per worker. Capping
+    // concurrency avoids multiplying scratch memory by every logical CPU.
+    // Default: two workers. Explicit override: 1..4 workers.
+    int configured_worker_limit = 2;
+    if (const char* configured = std::getenv("VOSE_RENDER_WORKERS")) {
+        char* end = nullptr;
+        errno = 0;
+        const long parsed = std::strtol(configured, &end, 10);
+        if (errno == 0 && end != configured && *end == '\0') {
+            configured_worker_limit = static_cast<int>(
+                std::max(1L, std::min(4L, parsed))
+            );
+        }
+    }
+    const int max_threads = std::max(
+        1,
+        std::min(static_cast<int>(hardware_threads), configured_worker_limit)
+    );
 
     std::vector<std::vector<double>> note_bufs(note_count);
 
@@ -2834,6 +2871,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
     bool failed_during_synth = false;
 
+    g_last_render_worker_count = 0;
     if (total_renderable > 0) {
         std::atomic<int>  next_task{0};
         std::atomic<int>  completed{0};
@@ -2847,10 +2885,10 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         // 記録した上で他のワーカーにも早期終了させ、メインスレッド側で
         // 安全にレンダリングを打ち切れるようにする。
         std::atomic<bool> worker_failed{false};
-        std::vector<std::string> worker_errors; // 同時失敗した全ノートのエラーを保持（上限あり）
-        constexpr size_t  kMaxRecordedErrors = 64;
-        std::mutex        worker_error_mutex;
-        std::atomic<int>  failed_note_count{0};
+        // Fixed-size storage must not allocate while handling std::bad_alloc.
+        std::array<char, 512> first_worker_error{};
+        std::mutex            worker_error_mutex;
+        std::atomic<int>      failed_note_count{0};
 
         auto worker_fn = [&]() {
             for (;;) {
@@ -2883,8 +2921,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                              e.what());
                     {
                         std::lock_guard<std::mutex> lock(worker_error_mutex);
-                        if (worker_errors.size() < kMaxRecordedErrors)
-                            worker_errors.emplace_back(buf);
+                        if (first_worker_error[0] == '\0')
+                            std::snprintf(first_worker_error.data(),
+                                          first_worker_error.size(), "%s", buf);
                     }
                     fprintf(stderr, "[Render] %s\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
@@ -2899,8 +2938,9 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
                              idx, wav, notes[idx].pitch_length);
                     {
                         std::lock_guard<std::mutex> lock(worker_error_mutex);
-                        if (worker_errors.size() < kMaxRecordedErrors)
-                            worker_errors.emplace_back(buf);
+                        if (first_worker_error[0] == '\0')
+                            std::snprintf(first_worker_error.data(),
+                                          first_worker_error.size(), "%s", buf);
                     }
                     fprintf(stderr, "[Render] %s\n", buf);
                     failed_note_count.fetch_add(1, std::memory_order_relaxed);
@@ -2927,6 +2967,10 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         };
 
         const int worker_count = std::min(max_threads, total_renderable);
+        g_last_render_worker_count = worker_count;
+        fprintf(stderr,
+                "[Render] Worker pool: %d (hardware=%u configured_limit=%d)\\n",
+                worker_count, hardware_threads, configured_worker_limit);
 
 #if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
         worker_fn();
@@ -2965,11 +3009,13 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 
         if (worker_failed.load(std::memory_order_relaxed)) {
             failed_during_synth = true;
-            // join 済みなので worker_errors へは排他不要。
-            fprintf(stderr, "[Render] Worker thread failed (%zu note error(s) recorded):\n",
-                    worker_errors.size());
-            for (const auto& msg : worker_errors)
-                fprintf(stderr, "[Render]   - %s\n", msg.c_str());
+            fprintf(stderr,
+                    "[Render] Worker thread failed (%d note error(s) recorded): %s\\n",
+                    failed_note_count.load(std::memory_order_relaxed),
+                    first_worker_error[0] ? first_worker_error.data() : "unknown worker failure");
+            record_render_error(first_worker_error[0]
+                ? first_worker_error.data()
+                : "Native synthesis worker failed; see the VO-SE render log.");
         } else {
             const int nfail = failed_note_count.load(std::memory_order_relaxed);
             if (nfail > 0) {
@@ -3619,9 +3665,36 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 //       キャンセルボタンを実装できる。
 // ============================================================
 
+static void execute_render_guarded(
+    NoteEvent* notes,
+    int note_count,
+    const char* output_path,
+    int mode_flag,
+    ProgressCallback progress_cb,
+    CancelCheckCallback cancel_cb) noexcept
+{
+    g_last_render_error[0] = '\0';
+    g_last_render_worker_count = 0;
+    try {
+        execute_render_impl(
+            notes, note_count, output_path, mode_flag, progress_cb, cancel_cb);
+    } catch (const std::bad_alloc&) {
+        record_render_error(
+            "Native render ran out of memory. Reduce VOSE_RENDER_WORKERS or render a shorter section.");
+        fprintf(stderr, "[Render] %s\\n", g_last_render_error);
+    } catch (const std::exception& e) {
+        record_render_error(e.what());
+        fprintf(stderr, "[Render] Native render exception: %s\\n", g_last_render_error);
+    } catch (...) {
+        record_render_error("Unknown native render exception.");
+        fprintf(stderr, "[Render] %s\\n", g_last_render_error);
+    }
+}
+
 DLLEXPORT void execute_render(NoteEvent* notes, int note_count, const char* output_path, int mode_flag)
 {
-    execute_render_impl(notes, note_count, output_path, mode_flag, nullptr, nullptr);
+    execute_render_guarded(
+        notes, note_count, output_path, mode_flag, nullptr, nullptr);
 }
 
 DLLEXPORT void execute_render_cancelable(NoteEvent* notes, int note_count, const char* output_path,
@@ -3629,7 +3702,18 @@ DLLEXPORT void execute_render_cancelable(NoteEvent* notes, int note_count, const
                                           ProgressCallback progress_cb,
                                           CancelCheckCallback cancel_cb)
 {
-    execute_render_impl(notes, note_count, output_path, mode_flag, progress_cb, cancel_cb);
+    execute_render_guarded(
+        notes, note_count, output_path, mode_flag, progress_cb, cancel_cb);
+}
+
+DLLEXPORT const char* get_last_render_error(void)
+{
+    return g_last_render_error;
+}
+
+DLLEXPORT int get_last_render_worker_count(void)
+{
+    return g_last_render_worker_count;
 }
 
 // 🚀 【新規追加】PipelineBridgeから転送された構造体配列をC++のベクタにコピーする
