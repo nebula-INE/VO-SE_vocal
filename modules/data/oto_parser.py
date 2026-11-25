@@ -120,7 +120,15 @@ def get_voice_dir_file_map(voice_dir: str) -> Dict[str, str]:
             )
             for filename in files:
                 full_path = os.path.join(root, filename)
-                if os.path.islink(full_path) or not os.path.isfile(full_path):
+                if not os.path.isfile(full_path):
+                    continue
+                try:
+                    if os.path.commonpath([
+                        os.path.realpath(full_path),
+                        os.path.realpath(voice_dir),
+                    ]) != os.path.realpath(voice_dir):
+                        continue
+                except (OSError, ValueError):
                     continue
                 rel_path = os.path.relpath(full_path, voice_dir)
                 rel_key = rel_path.replace("\\", "/").casefold()
