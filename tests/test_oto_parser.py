@@ -517,7 +517,7 @@ def test_resolve_alias_bridges_hiragana_and_romaji_spellings():
 
 def test_read_safe_prefers_utf8_when_bytes_are_also_valid_cp932(tmp_path):
     path = tmp_path / "utf8-also-decodes-as-cp932.oto"
-    expected = "ち.wav=ち,0,0,0,50,0\\n"
+    expected = "ち.wav=ち,0,0,0,50,0\n"
     path.write_bytes(expected.encode("utf-8"))
 
     assert OtoParser._read_safe(str(path)) == expected
