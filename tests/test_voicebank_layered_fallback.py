@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from modules.data.oto_parser import OtoParser
+from modules.data.oto_parser import OtoParser, _KANA_TO_ROMAJI
 
 
 HIRAGANA_CV = (
@@ -185,7 +185,9 @@ def test_extra_folder_uses_only_exact_name_matched_main_bank_sibling(tmp_path):
     extra = voices / "重音テトエクストラ"
     unrelated = voices / "別音源"
 
-    main_aliases = [alias for alias in HIRAGANA_CV if alias != "じ"]
+    main_aliases = [
+        romaji for kana, romaji in _KANA_TO_ROMAJI.items() if kana != "じ"
+    ]
     _write_layer(main, main_aliases)
     _write_layer(extra, ["じ"])
     _write_layer(unrelated, ["さ"])
@@ -219,7 +221,7 @@ def test_oto_wav_basename_fallback_is_unique_and_stays_inside_bank_root(tmp_path
     audio.mkdir(parents=True)
     (root / "character.txt").write_text("name=Example", encoding="utf-8")
     (selected / "oto.ini").write_text(
-        "missing/sub/sample.wav=あ,0,0,0,50,0\n",
+        "/old/voice/sample.wav=あ,0,0,0,50,0\n",
         encoding="utf-8",
     )
     actual_wav = audio / "sample.wav"
