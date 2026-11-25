@@ -258,14 +258,24 @@ def test_extra_oto_can_find_unique_wav_in_its_exact_paired_main_bank(tmp_path):
     parser = OtoParser()
     parser.load_voice_dir(
         str(extra),
-        use_cache=False,
-        write_cache=False,
+        use_cache=True,
+        write_cache=True,
     )
 
     entry = parser.get("じ")
     assert entry is not None
     assert entry.voice_dir == str(extra)
     assert entry.wav_path == str(shared_wav)
+
+    cached_parser = OtoParser()
+    cached_parser.load_voice_dir(
+        str(extra),
+        use_cache=True,
+        write_cache=False,
+    )
+    cached_entry = cached_parser.get("じ")
+    assert cached_entry is not None
+    assert cached_entry.wav_path == str(shared_wav)
 
 
 def test_selected_folder_prefix_map_is_used_when_extracted_root_has_none(tmp_path):
