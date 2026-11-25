@@ -471,6 +471,13 @@ class OtoParser:
                 alias = re.split(r"[/\\]", alias)[-1]
             tokens = alias.split()
             mora = tokens[-1] if tokens else alias
+            if "ァ" <= mora <= "ヶ":
+                mora = "".join(
+                    chr(ord(char) - 0x60) if "ァ" <= char <= "ヶ" else char
+                    for char in mora
+                )
+            if mora not in hiragana_cv:
+                mora = _ROMAJI_TO_KANA.get(mora.casefold(), mora)
             if mora in hiragana_cv:
                 covered.add(mora)
 
