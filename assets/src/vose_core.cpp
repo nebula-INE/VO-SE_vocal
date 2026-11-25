@@ -2969,7 +2969,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         const int worker_count = std::min(max_threads, total_renderable);
         g_last_render_worker_count = worker_count;
         fprintf(stderr,
-                "[Render] Worker pool: %d (hardware=%u configured_limit=%d)\\n",
+                "[Render] Worker pool: %d (hardware=%u configured_limit=%d)\n",
                 worker_count, hardware_threads, configured_worker_limit);
 
 #if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
@@ -3010,7 +3010,7 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
         if (worker_failed.load(std::memory_order_relaxed)) {
             failed_during_synth = true;
             fprintf(stderr,
-                    "[Render] Worker thread failed (%d note error(s) recorded): %s\\n",
+                    "[Render] Worker thread failed (%d note error(s) recorded): %s\n",
                     failed_note_count.load(std::memory_order_relaxed),
                     first_worker_error[0] ? first_worker_error.data() : "unknown worker failure");
             record_render_error(first_worker_error[0]
@@ -3681,13 +3681,13 @@ static void execute_render_guarded(
     } catch (const std::bad_alloc&) {
         record_render_error(
             "Native render ran out of memory. Reduce VOSE_RENDER_WORKERS or render a shorter section.");
-        fprintf(stderr, "[Render] %s\\n", g_last_render_error);
+        fprintf(stderr, "[Render] %s\n", g_last_render_error);
     } catch (const std::exception& e) {
         record_render_error(e.what());
-        fprintf(stderr, "[Render] Native render exception: %s\\n", g_last_render_error);
+        fprintf(stderr, "[Render] Native render exception: %s\n", g_last_render_error);
     } catch (...) {
         record_render_error("Unknown native render exception.");
-        fprintf(stderr, "[Render] %s\\n", g_last_render_error);
+        fprintf(stderr, "[Render] %s\n", g_last_render_error);
     }
 }
 
