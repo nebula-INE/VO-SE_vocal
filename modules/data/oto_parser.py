@@ -24,7 +24,7 @@ from modules.data.prefix_map import (
     note_name_to_midi,
     parse_prefix_map,
 )
-from typing import Callable, Dict, List, Optional, Tuple, cast
+from typing import Callable, Dict, List, Optional, Tuple, TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +205,18 @@ class OtoEntry:
         return self.left_blank / 1000.0
 
 
+class _VoiceLayerInfo(TypedDict):
+    directory: str
+    ini_path: str
+    coverage: float
+    covered: set[str]
+    supplement: bool
+    supplement_reason: str
+    selected: bool
+    selected_subtree: bool
+    relative_depth: int
+
+
 class OtoParser:
     """
     oto.ini をロード・検索する統合パーサー。
@@ -222,7 +234,7 @@ class OtoParser:
         self._prefix_map: List[PrefixMapEntry] = []
         self.loaded_layers: Tuple[str, ...] = ()
         self.loaded_oto_ini_paths: Tuple[str, ...] = ()
-        self.layer_info: List[Dict[str, object]] = []
+        self.layer_info: List[_VoiceLayerInfo] = []
         self.layer_notifications: List[str] = []
         self._unresolved_reported: set[Tuple[str, str, Optional[int]]] = set()
 
@@ -348,7 +360,7 @@ class OtoParser:
         selected: str,
         voices_dir: Optional[str] = None,
         max_up: int = 3,
-    ) -> Tuple[List[str], str, List[Dict[str, object]]]:
+    ) -> Tuple[List[str], str, List[_VoiceLayerInfo]]:
         """Collect bounded oto.ini layers and order main banks before supplements."""
         selected_path = os.path.abspath(os.path.expanduser(selected))
         if not os.path.isdir(selected_path):
@@ -372,7 +384,7 @@ class OtoParser:
             == os.path.normcase(os.path.realpath(selected_path))
             for directory, _ini_path in found
         )
-        info: List[Dict[str, object]] = []
+        info: List[_VoiceLayerInfo] = []
         for directory, ini_path in found:
             covered, coverage = self._layer_aliases_and_coverage(ini_path)
             supplement, reason = self._is_supplement_layer(directory, root, coverage)
@@ -398,7 +410,7 @@ class OtoParser:
                 "relative_depth": relative_depth,
             })
 
-        def priority(item: Dict[str, object]) -> Tuple[int, int, str]:
+        def priority(item: _VoiceLayerInfo) -> Tuple[int, int, str]:
             selected_rank = 0 if item["selected"] else 1 if item["selected_subtree"] else 2
             return (
                 selected_rank,
@@ -447,10 +459,7 @@ class OtoParser:
             self.layer_notifications.append(message)
             logger.info(message)
 
-        self.layer_info = [
-            {key: value for key, value in item.items() if key != "covered"}
-            for item in ordered_info
-        ]
+        self.layer_info = ordered_info
         return layers, root, self.layer_info
 
     def _lookup_alias(self, alias: str) -> Optional[OtoEntry]:
