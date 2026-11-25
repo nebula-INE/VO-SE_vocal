@@ -55,8 +55,9 @@ def test_selected_layer_wins_and_sibling_layer_is_used_as_wav_relative_fallback(
     assert count >= len(selected_aliases) + len(HIRAGANA_CV)
     assert parser.loaded_layers[0] == str(selected)
     assert parser.find_voice_root(str(selected)) == str(extracted_root)
-    assert parser.get("あ") is not None
-    assert parser.get("あ").wav_path == str(selected / "selected-a.wav")
+    selected_entry = parser.get("あ")
+    assert selected_entry is not None
+    assert selected_entry.wav_path == str(selected / "selected-a.wav")
 
     fallback = parser.resolve_alias("い")
     assert fallback is not None
