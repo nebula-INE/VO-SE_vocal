@@ -96,6 +96,10 @@ extern "C" {
         VoseProgressCallback progress_cb,
         VoseCancelCheckCallback cancel_cb);
 
+    // Desktop-safe error reporting. Read immediately after execute_render[_cancelable].
+    DLLEXPORT const char* get_last_render_error(void);
+    DLLEXPORT int get_last_render_worker_count(void);
+
     // 🚀 【新規追加】Python（PipelineBridge）からシリアライズされた連続フレームデータをC++メモリへ流し込む
     // このポインタを渡すだけのゼロコピー転送により、リアルタイム合成時でも一切の遅延が発生しません
     DLLEXPORT void set_vocal_timeline(const VoseFrame* frames, int frame_count);
