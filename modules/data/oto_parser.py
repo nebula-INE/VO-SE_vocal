@@ -154,6 +154,7 @@ class OtoEntry:
     preutterance: float     # 先行発声 (ms)    : ノート開始時刻より「先」に発声を始める量
     overlap: float          # オーバーラップ (ms): 前のノートとフェードでクロスする量
     search_root: Optional[str] = None  # WAV basename fallback の検索境界
+    search_roots: Tuple[str, ...] = ()  # 対応する本体/補助音源だけを含む検索境界
 
     @property
     def wav_path(self) -> str:
@@ -218,27 +219,37 @@ class OtoEntry:
         # Web版 resolveWavFilePath と同じく、OTO内の相対/旧絶対パスが
         # 現在の配置を指さない場合は、選択音源のルート内で basename が
         # 一意に一致する WAV のみ補完する。同名が複数なら推測しない。
-        search_root = os.path.abspath(
+        default_root = os.path.abspath(
             os.path.expanduser(self.search_root or self.voice_dir)
         )
-        root_map = get_voice_dir_file_map(search_root)
+        search_roots = tuple(
+            dict.fromkeys(
+                os.path.abspath(os.path.expanduser(root))
+                for root in (self.search_roots or (default_root,))
+            )
+        )
         target_basename = target_lower.rsplit("/", 1)[-1]
         basenames = [target_basename]
         if not target_basename.endswith(".wav"):
             basenames.append(target_basename + ".wav")
+        root_maps = [
+            (root, get_voice_dir_file_map(root))
+            for root in search_roots
+        ]
         for basename in basenames:
             matches = [
                 full_path
-                for relative_path, full_path in root_map.items()
+                for _root, file_map in root_maps
+                for relative_path, full_path in file_map.items()
                 if relative_path.rsplit("/", 1)[-1] == basename
             ]
             unique_matches = list(dict.fromkeys(matches))
             if len(unique_matches) == 1:
                 logger.debug(
-                    "OTO WAV basename fallback: %s -> %s (root=%s)",
+                    "OTO WAV basename fallback: %s -> %s (roots=%s)",
                     self.filename,
                     unique_matches[0],
-                    search_root,
+                    search_roots,
                 )
                 return unique_matches[0]
 
@@ -740,7 +751,12 @@ class OtoParser:
     # 公開 API
     # ------------------------------------------------------------------
 
-    def load_oto_file(self, ini_path: str, voice_root: Optional[str] = None) -> int:
+    def load_oto_file(
+        self,
+        ini_path: str,
+        voice_root: Optional[str] = None,
+        wav_search_roots: Optional[List[str]] = None,
+    ) -> int:
         """
         oto.ini を 1 ファイル読み込んでデータベースに追加する (8GB以下環境対応スロットリング)。
 
@@ -764,6 +780,12 @@ class OtoParser:
             if entry is not None:
                 entry.search_root = os.path.abspath(
                     os.path.expanduser(voice_root or voice_dir)
+                )
+                entry.search_roots = tuple(
+                    dict.fromkeys(
+                        os.path.abspath(os.path.expanduser(root))
+                        for root in (wav_search_roots or [entry.search_root])
+                    )
                 )
                 # 複数 oto.ini を再帰ロードしたとき、同名 alias を
                 # 後から読んだファイルで上書きしない。Web 側も同じ
@@ -851,6 +873,9 @@ class OtoParser:
         self.loaded_layers = tuple(layers)
         self.loaded_oto_ini_paths = tuple(str(item["ini_path"]) for item in layer_info)
         self.layer_info = layer_info
+        wav_search_roots = list(dict.fromkeys(
+            os.path.abspath(str(item["root"])) for item in layer_info
+        ))
         prefix_roots: List[str] = []
         for item in layer_info:
             if not item["supplement"]:
@@ -910,7 +935,7 @@ class OtoParser:
                 with open(cache_path, "r", encoding="utf-8") as cache_file:
                     cached_data = json.load(cache_file)
                 if (
-                    cached_data.get("cache_version") == 4
+                    cached_data.get("cache_version") == 5
                     and cached_data.get("source_signature") == source_signature
                 ):
                     for item in cached_data.get("entries", []):
@@ -919,6 +944,13 @@ class OtoParser:
                             filename=item["filename"],
                             voice_dir=item.get("voice_dir", selected),
                             search_root=item.get("search_root", item.get("voice_dir", selected)),
+                            search_roots=tuple(
+                                str(root)
+                                for root in item.get(
+                                    "search_roots",
+                                    [item.get("search_root", item.get("voice_dir", selected))],
+                                )
+                            ),
                             left_blank=float(item.get("left_blank", 0)),
                             fixed_range=float(item.get("fixed_range", 0)),
                             right_blank=float(item.get("right_blank", 0)),
@@ -943,7 +975,11 @@ class OtoParser:
         total = 0
         for item in layer_info:
             ini_path = str(item["ini_path"])
-            loaded = self.load_oto_file(ini_path, voice_root=str(item["root"]))
+            loaded = self.load_oto_file(
+                ini_path,
+                voice_root=str(item["root"]),
+                wav_search_roots=wav_search_roots,
+            )
             total += loaded
             logger.info(
                 "oto.ini レイヤー読込: %s (%d エントリ, CV %.0f%%, %s)",
@@ -967,6 +1003,7 @@ class OtoParser:
                         "filename": entry.filename,
                         "voice_dir": entry.voice_dir,
                         "search_root": entry.search_root,
+                        "search_roots": list(entry.search_roots),
                         "left_blank": entry.left_blank,
                         "fixed_range": entry.fixed_range,
                         "right_blank": entry.right_blank,
@@ -976,7 +1013,7 @@ class OtoParser:
                 with open(cache_path, "w", encoding="utf-8") as cache_file:
                     json.dump(
                         {
-                            "cache_version": 4,
+                            "cache_version": 5,
                             "entries": cache_entries,
                             "source_signature": source_signature,
                         },
