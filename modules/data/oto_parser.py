@@ -34,6 +34,27 @@ _PITCH_TAG_RE = re.compile(
 )
 _PITCH_SUFFIX_TAG_RE = re.compile(r"([A-Ga-g])([#b]?)(-?\d+)$", re.IGNORECASE)
 
+_KANA_TO_ROMAJI: Dict[str, str] = {
+    "あ": "a", "い": "i", "う": "u", "え": "e", "お": "o",
+    "か": "ka", "き": "ki", "く": "ku", "け": "ke", "こ": "ko",
+    "さ": "sa", "し": "shi", "す": "su", "せ": "se", "そ": "so",
+    "た": "ta", "ち": "chi", "つ": "tsu", "て": "te", "と": "to",
+    "な": "na", "に": "ni", "ぬ": "nu", "ね": "ne", "の": "no",
+    "は": "ha", "ひ": "hi", "ふ": "fu", "へ": "he", "ほ": "ho",
+    "ま": "ma", "み": "mi", "む": "mu", "め": "me", "も": "mo",
+    "や": "ya", "ゆ": "yu", "よ": "yo",
+    "ら": "ra", "り": "ri", "る": "ru", "れ": "re", "ろ": "ro",
+    "わ": "wa", "を": "wo", "ん": "n",
+    "が": "ga", "ぎ": "gi", "ぐ": "gu", "げ": "ge", "ご": "go",
+    "ざ": "za", "じ": "ji", "ず": "zu", "ぜ": "ze", "ぞ": "zo",
+    "だ": "da", "ぢ": "di", "づ": "du", "で": "de", "ど": "do",
+    "ば": "ba", "び": "bi", "ぶ": "bu", "べ": "be", "ぼ": "bo",
+    "ぱ": "pa", "ぴ": "pi", "ぷ": "pu", "ぺ": "pe", "ぽ": "po",
+}
+_ROMAJI_TO_KANA: Dict[str, str] = {
+    romaji: kana for kana, romaji in _KANA_TO_ROMAJI.items()
+}
+
 
 def _find_prefix_map_path(voice_dir: str) -> Optional[str]:
     """Find the root-level prefix.map regardless of filename casing."""
@@ -91,14 +112,19 @@ def get_voice_dir_file_map(voice_dir: str) -> Dict[str, str]:
     if voice_dir in _DIR_FILE_MAP_CACHE:
         return _DIR_FILE_MAP_CACHE[voice_dir]
     file_map: Dict[str, str] = {}
-    if os.path.exists(voice_dir):
-        for root, _dirs, files in os.walk(voice_dir):
-            for f in files:
-                full_path = os.path.join(root, f)
+    if os.path.isdir(voice_dir):
+        for root, dirs, files in os.walk(voice_dir, topdown=True, followlinks=False):
+            dirs[:] = sorted(
+                directory for directory in dirs
+                if not os.path.islink(os.path.join(root, directory))
+            )
+            for filename in files:
+                full_path = os.path.join(root, filename)
+                if os.path.islink(full_path) or not os.path.isfile(full_path):
+                    continue
                 rel_path = os.path.relpath(full_path, voice_dir)
-                rel_key = rel_path.replace("\\", "/").lower()
-                if rel_key not in file_map:
-                    file_map[rel_key] = full_path
+                rel_key = rel_path.replace("\\", "/").casefold()
+                file_map.setdefault(rel_key, full_path)
     _DIR_FILE_MAP_CACHE[voice_dir] = file_map
     return file_map
 
@@ -119,6 +145,7 @@ class OtoEntry:
     right_blank: float      # 右ブランク (ms)  : WAV 末尾からの読み飛ばし量（負値可）
     preutterance: float     # 先行発声 (ms)    : ノート開始時刻より「先」に発声を始める量
     overlap: float          # オーバーラップ (ms): 前のノートとフェードでクロスする量
+    search_root: Optional[str] = None  # WAV basename fallback の検索境界
 
     @property
     def wav_path(self) -> str:
@@ -180,6 +207,34 @@ class OtoEntry:
             if resolved:
                 return resolved
 
+        # Web版 resolveWavFilePath と同じく、OTO内の相対パスが古い
+        # フォルダ構成を指す場合は、選択音源のルート内で basename が
+        # 一意に一致する WAV のみ補完する。同名が複数なら推測しない。
+        if not os.path.isabs(normalized_filename):
+            search_root = os.path.abspath(
+                os.path.expanduser(self.search_root or self.voice_dir)
+            )
+            root_map = get_voice_dir_file_map(search_root)
+            target_basename = target_lower.rsplit("/", 1)[-1]
+            basenames = [target_basename]
+            if not target_basename.endswith(".wav"):
+                basenames.append(target_basename + ".wav")
+            for basename in basenames:
+                matches = [
+                    full_path
+                    for relative_path, full_path in root_map.items()
+                    if relative_path.rsplit("/", 1)[-1] == basename
+                ]
+                unique_matches = list(dict.fromkeys(matches))
+                if len(unique_matches) == 1:
+                    logger.debug(
+                        "OTO WAV basename fallback: %s -> %s (root=%s)",
+                        self.filename,
+                        unique_matches[0],
+                        search_root,
+                    )
+                    return unique_matches[0]
+
         # ファイルがまだ存在しない場合でも、呼び出し側が存在確認できる
         # 一貫したパスを返す。
         return exact_path
@@ -208,6 +263,7 @@ class OtoEntry:
 class _VoiceLayerInfo(TypedDict):
     directory: str
     ini_path: str
+    root: str
     coverage: float
     covered: set[str]
     supplement: bool
@@ -252,6 +308,80 @@ class OtoParser:
         except OSError:
             return False
         return any(marker in names for marker in ("character.txt", "readme.txt"))
+
+    @staticmethod
+    def _strip_supplement_suffix(name: str) -> str:
+        normalized = unicodedata.normalize("NFKC", str(name)).strip()
+        return re.sub(
+            r"[\\s._-]*(?:エクストラ|extra|append)$",
+            "",
+            normalized,
+            flags=re.IGNORECASE,
+        ).strip() or normalized
+
+    @classmethod
+    def _has_oto_layer(cls, directory: str) -> bool:
+        if not os.path.isdir(directory) or os.path.islink(directory):
+            return False
+        for current, dirs, files in os.walk(directory, topdown=True, followlinks=False):
+            dirs[:] = sorted(
+                name for name in dirs
+                if not os.path.islink(os.path.join(current, name))
+            )
+            if any(name.casefold() == "oto.ini" for name in files):
+                return True
+        return False
+
+    @classmethod
+    def _find_companion_voice_roots(
+        cls,
+        root: str,
+        voices_root: Optional[str],
+    ) -> List[str]:
+        """Find only exact name-linked main/Extra siblings directly under voices/."""
+        if not voices_root:
+            return []
+        root_path = os.path.realpath(root)
+        voices_path = os.path.realpath(voices_root)
+        if os.path.normcase(os.path.dirname(root_path)) != os.path.normcase(voices_path):
+            return []
+
+        root_name = os.path.basename(root_path)
+        root_base = cls._strip_supplement_suffix(root_name)
+        normalized_root_name = unicodedata.normalize("NFKC", root_name).casefold()
+        is_supplement = root_base.casefold() != normalized_root_name
+        try:
+            siblings = sorted(
+                os.listdir(voices_path),
+                key=lambda value: (value.casefold(), value),
+            )
+        except OSError:
+            return []
+
+        candidates: List[str] = []
+        if is_supplement:
+            # Selecting 重音テトエクストラ pairs only with an exact 重音テト sibling.
+            for sibling in siblings:
+                if unicodedata.normalize("NFKC", sibling).casefold() == root_base.casefold():
+                    candidates.append(os.path.join(voices_path, sibling))
+                    break
+        else:
+            # Selecting 重音テト also makes its explicitly named Extra sibling available.
+            for sibling in siblings:
+                if sibling == root_name:
+                    continue
+                sibling_base = cls._strip_supplement_suffix(sibling)
+                normalized_sibling = unicodedata.normalize("NFKC", sibling).casefold()
+                if (
+                    sibling_base.casefold() == normalized_root_name
+                    and sibling_base.casefold() != normalized_sibling
+                ):
+                    candidates.append(os.path.join(voices_path, sibling))
+
+        return [
+            candidate for candidate in candidates
+            if cls._has_oto_layer(candidate)
+        ]
 
     @staticmethod
     def _infer_voices_dir(start: str, voices_dir: Optional[str] = None) -> Optional[str]:
@@ -367,27 +497,42 @@ class OtoParser:
             return [], selected_path, []
 
         root = self.find_voice_root(selected_path, voices_dir=voices_dir, max_up=max_up)
-        found: List[Tuple[str, str]] = []
-        for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
-            dirs[:] = sorted(
-                directory for directory in dirs
-                if not os.path.islink(os.path.join(current, directory))
-            )
-            oto_names = sorted(name for name in files if name.casefold() == "oto.ini")
-            if oto_names:
-                ini_path = os.path.join(current, oto_names[0])
-                if not os.path.islink(ini_path):
-                    found.append((os.path.abspath(current), ini_path))
+        voices_root = self._infer_voices_dir(selected_path, voices_dir)
+        root_specs = [root]
+        root_specs.extend(
+            companion
+            for companion in self._find_companion_voice_roots(root, voices_root)
+            if os.path.normcase(os.path.realpath(companion))
+            != os.path.normcase(os.path.realpath(root))
+        )
+
+        found: List[Tuple[str, str, str]] = []
+        seen_roots: set[str] = set()
+        for layer_root in root_specs:
+            root_key = os.path.normcase(os.path.realpath(layer_root))
+            if root_key in seen_roots:
+                continue
+            seen_roots.add(root_key)
+            for current, dirs, files in os.walk(layer_root, topdown=True, followlinks=False):
+                dirs[:] = sorted(
+                    directory for directory in dirs
+                    if not os.path.islink(os.path.join(current, directory))
+                )
+                oto_names = sorted(name for name in files if name.casefold() == "oto.ini")
+                if oto_names:
+                    ini_path = os.path.join(current, oto_names[0])
+                    if not os.path.islink(ini_path):
+                        found.append((os.path.abspath(current), ini_path, layer_root))
 
         selected_has_layer = any(
             os.path.normcase(os.path.realpath(directory))
             == os.path.normcase(os.path.realpath(selected_path))
-            for directory, _ini_path in found
+            for directory, _ini_path, _layer_root in found
         )
         info: List[_VoiceLayerInfo] = []
-        for directory, ini_path in found:
+        for directory, ini_path, layer_root in found:
             covered, coverage = self._layer_aliases_and_coverage(ini_path)
-            supplement, reason = self._is_supplement_layer(directory, root, coverage)
+            supplement, reason = self._is_supplement_layer(directory, layer_root, coverage)
             selected_subtree = (
                 os.path.normcase(os.path.realpath(directory))
                 == os.path.normcase(os.path.realpath(selected_path))
@@ -397,10 +542,11 @@ class OtoParser:
                 os.path.normcase(os.path.realpath(directory))
                 == os.path.normcase(os.path.realpath(selected_path))
             )
-            relative_depth = len(os.path.relpath(directory, root).split(os.sep))
+            relative_depth = len(os.path.relpath(directory, layer_root).split(os.sep))
             info.append({
                 "directory": directory,
                 "ini_path": ini_path,
+                "root": os.path.abspath(layer_root),
                 "coverage": coverage,
                 "covered": covered,
                 "supplement": supplement,
@@ -462,19 +608,75 @@ class OtoParser:
         self.layer_info = ordered_info
         return layers, root, self.layer_info
 
+    @staticmethod
+    def _alias_equivalent_spellings(alias: str) -> List[str]:
+        """Return the same basic kana/katakana/romaji variants as the Web resolver."""
+        original = unicodedata.normalize("NFKC", str(alias))
+        candidates: List[str] = []
+
+        def add(value: str) -> None:
+            if value and value not in candidates:
+                candidates.append(value)
+
+        def katakana_to_hiragana(value: str) -> str:
+            return "".join(
+                chr(ord(char) - 0x60)
+                if "\\u30a1" <= char <= "\\u30f6"
+                else char
+                for char in value
+            )
+
+        def map_units(
+            value: str,
+            mapping: Dict[str, str],
+            preserve_initial_vowel: bool = False,
+        ) -> str:
+            scope, separator, leaf = value.rpartition("/")
+            target = leaf if separator else value
+            scope_prefix = scope + separator if separator else ""
+            parts = re.split(r"([ _-]+)", target)
+            lexical_indices = [
+                index for index, part in enumerate(parts)
+                if part and not re.fullmatch(r"[ _-]+", part)
+            ]
+            first_lexical = lexical_indices[0] if lexical_indices else -1
+            for index in lexical_indices:
+                token = parts[index]
+                lookup = token.casefold()
+                if (
+                    preserve_initial_vowel
+                    and index == first_lexical
+                    and len(lexical_indices) > 1
+                    and lookup in {"a", "i", "u", "e", "o", "n"}
+                ):
+                    continue
+                parts[index] = mapping.get(lookup, token)
+            return scope_prefix + "".join(parts)
+
+        add(original)
+        hiragana = katakana_to_hiragana(original)
+        add(hiragana)
+        add(map_units(hiragana, _KANA_TO_ROMAJI))
+        add(map_units(original, _KANA_TO_ROMAJI))
+        add(map_units(hiragana, _ROMAJI_TO_KANA, preserve_initial_vowel=True))
+        add(map_units(original, _ROMAJI_TO_KANA, preserve_initial_vowel=True))
+        return candidates
+
     def _lookup_alias(self, alias: str) -> Optional[OtoEntry]:
         key = str(alias)
-        normalized = unicodedata.normalize("NFKC", key)
-        entry = self._normalized_db.get(normalized)
-        if entry is not None:
-            return entry
-        exact = self._db.get(key)
-        if exact is not None:
-            return exact
-        # Support callers/tests that populate _db directly instead of using loaders.
-        for existing_key, existing_entry in self._db.items():
-            if unicodedata.normalize("NFKC", existing_key) == normalized:
-                return existing_entry
+        # Preserve exact first-wins behavior before trying alternative spellings.
+        for candidate in self._alias_equivalent_spellings(key):
+            normalized = unicodedata.normalize("NFKC", candidate)
+            entry = self._normalized_db.get(normalized)
+            if entry is not None:
+                return entry
+            exact = self._db.get(candidate)
+            if exact is not None:
+                return exact
+            # Support callers/tests that populate _db directly instead of using loaders.
+            for existing_key, existing_entry in self._db.items():
+                if unicodedata.normalize("NFKC", existing_key) == normalized:
+                    return existing_entry
         return None
 
     def _warn_unresolved(
@@ -546,6 +748,9 @@ class OtoParser:
                 continue
             entry = self._parse_line(line, voice_dir)
             if entry is not None:
+                entry.search_root = os.path.abspath(
+                    os.path.expanduser(voice_root or voice_dir)
+                )
                 # 複数 oto.ini を再帰ロードしたとき、同名 alias を
                 # 後から読んだファイルで上書きしない。Web 側も同じ
                 # first-wins 方針なので、3経路の解決結果を一致させる。
@@ -632,9 +837,22 @@ class OtoParser:
         self.loaded_layers = tuple(layers)
         self.loaded_oto_ini_paths = tuple(str(item["ini_path"]) for item in layer_info)
         self.layer_info = layer_info
-        prefix_map_path = (
-            _find_prefix_map_path(scan_root)
-            or _find_prefix_map_path(selected)
+        prefix_roots: List[str] = []
+        for item in layer_info:
+            if not item["supplement"]:
+                candidate_root = str(item["root"])
+                if candidate_root not in prefix_roots:
+                    prefix_roots.append(candidate_root)
+        for candidate_root in (scan_root, selected):
+            if candidate_root not in prefix_roots:
+                prefix_roots.append(candidate_root)
+        prefix_map_path = next(
+            (
+                candidate
+                for candidate_root in prefix_roots
+                if (candidate := _find_prefix_map_path(candidate_root)) is not None
+            ),
+            None,
         )
         if reset:
             prefix_map_dir = (
@@ -654,6 +872,7 @@ class OtoParser:
                     stat.st_mtime_ns,
                     stat.st_size,
                     layer_index,
+                    os.path.abspath(str(item["root"])),
                 ])
             except OSError:
                 continue
@@ -677,7 +896,7 @@ class OtoParser:
                 with open(cache_path, "r", encoding="utf-8") as cache_file:
                     cached_data = json.load(cache_file)
                 if (
-                    cached_data.get("cache_version") == 3
+                    cached_data.get("cache_version") == 4
                     and cached_data.get("source_signature") == source_signature
                 ):
                     for item in cached_data.get("entries", []):
@@ -685,6 +904,7 @@ class OtoParser:
                             alias=item["alias"],
                             filename=item["filename"],
                             voice_dir=item.get("voice_dir", selected),
+                            search_root=item.get("search_root", item.get("voice_dir", selected)),
                             left_blank=float(item.get("left_blank", 0)),
                             fixed_range=float(item.get("fixed_range", 0)),
                             right_blank=float(item.get("right_blank", 0)),
@@ -709,7 +929,7 @@ class OtoParser:
         total = 0
         for item in layer_info:
             ini_path = str(item["ini_path"])
-            loaded = self.load_oto_file(ini_path, voice_root=scan_root)
+            loaded = self.load_oto_file(ini_path, voice_root=str(item["root"]))
             total += loaded
             logger.info(
                 "oto.ini レイヤー読込: %s (%d エントリ, CV %.0f%%, %s)",
@@ -732,6 +952,7 @@ class OtoParser:
                         "alias": entry.alias,
                         "filename": entry.filename,
                         "voice_dir": entry.voice_dir,
+                        "search_root": entry.search_root,
                         "left_blank": entry.left_blank,
                         "fixed_range": entry.fixed_range,
                         "right_blank": entry.right_blank,
@@ -741,7 +962,7 @@ class OtoParser:
                 with open(cache_path, "w", encoding="utf-8") as cache_file:
                     json.dump(
                         {
-                            "cache_version": 3,
+                            "cache_version": 4,
                             "entries": cache_entries,
                             "source_signature": source_signature,
                         },
@@ -1021,8 +1242,8 @@ class OtoParser:
 
     @staticmethod
     def _read_safe(path: str) -> str:
-        """Shift-JIS / UTF-8 / latin-1 の順で oto.ini を読む。"""
-        for enc in ("cp932", "utf-8-sig", "utf-8", "latin-1"):
+        """Web版と同じく UTF-8 を優先し、失敗したら Shift-JIS/CP932 を読む。"""
+        for enc in ("utf-8-sig", "cp932", "utf-8", "latin-1"):
             try:
                 with open(path, "r", encoding=enc, errors="strict") as f:
                     return f.read()
