@@ -219,7 +219,7 @@ def test_oto_wav_basename_fallback_is_unique_and_stays_inside_bank_root(tmp_path
     audio.mkdir(parents=True)
     (root / "character.txt").write_text("name=Example", encoding="utf-8")
     (selected / "oto.ini").write_text(
-        "missing/sub/sample.wav=あ,0,0,0,50,0\\n",
+        "missing/sub/sample.wav=あ,0,0,0,50,0\n",
         encoding="utf-8",
     )
     actual_wav = audio / "sample.wav"
