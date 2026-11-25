@@ -239,6 +239,35 @@ def test_oto_wav_basename_fallback_is_unique_and_stays_inside_bank_root(tmp_path
     assert entry.wav_path == str(actual_wav)
 
 
+def test_extra_oto_can_find_unique_wav_in_its_exact_paired_main_bank(tmp_path):
+    voices = tmp_path / "voices"
+    main = voices / "重音テト"
+    extra = voices / "重音テトエクストラ"
+    main_aliases = [alias for alias in HIRAGANA_CV if alias != "じ"]
+    _write_layer(main, main_aliases)
+
+    extra.mkdir(parents=True)
+    (extra / "oto.ini").write_text(
+        "legacy/extra-sample.wav=じ,0,0,0,50,0\\n",
+        encoding="utf-8",
+    )
+    shared_wav = main / "audio" / "extra-sample.wav"
+    shared_wav.parent.mkdir(parents=True)
+    shared_wav.write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(
+        str(extra),
+        use_cache=False,
+        write_cache=False,
+    )
+
+    entry = parser.get("じ")
+    assert entry is not None
+    assert entry.voice_dir == str(extra)
+    assert entry.wav_path == str(shared_wav)
+
+
 def test_selected_folder_prefix_map_is_used_when_extracted_root_has_none(tmp_path):
     root = tmp_path / "package"
     root.mkdir()
