@@ -215,33 +215,32 @@ class OtoEntry:
             if resolved:
                 return resolved
 
-        # Web版 resolveWavFilePath と同じく、OTO内の相対パスが古い
-        # フォルダ構成を指す場合は、選択音源のルート内で basename が
+        # Web版 resolveWavFilePath と同じく、OTO内の相対/旧絶対パスが
+        # 現在の配置を指さない場合は、選択音源のルート内で basename が
         # 一意に一致する WAV のみ補完する。同名が複数なら推測しない。
-        if not os.path.isabs(normalized_filename):
-            search_root = os.path.abspath(
-                os.path.expanduser(self.search_root or self.voice_dir)
-            )
-            root_map = get_voice_dir_file_map(search_root)
-            target_basename = target_lower.rsplit("/", 1)[-1]
-            basenames = [target_basename]
-            if not target_basename.endswith(".wav"):
-                basenames.append(target_basename + ".wav")
-            for basename in basenames:
-                matches = [
-                    full_path
-                    for relative_path, full_path in root_map.items()
-                    if relative_path.rsplit("/", 1)[-1] == basename
-                ]
-                unique_matches = list(dict.fromkeys(matches))
-                if len(unique_matches) == 1:
-                    logger.debug(
-                        "OTO WAV basename fallback: %s -> %s (root=%s)",
-                        self.filename,
-                        unique_matches[0],
-                        search_root,
-                    )
-                    return unique_matches[0]
+        search_root = os.path.abspath(
+            os.path.expanduser(self.search_root or self.voice_dir)
+        )
+        root_map = get_voice_dir_file_map(search_root)
+        target_basename = target_lower.rsplit("/", 1)[-1]
+        basenames = [target_basename]
+        if not target_basename.endswith(".wav"):
+            basenames.append(target_basename + ".wav")
+        for basename in basenames:
+            matches = [
+                full_path
+                for relative_path, full_path in root_map.items()
+                if relative_path.rsplit("/", 1)[-1] == basename
+            ]
+            unique_matches = list(dict.fromkeys(matches))
+            if len(unique_matches) == 1:
+                logger.debug(
+                    "OTO WAV basename fallback: %s -> %s (root=%s)",
+                    self.filename,
+                    unique_matches[0],
+                    search_root,
+                )
+                return unique_matches[0]
 
         # ファイルがまだ存在しない場合でも、呼び出し側が存在確認できる
         # 一貫したパスを返す。
