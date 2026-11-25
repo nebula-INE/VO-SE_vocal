@@ -248,7 +248,7 @@ def test_extra_oto_can_find_unique_wav_in_its_exact_paired_main_bank(tmp_path):
 
     extra.mkdir(parents=True)
     (extra / "oto.ini").write_text(
-        "legacy/extra-sample.wav=じ,0,0,0,50,0\\n",
+        "legacy/extra-sample.wav=じ,0,0,0,50,0\n",
         encoding="utf-8",
     )
     shared_wav = main / "audio" / "extra-sample.wav"
