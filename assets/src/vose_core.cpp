@@ -2981,8 +2981,20 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
 #else
         std::vector<std::thread> workers;
         workers.reserve(worker_count);
-        for (int i = 0; i < worker_count; ++i)
-            workers.emplace_back(worker_fn);
+        try {
+            for (int i = 0; i < worker_count; ++i)
+                workers.emplace_back(worker_fn);
+        } catch (...) {
+            // A partially-created vector of joinable std::thread objects would
+            // terminate the process during stack unwinding. Stop and join every
+            // worker before allowing the C ABI guard to report the failure.
+            cancel_flag.store(true, std::memory_order_relaxed);
+            for (auto& worker : workers) {
+                if (worker.joinable())
+                    worker.join();
+            }
+            throw;
+        }
 
         // メインスレッドは進捗通知とキャンセル監視に専念する。
         // worker_failed も終了条件に含めないと、例外発生時に completed が
