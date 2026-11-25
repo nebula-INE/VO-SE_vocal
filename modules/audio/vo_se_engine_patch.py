@@ -500,6 +500,51 @@ def _validate_rendered_wav(file_path: str, expected_duration_sec: float) -> None
         )
 
 
+def _read_native_render_error(native_lib: Any) -> str:
+    """Read a native failure without allowing exceptions to escape the C ABI."""
+    getter = getattr(native_lib, "get_last_render_error", None)
+    if not callable(getter):
+        return ""
+    try:
+        try:
+            getter.restype = ctypes.c_char_p
+        except (AttributeError, TypeError):
+            # Python fakes used by unit tests may expose a normal bound method.
+            pass
+        raw = getter()
+    except Exception as exc:
+        logger.debug("ネイティブレンダーのエラー取得に失敗: %s", exc)
+        return ""
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace").strip()
+    if isinstance(raw, str):
+        return raw.strip()
+    try:
+        return ctypes.string_at(raw).decode("utf-8", errors="replace").strip()
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _log_native_render_worker_count(native_lib: Any) -> None:
+    """Log the bounded native worker count when the loaded core exposes it."""
+    getter = getattr(native_lib, "get_last_render_worker_count", None)
+    if not callable(getter):
+        return
+    try:
+        try:
+            getter.restype = ctypes.c_int
+        except (AttributeError, TypeError):
+            pass
+        worker_count = int(getter())
+    except Exception as exc:
+        logger.debug("ネイティブレンダラーのワーカー数取得に失敗: %s", exc)
+        return
+    if worker_count > 0:
+        logger.info("ネイティブWORLD合成ワーカー数: %d", worker_count)
+
+
 def _render_to_wav_v2(
     self,
     notes,
@@ -951,6 +996,11 @@ def _render_to_wav_v2(
             )
         finally:
             self._temp_refs = []
+
+    _log_native_render_worker_count(self.lib)
+    native_error = _read_native_render_error(self.lib)
+    if native_error:
+        raise RuntimeError(f"ネイティブ合成中にエラーが発生しました: {native_error}")
 
     if callable(cancel_check) and cancel_check():
         raise RuntimeError("レンダリングがキャンセルされました")
