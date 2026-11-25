@@ -313,7 +313,7 @@ class OtoParser:
     def _strip_supplement_suffix(name: str) -> str:
         normalized = unicodedata.normalize("NFKC", str(name)).strip()
         return re.sub(
-            r"[\\s._-]*(?:エクストラ|extra|append)$",
+            r"[ ._-]*(?:エクストラ|extra|append)$",
             "",
             normalized,
             flags=re.IGNORECASE,
