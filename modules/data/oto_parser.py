@@ -501,7 +501,7 @@ class OtoParser:
             prev_vowel,
             note_num,
             list(dict.fromkeys(unicodedata.normalize("NFKC", key) for key in tried_keys)),
-            list(self.loaded_layers),
+            " | ".join(self.loaded_layers),
         )
 
     def _log_resolution(
