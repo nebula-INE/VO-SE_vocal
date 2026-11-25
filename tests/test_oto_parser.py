@@ -494,3 +494,30 @@ def test_load_voice_dir_finds_prefix_map_case_insensitively(tmp_path):
     selected = parser.resolve_alias("あ", None, note_num=65)
     assert selected is not None
     assert selected.alias == "あ_F4"
+
+
+
+def test_resolve_alias_bridges_hiragana_and_romaji_spellings():
+    parser = OtoParser()
+    parser._db["ji"] = _entry("ji")
+    parser._db["sa"] = _entry("sa")
+    parser._db["no"] = _entry("no")
+    parser._db["a ji"] = _entry("a ji")
+
+    ji = parser.resolve_alias("じ")
+    sa = parser.resolve_alias("さ")
+    no = parser.resolve_alias("の")
+    contextual = parser.resolve_alias("じ", "a")
+
+    assert ji is not None and ji.alias == "ji"
+    assert sa is not None and sa.alias == "sa"
+    assert no is not None and no.alias == "no"
+    assert contextual is not None and contextual.alias == "a ji"
+
+
+def test_read_safe_prefers_utf8_when_bytes_are_also_valid_cp932(tmp_path):
+    path = tmp_path / "utf8-also-decodes-as-cp932.oto"
+    expected = "ち.wav=ち,0,0,0,50,0\\n"
+    path.write_bytes(expected.encode("utf-8"))
+
+    assert OtoParser._read_safe(str(path)) == expected
