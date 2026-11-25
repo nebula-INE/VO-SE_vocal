@@ -778,13 +778,14 @@ class OtoParser:
                 continue
             entry = self._parse_line(line, voice_dir)
             if entry is not None:
-                entry.search_root = os.path.abspath(
+                search_root = os.path.abspath(
                     os.path.expanduser(voice_root or voice_dir)
                 )
+                entry.search_root = search_root
                 entry.search_roots = tuple(
                     dict.fromkeys(
                         os.path.abspath(os.path.expanduser(root))
-                        for root in (wav_search_roots or [entry.search_root])
+                        for root in (wav_search_roots or [search_root])
                     )
                 )
                 # 複数 oto.ini を再帰ロードしたとき、同名 alias を
