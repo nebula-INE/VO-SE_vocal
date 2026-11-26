@@ -498,9 +498,7 @@ class OtoParser:
             "ぱぴぷぺぽぁぃぅぇぉゃゅょゔっ"
         )
         covered: set[str] = set()
-        try:
-            file_size = os.path.getsize(ini_path)
-        except OSError:
+        if not os.path.isfile(ini_path):
             return covered, 0.0
         encoding = OtoParser._detect_text_encoding(ini_path)
         try:
@@ -584,14 +582,12 @@ class OtoParser:
 
         found: List[Tuple[str, str, str]] = []
         seen_roots: set[str] = set()
-        scanned_directories = 0
         for layer_root in root_specs:
             root_key = os.path.normcase(os.path.realpath(layer_root))
             if root_key in seen_roots:
                 continue
             seen_roots.add(root_key)
             for current, dirs, files in os.walk(layer_root, topdown=True, followlinks=False):
-                scanned_directories += 1
                 if cancel_event is not None and cancel_event.is_set():
                     raise VoicebankLoadCancelled("音源フォルダのスキャンはキャンセルされました。")
                 dirs[:] = sorted(
@@ -883,16 +879,11 @@ class OtoParser:
         cancel_event: Optional[threading.Event] = None,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> int:
-        """Stream one oto.ini into the alias database under explicit resource limits."""
+        """Stream one oto.ini into the alias database without default size/count caps."""
         if not os.path.isfile(ini_path):
             logger.warning("oto.ini が見つかりません: %s", ini_path)
             return 0
 
-        try:
-            file_size = os.path.getsize(ini_path)
-        except OSError:
-            logger.warning("oto.ini のサイズを取得できません: %s", ini_path)
-            return 0
         limit = None if max_entries is None else max(0, int(max_entries))
         voice_dir = os.path.dirname(os.path.abspath(ini_path))
         encoding = self._detect_text_encoding(ini_path)
