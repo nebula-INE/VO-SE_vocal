@@ -311,6 +311,12 @@ class _VoiceBankImportWorker(QThread):
                 "dynamics_ai": dynamics_ai,
                 "engine_message": engine_message,
             })
+        except MemoryError:
+            logger.exception("音源ZIPのバックグラウンド処理でメモリ不足が発生")
+            self.failed.emit(
+                "音源ZIPの処理中にメモリ不足が発生しました。"
+                "空きメモリを確保してから再試行してください。"
+            )
         except Exception as exc:
             logger.exception("音源ZIPのバックグラウンドインストールに失敗")
             self.failed.emit(str(exc) or exc.__class__.__name__)

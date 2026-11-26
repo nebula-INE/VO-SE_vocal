@@ -8,6 +8,10 @@ import json
 import tempfile
 
 
+MAX_VOICE_ZIP_ENTRIES = 200_000
+MAX_VOICE_ZIP_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
+MAX_VOICE_ZIP_FILE_BYTES = 1024 * 1024 * 1024
+
 
 def get_resource_path(relative_path: str) -> str:
     """
@@ -249,6 +253,27 @@ class VoiceManager:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with zipfile.ZipFile(zip_path, 'r') as zf:
+                # ZIP bombs and malformed archives must fail before extraction starts.
+                zip_infos = zf.infolist()
+                if len(zip_infos) > MAX_VOICE_ZIP_ENTRIES:
+                    raise ValueError(
+                        f"ZIP内のファイル数が安全な上限 ({MAX_VOICE_ZIP_ENTRIES:,}) を超えています。"
+                    )
+                total_uncompressed = 0
+                for info in zip_infos:
+                    if info.is_dir():
+                        continue
+                    if info.file_size < 0 or info.file_size > MAX_VOICE_ZIP_FILE_BYTES:
+                        raise ValueError(
+                            f"ZIP内の単一ファイルが安全なサイズ上限を超えています: {info.filename}"
+                        )
+                    total_uncompressed += info.file_size
+                    if total_uncompressed > MAX_VOICE_ZIP_UNCOMPRESSED_BYTES:
+                        raise ValueError(
+                            "ZIP展開後の合計サイズが安全な上限 "
+                            f"({MAX_VOICE_ZIP_UNCOMPRESSED_BYTES:,} bytes) を超えています。"
+                        )
+
                 # Windows 等で作られた ZIP は日本語名を CP932 で保存し UTF-8 フラグを立てない。
                 # そのまま展開するとフォルダ名・wav 名が化けて oto.ini と一致しなくなるため、
                 # 名前を正しく読み直しながら安全に展開する。

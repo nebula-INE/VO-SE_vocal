@@ -1427,6 +1427,12 @@ class _VoiceImportWorker(QThread):
             name = self._func()
             # install_voice_from_zip/folder already refreshes VoiceManager.voices.
             voices = dict(getattr(self._manager, "voices", {}) or {})
+        except MemoryError:
+            self.failed.emit(
+                "音源の追加中にメモリ不足が発生しました。"
+                "空きメモリを確保してから再試行してください。"
+            )
+            return
         except Exception as exc:  # noqa: BLE001 - surface the failure to the user
             self.failed.emit(str(exc) or exc.__class__.__name__)
             return

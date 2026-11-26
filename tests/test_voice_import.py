@@ -322,3 +322,23 @@ def test_scan_voices_reports_progress_without_glob_materialization(vm, tmp_path,
     voices = vm.scan_voices(progress_callback=progress.append)
     assert "nested-129" in voices
     assert progress
+
+
+
+@pytest.mark.unit
+def test_zip_install_rejects_excessive_uncompressed_size(vm, tmp_path, monkeypatch):
+    from modules.audio import voice_manager as voice_manager_module
+
+    archive = tmp_path / "oversized.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("LargeVoice/oto.ini", "a.wav=あ,0,0,0,0,0\n")
+        zf.writestr("LargeVoice/a.wav", b"x" * 128)
+
+    monkeypatch.setattr(
+        voice_manager_module,
+        "MAX_VOICE_ZIP_UNCOMPRESSED_BYTES",
+        64,
+    )
+    with pytest.raises(ValueError, match="展開後の合計サイズ"):
+        vm.install_voice_from_zip(str(archive))
+    assert not os.path.exists(vm.user_voice_dir)
