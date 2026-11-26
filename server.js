@@ -1539,15 +1539,28 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
   }
 
   const matchMappedAlias = (candidate) => {
-    // An explicitly written alias must always win over automatic pitch mapping.
-    // This is especially important for explicit VCV aliases such as "a い".
     const exact = selectBestPitchEntry(indexed, candidate, noteNum) || aliasMap.get(candidate);
-    if (exact) return exact;
-    if (noteNum === null || noteNum === undefined) return null;
-    if (candidate.includes('/') || candidate.includes('\\')) return null;
-    const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);
-    if (mapped === candidate) return null;
-    return aliasMap.get(mapped) || null;
+    const explicitlyQualified =
+      candidate.includes('/') ||
+      candidate.includes('\\') ||
+      candidate.includes(' ') ||
+      candidate.includes('_') ||
+      candidate.startsWith('-');
+
+    // An explicitly written VCV/CV or pitch-scoped alias must win unchanged.
+    if (explicitlyQualified && exact) return exact;
+
+    // For plain CV lyrics, a covered prefix.map range takes priority over an
+    // unqualified default alias. This matches Desktop OtoParser.resolve_alias().
+    if (noteNum !== null && noteNum !== undefined && !candidate.includes('/') && !candidate.includes('\\')) {
+      const mapped = applyPrefixMapAlias(candidate, noteNum, indexed.prefixMap);
+      if (mapped !== candidate) {
+        const mappedEntry =
+          selectBestPitchEntry(indexed, mapped, noteNum) || aliasMap.get(mapped);
+        if (mappedEntry) return mappedEntry;
+      }
+    }
+    return exact || null;
   };
 
   // Helper to search direct match or pitch-suffixed key in aliasMap
