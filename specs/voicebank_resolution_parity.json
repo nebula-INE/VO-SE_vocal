@@ -131,6 +131,10 @@
     {
       "filename": "audio/extra-f4.wav",
       "alias": "あ_F4"
+    },
+    {
+      "filename": "legacy/ambiguous.wav",
+      "alias": "曖昧"
     }
   ],
   "unrelated_entries": [
@@ -149,7 +153,9 @@
     "main/audio/main-c4.wav": "main_prefix_map_wins",
     "extra/audio/extra-shared.wav": "extra_duplicate_loses",
     "extra/audio/extra-f4.wav": "extra_prefix_map_loses",
-    "unrelated/unrelated.wav": "unrelated_must_not_be_visible"
+    "unrelated/unrelated.wav": "unrelated_must_not_be_visible",
+    "main/audio/ambiguous.wav": "ambiguous_main_candidate",
+    "extra/audio/ambiguous.wav": "ambiguous_extra_candidate"
   },
   "expected": {
     "layers_when_extra_selected": [
@@ -166,6 +172,8 @@
     "prefix_map_alias": "あ_C4",
     "prefix_map_wav_payload": "main_prefix_map_wins",
     "unrelated_alias": "ふ",
-    "unrelated_alias_resolves": false
+    "unrelated_alias_resolves": false,
+    "ambiguous_alias": "曖昧",
+    "ambiguous_resolves": false
   }
 }
