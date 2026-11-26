@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "contract": {
+    "companion_suffixes": [
+      "エクストラ",
+      "Extra",
+      "Append"
+    ],
+    "companion_matching": "exact_normalized_base_name_only",
+    "unrelated_sibling_voicebanks": "never_include",
+    "layer_order": "complete_main_layers_before_supplement_layers",
+    "duplicate_alias": "first_wins_after_layer_ordering",
+    "wav_resolution": "relative_to_oto_ini_directory_then_case_insensitive_path_then_unique_basename",
+    "basename_fallback_scope": "selected_voicebank_and_exact_companion_only",
+    "ambiguous_basename": "do_not_guess",
+    "prefix_map": "first_non_supplement_root_then_selected_root",
+    "multi_pitch": "closest_pitch_within_the_highest_priority_matching_layer",
+    "encoding_order": [
+      "UTF-8",
+      "CP932/Shift-JIS"
+    ]
+  },
+  "voicebanks": {
+    "main": "Kasane_Teto",
+    "extra": "Kasane_Teto_Extra",
+    "unrelated": "DifferentVoice",
+    "selected": "Kasane_Teto_Extra"
+  },
+  "main_cv_aliases": [
+    "あ",
+    "い",
+    "う",
+    "え",
+    "お",
+    "か",
+    "き",
+    "く",
+    "け",
+    "こ",
+    "さ",
+    "し",
+    "す",
+    "せ",
+    "そ",
+    "た",
+    "ち",
+    "つ",
+    "て",
+    "と",
+    "な",
+    "に",
+    "ぬ",
+    "ね",
+    "の",
+    "は",
+    "ひ",
+    "ふ",
+    "へ",
+    "ほ",
+    "ま",
+    "み",
+    "む",
+    "め",
+    "も",
+    "や",
+    "ゆ",
+    "よ",
+    "ら",
+    "り",
+    "る",
+    "れ",
+    "ろ",
+    "わ",
+    "を",
+    "ん",
+    "が",
+    "ぎ",
+    "ぐ",
+    "げ",
+    "ご",
+    "ざ",
+    "じ",
+    "ず",
+    "ぜ",
+    "ぞ",
+    "だ",
+    "ぢ",
+    "づ",
+    "で",
+    "ど",
+    "ば",
+    "び",
+    "ぶ",
+    "べ",
+    "ぼ",
+    "ぱ",
+    "ぴ",
+    "ぷ",
+    "ぺ",
+    "ぽ",
+    "ぁ",
+    "ぃ",
+    "ぅ",
+    "ぇ",
+    "ぉ",
+    "ゃ",
+    "ゅ",
+    "ょ",
+    "ゔ",
+    "っ"
+  ],
+  "main_entries": [
+    {
+      "filename": "audio/main-shared.wav",
+      "alias": "共通"
+    },
+    {
+      "filename": "audio/main-c4.wav",
+      "alias": "あ_C4"
+    }
+  ],
+  "extra_entries": [
+    {
+      "filename": "legacy/extra-ji.wav",
+      "alias": "じ"
+    },
+    {
+      "filename": "audio/extra-shared.wav",
+      "alias": "共通"
+    },
+    {
+      "filename": "audio/extra-f4.wav",
+      "alias": "あ_F4"
+    }
+  ],
+  "unrelated_entries": [
+    {
+      "filename": "unrelated.wav",
+      "alias": "ふ"
+    }
+  ],
+  "prefix_map": {
+    "main": "C1\t\t_C4\n",
+    "extra": "C1\t\t_F4\n"
+  },
+  "wav_payloads": {
+    "main/audio/extra-ji.wav": "paired_extra_wav",
+    "main/audio/main-shared.wav": "main_duplicate_wins",
+    "main/audio/main-c4.wav": "main_prefix_map_wins",
+    "extra/audio/extra-shared.wav": "extra_duplicate_loses",
+    "extra/audio/extra-f4.wav": "extra_prefix_map_loses",
+    "unrelated/unrelated.wav": "unrelated_must_not_be_visible"
+  },
+  "expected": {
+    "layers_when_extra_selected": [
+      "Kasane_Teto",
+      "Kasane_Teto_Extra"
+    ],
+    "layers_when_main_selected": [
+      "Kasane_Teto",
+      "Kasane_Teto_Extra"
+    ],
+    "main_layer_alias_wins": "共通",
+    "extra_only_alias": "じ",
+    "extra_only_alias_wav_payload": "paired_extra_wav",
+    "prefix_map_alias": "あ_C4",
+    "prefix_map_wav_payload": "main_prefix_map_wins",
+    "unrelated_alias": "ふ",
+    "unrelated_alias_resolves": false
+  }
+}
