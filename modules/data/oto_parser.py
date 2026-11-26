@@ -1118,7 +1118,6 @@ class OtoParser:
                             "right_blank": entry.right_blank,
                             "preutterance": entry.preutterance,
                             "overlap": entry.overlap,
-                            "layer_priority": entry.layer_priority,
                         })
                 with open(cache_path, "w", encoding="utf-8") as cache_file:
                     json.dump(
