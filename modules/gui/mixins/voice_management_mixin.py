@@ -15,13 +15,7 @@ import os
 import pickle
 from typing import Any, Dict
 
-from modules.data.oto_parser import (
-    MAX_OTO_FILE_BYTES,
-    MAX_OTO_LINE_CHARS,
-    MAX_VOICEBANK_OTO_ENTRIES,
-    OtoParser,
-    VoicebankResourceLimitError,
-)
+from modules.data.oto_parser import OtoParser, VoicebankResourceLimitError
 
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QMessageBox
@@ -115,36 +109,19 @@ class VoiceManagementMixin:
     # ------------------------------------------------------------------
 
     def parse_oto_ini(self: Any, voice_path: str) -> dict:
-        """Read the GUI compatibility view under the same voicebank limits as OtoParser."""
+        """Stream the GUI compatibility view without arbitrary source-size or entry caps."""
         oto_map: dict = {}
         oto_path = os.path.join(voice_path, "oto.ini")
         if not os.path.isfile(oto_path):
             return oto_map
 
-        try:
-            file_size = os.path.getsize(oto_path)
-        except OSError:
-            return oto_map
-        if file_size > MAX_OTO_FILE_BYTES:
-            raise VoicebankResourceLimitError(
-                f"oto.ini が安全なサイズ上限 ({MAX_OTO_FILE_BYTES:,} bytes) を超えています。"
-            )
-
         encoding = OtoParser._detect_text_encoding(oto_path)
         try:
             with open(oto_path, "r", encoding=encoding, errors="strict", newline=None) as source:
                 for line_number, raw_line in enumerate(source, start=1):
-                    if len(raw_line) > MAX_OTO_LINE_CHARS:
-                        raise VoicebankResourceLimitError(
-                            f"oto.ini の1行が安全な長さ上限を超えています (line {line_number})。"
-                        )
                     line = raw_line.strip()
                     if not line or "=" not in line:
                         continue
-                    if len(oto_map) >= MAX_VOICEBANK_OTO_ENTRIES:
-                        raise VoicebankResourceLimitError(
-                            f"GUI用 oto.ini エントリ数が安全な上限 ({MAX_VOICEBANK_OTO_ENTRIES:,}) を超えました。"
-                        )
 
                     try:
                         wav_file, params = line.split("=", 1)
