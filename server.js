@@ -93,6 +93,42 @@ function checkMemoryAndClean() {
 }
 
 // Native Node.js Helper for decoding Shift-JIS / UTF-8
+async function detectTextFileEncoding(filePath) {
+  const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+  try {
+    // Validate incrementally, keeping only the current stream chunk in memory.
+    for await (const chunk of fs.createReadStream(filePath)) {
+      utf8Decoder.decode(chunk, { stream: true });
+    }
+    utf8Decoder.decode();
+    return 'utf-8';
+  } catch {
+    return 'shift-jis';
+  }
+}
+
+async function* readTextFileLines(filePath) {
+  const encoding = await detectTextFileEncoding(filePath);
+  const decoder = new TextDecoder(encoding);
+  let pending = '';
+
+  for await (const chunk of fs.createReadStream(filePath)) {
+    pending += decoder.decode(chunk, { stream: true });
+    let newlineIndex = pending.indexOf('\n');
+    while (newlineIndex !== -1) {
+      let line = pending.slice(0, newlineIndex);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      yield line;
+      pending = pending.slice(newlineIndex + 1);
+      newlineIndex = pending.indexOf('\n');
+    }
+  }
+
+  pending += decoder.decode();
+  if (pending.endsWith('\r')) pending = pending.slice(0, -1);
+  if (pending.length > 0) yield pending;
+}
+
 function decodeTextBuffer(buffer) {
   try {
     const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
@@ -113,9 +149,8 @@ function decodeTextBuffer(buffer) {
 // ★修正点:
 //   1. エイリアス毎の fs.existsSync（同期I/O）を撤廃。
 //      wav の存在確認は再生・サンプル要求時にのみ行う。
-//   2. entries 配列に上限を設け、巨大音源（数万エイリアス）で
-//      メモリが際限なく膨張しないようにする。
-//      上限超過分は aliasMap のみに保持（検索・単体参照は可能）。
+//   2. oto.ini は TextDecoder + ReadStream で逐次解析し、
+//      巨大ファイル全体や split() による行配列をRAMへ展開しない。
 // ★追加: メインスレッド（iPad Safari等のサンドボックスを含む）を
 //         ブロックし続けないよう、一定件数ごとにイベントループへ制御を返す。
 function yieldToEventLoop() {
@@ -164,24 +199,27 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
     const layer = plan.layerInfo[layerIndex];
     const currentDir = layer.directory;
     try {
-      const buf = await fs.promises.readFile(layer.iniPath);
-      const content = decodeTextBuffer(buf);
-      const lines = content.split(/\r?\n/);
       const relativeDir = path.relative(layer.root, currentDir);
       const subdirPrefix = relativeDir && relativeDir !== '.'
-        ? relativeDir.split(path.sep).join('\\') + '\\'
+        ? relativeDir.split(path.sep).join('\\\\') + '\\\\'
         : '';
 
       let linesSinceYield = 0;
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index].trim();
+      for await (const rawLine of readTextFileLines(layer.iniPath)) {
+        linesSinceYield += 1;
+        if (linesSinceYield >= YIELD_EVERY_LINES) {
+          linesSinceYield = 0;
+          await yieldToEventLoop();
+        }
+
+        const line = rawLine.trim();
         if (!line || !line.includes('=')) continue;
 
         const separator = line.indexOf('=');
-        const filename = line.slice(0, separator).trim().replace(/\\/g, '/');
+        const filename = line.slice(0, separator).trim().replace(/\\\\/g, '/');
         const parts = line.slice(separator + 1).split(',');
         const rawAlias = (parts[0] || '').trim();
-        const alias = rawAlias || path.basename(filename).replace(/\.wav$/i, '');
+        const alias = rawAlias || path.basename(filename).replace(/\\.wav$/i, '');
         if (!alias) continue;
 
         result.aliasCount += 1;
@@ -190,7 +228,7 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
         if (
           alias.includes(' ') ||
           alias.startsWith('-') ||
-          (['a', 'i', 'e', 'u', 'o', 'n'].includes(firstChar) && ['-', '_', '\t'].includes(secondChar))
+          (['a', 'i', 'e', 'u', 'o', 'n'].includes(firstChar) && ['-', '_', '\\t'].includes(secondChar))
         ) {
           result.hasVcv = true;
         }
@@ -225,7 +263,7 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
         // remain in entries so same-layer multi-pitch selection can choose by MIDI.
         if (!result.aliasMap.has(alias)) result.aliasMap.set(alias, entryObj);
 
-        const baseNameNoExt = path.posix.basename(filename).replace(/\.wav$/i, '');
+        const baseNameNoExt = path.posix.basename(filename).replace(/\\.wav$/i, '');
         if (baseNameNoExt && !result.aliasMap.has(baseNameNoExt)) {
           result.aliasMap.set(baseNameNoExt, entryObj);
         }
@@ -238,12 +276,6 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
             const scopedBaseName = subdirPrefix + baseNameNoExt;
             if (!result.aliasMap.has(scopedBaseName)) result.aliasMap.set(scopedBaseName, entryObj);
           }
-        }
-
-        linesSinceYield += 1;
-        if (linesSinceYield >= YIELD_EVERY_LINES) {
-          linesSinceYield = 0;
-          await yieldToEventLoop();
         }
       }
     } catch (error) {
