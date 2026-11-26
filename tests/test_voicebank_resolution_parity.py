@@ -190,6 +190,28 @@ def test_same_alias_pitch_variants_survive_oto_cache_reload(tmp_path: Path) -> N
     assert cached_choice.wav_path == str(main / "audio" / "duplicate-a_F4.wav")
 
 
+def test_wav_lookup_rejects_paths_outside_the_selected_voicebank_pair(tmp_path: Path) -> None:
+    _main, extra, _unrelated = _materialize_voicebanks(tmp_path)
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"must not be exposed")
+
+    with (extra / "oto.ini").open("a", encoding="utf-8") as oto_file:
+        oto_file.write("../../outside.wav=outside-boundary,0,0,0,20,5\n")
+
+    parser = OtoParser()
+    parser.load_voice_dir(
+        str(extra),
+        use_cache=False,
+        reset=True,
+        write_cache=False,
+    )
+
+    entry = parser.get("outside-boundary")
+    assert entry is not None
+    assert Path(entry.wav_path) != outside
+    assert not Path(entry.wav_path).is_file()
+
+
 def test_shared_resolution_fixture_declares_safe_cross_platform_rules() -> None:
     contract = FIXTURE["contract"]
     assert contract["companion_matching"] == "exact_normalized_base_name_only"
