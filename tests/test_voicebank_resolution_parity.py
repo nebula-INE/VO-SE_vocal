@@ -107,6 +107,13 @@ def test_shared_voicebank_resolution_contract_when_extra_is_selected(tmp_path: P
     assert prefix_entry.voice_dir == str(main)
     assert prefix_entry.wav_path == str(main / "audio" / "main-c4.wav")
 
+    same_alias_c4 = parser.resolve_alias(FIXTURE["expected"]["same_alias"], note_num=60)
+    same_alias_f4 = parser.resolve_alias(FIXTURE["expected"]["same_alias"], note_num=65)
+    assert same_alias_c4 is not None
+    assert same_alias_f4 is not None
+    assert same_alias_c4.wav_path == str(main / "audio" / "duplicate-a_C4.wav")
+    assert same_alias_f4.wav_path == str(main / "audio" / "duplicate-a_F4.wav")
+
     # The CP932 oto.ini nested inside the main bank remains discoverable.
     cp932_entry = parser.resolve_alias(FIXTURE["expected"]["encoding_alias"])
     assert cp932_entry is not None
