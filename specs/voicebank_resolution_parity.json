@@ -113,6 +113,10 @@
       "alias": "共通"
     },
     {
+      "filename": "audio/main-default-a.wav",
+      "alias": "あ"
+    },
+    {
       "filename": "audio/main-c4.wav",
       "alias": "あ_C4"
     }
@@ -154,7 +158,8 @@
     "unrelated/unrelated.wav": "unrelated_must_not_be_visible",
     "main/audio/ambiguous.wav": "ambiguous_main_candidate",
     "extra/audio/ambiguous.wav": "ambiguous_extra_candidate",
-    "main/encoding/cp932.wav": "cp932_oto_loaded"
+    "main/encoding/cp932.wav": "cp932_oto_loaded",
+    "main/audio/main-default-a.wav": "main_unqualified_a_must_lose_to_prefix_map"
   },
   "expected": {
     "layers_when_extra_selected": [
