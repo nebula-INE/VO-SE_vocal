@@ -311,30 +311,16 @@ def _refresh_voice_library_v2_unlocked(self) -> None:
     candidate_oto_map: Dict[str, str] = {}
     layer_dirs = tuple(getattr(candidate_parser, "loaded_layers", ()))
     layer_realpaths = {os.path.realpath(path) for path in layer_dirs}
-    max_fallback_names = 20_000
-    max_scanned_entries = 120_000
-    max_scanned_directories = 30_000
-    fallback_names = 0
-    scanned_entries = 0
-    scanned_directories = 0
-    scan_truncated = False
-
+    # Keep the legacy WAV-stem fallback for every discovered sample. The scan
+    # stores paths rather than file contents and remains incremental per directory.
     for layer_dir in layer_dirs:
         pending = [layer_dir]
-        while pending and fallback_names < max_fallback_names:
+        while pending:
             root = pending.pop()
-            scanned_directories += 1
-            if scanned_directories > max_scanned_directories:
-                scan_truncated = True
-                break
             subdirectories = []
             try:
                 with os.scandir(root) as iterator:
                     for item in iterator:
-                        scanned_entries += 1
-                        if scanned_entries > max_scanned_entries:
-                            scan_truncated = True
-                            break
                         try:
                             if item.is_symlink():
                                 continue
@@ -346,25 +332,15 @@ def _refresh_voice_library_v2_unlocked(self) -> None:
                                 and item.name.casefold().endswith(".wav")
                             ):
                                 lyric = os.path.splitext(item.name)[0]
-                                before = len(candidate_oto_map)
                                 candidate_oto_map.setdefault(
                                     lyric,
                                     os.path.abspath(item.path),
                                 )
-                                if len(candidate_oto_map) > before:
-                                    fallback_names += 1
-                                    if fallback_names >= max_fallback_names:
-                                        scan_truncated = True
-                                        break
                         except OSError:
                             continue
             except OSError:
                 continue
             pending.extend(sorted(subdirectories, reverse=True))
-            if scan_truncated:
-                break
-        if scan_truncated:
-            break
 
     # Configured aliases are authoritative and are not subject to the stem cap.
     for alias, entry in getattr(candidate_parser, "_db", {}).items():
@@ -398,14 +374,6 @@ def _refresh_voice_library_v2_unlocked(self) -> None:
     self._loaded_oto_ini_paths = candidate_loaded_paths
     self.vcv_resolver = candidate_vcv_resolver
     self.cvvc_resolver = candidate_cvvc_resolver
-
-    if scan_truncated:
-        logger.warning(
-            "Legacy WAV fallback map was capped (%d stems, %d filesystem entries, %d directories).",
-            fallback_names,
-            scanned_entries,
-            scanned_directories,
-        )
 
     logger.info(
         "音源ライブラリ更新: %d WAV aliases / VCV=%s",
