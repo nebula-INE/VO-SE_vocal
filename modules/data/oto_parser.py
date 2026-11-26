@@ -455,29 +455,33 @@ class OtoParser:
         cls,
         start: str,
         voices_dir: Optional[str] = None,
-        max_up: int = 3,
+        max_up: Optional[int] = None,
     ) -> str:
-        """Find the extracted bank root without walking into unrelated voicebanks.
+        """Find the extracted bank root without a default parent-depth ceiling.
 
-        Search the selected directory and at most max_up parents for UTAU root
-        markers. If none exists, limit fallback to the direct child of voices/
-        containing the selection. Without a recognizable voices directory, the
-        selected directory itself is the search boundary.
+        Search upward for UTAU root markers, stopping at the configured voices
+        directory when one is known. Callers may still pass max_up explicitly
+        when they need a narrower search. Without a recognizable voices
+        directory, the selected directory remains the fallback boundary.
         """
         selected = os.path.abspath(os.path.expanduser(start))
         voices_root = cls._infer_voices_dir(selected, voices_dir)
         current = selected
-        for _ in range(max(0, int(max_up)) + 1):
+        depth = 0
+        while True:
             if cls._contains_root_marker(current):
                 return current
             if voices_root and os.path.normcase(current) == os.path.normcase(voices_root):
                 break
             if voices_root and not cls._is_within(current, voices_root):
                 break
+            if max_up is not None and depth >= max(0, int(max_up)):
+                break
             parent = os.path.dirname(current)
             if parent == current:
                 break
             current = parent
+            depth += 1
 
         if voices_root and cls._is_within(selected, voices_root):
             relative = os.path.relpath(selected, voices_root)
