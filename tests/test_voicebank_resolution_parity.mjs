@@ -116,6 +116,12 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
   ];
   await writeFile(join(mainDir, 'oto.ini'), mainLines.join('\n') + '\n', 'utf8');
   await writeFile(join(mainDir, 'prefix.map'), fixture.prefix_map.main, 'utf8');
+  const encodingDir = join(mainDir, 'encoding');
+  await mkdir(encodingDir, { recursive: true });
+  await writeFile(
+    join(encodingDir, 'oto.ini'),
+    Buffer.from(fixture.encoding_case.oto_base64_cp932, 'base64')
+  );
 
   await writeFile(join(extraDir, 'oto.ini'), otoLines(fixture.extra_entries).join('\n') + '\n', 'utf8');
   await writeFile(join(extraDir, 'prefix.map'), fixture.prefix_map.extra, 'utf8');
@@ -167,6 +173,15 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
     prefixMapped.body,
     wavs.get(fixture.expected.prefix_map_wav_payload),
     'the main voicebank prefix.map must take priority over the Extra prefix.map'
+  );
+
+  const cp932Entry = await request(port, sampleUrl(extraName, fixture.expected.encoding_alias, 60));
+  assert.equal(cp932Entry.status, 200, startup.stderr);
+  assert.equal(decodeURIComponent(cp932Entry.headers['x-alias-matched']), fixture.expected.encoding_alias);
+  assert.deepEqual(
+    cp932Entry.body,
+    wavs.get(fixture.encoding_case.wav_payload),
+    'CP932 oto.ini must be decoded and its WAV entry must remain usable'
   );
 
   const unrelated = await request(port, sampleUrl(extraName, fixture.expected.unrelated_alias, 60));
