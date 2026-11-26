@@ -119,7 +119,7 @@ def _decode_zip_member_name(info: zipfile.ZipInfo, encoding: str) -> str:
 
 def _zip_member_target(root: str, info: zipfile.ZipInfo, encoding: str):
     """Return a validated destination, or None for harmless OS metadata files."""
-    name = _decode_zip_member_name(info, encoding).replace("\\\\", "/")
+    name = _decode_zip_member_name(info, encoding).replace(chr(92), "/")
     if "__MACOSX/" in name or name.endswith(".DS_Store"):
         return None
 
