@@ -160,19 +160,41 @@ class OtoEntry:
     @property
     def wav_path(self) -> str:
         """フルパスで WAV へのパスを返す (区切り文字・大文字小文字差を吸収)。"""
-        # oto.ini は Windows 環境で "\" 区切りを保存することがあるため、
-        # 実行環境の区切り文字へ正規化してから解決する。
         normalized_filename = self.filename.replace("\\", os.sep).replace("/", os.sep)
+        default_root = os.path.abspath(
+            os.path.expanduser(self.search_root or self.voice_dir)
+        )
+        search_roots = tuple(
+            dict.fromkeys(
+                os.path.abspath(os.path.expanduser(root))
+                for root in (self.search_roots or (default_root,))
+            )
+        )
+
+        def is_allowed_path(candidate: str) -> bool:
+            """既存ファイル・未作成パスともに、実体が許可ルート内か確認する。"""
+            try:
+                real_candidate = os.path.realpath(candidate)
+                for root in search_roots:
+                    real_root = os.path.realpath(root)
+                    common = os.path.commonpath((real_root, real_candidate))
+                    if os.path.normcase(common) == os.path.normcase(real_root):
+                        return True
+            except (OSError, ValueError):
+                return False
+            return False
+
         if os.path.isabs(normalized_filename):
             exact_path = os.path.normpath(normalized_filename)
         else:
             exact_path = os.path.normpath(
                 os.path.join(self.voice_dir, normalized_filename)
             )
+
         # 先に実ファイルシステム上の実際の名前へ解決する。
         # macOS/Windows の case-insensitive filesystem では
         # os.path.isfile(exact_path) が表記違いでも True になるため、
-        # これを先に行わないと `SubVoice` が `subvoice` のまま返る。
+        # これを先に行わないと SubVoice が subvoice のまま返る。
         if not os.path.isabs(normalized_filename):
             current = os.path.abspath(self.voice_dir)
             components = [
@@ -196,10 +218,10 @@ class OtoEntry:
                     break
                 current = os.path.join(current, matched)
             else:
-                if os.path.isfile(current):
+                if os.path.isfile(current) and is_allowed_path(current):
                     return current
 
-        if os.path.isfile(exact_path):
+        if os.path.isfile(exact_path) and is_allowed_path(exact_path):
             return exact_path
 
         # Case-insensitive & nested-path resolution using a relative-path cache.
@@ -208,27 +230,19 @@ class OtoEntry:
             normalized_filename.replace(os.sep, "/").replace("\\", "/").lower()
         )
         resolved = file_map.get(target_lower)
-        if resolved:
+        if resolved and is_allowed_path(resolved):
             return resolved
 
         # 拡張子省略の oto.ini にも対応するが、相対パス全体をキーにする。
         if not target_lower.endswith(".wav"):
             resolved = file_map.get(target_lower + ".wav")
-            if resolved:
+            if resolved and is_allowed_path(resolved):
                 return resolved
 
         # Web版 resolveWavFilePath と同じく、OTO内の相対/旧絶対パスが
-        # 現在の配置を指さない場合は、選択音源のルート内で basename が
-        # 一意に一致する WAV のみ補完する。同名が複数なら推測しない。
-        default_root = os.path.abspath(
-            os.path.expanduser(self.search_root or self.voice_dir)
-        )
-        search_roots = tuple(
-            dict.fromkeys(
-                os.path.abspath(os.path.expanduser(root))
-                for root in (self.search_roots or (default_root,))
-            )
-        )
+        # 現在の配置を指さない場合は、選択音源とその正確な補助音源の
+        # ルート内で basename が一意に一致する WAV のみ補完する。
+        # 音源ペアの外にあるファイルは、oto.ini が直接指していても返さない。
         target_basename = target_lower.rsplit("/", 1)[-1]
         basenames = [target_basename]
         if not target_basename.endswith(".wav"):
@@ -240,12 +254,12 @@ class OtoEntry:
         for basename in basenames:
             matches = [
                 full_path
-                for _root, file_map in root_maps
-                for relative_path, full_path in file_map.items()
+                for _root, root_file_map in root_maps
+                for relative_path, full_path in root_file_map.items()
                 if relative_path.rsplit("/", 1)[-1] == basename
             ]
             unique_matches = list(dict.fromkeys(matches))
-            if len(unique_matches) == 1:
+            if len(unique_matches) == 1 and is_allowed_path(unique_matches[0]):
                 logger.debug(
                     "OTO WAV basename fallback: %s -> %s (roots=%s)",
                     self.filename,
@@ -254,9 +268,13 @@ class OtoEntry:
                 )
                 return unique_matches[0]
 
-        # ファイルがまだ存在しない場合でも、呼び出し側が存在確認できる
-        # 一貫したパスを返す。
-        return exact_path
+        # ファイルがまだ存在しない場合でも、許可ルート内のパスだけを返す。
+        if is_allowed_path(exact_path):
+            return exact_path
+        safe_basename = os.path.basename(normalized_filename.rstrip("/\\"))
+        if not safe_basename or safe_basename in (".", ".."):
+            safe_basename = "unresolved.wav"
+        return os.path.join(self.voice_dir, safe_basename)
 
     @property
     def preutterance_sec(self) -> float:
