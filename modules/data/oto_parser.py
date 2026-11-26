@@ -155,6 +155,7 @@ class OtoEntry:
     overlap: float          # オーバーラップ (ms): 前のノートとフェードでクロスする量
     search_root: Optional[str] = None  # WAV basename fallback の検索境界
     search_roots: Tuple[str, ...] = ()  # 対応する本体/補助音源だけを含む検索境界
+    layer_priority: int = 0  # main / supplement の読み込み優先順位
 
     @property
     def wav_path(self) -> str:
@@ -841,26 +842,24 @@ class OtoParser:
                         for root in (wav_search_roots or [search_root])
                     )
                 )
+                entry.layer_priority = int(layer_priority)
                 normalized_alias = unicodedata.normalize("NFKC", entry.alias)
-                variants = self._alias_variants.setdefault(normalized_alias, [])
-                variants.append((int(layer_priority), entry))
-
-                # Public alias lookup and native metadata remain first-wins.
-                # Rendering can use the complete same-layer list above to select
-                # the closest pitch-tagged WAV, matching the Web resolver.
-                if entry.alias in self._db or normalized_alias in self._normalized_db:
-                    existing = self._lookup_alias(entry.alias)
+                existing = self._lookup_alias(entry.alias)
+                if existing is not None:
+                    variants = self._alias_variants.setdefault(
+                        normalized_alias,
+                        [(int(existing.layer_priority), existing)],
+                    )
+                    variants.append((int(layer_priority), entry))
                     logger.warning(
                         "重複 alias を保持 (first-wins metadata / note-aware pitch): %s (%s) / 既存=%s",
                         entry.alias,
                         entry.wav_path,
-                        existing.wav_path if existing is not None else "<unknown>",
+                        existing.wav_path,
                     )
                 else:
                     self._db[entry.alias] = entry
-                self._normalized_db.setdefault(
-                    normalized_alias, self._db.get(entry.alias, entry)
-                )
+                    self._normalized_db.setdefault(normalized_alias, entry)
 
                 # UTAU/OpenUtau multi-pitch banks can address an entry with
                 # a folder-qualified lyric such as "D4/あ" or "D4\\あ".
@@ -877,14 +876,17 @@ class OtoParser:
                     if rel_dir not in (".", ""):
                         prefix = rel_dir.replace(os.sep, "/").strip("/") + "/"
                         scoped_key = prefix + entry.alias
-                        self._db.setdefault(scoped_key, entry)
                         scoped_normalized = unicodedata.normalize("NFKC", scoped_key)
-                        self._normalized_db.setdefault(
-                            scoped_normalized,
-                            self._db[scoped_key],
-                        )
-                        scoped_variants = self._alias_variants.setdefault(scoped_normalized, [])
-                        scoped_variants.append((int(layer_priority), entry))
+                        scoped_existing = self._normalized_db.get(scoped_normalized)
+                        if scoped_existing is None:
+                            self._db.setdefault(scoped_key, entry)
+                            self._normalized_db.setdefault(scoped_normalized, entry)
+                        else:
+                            scoped_variants = self._alias_variants.setdefault(
+                                scoped_normalized,
+                                [(int(scoped_existing.layer_priority), scoped_existing)],
+                            )
+                            scoped_variants.append((int(layer_priority), entry))
 
                 count += 1
 
@@ -1016,6 +1018,7 @@ class OtoParser:
                             right_blank=float(item.get("right_blank", 0)),
                             preutterance=float(item.get("preutterance", 0)),
                             overlap=float(item.get("overlap", 0)),
+                            layer_priority=int(item.get("layer_priority", 0)),
                         )
                         db_key = item.get("db_key", entry.alias)
                         self._db[db_key] = entry
@@ -1040,6 +1043,7 @@ class OtoParser:
                             right_blank=float(item.get("right_blank", 0)),
                             preutterance=float(item.get("preutterance", 0)),
                             overlap=float(item.get("overlap", 0)),
+                            layer_priority=int(item.get("layer_priority", 0)),
                         )
                         normalized_key = unicodedata.normalize("NFKC", item["key"])
                         self._alias_variants.setdefault(normalized_key, []).append(
@@ -1093,6 +1097,7 @@ class OtoParser:
                         "right_blank": entry.right_blank,
                         "preutterance": entry.preutterance,
                         "overlap": entry.overlap,
+                        "layer_priority": entry.layer_priority,
                     })
                 cache_alias_variants = []
                 for normalized_key, variants in self._alias_variants.items():
@@ -1110,6 +1115,7 @@ class OtoParser:
                             "right_blank": entry.right_blank,
                             "preutterance": entry.preutterance,
                             "overlap": entry.overlap,
+                            "layer_priority": entry.layer_priority,
                         })
                 with open(cache_path, "w", encoding="utf-8") as cache_file:
                     json.dump(
