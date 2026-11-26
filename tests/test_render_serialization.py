@@ -3,7 +3,7 @@ import time
 
 import pytest
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from modules.audio import vo_se_engine_patch
 
@@ -173,6 +173,6 @@ def test_set_voice_library_rolls_back_path_when_refresh_fails(tmp_path):
 
     engine.refresh_voice_library_v2 = fail_refresh
     with pytest.raises(RuntimeError, match="could not be loaded"):
-        VO_SE_Engine.set_voice_library(engine, new_path)
+        VO_SE_Engine.set_voice_library(cast(VO_SE_Engine, engine), new_path)
 
     assert engine.voice_lib_path == old_path
