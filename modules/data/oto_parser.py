@@ -1255,6 +1255,17 @@ class OtoParser:
             return None
 
         def match_mapped(alias: str) -> Optional[OtoEntry]:
+            explicitly_qualified = (
+                "/" in alias
+                or "\\" in alias
+                or " " in alias
+                or "_" in alias
+                or alias.startswith("-")
+            )
+            if explicitly_qualified:
+                explicit_entry = self._lookup_alias_for_note(alias, note_num)
+                if explicit_entry is not None:
+                    return explicit_entry
             if note_num is None:
                 return None
             mapped = map_alias(alias, note_num, self._prefix_map)
