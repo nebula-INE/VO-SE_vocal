@@ -18,6 +18,11 @@ import {
   resolveZipEntryPath,
   isRealPathInside
 } from './modules/utils/voicebank_security.js';
+import {
+  collectVoicebankResolutionPlan,
+  resolveVoicebankWavPath,
+  isRealPathInsideVoicebankRoots
+} from './modules/utils/voicebank_resolution.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,180 +127,134 @@ function yieldToEventLoop() {
 const YIELD_EVERY_LINES = 500;   // oto.ini の行処理、この件数ごとに一度yield
 const YIELD_EVERY_FILES = 20;    // oto.iniファイル自体、この件数ごとに一度yield
 
-async function findRootPrefixMapPath(rootDir) {
-  const names = await fs.promises.readdir(rootDir);
-  const matches = names
-    .filter((name) => name.toLowerCase() === 'prefix.map')
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  if (matches.length > 1) {
-    console.warn(
-      `[VO-SE] multiple case variants of prefix.map found; using "${matches[0]}" in ${rootDir}`
-    );
-  }
-  for (const name of matches) {
-    const candidate = path.join(rootDir, name);
-    try {
-      if ((await fs.promises.stat(candidate)).isFile()) return candidate;
-    } catch {}
-  }
-  return null;
-}
 
 // ★修正: 同期の再帰関数だったものを非同期化。
 //   1. fs.readFileSync / fs.readdirSync → fs.promises 版に変更
 //   2. 一定件数ごとに yieldToEventLoop() を挟み、長時間の連続実行を避ける
 //   3. エイリアス毎の existsSync は行わない（前回の修正を維持）
 //   4. entries に上限を設定（前回の修正を維持）
-async function parseOtoIniFull(dirPath) {
+async function parseOtoIniFull(dirPath, resolutionPlan) {
+  const plan = resolutionPlan || await collectVoicebankResolutionPlan(
+    dirPath,
+    path.join(__dirname, 'temp', 'voicebanks')
+  );
   const result = {
     aliasCount: 0,
     hasVcv: false,
     aliases: [],
     entries: [],
     aliasMap: new Map(),
-    prefixMap: new Map()
+    prefixMap: new Map(),
+    voicebankRoot: plan.scanRoot,
+    voicebankRoots: plan.voicebankRoots,
+    layers: plan.layers,
+    layerInfo: plan.layerInfo,
+    prefixMapPath: plan.prefixMapPath
   };
 
-  const exists = await fs.promises.access(dirPath).then(() => true).catch(() => false);
-  if (!exists) return result;
-
-  let filesSinceYield = 0;
-
-  const walkDir = async (currentDir) => {
-    let files;
+  if (plan.prefixMapPath) {
     try {
-      files = await fs.promises.readdir(currentDir, { withFileTypes: true });
-    } catch (e) {
-      return;
-    }
-
-    // UTAUの複数音域（マルチピッチ）音源は .ust の Lyric= が
-    // "サブフォルダ名\エイリアス"（例: "do-dai\あー_D4"）という形式で
-    // 音域フォルダを指定してくる。ルート直下のoto.iniなら subdirPrefix は空。
-    const relDir = path.relative(dirPath, currentDir);
-    const subdirPrefix = relDir ? relDir.split(path.sep).join('\\') + '\\' : '';
-
-    for (const file of files) {
-      const fullPath = path.join(currentDir, file.name);
-
-      if (file.isDirectory()) {
-        await walkDir(fullPath);
-        continue;
-      }
-
-      if (file.name.toLowerCase() !== 'oto.ini') continue;
-
-      try {
-        const buf = await fs.promises.readFile(fullPath);
-        const content = decodeTextBuffer(buf);
-        const lines = content.split(/\r?\n/);
-
-        let linesSinceYield = 0;
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line || !line.includes('=')) continue;
-
-          const eqIdx = line.indexOf('=');
-          const rawFilename = line.substring(0, eqIdx).trim();
-          const filename = rawFilename.replace(/\\/g, '/');
-          const rest = line.substring(eqIdx + 1);
-          const parts = rest.split(',');
-
-          let rawAlias = (parts[0] || '').trim();
-          if (!rawAlias) {
-            const baseName = path.basename(filename);
-            rawAlias = baseName.replace(/\.wav$/i, '');
-          }
-          const alias = rawAlias;
-          if (!alias) continue;
-
-          result.aliasCount++;
-          if (alias.includes(' ') || alias.startsWith('-') || /^[aieuon][-_\s]/i.test(alias)) {
-            result.hasVcv = true;
-          }
-
-          if (result.aliases.length < 100) {
-            result.aliases.push(alias);
-          }
-
-          const left_blank = parseFloat(parts[1]) || 0;
-          const fixed_range = parseFloat(parts[2]) || 0;
-          const right_blank = parseFloat(parts[3]) || 0;
-          const preutterance = parseFloat(parts[4]) || 0;
-          const overlap = parseFloat(parts[5]) || 0;
-
-          const entryObj = {
-            alias,
-            filename,
-            wav_path: resolvePathInside(dirPath, filename, currentDir),
-            left_blank,
-            fixed_range,
-            right_blank,
-            preutterance,
-            overlap
-          };
-
-          if (result.entries.length < MAX_INDEXED_ENTRIES) {
-            result.entries.push(entryObj);
-          }
-          if (!result.aliasMap.has(alias)) {
-            result.aliasMap.set(alias, entryObj);
-          }
-          const baseNameNoExt = path.basename(filename).replace(/\.wav$/i, '');
-          if (baseNameNoExt && !result.aliasMap.has(baseNameNoExt)) {
-            result.aliasMap.set(baseNameNoExt, entryObj);
-          }
-          // サブフォルダ内なら "サブフォルダ\エイリアス" / "サブフォルダ\ファイル名" 形式でも登録
-          // （.ust の Lyric= がこの形式で音域フォルダを指定してくるため）
-          if (subdirPrefix) {
-            const prefixedAlias = subdirPrefix + alias;
-            if (!result.aliasMap.has(prefixedAlias)) {
-              result.aliasMap.set(prefixedAlias, entryObj);
-            }
-            if (baseNameNoExt) {
-              const prefixedBaseName = subdirPrefix + baseNameNoExt;
-              if (!result.aliasMap.has(prefixedBaseName)) {
-                result.aliasMap.set(prefixedBaseName, entryObj);
-              }
-            }
-          }
-
-          // ★重要: 巨大なVCV音源（oto.ini 1本で数千〜1万行）でも
-          //         ここで定期的に制御を返すことで、iPad Safari側の
-          //         「応答なし」判定を避ける
-          linesSinceYield++;
-          if (linesSinceYield >= YIELD_EVERY_LINES) {
-            linesSinceYield = 0;
-            await yieldToEventLoop();
-          }
-        }
-      } catch (err) {
-        // Ignore bad lines safely
-      }
-
-      // ★複数音源フォルダをまとめて置いているケース（oto.iniファイルが多数）でもyield
-      filesSinceYield++;
-      if (filesSinceYield >= YIELD_EVERY_FILES) {
-        filesSinceYield = 0;
-        await yieldToEventLoop();
-      }
-    }
-  };
-
-  // prefix.map is optional and lives at the voicebank root. Match the
-  // filename case-insensitively to support voicebanks authored on Windows.
-  try {
-    const prefixPath = await findRootPrefixMapPath(dirPath);
-    if (prefixPath) {
-      const prefixText = decodeTextBuffer(await fs.promises.readFile(prefixPath));
+      const prefixText = decodeTextBuffer(await fs.promises.readFile(plan.prefixMapPath));
       result.prefixMap = parsePrefixMapText(prefixText);
+    } catch {
+      // A malformed optional prefix.map must not prevent the voicebank from loading.
     }
-  } catch (e) {
-    // A malformed optional prefix.map must not prevent the voicebank from loading.
   }
 
-  await walkDir(dirPath);
+  let filesSinceYield = 0;
+  for (let layerIndex = 0; layerIndex < plan.layerInfo.length; layerIndex += 1) {
+    const layer = plan.layerInfo[layerIndex];
+    const currentDir = layer.directory;
+    try {
+      const buf = await fs.promises.readFile(layer.iniPath);
+      const content = decodeTextBuffer(buf);
+      const lines = content.split(/\r?\n/);
+      const relativeDir = path.relative(layer.root, currentDir);
+      const subdirPrefix = relativeDir && relativeDir !== '.'
+        ? relativeDir.split(path.sep).join('\\') + '\\'
+        : '';
+
+      let linesSinceYield = 0;
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index].trim();
+        if (!line || !line.includes('=')) continue;
+
+        const separator = line.indexOf('=');
+        const filename = line.slice(0, separator).trim().replace(/\\/g, '/');
+        const parts = line.slice(separator + 1).split(',');
+        const rawAlias = (parts[0] || '').trim();
+        const alias = rawAlias || path.basename(filename).replace(/\.wav$/i, '');
+        if (!alias) continue;
+
+        result.aliasCount += 1;
+        if (alias.includes(' ') || alias.startsWith('-') || /^[aieuon][-_\\s]/i.test(alias)) {
+          result.hasVcv = true;
+        }
+        if (result.aliases.length < 100) result.aliases.push(alias);
+
+        const left_blank = parseFloat(parts[1]) || 0;
+        const fixed_range = parseFloat(parts[2]) || 0;
+        const right_blank = parseFloat(parts[3]) || 0;
+        const preutterance = parseFloat(parts[4]) || 0;
+        const overlap = parseFloat(parts[5]) || 0;
+        const wavPath = path.isAbsolute(filename)
+          ? path.normalize(filename)
+          : path.resolve(currentDir, filename);
+
+        const entryObj = {
+          alias,
+          filename,
+          wav_path: wavPath,
+          oto_dir: currentDir,
+          voicebank_root: layer.root,
+          voicebank_roots: plan.voicebankRoots,
+          layer_index: layerIndex,
+          left_blank,
+          fixed_range,
+          right_blank,
+          preutterance,
+          overlap
+        };
+
+        if (result.entries.length < MAX_INDEXED_ENTRIES) {
+          result.entries.push(entryObj);
+        }
+        // The first complete/main layer wins duplicate aliases. All pitch variants
+        // remain in entries so same-layer multi-pitch selection can choose by MIDI.
+        if (!result.aliasMap.has(alias)) result.aliasMap.set(alias, entryObj);
+
+        const baseNameNoExt = path.posix.basename(filename).replace(/\.wav$/i, '');
+        if (baseNameNoExt && !result.aliasMap.has(baseNameNoExt)) {
+          result.aliasMap.set(baseNameNoExt, entryObj);
+        }
+
+        // Keep folder-qualified aliases used by OpenUtau multi-pitch UST files.
+        if (subdirPrefix) {
+          const scopedAlias = subdirPrefix + alias;
+          if (!result.aliasMap.has(scopedAlias)) result.aliasMap.set(scopedAlias, entryObj);
+          if (baseNameNoExt) {
+            const scopedBaseName = subdirPrefix + baseNameNoExt;
+            if (!result.aliasMap.has(scopedBaseName)) result.aliasMap.set(scopedBaseName, entryObj);
+          }
+        }
+
+        linesSinceYield += 1;
+        if (linesSinceYield >= YIELD_EVERY_LINES) {
+          linesSinceYield = 0;
+          await yieldToEventLoop();
+        }
+      }
+    } catch (error) {
+      console.warn('[VO-SE] oto.ini read failed: ' + layer.iniPath, error);
+    }
+
+    filesSinceYield += 1;
+    if (filesSinceYield >= YIELD_EVERY_FILES) {
+      filesSinceYield = 0;
+      await yieldToEventLoop();
+    }
+  }
+
   return result;
 }
 
@@ -313,81 +272,59 @@ class VoicebankRegistryEngine {
   }
 
   async getOrIndex(vbName, vbPath) {
-    let latestMtime = 0;
-    try {
-      const stats = await fs.promises.stat(vbPath);
-      latestMtime = stats.mtimeMs;
-      try {
-        const prefixPath = await findRootPrefixMapPath(vbPath);
-        if (prefixPath) {
-          const prefixStats = await fs.promises.stat(prefixPath);
-          latestMtime = Math.max(latestMtime, prefixStats.mtimeMs);
-        }
-      } catch (e) {
-        // prefix.map is optional.
-      }
-    } catch (e) {
-      return null;
-    }
-
+    const resolutionPlan = await collectVoicebankResolutionPlan(
+      vbPath,
+      path.join(__dirname, 'temp', 'voicebanks')
+    );
+    const sourceSignature = resolutionPlan.sourceSignature;
     const cached = this.cache.get(vbName);
-    if (cached && cached.mtime === latestMtime) {
-      // LRU: 参照されたエントリを最後尾に移動（最近使った扱いにする）
+    if (cached && cached.sourceSignature === sourceSignature) {
       this.cache.delete(vbName);
       this.cache.set(vbName, cached);
       return cached;
     }
 
-    // ★同じ音源への同時リクエストで二重解析が走らないよう、
-    //   進行中のPromiseを一時的にキャッシュしておく
-    if (this.pending && this.pending.has(vbName)) {
-      return this.pending.get(vbName);
-    }
     if (!this.pending) this.pending = new Map();
+    if (this.pending.has(vbName)) return this.pending.get(vbName);
 
     const indexPromise = (async () => {
       checkMemoryAndClean();
-      const parsed = await parseOtoIniFull(vbPath);
-      return parsed;
+      const parsed = await parseOtoIniFull(vbPath, resolutionPlan);
+      let realRoot = resolutionPlan.scanRoot;
+      try { realRoot = fs.realpathSync(resolutionPlan.scanRoot); } catch {}
+      const indexed = {
+        sourceSignature,
+        voicebankRoot: realRoot,
+        voicebankRoots: parsed.voicebankRoots,
+        layers: parsed.layers,
+        layerInfo: parsed.layerInfo,
+        prefixMapPath: parsed.prefixMapPath,
+        aliasCount: parsed.aliasCount,
+        hasVcv: parsed.hasVcv,
+        aliasesPreview: parsed.aliases,
+        entries: parsed.entries,
+        aliasMap: parsed.aliasMap,
+        prefixMap: parsed.prefixMap
+      };
+
+      this.cache.set(vbName, indexed);
+      while (this.cache.size > this.maxCached) {
+        const oldestKey = this.cache.keys().next().value;
+        this.cache.delete(oldestKey);
+      }
+
+      if (this.warmBaseMidiCache) {
+        setImmediate(() => this.warmBaseMidiCache(indexed));
+      }
+      return indexed;
     })();
+
     this.pending.set(vbName, indexPromise);
-
-    const parsed = await indexPromise;
-    this.pending.delete(vbName);
-
-    const indexed = {
-      mtime: latestMtime,
-      voicebankRoot: fs.realpathSync(vbPath),
-      aliasCount: parsed.aliasCount,
-      hasVcv: parsed.hasVcv,
-      aliasesPreview: parsed.aliases,
-      entries: parsed.entries,
-      aliasMap: parsed.aliasMap,
-      prefixMap: parsed.prefixMap
-    };
-
-    this.cache.set(vbName, indexed);
-
-    // ★修正: detectWavBaseMidi() は .frq ファイルも無くピッチタグも無いwavに対して
-    // ブルートフォースの自己相関ピッチ検出（O(サンプル数×ラグ数)、数百万回の
-    // 乗算加算）を行う。これは結果をキャッシュしているものの、初回は
-    // /api/py/voicebank-sample のリクエストハンドラ内で同期的に実行されるため、
-    // Node.jsのイベントループ全体を数十ms単位でブロックしてしまい、
-    // 再生中に新しいエイリアスへ初めてアクセスするたびに他の並行リクエストまで
-    // 詰まらせる原因になっていた（プレビュー再生が「つっかえる」症状と一致）。
-    // インデックス直後にバックグラウンドで全エントリぶん先にウォームアップして
-    // おくことで、実際の再生リクエストが来る頃には既にキャッシュ済みにする。
-    if (this.warmBaseMidiCache) {
-      setImmediate(() => this.warmBaseMidiCache(indexed));
+    try {
+      return await indexPromise;
+    } finally {
+      this.pending.delete(vbName);
     }
-
-    // ★修正: 解析「後」にもサイズをチェックし、古いものから個別に間引く
-    while (this.cache.size > this.maxCached) {
-      const oldestKey = this.cache.keys().next().value;
-      this.cache.delete(oldestKey);
-    }
-
-    return indexed;
   }
 
   invalidate(vbName) {
@@ -1331,7 +1268,7 @@ vbRegistry.warmBaseMidiCache = (indexed) => {
     const end = Math.min(entries.length, i + WARM_BATCH_SIZE);
     for (; i < end; i++) {
       const e = entries[i];
-      if (!e || !e.wav_path || !isRealPathInside(indexed.voicebankRoot, e.wav_path)) continue;
+      if (!e || !e.wav_path || !isRealPathInsideVoicebankRoots(e.wav_path, indexed.voicebankRoots)) continue;
       try {
         detectWavBaseMidi(e.wav_path, e.alias, e.filename);
       } catch (err) {
@@ -1448,15 +1385,26 @@ function selectBestPitchEntryFromEntries(entries, noteNum) {
   return taggedCount > 0 ? best : matches[0];
 }
 
+function selectBestPitchEntryFromPreferredLayer(indexed, matches, noteNum) {
+  const candidates = Array.isArray(matches) ? matches.filter(Boolean) : [];
+  if (!candidates.length) return null;
+  const preferredLayer = Math.min(...candidates.map((entry) =>
+    Number.isFinite(Number(entry.layer_index)) ? Number(entry.layer_index) : 0
+  ));
+  const sameLayer = candidates.filter((entry) =>
+    (Number.isFinite(Number(entry.layer_index)) ? Number(entry.layer_index) : 0) === preferredLayer
+  );
+  return selectBestPitchEntryFromEntries(sameLayer, noteNum);
+}
+
 function selectBestPitchEntry(indexed, candidate, noteNum) {
-  if (!indexed || !candidate || !Array.isArray(indexed.entries)) return null;
+  if (!indexed || !Array.isArray(indexed.entries)) return null;
   const normalized = String(candidate).normalize('NFC');
   const matches = indexed.entries.filter((entry) =>
     entry && String(entry.alias || '').normalize('NFC') === normalized
   );
-  return selectBestPitchEntryFromEntries(matches, noteNum);
+  return selectBestPitchEntryFromPreferredLayer(indexed, matches, noteNum);
 }
-
 // [FIX] This function was called from resolveVoicebankPath() in two places but was
 // never defined anywhere in server.js, causing a ReferenceError on every single
 // call to resolveVoicebankPath — which meant every /api/py/voicebank-sample,
@@ -1682,7 +1630,7 @@ function findAliasEntry(indexed, rawAlias, prevLyric = null, noteNum = null) {
       }
     }
     if (filenameMatches.length > 0) {
-      const best = selectBestPitchEntryFromEntries(filenameMatches, noteNum);
+      const best = selectBestPitchEntryFromPreferredLayer(indexed, filenameMatches, noteNum);
       return best || filenameMatches[0];
     }
   }
@@ -1777,63 +1725,8 @@ function resolveVoicebankPath(targetName) {
 }
 
 // Case-insensitive search for WAV file in directory
-function resolveWavFilePath(dirPath, filename, voicebankRoot = dirPath) {
-  if (typeof filename !== 'string' || !filename) return null;
-  const normFile = filename.replace(/\\\\/g, '/');
-  const targetWav = resolvePathInside(voicebankRoot, normFile, dirPath);
-  const isSafeWav = (candidate) => {
-    try {
-      return fs.statSync(candidate).isFile() && isRealPathInside(voicebankRoot, candidate);
-    } catch {
-      return false;
-    }
-  };
-  if (targetWav && isSafeWav(targetWav)) return targetWav;
-
-  // Retain case-insensitive UTAU filename matching, but never traverse beyond
-  // the selected voicebank root or follow a symlink outside it.
-  try {
-    const components = normFile.split('/').filter((part) => part && part !== '.');
-    let resolved = dirPath;
-    for (const component of components) {
-      if (component === '..') {
-        const parent = path.dirname(resolved);
-        if (!isPathInside(voicebankRoot, parent) || !isRealPathInside(voicebankRoot, parent)) return null;
-        resolved = parent;
-        continue;
-      }
-      if (!isRealPathInside(voicebankRoot, resolved)) return null;
-      const items = fs.readdirSync(resolved, { withFileTypes: true });
-      const match = items.find((item) => item.name.toLowerCase() === component.toLowerCase());
-      if (!match) return null;
-      resolved = path.join(resolved, match.name);
-    }
-    if (isSafeWav(resolved)) return resolved;
-  } catch {}
-
-  // Basename fallback remains limited to one unambiguous match inside the bank.
-  const baseWav = path.basename(normFile).toLowerCase();
-  try {
-    const matches = [];
-    const searchDir = (current) => {
-      if (!isRealPathInside(voicebankRoot, current)) return;
-      const items = fs.readdirSync(current, { withFileTypes: true });
-      for (const item of items) {
-        const fullPath = path.join(current, item.name);
-        if (item.isDirectory()) {
-          searchDir(fullPath);
-          if (matches.length > 1) return;
-        } else if (item.name.toLowerCase() === baseWav && isSafeWav(fullPath)) {
-          matches.push(fullPath);
-          if (matches.length > 1) return;
-        }
-      }
-    };
-    searchDir(dirPath);
-    if (matches.length === 1) return matches[0];
-  } catch {}
-
-  return null;
+function resolveWavFilePath(otoDirectory, filename, voicebankRoots = otoDirectory) {
+  return resolveVoicebankWavPath(otoDirectory, filename, voicebankRoots);
 }
 
 // Stream WAV Audio sample for specific voicebank & alias (Pure Native - Zero Subprocess)
@@ -1869,19 +1762,13 @@ app.get('/api/py/voicebank-sample', async (req, res) => {
 
   const { resolvedName, resolvedPath } = resolved;
   const indexed = await vbRegistry.getOrIndex(resolvedName, resolvedPath);
-  let entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
-  let wavFile = entry ? entry.wav_path : null;
-
-  if (
-    wavFile &&
-    (!fs.existsSync(wavFile) || !isRealPathInside(resolvedPath, wavFile)) &&
-    entry.filename
-  ) {
-    wavFile = resolveWavFilePath(wavFile ? path.dirname(wavFile) : resolvedPath, entry.filename, resolvedPath);
-  }
+  const entry = findAliasEntry(indexed, alias, prevLyric, noteNum);
+  const wavFile = entry
+    ? resolveWavFilePath(entry.oto_dir || path.dirname(entry.wav_path), entry.filename, indexed.voicebankRoots)
+    : null;
 
   let sampleIsSafe = false;
-  if (entry && wavFile && isRealPathInside(resolvedPath, wavFile)) {
+  if (entry && wavFile && isRealPathInsideVoicebankRoots(wavFile, indexed.voicebankRoots)) {
     try { sampleIsSafe = fs.statSync(wavFile).isFile(); } catch {}
   }
   if (!sampleIsSafe) {
@@ -1923,13 +1810,17 @@ app.post('/api/py/render-notes', async (req, res) => {
 
     const entry = findAliasEntry(indexed, lyric, prevLyric, n.noteNum || 60);
     let resolvedWavPath = null;
-    if (entry) {
-      if (fs.existsSync(entry.wav_path) && isRealPathInside(vbPath, entry.wav_path)) {
-        resolvedWavPath = entry.wav_path;
-      } else if (entry.filename && vbPath) {
-        resolvedWavPath = resolveWavFilePath(entry.wav_path ? path.dirname(entry.wav_path) : vbPath, entry.filename, vbPath);
-      }
-      if (resolvedWavPath && (!fs.existsSync(resolvedWavPath) || !isRealPathInside(vbPath, resolvedWavPath))) {
+    if (entry && indexed) {
+      resolvedWavPath = resolveWavFilePath(
+        entry.oto_dir || path.dirname(entry.wav_path),
+        entry.filename,
+        indexed.voicebankRoots
+      );
+      if (
+        resolvedWavPath &&
+        (!fs.existsSync(resolvedWavPath) ||
+          !isRealPathInsideVoicebankRoots(resolvedWavPath, indexed.voicebankRoots))
+      ) {
         resolvedWavPath = null;
       }
     }
