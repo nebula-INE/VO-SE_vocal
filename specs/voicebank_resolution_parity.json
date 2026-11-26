@@ -118,6 +118,14 @@
     {
       "filename": "audio/main-c4.wav",
       "alias": "あ_C4"
+    },
+    {
+      "filename": "audio/duplicate-a_C4.wav",
+      "alias": "同一"
+    },
+    {
+      "filename": "audio/duplicate-a_F4.wav",
+      "alias": "同一"
     }
   ],
   "extra_entries": [
@@ -158,7 +166,9 @@
     "main/audio/ambiguous.wav": "ambiguous_main_candidate",
     "extra/audio/ambiguous.wav": "ambiguous_extra_candidate",
     "main/encoding/cp932.wav": "cp932_oto_loaded",
-    "main/audio/main-default-a.wav": "main_unqualified_a_must_lose_to_prefix_map"
+    "main/audio/main-default-a.wav": "main_unqualified_a_must_lose_to_prefix_map",
+    "main/audio/duplicate-a_C4.wav": "same_alias_closest_c4",
+    "main/audio/duplicate-a_F4.wav": "same_alias_closest_f4"
   },
   "expected": {
     "layers_when_extra_selected": [
@@ -178,7 +188,10 @@
     "unrelated_alias_resolves": false,
     "ambiguous_alias": "曖昧",
     "ambiguous_resolves": false,
-    "encoding_alias": "特殊"
+    "encoding_alias": "特殊",
+    "same_alias": "同一",
+    "same_alias_note_60": "same_alias_closest_c4",
+    "same_alias_note_65": "same_alias_closest_f4"
   },
   "encoding_case": {
     "alias": "特殊",
