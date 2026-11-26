@@ -310,17 +310,21 @@ def test_scan_voices_reports_progress_without_glob_materialization(vm, tmp_path,
     import glob
 
     root = tmp_path / "source"
-    current = root
+    root.mkdir(parents=True, exist_ok=True)
     for index in range(130):
-        current = current / f"nested-{index:03d}"
-        current.mkdir(parents=True, exist_ok=True)
-    (current / "oto.ini").write_text("a.wav=あ,0,0,0,0,0\\n", encoding="utf-8")
+        bank = root / f"bank-{index:03d}"
+        bank.mkdir()
+        if index == 129:
+            (bank / "oto.ini").write_text(
+                "a.wav=あ,0,0,0,0,0\n",
+                encoding="utf-8",
+            )
     vm.internal_voice_dir = str(root)
     monkeypatch.setattr(glob, "glob", lambda *_args, **_kwargs: pytest.fail("glob must not be used"))
     progress = []
 
     voices = vm.scan_voices(progress_callback=progress.append)
-    assert "nested-129" in voices
+    assert "bank-129" in voices
     assert progress
 
 
