@@ -6,7 +6,6 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import { pipeline } from 'stream/promises';
-import { Transform } from 'stream';
 import yauzl from 'yauzl';
 import multer from 'multer';
 import {
@@ -201,7 +200,7 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
     try {
       const relativeDir = path.relative(layer.root, currentDir);
       const subdirPrefix = relativeDir && relativeDir !== '.'
-        ? relativeDir.split(path.sep).join('\\\\') + '\\\\'
+        ? relativeDir.split(path.sep).join('\\') + '\\'
         : '';
 
       let linesSinceYield = 0;
@@ -216,10 +215,10 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
         if (!line || !line.includes('=')) continue;
 
         const separator = line.indexOf('=');
-        const filename = line.slice(0, separator).trim().replace(/\\\\/g, '/');
+        const filename = line.slice(0, separator).trim().replace(/\\/g, '/');
         const parts = line.slice(separator + 1).split(',');
         const rawAlias = (parts[0] || '').trim();
-        const alias = rawAlias || path.basename(filename).replace(/\\.wav$/i, '');
+        const alias = rawAlias || path.basename(filename).replace(/\.wav$/i, '');
         if (!alias) continue;
 
         result.aliasCount += 1;
@@ -228,7 +227,7 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
         if (
           alias.includes(' ') ||
           alias.startsWith('-') ||
-          (['a', 'i', 'e', 'u', 'o', 'n'].includes(firstChar) && ['-', '_', '\\t'].includes(secondChar))
+          (['a', 'i', 'e', 'u', 'o', 'n'].includes(firstChar) && ['-', '_', '\t'].includes(secondChar))
         ) {
           result.hasVcv = true;
         }
@@ -263,7 +262,7 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
         // remain in entries so same-layer multi-pitch selection can choose by MIDI.
         if (!result.aliasMap.has(alias)) result.aliasMap.set(alias, entryObj);
 
-        const baseNameNoExt = path.posix.basename(filename).replace(/\\.wav$/i, '');
+        const baseNameNoExt = path.posix.basename(filename).replace(/\.wav$/i, '');
         if (baseNameNoExt && !result.aliasMap.has(baseNameNoExt)) {
           result.aliasMap.set(baseNameNoExt, entryObj);
         }
@@ -423,22 +422,6 @@ function decodeZipFilename(bufOrStr) {
 }
 
 // Chunk size is a transport detail only; it does not limit total upload size.
-const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
-
-function createByteLimitTransform(maxBytes, message) {
-  let totalBytes = 0;
-  return new Transform({
-    transform(chunk, encoding, callback) {
-      totalBytes += chunk.length;
-      if (totalBytes > maxBytes) {
-        callback(new Error(message));
-        return;
-      }
-      callback(null, chunk);
-    }
-  });
-}
-
 async function preflightZipForDiskSpace(zipPath, targetDir) {
   // First pass validates every archive path and computes the expanded payload
   // size without extracting. This replaces fixed per-member/archive byte/count
@@ -2176,15 +2159,10 @@ app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
 
   try {
     fs.mkdirSync(chunksDir, { recursive: true });
-    if (Buffer.isBuffer(req.body)) {
-      if (req.body.length > MAX_CHUNK_BYTES) {
-        return res.status(413).json({ success: false, error: 'Upload chunk exceeds the 2 MiB limit' });
-      }
-      fs.writeFileSync(chunkFilePath, req.body);
-    } else {
-      const writeStream = fs.createWriteStream(chunkFilePath, { flags: 'wx' });
-      await pipeline(req, createByteLimitTransform(MAX_CHUNK_BYTES, 'Upload chunk exceeds the 2 MiB limit'), writeStream);
-    }
+    // Stream each request chunk to disk with backpressure. CHUNK_SIZE is a
+    // client-side transport choice, not a server-enforced file-size ceiling.
+    const writeStream = fs.createWriteStream(chunkFilePath, { flags: 'wx' });
+    await pipeline(req, writeStream);
 
     const receivedCount = fs.readdirSync(chunksDir).filter((file) => /^part_\d+$/.test(file)).length;
     if (receivedCount < totalChunks) {
