@@ -588,6 +588,15 @@ def test_load_voice_dir_has_no_default_oto_entry_ceiling(tmp_path, monkeypatch):
     assert parser.get("い") is not None
 
 
+def test_find_voice_root_searches_deep_parent_chain_by_default(tmp_path):
+    bank_root = tmp_path / "nested-bank"
+    selected = bank_root / "a" / "b" / "c" / "d" / "selected"
+    selected.mkdir(parents=True)
+    (bank_root / "character.txt").write_text("name=DeepBank", encoding="utf-8")
+
+    assert OtoParser.find_voice_root(str(selected)) == str(bank_root)
+
+
 def test_load_oto_file_honors_cancellation(tmp_path):
     import threading
 
