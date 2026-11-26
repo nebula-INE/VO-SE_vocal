@@ -202,12 +202,13 @@ function isSupplementLayer(directory, root, coverage) {
   return { supplement: false, reason: '' };
 }
 
-async function findOtoIniLayers(root) {
+async function findOtoIniLayers(root, scannedDirectories = []) {
   const found = [];
   const stack = [root];
   while (stack.length) {
     const current = stack.pop();
     const entries = await readDirectory(current);
+    scannedDirectories.push(path.resolve(current));
     const directories = entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink());
     for (let index = directories.length - 1; index >= 0; index -= 1) {
       stack.push(path.join(current, directories[index].name));
@@ -245,6 +246,7 @@ export async function collectVoicebankResolutionPlan(selectedDirectory, managedV
   }
 
   const discovered = [];
+  const scannedDirectories = [];
   const seenRoots = new Set();
   for (const layerRoot of rootSpecs) {
     let realRoot;
@@ -255,16 +257,17 @@ export async function collectVoicebankResolutionPlan(selectedDirectory, managedV
     }
     if (seenRoots.has(realRoot)) continue;
     seenRoots.add(realRoot);
-    discovered.push(...await findOtoIniLayers(layerRoot));
+    discovered.push(...await findOtoIniLayers(layerRoot, scannedDirectories));
   }
 
   const selectedHasLayer = discovered.some((item) =>
     path.resolve(item.directory) === selected
   );
-  const layerInfo = discovered.map((item) => {
+  const layerInfo = [];
+  for (const item of discovered) {
     let text = '';
     try {
-      text = decodeTextBuffer(fs.readFileSync(item.iniPath));
+      text = decodeTextBuffer(await fsp.readFile(item.iniPath));
     } catch {}
     const { coverage } = layerCoverageFromText(text);
     const { supplement, reason } = isSupplementLayer(item.directory, item.root, coverage);
@@ -272,7 +275,7 @@ export async function collectVoicebankResolutionPlan(selectedDirectory, managedV
       (!selectedHasLayer && isPathInside(selected, item.directory));
     const exactSelected = path.resolve(item.directory) === selected;
     const relativeDepth = path.relative(item.root, item.directory).split(path.sep).length;
-    return {
+    layerInfo.push({
       ...item,
       coverage,
       supplement,
@@ -280,8 +283,8 @@ export async function collectVoicebankResolutionPlan(selectedDirectory, managedV
       selected: exactSelected,
       selectedSubtree,
       relativeDepth
-    };
-  });
+    });
+  }
 
   const priority = (item) => [
     item.selected ? 0 : item.selectedSubtree ? 1 : 2,
@@ -317,7 +320,7 @@ export async function collectVoicebankResolutionPlan(selectedDirectory, managedV
   }
 
   const signatureEntries = [];
-  const signaturePaths = new Set([scanRoot, ...rootSpecs]);
+  const signaturePaths = new Set([managedRoot, scanRoot, ...rootSpecs, ...scannedDirectories]);
   for (const item of orderedLayers) signaturePaths.add(item.iniPath);
   if (prefixMapPath) signaturePaths.add(prefixMapPath);
   for (const sourcePath of signaturePaths) {
