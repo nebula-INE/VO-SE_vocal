@@ -1,5 +1,7 @@
 import threading
 import time
+
+import pytest
 from pathlib import Path
 from typing import Any, Callable
 
@@ -115,3 +117,62 @@ def test_load_ust_project_replaces_voice_root_under_native_render_lock(
     assert engine.voice_lib_path == str(voice_dir)
     assert engine._ust_voice_dir == str(voice_dir)
     assert refresh_calls == [str(voice_dir)]
+
+
+
+def test_voice_library_refresh_keeps_previous_state_on_resource_limit(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from modules.data.oto_parser import VoicebankResourceLimitError
+
+    candidate_root = tmp_path / "oversized"
+    candidate_root.mkdir()
+
+    class FailingParser:
+        def load_voice_dir(self, *_args, **_kwargs):
+            raise VoicebankResourceLimitError("too many entries")
+
+    monkeypatch.setattr(vo_se_engine_patch, "OtoParser", FailingParser)
+    old_parser = object()
+    old_map = {"old": "/old.wav"}
+    old_loaded_paths = ("old/oto.ini",)
+    old_vcv = object()
+    old_cvvc = object()
+    engine = SimpleNamespace(
+        voice_lib_path=str(candidate_root),
+        oto_parser=old_parser,
+        oto_map=old_map,
+        _loaded_oto_ini_paths=old_loaded_paths,
+        vcv_resolver=old_vcv,
+        cvvc_resolver=old_cvvc,
+        oto_data={"old": "metadata"},
+        set_oto_data=lambda _value: pytest.fail("native OTO must not be replaced"),
+    )
+
+    with pytest.raises(VoicebankResourceLimitError):
+        vo_se_engine_patch._refresh_voice_library_v2_unlocked(engine)
+
+    assert engine.oto_parser is old_parser
+    assert engine.oto_map is old_map
+    assert engine._loaded_oto_ini_paths == old_loaded_paths
+    assert engine.vcv_resolver is old_vcv
+    assert engine.cvvc_resolver is old_cvvc
+
+
+def test_set_voice_library_rolls_back_path_when_refresh_fails(tmp_path):
+    from types import SimpleNamespace
+
+    from modules.audio.vo_se_engine import VO_SE_Engine
+
+    old_path = str(tmp_path / "old")
+    new_path = str(tmp_path / "new")
+    engine = SimpleNamespace(voice_lib_path=old_path)
+
+    def fail_refresh():
+        raise RuntimeError("voicebank could not be loaded")
+
+    engine.refresh_voice_library_v2 = fail_refresh
+    with pytest.raises(RuntimeError, match="could not be loaded"):
+        VO_SE_Engine.set_voice_library(engine, new_path)
+
+    assert engine.voice_lib_path == old_path

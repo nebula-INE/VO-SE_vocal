@@ -100,17 +100,23 @@ class VO_SE_Engine:
             print(f"Device error: {e}")
 
     def set_voice_library(self, path: str) -> None:
-        """音源フォルダ切替とOTO更新をネイティブレンダーに対して排他制御する。"""
+        """Switch the active library atomically under the native-render lock."""
         from modules.audio.vo_se_engine_patch import _NATIVE_ENGINE_LOCK
 
+        target_path = os.path.abspath(os.path.expanduser(str(path)))
         with _NATIVE_ENGINE_LOCK:
-            self.voice_lib_path = os.path.abspath(path)
-            refresh_v2 = getattr(self, "refresh_voice_library_v2", None)
-            if callable(refresh_v2):
-                refresh_v2()
-            else:
-                self.refresh_voice_library()
-                self.set_oto_data(getattr(self.oto_parser, "_db", {}))
+            previous_path = str(getattr(self, "voice_lib_path", "") or "")
+            self.voice_lib_path = target_path
+            try:
+                refresh_v2 = getattr(self, "refresh_voice_library_v2", None)
+                if callable(refresh_v2):
+                    refresh_v2()
+                else:
+                    self.refresh_voice_library()
+                    self.set_oto_data(getattr(self.oto_parser, "_db", {}))
+            except Exception:
+                self.voice_lib_path = previous_path
+                raise
 
     def set_oto_data(self, oto_data) -> None:
         """oto.ini のメタデータをPython/ネイティブ両方へ同期する。"""
