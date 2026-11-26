@@ -87,6 +87,7 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
   const extraDir = join(VOICEBANKS, extraName);
   const unrelatedDir = join(VOICEBANKS, unrelatedName);
   const directories = [mainDir, extraDir, unrelatedDir];
+  let externalPath = null;
 
   const wavs = new Map();
   let seed = 10;
@@ -141,6 +142,7 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
   t.after(async () => {
     child.kill('SIGTERM');
     await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+    if (externalPath) await rm(externalPath, { force: true });
   });
 
   const startup = await waitForServer(child, port);
@@ -214,6 +216,23 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
 
   const ambiguous = await request(port, sampleUrl(extraName, fixture.expected.ambiguous_alias, 60));
   assert.equal(ambiguous.status, 404, 'ambiguous WAV basename matches must never be guessed');
+
+  const boundary = fixture.path_boundary;
+  const outsideFilename = suffix + '-' + boundary.outside_filename;
+  externalPath = join(ROOT, 'temp', outsideFilename);
+  await writeFile(externalPath, makeWav(seed));
+  const outsideOtoFilename = boundary.oto_filename.replace('{outside_filename}', outsideFilename);
+  const extraLinesWithBoundary = [
+    ...otoLines(fixture.extra_entries),
+    outsideOtoFilename + '=' + boundary.alias + ',0,0,0,20,5'
+  ];
+  await writeFile(join(extraDir, 'oto.ini'), extraLinesWithBoundary.join('\n') + '\n', 'utf8');
+  const outsideVoicebankFile = await request(port, sampleUrl(extraName, boundary.alias, 60));
+  assert.equal(
+    outsideVoicebankFile.status,
+    boundary.expected_status,
+    'WAV files outside the selected bank and exact companion must not be exposed'
+  );
 
   const selectedMain = await request(port, sampleUrl(mainName, fixture.expected.extra_only_alias, 60));
   assert.equal(selectedMain.status, 200, startup.stderr);

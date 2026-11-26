@@ -192,11 +192,17 @@ def test_same_alias_pitch_variants_survive_oto_cache_reload(tmp_path: Path) -> N
 
 def test_wav_lookup_rejects_paths_outside_the_selected_voicebank_pair(tmp_path: Path) -> None:
     _main, extra, _unrelated = _materialize_voicebanks(tmp_path)
-    outside = tmp_path / "outside.wav"
+    boundary = FIXTURE["path_boundary"]
+    outside = tmp_path / boundary["outside_filename"]
     outside.write_bytes(b"must not be exposed")
 
+    outside_oto_filename = boundary["oto_filename"].replace(
+        "{outside_filename}", boundary["outside_filename"]
+    )
     with (extra / "oto.ini").open("a", encoding="utf-8") as oto_file:
-        oto_file.write("../../outside.wav=outside-boundary,0,0,0,20,5\n")
+        oto_file.write(
+            f"{outside_oto_filename}={boundary['alias']},0,0,0,20,5\n"
+        )
 
     parser = OtoParser()
     parser.load_voice_dir(
@@ -206,7 +212,7 @@ def test_wav_lookup_rejects_paths_outside_the_selected_voicebank_pair(tmp_path: 
         write_cache=False,
     )
 
-    entry = parser.get("outside-boundary")
+    entry = parser.get(boundary["alias"])
     assert entry is not None
     assert Path(entry.wav_path) != outside
     assert not Path(entry.wav_path).is_file()

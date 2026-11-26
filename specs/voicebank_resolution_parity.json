@@ -210,5 +210,11 @@
     "oto_base64_cp932": "Y3A5MzIud2F2PZPBjuosMCwwLDAsMjAsNQo=",
     "wav_path_under_main": "encoding/cp932.wav",
     "wav_payload": "cp932_oto_loaded"
+  },
+  "path_boundary": {
+    "alias": "outside-boundary",
+    "oto_filename": "../../{outside_filename}",
+    "outside_filename": "outside.wav",
+    "expected_status": 404
   }
 }
