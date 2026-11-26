@@ -21,6 +21,7 @@ oto.ini（CP932 で書かれた日本語名）と一致しなくなり、音源�
 """
 from __future__ import annotations
 
+import logging
 import os
 import ntpath
 import shutil
@@ -213,21 +214,18 @@ def safe_extract_zip(
     return extracted
 
 
-def repair_mojibake_tree(root: str) -> List[Tuple[str, str]]:
-    """root 直下の各音源フォルダについて、文字化け(CP437 誤読)した名前を直してリネームする。
-
-    以前のバージョンで取り込んだ（すでに化けた名前で保存された）音源を直すためのもの。
-
-    誤判定でユーザーのフォルダ名を書き換えないよう、音源フォルダ（root 直下の 1 つ）ごとに判断する。
-      * そのフォルダ内に「はっきり化けている」名前（日本語が 2 文字以上で半分以上）が
-        1 つでもあれば、そのフォルダ内の名前をすべて直す
-        （"a か.wav" のように ASCII が混ざる名前も一緒に直すため）
-      * 1 つも無ければ（欧文の正しい名前など）何もしない
-    同名が既にある場合は上書きせずそのまま残す。戻り値は (旧パス, 新パス) の一覧。
-    """
+def repair_mojibake_tree(
+    root: str,
+    cancel_event=None,
+    max_entries: int = 200_000,
+) -> List[Tuple[str, str]]:
+    """Repair garbled names with bounded two-pass traversal and cooperative cancellation."""
     renamed: List[Tuple[str, str]] = []
     if not root or not os.path.isdir(root):
         return renamed
+
+    def _cancelled() -> bool:
+        return bool(cancel_event is not None and cancel_event.is_set())
 
     def _rename(dirpath: str, name: str, strict: bool) -> None:
         fixed = fix_cp437_mojibake(name, strict=strict)
@@ -242,19 +240,87 @@ def repair_mojibake_tree(root: str) -> List[Tuple[str, str]]:
             return
         renamed.append((old, new))
 
-    for entry in sorted(os.listdir(root)):
-        entry_path = os.path.join(root, entry)
-        if not os.path.isdir(entry_path):
-            _rename(root, entry, strict=True)
-            continue
+    try:
+        with os.scandir(root) as root_entries:
+            for entry in root_entries:
+                if _cancelled():
+                    break
+                if entry.is_symlink():
+                    continue
+                if not entry.is_dir(follow_symlinks=False):
+                    _rename(root, entry.name, strict=True)
+                    continue
 
-        walked = list(os.walk(entry_path, topdown=False))
-        names = [entry] + [n for _d, dirs, files in walked for n in dirs + files]
-        if not any(fix_cp437_mojibake(n, strict=True) != n for n in names):
-            continue           # この音源フォルダには化けた名前が無い
-        for dirpath, dirnames, filenames in walked:     # 深い方から先に直す
-            for name in filenames + dirnames:
-                _rename(dirpath, name, strict=False)
-        _rename(root, entry, strict=False)
+                # Pass 1: stop as soon as one clearly garbled child is found.
+                contains_mojibake = fix_cp437_mojibake(entry.name, strict=True) != entry.name
+                scan_complete = True
+                scanned = 0
+                if not contains_mojibake:
+                    for dirpath, dirnames, filenames in os.walk(
+                        entry.path,
+                        topdown=True,
+                        followlinks=False,
+                    ):
+                        if _cancelled():
+                            scan_complete = False
+                            break
+                        dirnames[:] = [
+                            dirname for dirname in dirnames
+                            if not os.path.islink(os.path.join(dirpath, dirname))
+                        ]
+                        for child_name in dirnames + filenames:
+                            scanned += 1
+                            if scanned > max_entries:
+                                scan_complete = False
+                                break
+                            if fix_cp437_mojibake(child_name, strict=True) != child_name:
+                                contains_mojibake = True
+                                break
+                        if contains_mojibake or not scan_complete:
+                            break
+
+                if not scan_complete:
+                    logging.warning(
+                        "文字化け修復の検査をキャンセルまたは上限で停止しました: %s",
+                        entry.path,
+                    )
+                    if _cancelled():
+                        break
+                    continue
+                if not contains_mojibake:
+                    continue
+
+                # Pass 2: rename bottom-up without retaining os.walk results.
+                renamed_scan = 0
+                rename_complete = True
+                for dirpath, dirnames, filenames in os.walk(
+                    entry.path,
+                    topdown=False,
+                    followlinks=False,
+                ):
+                    if _cancelled():
+                        rename_complete = False
+                        break
+                    for child_name in filenames + dirnames:
+                        renamed_scan += 1
+                        if renamed_scan > max_entries:
+                            rename_complete = False
+                            break
+                        if not os.path.islink(os.path.join(dirpath, child_name)):
+                            _rename(dirpath, child_name, strict=False)
+                    if not rename_complete:
+                        break
+
+                if rename_complete and not _cancelled():
+                    _rename(root, entry.name, strict=False)
+                else:
+                    logging.warning(
+                        "文字化け修復を途中で停止しました。再スキャンで残りを修復できます: %s",
+                        entry.path,
+                    )
+                if _cancelled():
+                    break
+    except OSError as exc:
+        logging.warning("文字化け修復をスキップしました (%s): %s", root, exc)
 
     return renamed

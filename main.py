@@ -61,6 +61,39 @@ def global_exception_handler(exctype, value, tb):
 sys.excepthook = global_exception_handler
 
 
+def _enable_fatal_crash_diagnostics():
+    """Persist Python/native fatal-signal tracebacks for post-crash diagnosis."""
+    try:
+        import faulthandler
+
+        system = platform.system()
+        if system == "Windows":
+            base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+            log_dir = os.path.join(base, "VO-SE Pro", "Logs")
+        elif system == "Darwin":
+            log_dir = os.path.expanduser("~/Library/Logs/VO-SE Pro")
+        else:
+            state_home = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+            log_dir = os.path.join(state_home, "vo-se-pro", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_handle = open(os.path.join(log_dir, "fatal-crash.log"), "ab", buffering=0)
+        faulthandler.enable(file=log_handle, all_threads=True)
+        return log_handle
+    except (OSError, RuntimeError, ValueError):
+        # Some embedded/windowed launchers provide no writable diagnostics path.
+        try:
+            if sys.stderr is not None:
+                import faulthandler
+                faulthandler.enable(file=sys.stderr, all_threads=True)
+        except (OSError, RuntimeError, ValueError):
+            pass
+    return None
+
+
+# Keep the handle alive for as long as faulthandler is enabled.
+_FATAL_CRASH_LOG_HANDLE = _enable_fatal_crash_diagnostics()
+
+
 # --- [1] リソースパス解決関数 (PyInstaller対応) ---
 def get_resource_path(relative_path):
     if getattr(sys, 'frozen', False):

@@ -283,73 +283,134 @@ def build_portamento_curve(
 
 
 def _refresh_voice_library_v2_unlocked(self) -> None:
-    """VcvResolver を再初期化しながら音源フォルダを再スキャンする。"""
-    self.oto_map = {}
-
-    if not os.path.exists(self.voice_lib_path):
-        os.makedirs(self.voice_lib_path, exist_ok=True)
-        self._loaded_oto_ini_paths = tuple()
-        self.vcv_resolver = None
-        self.cvvc_resolver = None
-        sync_oto = getattr(self, "set_oto_data", None)
-        if callable(sync_oto):
-            sync_oto({})
-        return
-
-    if not hasattr(self, "oto_parser") or self.oto_parser is None:
-        self.oto_parser = OtoParser()
-
-    # OtoParser owns bounded root discovery and deterministic main/fallback
-    # ordering. Do not independently walk voice_lib_path here: that used to
-    # make Python and the native OTO database disagree about duplicate aliases.
-    self.oto_parser.load_voice_dir(
-        self.voice_lib_path,
-        use_cache=False,
-        reset=True,
-        write_cache=False,
+    """Build a complete candidate voice index before replacing live engine state."""
+    target_path = os.path.abspath(
+        os.path.expanduser(str(getattr(self, "voice_lib_path", "") or ""))
     )
-    self._loaded_oto_ini_paths = tuple(
-        getattr(self.oto_parser, "loaded_oto_ini_paths", ())
-    )
+    if not target_path:
+        raise ValueError("音源フォルダが指定されていません。")
+    if not os.path.exists(target_path):
+        os.makedirs(target_path, exist_ok=True)
 
-    # Preserve the legacy basename fallback map, but walk each layer separately
-    # and prune nested oto.ini layers so a parent layer cannot steal a child
-    # layer's WAV path. The layer order is the same first-wins order as _db.
-    layer_dirs = tuple(getattr(self.oto_parser, "loaded_layers", ()))
+    # Never clear the active parser/map before the candidate has finished.
+    candidate_parser = OtoParser()
+    try:
+        candidate_parser.load_voice_dir(
+            target_path,
+            use_cache=False,
+            reset=True,
+            write_cache=False,
+        )
+    except MemoryError as exc:
+        from modules.data.oto_parser import VoicebankResourceLimitError
+
+        raise VoicebankResourceLimitError(
+            "音源インデックスの作成中にメモリ不足が発生しました。"
+        ) from exc
+
+    candidate_oto_map: Dict[str, str] = {}
+    layer_dirs = tuple(getattr(candidate_parser, "loaded_layers", ()))
     layer_realpaths = {os.path.realpath(path) for path in layer_dirs}
+    max_fallback_names = 20_000
+    max_scanned_entries = 120_000
+    max_scanned_directories = 30_000
+    fallback_names = 0
+    scanned_entries = 0
+    scanned_directories = 0
+    scan_truncated = False
+
     for layer_dir in layer_dirs:
-        for root, dirs, files in os.walk(layer_dir, topdown=True, followlinks=False):
-            dirs[:] = sorted(
-                directory
-                for directory in dirs
-                if not os.path.islink(os.path.join(root, directory))
-                and os.path.realpath(os.path.join(root, directory)) not in layer_realpaths
-            )
-            for fname in files:
-                if not fname.lower().endswith(".wav"):
-                    continue
-                lyric = os.path.splitext(fname)[0]
-                self.oto_map.setdefault(
-                    lyric,
-                    os.path.abspath(os.path.join(root, fname)),
-                )
+        pending = [layer_dir]
+        while pending and fallback_names < max_fallback_names:
+            root = pending.pop()
+            scanned_directories += 1
+            if scanned_directories > max_scanned_directories:
+                scan_truncated = True
+                break
+            subdirectories = []
+            try:
+                with os.scandir(root) as iterator:
+                    for item in iterator:
+                        scanned_entries += 1
+                        if scanned_entries > max_scanned_entries:
+                            scan_truncated = True
+                            break
+                        try:
+                            if item.is_symlink():
+                                continue
+                            if item.is_dir(follow_symlinks=False):
+                                if os.path.realpath(item.path) not in layer_realpaths:
+                                    subdirectories.append(item.path)
+                            elif (
+                                item.is_file(follow_symlinks=False)
+                                and item.name.casefold().endswith(".wav")
+                            ):
+                                lyric = os.path.splitext(item.name)[0]
+                                before = len(candidate_oto_map)
+                                candidate_oto_map.setdefault(
+                                    lyric,
+                                    os.path.abspath(item.path),
+                                )
+                                if len(candidate_oto_map) > before:
+                                    fallback_names += 1
+                                    if fallback_names >= max_fallback_names:
+                                        scan_truncated = True
+                                        break
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+            pending.extend(sorted(subdirectories, reverse=True))
+            if scan_truncated:
+                break
+        if scan_truncated:
+            break
 
-    # Include configured aliases even when their WAV filenames differ from the
-    # lyric. OtoEntry.wav_path remains relative to the oto.ini that declared it.
-    for alias, entry in getattr(self.oto_parser, "_db", {}).items():
-        self.oto_map.setdefault(alias, entry.wav_path)
+    # Configured aliases are authoritative and are not subject to the stem cap.
+    for alias, entry in getattr(candidate_parser, "_db", {}).items():
+        candidate_oto_map.setdefault(alias, entry.wav_path)
 
-    self.vcv_resolver = VcvResolver(self.oto_parser, use_g2p=True)
-    self.cvvc_resolver = CvvcResolver(self.oto_parser)
+    candidate_vcv_resolver = VcvResolver(candidate_parser, use_g2p=True)
+    candidate_cvvc_resolver = CvvcResolver(candidate_parser)
+    candidate_loaded_paths = tuple(
+        getattr(candidate_parser, "loaded_oto_ini_paths", ())
+    )
 
+    # Native metadata is replaced only after all Python-side allocation succeeds.
+    # If native sync raises, attempt to restore the previous metadata input.
     sync_oto = getattr(self, "set_oto_data", None)
+    previous_oto_data = getattr(self, "oto_data", None)
     if callable(sync_oto):
-        sync_oto(getattr(self.oto_parser, "_db", {}))
+        try:
+            sync_oto(getattr(candidate_parser, "_db", {}))
+        except Exception:
+            self.oto_data = previous_oto_data
+            if previous_oto_data is not None:
+                try:
+                    sync_oto(previous_oto_data)
+                except Exception:
+                    logger.exception("音源OTOのネイティブ状態をロールバックできませんでした")
+            raise
+
+    # Commit the candidate state only after native metadata synchronization.
+    self.oto_parser = candidate_parser
+    self.oto_map = candidate_oto_map
+    self._loaded_oto_ini_paths = candidate_loaded_paths
+    self.vcv_resolver = candidate_vcv_resolver
+    self.cvvc_resolver = candidate_cvvc_resolver
+
+    if scan_truncated:
+        logger.warning(
+            "Legacy WAV fallback map was capped (%d stems, %d filesystem entries, %d directories).",
+            fallback_names,
+            scanned_entries,
+            scanned_directories,
+        )
 
     logger.info(
-        "音源ライブラリ更新: %d WAV / VCV=%s",
-        len(self.oto_map),
-        self.oto_parser.has_vcv(),
+        "音源ライブラリ更新: %d WAV aliases / VCV=%s",
+        len(candidate_oto_map),
+        candidate_parser.has_vcv(),
     )
 
 

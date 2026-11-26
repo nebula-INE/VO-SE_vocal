@@ -263,7 +263,7 @@ def test_managed_voice_registry_tracks_repaired_top_level_name(vm, tmp_path, mon
 
     src = _make_voice(str(tmp_path / "source"), "BrokenVoice")
 
-    def rename_managed_bank(root):
+    def rename_managed_bank(root, cancel_event=None, max_entries=200_000):
         if os.path.normcase(os.path.abspath(root)) != os.path.normcase(os.path.abspath(vm.user_voice_dir)):
             return []
         old_path = os.path.join(root, "BrokenVoice")
@@ -289,3 +289,60 @@ def test_managed_voice_registry_tracks_repaired_top_level_name(vm, tmp_path, mon
     assert vm.is_managed_voice(installed_path)
     assert vm.delete_user_voice(installed_path) == "FixedVoice"
     assert os.path.exists(os.path.join(src, "oto.ini"))
+
+
+
+@pytest.mark.unit
+def test_scan_voices_supports_cancellation(vm, tmp_path):
+    import threading
+
+    _make_voice(str(tmp_path / "source"), "VoiceC")
+    vm.internal_voice_dir = str(tmp_path / "source")
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    voices = vm.scan_voices(cancel_event=cancel_event)
+    assert voices == {"VO-SE Official (Embedded)": "__INTERNAL__"}
+
+
+@pytest.mark.unit
+def test_scan_voices_reports_progress_without_glob_materialization(vm, tmp_path, monkeypatch):
+    import glob
+
+    root = tmp_path / "source"
+    root.mkdir(parents=True, exist_ok=True)
+    for index in range(130):
+        bank = root / f"bank-{index:03d}"
+        bank.mkdir()
+        if index == 129:
+            (bank / "oto.ini").write_text(
+                "a.wav=あ,0,0,0,0,0\n",
+                encoding="utf-8",
+            )
+    vm.internal_voice_dir = str(root)
+    monkeypatch.setattr(glob, "glob", lambda *_args, **_kwargs: pytest.fail("glob must not be used"))
+    progress = []
+
+    voices = vm.scan_voices(progress_callback=progress.append)
+    assert "bank-129" in voices
+    assert progress
+
+
+
+@pytest.mark.unit
+def test_zip_install_rejects_excessive_uncompressed_size(vm, tmp_path, monkeypatch):
+    from modules.audio import voice_manager as voice_manager_module
+
+    archive = tmp_path / "oversized.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("LargeVoice/oto.ini", "a.wav=あ,0,0,0,0,0\n")
+        zf.writestr("LargeVoice/a.wav", b"x" * 128)
+
+    monkeypatch.setattr(
+        voice_manager_module,
+        "MAX_VOICE_ZIP_UNCOMPRESSED_BYTES",
+        64,
+    )
+    with pytest.raises(ValueError, match="展開後の合計サイズ"):
+        vm.install_voice_from_zip(str(archive))
+    assert not os.path.exists(vm.user_voice_dir)

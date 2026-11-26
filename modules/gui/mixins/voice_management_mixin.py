@@ -10,9 +10,18 @@ MainWindow から以下の音源関連メソッドを分離:
 """
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 from typing import Any, Dict
+
+from modules.data.oto_parser import (
+    MAX_OTO_FILE_BYTES,
+    MAX_OTO_LINE_CHARS,
+    MAX_VOICEBANK_OTO_ENTRIES,
+    OtoParser,
+    VoicebankResourceLimitError,
+)
 
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QMessageBox
@@ -106,57 +115,64 @@ class VoiceManagementMixin:
     # ------------------------------------------------------------------
 
     def parse_oto_ini(self: Any, voice_path: str) -> dict:
-        """
-        oto.iniを解析して辞書に格納する
-        戻り値:
-        {
-            "あ": {
-                "wav_path": ".../a.wav",
-                "offset": 50.0,
-                "consonant": 100.0,
-                "blank": 0.0,
-                "preutterance": 120.0,
-                "overlap": 30.0
-            },
-            ...
-        }
-        """
+        """Read the GUI compatibility view under the same voicebank limits as OtoParser."""
         oto_map: dict = {}
-
         oto_path = os.path.join(voice_path, "oto.ini")
-        if not os.path.exists(oto_path):
+        if not os.path.isfile(oto_path):
             return oto_map
 
-        content = self.read_file_safely(oto_path)  # type: ignore[attr-defined]
-        if not content:
+        try:
+            file_size = os.path.getsize(oto_path)
+        except OSError:
             return oto_map
+        if file_size > MAX_OTO_FILE_BYTES:
+            raise VoicebankResourceLimitError(
+                f"oto.ini が安全なサイズ上限 ({MAX_OTO_FILE_BYTES:,} bytes) を超えています。"
+            )
 
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
+        encoding = OtoParser._detect_text_encoding(oto_path)
+        try:
+            with open(oto_path, "r", encoding=encoding, errors="strict", newline=None) as source:
+                for line_number, raw_line in enumerate(source, start=1):
+                    if len(raw_line) > MAX_OTO_LINE_CHARS:
+                        raise VoicebankResourceLimitError(
+                            f"oto.ini の1行が安全な長さ上限を超えています (line {line_number})。"
+                        )
+                    line = raw_line.strip()
+                    if not line or "=" not in line:
+                        continue
+                    if len(oto_map) >= MAX_VOICEBANK_OTO_ENTRIES:
+                        raise VoicebankResourceLimitError(
+                            f"GUI用 oto.ini エントリ数が安全な上限 ({MAX_VOICEBANK_OTO_ENTRIES:,}) を超えました。"
+                        )
 
-            try:
-                wav_file, params = line.split("=", 1)
-                wav_file = wav_file.strip()
-
-                parts = params.split(",")
-
-                alias = parts[0].strip() if parts and parts[0].strip() else os.path.splitext(wav_file)[0]
-
-                oto_map[alias] = {
-                    "wav_path": os.path.join(voice_path, wav_file),
-                    "offset": self.safe_to_float(parts[1]) if len(parts) > 1 else 0.0,
-                    "consonant": self.safe_to_float(parts[2]) if len(parts) > 2 else 0.0,
-                    "blank": self.safe_to_float(parts[3]) if len(parts) > 3 else 0.0,
-                    "preutterance": self.safe_to_float(parts[4]) if len(parts) > 4 else 0.0,
-                    "overlap": self.safe_to_float(parts[5]) if len(parts) > 5 else 0.0,
-                }
-
-            except Exception as e:
-                # oto.ini は壊れている行が普通にあるので黙殺が正解
-                print(f"DEBUG: oto.ini parse skipped line: {line} ({e})")
-                continue
+                    try:
+                        wav_file, params = line.split("=", 1)
+                        wav_file = wav_file.strip()
+                        parts = params.split(",")
+                        alias = (
+                            parts[0].strip()
+                            if parts and parts[0].strip()
+                            else os.path.splitext(wav_file)[0]
+                        )
+                        oto_map[alias] = {
+                            "wav_path": os.path.join(voice_path, wav_file),
+                            "offset": self.safe_to_float(parts[1]) if len(parts) > 1 else 0.0,
+                            "consonant": self.safe_to_float(parts[2]) if len(parts) > 2 else 0.0,
+                            "blank": self.safe_to_float(parts[3]) if len(parts) > 3 else 0.0,
+                            "preutterance": self.safe_to_float(parts[4]) if len(parts) > 4 else 0.0,
+                            "overlap": self.safe_to_float(parts[5]) if len(parts) > 5 else 0.0,
+                        }
+                    except (IndexError, TypeError, ValueError):
+                        logging.debug(
+                            "GUI oto.ini parse skipped invalid row %d: %s",
+                            line_number,
+                            oto_path,
+                        )
+        except MemoryError as exc:
+            raise VoicebankResourceLimitError(
+                "GUI用 oto.ini データの作成中にメモリ不足が発生しました。"
+            ) from exc
 
         return oto_map
 
@@ -244,6 +260,9 @@ class VoiceManagementMixin:
         ボイスカード選択時の処理。
         音源データのロード、エンジンの更新、トークマネージャーの設定を同期。
         """
+        previous_voice = str(getattr(self, "current_voice", "") or "")
+        previous_oto_data = getattr(self, "current_oto_data", None)
+
         # 1. UIの表示更新（選択状態のハイライト切り替え）
         if self.voice_cards:
             for card in self.voice_cards:
@@ -272,8 +291,13 @@ class VoiceManagementMixin:
 
         try:
             # 3. 原音設定(oto.ini)の解析と保持
-            oto_data = self.parse_oto_ini(path)
-            self.current_oto_data = oto_data if isinstance(oto_data, dict) else {}
+            if self.vo_se_engine is None:
+                oto_data = self.parse_oto_ini(path)
+                candidate_oto_data = oto_data if isinstance(oto_data, dict) else {}
+            else:
+                # The engine builds the bounded OTO index and supplies the
+                # loaded entry count below; do not duplicate the full database.
+                candidate_oto_data = {}
 
             # 4. エンジン(vo_se_engine)への音源反映
             if self.vo_se_engine is not None:
@@ -283,6 +307,7 @@ class VoiceManagementMixin:
                 # 空の OTO エントリでネイティブ DB を上書きしてしまう。
                 self.vo_se_engine.set_voice_library(path)
 
+            self.current_oto_data = candidate_oto_data
             self.current_voice = character_name
 
             # 5. トーク用音源(htsvoice)のチェックと設定
@@ -328,6 +353,14 @@ class VoiceManagementMixin:
             print(f"Selected voice: {character_name} at {path} (Color: {char_color})")
 
         except Exception as e:
+            # Keep the UI selection and metadata aligned with the previous
+            # engine state when a candidate voicebank could not be loaded.
+            self.current_voice = previous_voice
+            self.current_oto_data = previous_oto_data
+            if self.voice_cards:
+                for card in self.voice_cards:
+                    if card is not None and hasattr(card, "set_selected"):
+                        card.set_selected(getattr(card, "name", "") == previous_voice)
             print(f"Error loading voice: {e}")
             QMessageBox.critical(
                 self,

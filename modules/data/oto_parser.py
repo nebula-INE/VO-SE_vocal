@@ -10,11 +10,12 @@ VO-SE Vocal — oto.ini 完全パーサー
 """
 from __future__ import annotations
 
+import codecs
+import gc
+import logging
 import os
 import re
-
-import logging
-import gc
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -105,40 +106,77 @@ def get_system_ram_gb() -> float:
 
 IS_LOW_RAM = get_system_ram_gb() <= 8.5
 
-# Global cache for voice directory file maps to eliminate O(N) disk walks
-_DIR_FILE_MAP_CACHE: Dict[str, Dict[str, str]] = {}
+# Guardrails for malformed or unusually large third-party voicebanks.
+MAX_OTO_FILE_BYTES = 32 * 1024 * 1024 if IS_LOW_RAM else 128 * 1024 * 1024
+MAX_OTO_LINE_CHARS = 64 * 1024
+MAX_VOICEBANK_OTO_ENTRIES = 100_000 if IS_LOW_RAM else 300_000
+MAX_OTO_CACHE_BYTES = 16 * 1024 * 1024 if IS_LOW_RAM else 64 * 1024 * 1024
+MAX_LAYER_SCAN_DIRECTORIES = 100_000 if IS_LOW_RAM else 300_000
+MAX_LAYER_OTO_FILES = 2_048
+MAX_WAV_FALLBACK_SCAN_ENTRIES = 100_000 if IS_LOW_RAM else 250_000
+MAX_WAV_FALLBACK_SCAN_DIRECTORIES = 20_000 if IS_LOW_RAM else 50_000
 
-def get_voice_dir_file_map(voice_dir: str) -> Dict[str, str]:
-    if voice_dir in _DIR_FILE_MAP_CACHE:
-        return _DIR_FILE_MAP_CACHE[voice_dir]
-    file_map: Dict[str, str] = {}
-    if os.path.isdir(voice_dir):
-        for root, dirs, files in os.walk(voice_dir, topdown=True, followlinks=False):
-            dirs[:] = sorted(
-                directory for directory in dirs
-                if not os.path.islink(os.path.join(root, directory))
-            )
-            for filename in files:
-                full_path = os.path.join(root, filename)
-                if not os.path.isfile(full_path):
-                    continue
-                try:
-                    if os.path.commonpath([
-                        os.path.realpath(full_path),
-                        os.path.realpath(voice_dir),
-                    ]) != os.path.realpath(voice_dir):
-                        continue
-                except (OSError, ValueError):
-                    continue
-                rel_path = os.path.relpath(full_path, voice_dir)
-                rel_key = rel_path.replace("\\", "/").casefold()
-                file_map.setdefault(rel_key, full_path)
-    _DIR_FILE_MAP_CACHE[voice_dir] = file_map
-    return file_map
+
+class VoicebankResourceLimitError(RuntimeError):
+    """Raised when a voicebank exceeds safe parsing/resource limits."""
+
+
+class VoicebankLoadCancelled(RuntimeError):
+    """Raised when a caller cancels a voicebank scan or parse."""
+
 
 def clear_voice_dir_file_map_cache() -> None:
-    _DIR_FILE_MAP_CACHE.clear()
+    """Compatibility hook; WAV lookups no longer retain whole-tree file maps."""
     gc.collect()
+
+
+def _find_unique_voicebank_file_by_name(
+    roots: Tuple[str, ...],
+    basename: str,
+    is_allowed_path: Callable[[str], bool],
+) -> Tuple[Optional[str], bool]:
+    """Find a unique file with constant memory; stop immediately on ambiguity."""
+    matches: set[str] = set()
+    scanned_entries = 0
+    scanned_directories = 0
+    target = basename.casefold()
+
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        pending = [root]
+        while pending:
+            current = pending.pop()
+            scanned_directories += 1
+            if scanned_directories > MAX_WAV_FALLBACK_SCAN_DIRECTORIES:
+                return None, False
+            try:
+                with os.scandir(current) as iterator:
+                    for item in iterator:
+                        scanned_entries += 1
+                        if scanned_entries > MAX_WAV_FALLBACK_SCAN_ENTRIES:
+                            return None, False
+                        try:
+                            if item.is_symlink():
+                                continue
+                            if item.is_dir(follow_symlinks=False):
+                                pending.append(item.path)
+                            elif (
+                                item.is_file(follow_symlinks=False)
+                                and item.name.casefold() == target
+                                and is_allowed_path(item.path)
+                            ):
+                                matches.add(os.path.abspath(item.path))
+                                if len(matches) > 1:
+                                    return None, True
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+
+    if len(matches) == 1:
+        return next(iter(matches)), True
+    return None, True
 
 
 @dataclass
@@ -224,49 +262,35 @@ class OtoEntry:
         if os.path.isfile(exact_path) and is_allowed_path(exact_path):
             return exact_path
 
-        # Case-insensitive & nested-path resolution using a relative-path cache.
-        file_map = get_voice_dir_file_map(self.voice_dir)
+        # Basename fallback is streamed with a strict scan budget. Never build a
+        # dictionary containing every file in a large voicebank.
         target_lower = (
             normalized_filename.replace(os.sep, "/").replace("\\", "/").lower()
         )
-        resolved = file_map.get(target_lower)
-        if resolved and is_allowed_path(resolved):
-            return resolved
-
-        # 拡張子省略の oto.ini にも対応するが、相対パス全体をキーにする。
-        if not target_lower.endswith(".wav"):
-            resolved = file_map.get(target_lower + ".wav")
-            if resolved and is_allowed_path(resolved):
-                return resolved
-
-        # Web版 resolveWavFilePath と同じく、OTO内の相対/旧絶対パスが
-        # 現在の配置を指さない場合は、選択音源とその正確な補助音源の
-        # ルート内で basename が一意に一致する WAV のみ補完する。
-        # 音源ペアの外にあるファイルは、oto.ini が直接指していても返さない。
         target_basename = target_lower.rsplit("/", 1)[-1]
         basenames = [target_basename]
         if not target_basename.endswith(".wav"):
             basenames.append(target_basename + ".wav")
-        root_maps = [
-            (root, get_voice_dir_file_map(root))
-            for root in search_roots
-        ]
         for basename in basenames:
-            matches = [
-                full_path
-                for _root, root_file_map in root_maps
-                for relative_path, full_path in root_file_map.items()
-                if relative_path.rsplit("/", 1)[-1] == basename
-            ]
-            unique_matches = list(dict.fromkeys(matches))
-            if len(unique_matches) == 1 and is_allowed_path(unique_matches[0]):
+            resolved, complete = _find_unique_voicebank_file_by_name(
+                search_roots,
+                basename,
+                is_allowed_path,
+            )
+            if resolved:
                 logger.debug(
                     "OTO WAV basename fallback: %s -> %s (roots=%s)",
                     self.filename,
-                    unique_matches[0],
+                    resolved,
                     search_roots,
                 )
-                return unique_matches[0]
+                return resolved
+            if not complete:
+                logger.warning(
+                    "WAV basename fallback scan limit reached; unresolved safely: %s",
+                    self.filename,
+                )
+                break
 
         # ファイルがまだ存在しない場合でも、許可ルート内のパスだけを返す。
         if is_allowed_path(exact_path):
@@ -476,7 +500,7 @@ class OtoParser:
 
     @staticmethod
     def _layer_aliases_and_coverage(ini_path: str) -> Tuple[set[str], float]:
-        """Return the hiragana CV units represented by one oto.ini and coverage."""
+        """Return CV coverage while streaming the source oto.ini."""
         hiragana_cv = set(
             "あいうえお"
             "かきくけこさしすせそたちつてとなにぬねの"
@@ -486,32 +510,56 @@ class OtoParser:
         )
         covered: set[str] = set()
         try:
-            text = OtoParser._read_safe(ini_path)
+            file_size = os.path.getsize(ini_path)
         except OSError:
             return covered, 0.0
+        if file_size > MAX_OTO_FILE_BYTES:
+            raise VoicebankResourceLimitError(
+                f"oto.ini が安全なサイズ上限を超えています ({file_size:,} bytes): {ini_path}"
+            )
 
-        for raw_line in text.splitlines():
-            if "=" not in raw_line:
-                continue
-            filename, params = raw_line.split("=", 1)
-            fields = params.split(",")
-            alias = fields[0].strip() if fields and fields[0].strip() else os.path.splitext(filename.strip())[0]
-            alias = unicodedata.normalize("NFKC", alias)
-            alias = re.sub(r"^(?:[-_]\s*|[aieuon](?:\s+|_))", "", alias, flags=re.IGNORECASE)
-            alias = re.sub(r"_?[A-Ga-g][#b]?-?\d+$", "", alias).strip()
-            if "/" in alias or "\\" in alias:
-                alias = re.split(r"[/\\]", alias)[-1]
-            tokens = alias.split()
-            mora = tokens[-1] if tokens else alias
-            if "ァ" <= mora <= "ヶ":
-                mora = "".join(
-                    chr(ord(char) - 0x60) if "ァ" <= char <= "ヶ" else char
-                    for char in mora
-                )
-            if mora not in hiragana_cv:
-                mora = _ROMAJI_TO_KANA.get(mora.casefold(), mora)
-            if mora in hiragana_cv:
-                covered.add(mora)
+        encoding = OtoParser._detect_text_encoding(ini_path)
+        try:
+            with open(ini_path, "r", encoding=encoding, errors="strict", newline=None) as source:
+                for line_number, raw_line in enumerate(source, start=1):
+                    if len(raw_line) > MAX_OTO_LINE_CHARS:
+                        raise VoicebankResourceLimitError(
+                            f"oto.ini の1行が安全な長さ上限を超えています: {ini_path} (line {line_number})"
+                        )
+                    if "=" not in raw_line:
+                        continue
+                    filename, params = raw_line.split("=", 1)
+                    fields = params.split(",")
+                    alias = (
+                        fields[0].strip()
+                        if fields and fields[0].strip()
+                        else os.path.splitext(filename.strip())[0]
+                    )
+                    alias = unicodedata.normalize("NFKC", alias)
+                    alias = re.sub(
+                        r"^(?:[-_]\s*|[aieuon](?:\s+|_))",
+                        "",
+                        alias,
+                        flags=re.IGNORECASE,
+                    )
+                    alias = re.sub(r"_?[A-Ga-g][#b]?-?\d+$", "", alias).strip()
+                    if "/" in alias or "\\" in alias:
+                        alias = re.split(r"[/\\]", alias)[-1]
+                    tokens = alias.split()
+                    mora = tokens[-1] if tokens else alias
+                    if "ァ" <= mora <= "ヶ":
+                        mora = "".join(
+                            chr(ord(char) - 0x60) if "ァ" <= char <= "ヶ" else char
+                            for char in mora
+                        )
+                    if mora not in hiragana_cv:
+                        mora = _ROMAJI_TO_KANA.get(mora.casefold(), mora)
+                    if mora in hiragana_cv:
+                        covered.add(mora)
+        except MemoryError as exc:
+            raise VoicebankResourceLimitError(
+                f"oto.ini の音源レイヤー解析中にメモリ不足が発生しました: {ini_path}"
+            ) from exc
 
         return covered, len(covered) / max(len(hiragana_cv), 1)
 
@@ -537,6 +585,7 @@ class OtoParser:
         selected: str,
         voices_dir: Optional[str] = None,
         max_up: int = 3,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Tuple[List[str], str, List[_VoiceLayerInfo]]:
         """Collect bounded oto.ini layers and order main banks before supplements."""
         selected_path = os.path.abspath(os.path.expanduser(selected))
@@ -555,12 +604,20 @@ class OtoParser:
 
         found: List[Tuple[str, str, str]] = []
         seen_roots: set[str] = set()
+        scanned_directories = 0
         for layer_root in root_specs:
             root_key = os.path.normcase(os.path.realpath(layer_root))
             if root_key in seen_roots:
                 continue
             seen_roots.add(root_key)
             for current, dirs, files in os.walk(layer_root, topdown=True, followlinks=False):
+                scanned_directories += 1
+                if cancel_event is not None and cancel_event.is_set():
+                    raise VoicebankLoadCancelled("音源フォルダのスキャンはキャンセルされました。")
+                if scanned_directories > MAX_LAYER_SCAN_DIRECTORIES:
+                    raise VoicebankResourceLimitError(
+                        f"音源フォルダの走査数が安全な上限 ({MAX_LAYER_SCAN_DIRECTORIES:,}) を超えました: {layer_root}"
+                    )
                 dirs[:] = sorted(
                     directory for directory in dirs
                     if not os.path.islink(os.path.join(current, directory))
@@ -570,6 +627,10 @@ class OtoParser:
                     ini_path = os.path.join(current, oto_names[0])
                     if not os.path.islink(ini_path):
                         found.append((os.path.abspath(current), ini_path, layer_root))
+                        if len(found) > MAX_LAYER_OTO_FILES:
+                            raise VoicebankResourceLimitError(
+                                f"oto.ini の検出数が安全な上限 ({MAX_LAYER_OTO_FILES:,}) を超えました: {layer_root}"
+                            )
 
         selected_has_layer = any(
             os.path.normcase(os.path.realpath(directory))
@@ -822,106 +883,146 @@ class OtoParser:
     # 公開 API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _detect_text_encoding(path: str) -> str:
+        """Detect the supported encoding in bounded chunks without loading the file."""
+        for encoding in ("utf-8-sig", "cp932", "utf-8", "latin-1"):
+            try:
+                decoder = codecs.getincrementaldecoder(encoding)(errors="strict")
+                with open(path, "rb") as raw_file:
+                    while True:
+                        chunk = raw_file.read(64 * 1024)
+                        if not chunk:
+                            break
+                        decoder.decode(chunk, final=False)
+                    decoder.decode(b"", final=True)
+                return encoding
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return "cp932"
+
     def load_oto_file(
         self,
         ini_path: str,
         voice_root: Optional[str] = None,
         wav_search_roots: Optional[List[str]] = None,
         layer_priority: int = 0,
+        max_entries: Optional[int] = None,
+        cancel_event: Optional[threading.Event] = None,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> int:
-        """
-        oto.ini を 1 ファイル読み込んでデータベースに追加する (8GB以下環境対応スロットリング)。
-
-        Returns:
-            追加されたエントリ数
-        """
+        """Stream one oto.ini into the alias database under explicit resource limits."""
         if not os.path.isfile(ini_path):
             logger.warning("oto.ini が見つかりません: %s", ini_path)
             return 0
 
+        try:
+            file_size = os.path.getsize(ini_path)
+        except OSError:
+            logger.warning("oto.ini のサイズを取得できません: %s", ini_path)
+            return 0
+        if file_size > MAX_OTO_FILE_BYTES:
+            raise VoicebankResourceLimitError(
+                f"oto.ini が安全なサイズ上限を超えています ({file_size:,} bytes): {ini_path}"
+            )
+
+        limit = MAX_VOICEBANK_OTO_ENTRIES if max_entries is None else max(0, int(max_entries))
         voice_dir = os.path.dirname(os.path.abspath(ini_path))
-        content = self._read_safe(ini_path)
+        encoding = self._detect_text_encoding(ini_path)
         count = 0
 
-        lines = content.splitlines()
-        for idx, raw_line in enumerate(lines):
-            line = raw_line.strip()
-            if not line or "=" not in line:
-                continue
-            entry = self._parse_line(line, voice_dir)
-            if entry is not None:
-                search_root = os.path.abspath(
-                    os.path.expanduser(voice_root or voice_dir)
-                )
-                entry.search_root = search_root
-                entry.search_roots = tuple(
-                    dict.fromkeys(
-                        os.path.abspath(os.path.expanduser(root))
-                        for root in (wav_search_roots or [search_root])
-                    )
-                )
-                entry.layer_priority = int(layer_priority)
-                normalized_alias = unicodedata.normalize("NFKC", entry.alias)
-                existing = (
-                    self._normalized_db.get(normalized_alias)
-                    or self._db.get(entry.alias)
-                )
-                if existing is not None:
-                    variants = self._alias_variants.setdefault(
-                        normalized_alias,
-                        [(int(existing.layer_priority), existing)],
-                    )
-                    variants.append((int(layer_priority), entry))
-                    logger.warning(
-                        "重複 alias を保持 (first-wins metadata / note-aware pitch): %s (%s) / 既存=%s",
-                        entry.alias,
-                        entry.wav_path,
-                        existing.wav_path,
-                    )
-                else:
-                    self._db[entry.alias] = entry
-                    self._normalized_db.setdefault(normalized_alias, entry)
-
-                # UTAU/OpenUtau multi-pitch banks can address an entry with
-                # a folder-qualified lyric such as "D4/あ" or "D4\\あ".
-                # Keep that qualified key in addition to the unqualified
-                # alias so duplicate aliases in different pitch folders do
-                # not become ambiguous.
-                if voice_root is not None:
-                    try:
-                        rel_dir = os.path.relpath(
-                            voice_dir, os.path.abspath(voice_root)
+        try:
+            with open(ini_path, "r", encoding=encoding, errors="strict", newline=None) as source:
+                for idx, raw_line in enumerate(source):
+                    if idx % 256 == 0 and cancel_event is not None and cancel_event.is_set():
+                        raise VoicebankLoadCancelled("音源読み込みはキャンセルされました。")
+                    if len(raw_line) > MAX_OTO_LINE_CHARS:
+                        raise VoicebankResourceLimitError(
+                            f"oto.ini の1行が安全な長さ上限を超えています: {ini_path} (line {idx + 1})"
                         )
-                    except (OSError, ValueError):
-                        rel_dir = "."
-                    if rel_dir not in (".", ""):
-                        prefix = rel_dir.replace(os.sep, "/").strip("/") + "/"
-                        scoped_key = prefix + entry.alias
-                        scoped_normalized = unicodedata.normalize("NFKC", scoped_key)
-                        scoped_existing = self._normalized_db.get(scoped_normalized)
-                        if scoped_existing is None:
-                            self._db.setdefault(scoped_key, entry)
-                            self._normalized_db.setdefault(scoped_normalized, entry)
-                        else:
-                            scoped_variants = self._alias_variants.setdefault(
-                                scoped_normalized,
-                                [(int(scoped_existing.layer_priority), scoped_existing)],
+                    line = raw_line.strip()
+                    if not line or "=" not in line:
+                        continue
+
+                    entry = self._parse_line(line, voice_dir)
+                    if entry is None:
+                        continue
+                    if count >= limit:
+                        raise VoicebankResourceLimitError(
+                            f"音源のOTOエントリ数が安全な上限 ({limit:,}) を超えました: {ini_path}"
+                        )
+
+                    search_root = os.path.abspath(
+                        os.path.expanduser(voice_root or voice_dir)
+                    )
+                    entry.search_root = search_root
+                    entry.search_roots = tuple(
+                        dict.fromkeys(
+                            os.path.abspath(os.path.expanduser(root))
+                            for root in (wav_search_roots or [search_root])
+                        )
+                    )
+                    entry.layer_priority = int(layer_priority)
+                    normalized_alias = unicodedata.normalize("NFKC", entry.alias)
+                    existing = (
+                        self._normalized_db.get(normalized_alias)
+                        or self._db.get(entry.alias)
+                    )
+                    if existing is not None:
+                        variants = self._alias_variants.setdefault(
+                            normalized_alias,
+                            [(int(existing.layer_priority), existing)],
+                        )
+                        variants.append((int(layer_priority), entry))
+                        logger.warning(
+                            "重複 alias を保持 (first-wins metadata / note-aware pitch): %s (%s) / 既存=%s",
+                            entry.alias,
+                            entry.wav_path,
+                            existing.wav_path,
+                        )
+                    else:
+                        self._db[entry.alias] = entry
+                        self._normalized_db.setdefault(normalized_alias, entry)
+
+                    # Preserve explicit pitch-folder scoped aliases.
+                    if voice_root is not None:
+                        try:
+                            rel_dir = os.path.relpath(
+                                voice_dir, os.path.abspath(voice_root)
                             )
-                            scoped_variants.append((int(layer_priority), entry))
+                        except (OSError, ValueError):
+                            rel_dir = "."
+                        if rel_dir not in (".", ""):
+                            prefix = rel_dir.replace(os.sep, "/").strip("/") + "/"
+                            scoped_key = prefix + entry.alias
+                            scoped_normalized = unicodedata.normalize("NFKC", scoped_key)
+                            scoped_existing = self._normalized_db.get(scoped_normalized)
+                            if scoped_existing is None:
+                                self._db.setdefault(scoped_key, entry)
+                                self._normalized_db.setdefault(scoped_normalized, entry)
+                            else:
+                                scoped_variants = self._alias_variants.setdefault(
+                                    scoped_normalized,
+                                    [(int(scoped_existing.layer_priority), scoped_existing)],
+                                )
+                                scoped_variants.append((int(layer_priority), entry))
 
-                count += 1
+                    count += 1
+                    if IS_LOW_RAM and idx > 0 and idx % 300 == 0:
+                        time.sleep(0.003)
+                        if idx % 1200 == 0:
+                            gc.collect()
+                    if progress_callback is not None and idx > 0 and idx % 2048 == 0:
+                        progress_callback(ini_path, idx, count)
+        except (VoicebankLoadCancelled, VoicebankResourceLimitError):
+            raise
+        except MemoryError as exc:
+            raise VoicebankResourceLimitError(
+                f"音源の解析中にメモリ不足が発生しました: {ini_path}"
+            ) from exc
 
-            # Low RAM throttle: pause slightly and collect garbage every 300 lines
-            if IS_LOW_RAM and idx > 0 and idx % 300 == 0:
-                time.sleep(0.003)
-                if idx % 1200 == 0:
-                    gc.collect()
-
-        # Alias 逆引きインデックスを既に構築していた場合は、
-        # 新しい oto.ini の追加内容を反映するため無効化する。
         if hasattr(self, "_lyric_index"):
             self._lyric_index.clear()
-
         logger.debug("oto.ini ロード完了 (%d エントリ): %s", count, ini_path)
         return count
 
@@ -932,6 +1033,8 @@ class OtoParser:
         reset: bool = True,
         voices_dir: Optional[str] = None,
         write_cache: bool = True,
+        cancel_event: Optional[threading.Event] = None,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> int:
         """Load one voicebank and its bounded fallback layers.
 
@@ -944,10 +1047,22 @@ class OtoParser:
         if reset:
             self.clear()
 
-        layers, scan_root, layer_info = self.collect_voice_layers(
-            selected,
-            voices_dir=voices_dir,
-        )
+        try:
+            layers, scan_root, layer_info = self.collect_voice_layers(
+                selected,
+                voices_dir=voices_dir,
+                cancel_event=cancel_event,
+            )
+        except (VoicebankLoadCancelled, VoicebankResourceLimitError):
+            if reset:
+                self.clear()
+            raise
+        except MemoryError as exc:
+            if reset:
+                self.clear()
+            raise VoicebankResourceLimitError(
+                "音源フォルダの走査中にメモリ不足が発生しました。"
+            ) from exc
         if not layers:
             self.loaded_layers = ()
             self.loaded_oto_ini_paths = ()
@@ -1012,7 +1127,13 @@ class OtoParser:
                 pass
         source_signature.sort(key=lambda item: str(item[0]))
 
-        if use_cache and reset and os.path.isfile(cache_path):
+        cache_is_bounded = False
+        if os.path.isfile(cache_path):
+            try:
+                cache_is_bounded = os.path.getsize(cache_path) <= MAX_OTO_CACHE_BYTES
+            except OSError:
+                cache_is_bounded = False
+        if use_cache and reset and cache_is_bounded:
             try:
                 import json
                 with open(cache_path, "r", encoding="utf-8") as cache_file:
@@ -1077,78 +1198,126 @@ class OtoParser:
                         selected,
                     )
                     return len(self._db)
+            except MemoryError as exc:
+                if reset:
+                    self.clear()
+                raise VoicebankResourceLimitError(
+                    "音源キャッシュの読み込み中にメモリ不足が発生しました。キャッシュを削除して再試行してください。"
+                ) from exc
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 logger.warning("oto.ini キャッシュ読み込みをスキップ (%s)", exc)
+        elif use_cache and reset and os.path.isfile(cache_path):
+            logger.warning(
+                "oto.ini キャッシュが上限 (%s bytes) を超えたため、再生成します: %s",
+                MAX_OTO_CACHE_BYTES,
+                cache_path,
+            )
 
         total = 0
-        for layer_priority, item in enumerate(layer_info):
-            ini_path = str(item["ini_path"])
-            loaded = self.load_oto_file(
-                ini_path,
-                voice_root=str(item["root"]),
-                wav_search_roots=wav_search_roots,
-                layer_priority=layer_priority,
-            )
-            total += loaded
-            logger.info(
-                "oto.ini レイヤー読込: %s (%d エントリ, CV %.0f%%, %s)",
-                item["directory"],
-                loaded,
-                float(item["coverage"]) * 100.0,
-                "補助" if item["supplement"] else "メイン",
-            )
-            if IS_LOW_RAM:
-                time.sleep(0.005)
-                gc.collect()
+        try:
+            for layer_priority, item in enumerate(layer_info):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise VoicebankLoadCancelled("音源読み込みはキャンセルされました。")
+                ini_path = str(item["ini_path"])
+                remaining = MAX_VOICEBANK_OTO_ENTRIES - total
+                loaded = self.load_oto_file(
+                    ini_path,
+                    voice_root=str(item["root"]),
+                    wav_search_roots=wav_search_roots,
+                    layer_priority=layer_priority,
+                    max_entries=remaining,
+                    cancel_event=cancel_event,
+                    progress_callback=progress_callback,
+                )
+                total += loaded
+                logger.info(
+                    "oto.ini レイヤー読込: %s (%d エントリ, 合計 %d / %d, CV %.0f%%, %s)",
+                    item["directory"],
+                    loaded,
+                    total,
+                    MAX_VOICEBANK_OTO_ENTRIES,
+                    float(item["coverage"]) * 100.0,
+                    "補助" if item["supplement"] else "メイン",
+                )
+                if progress_callback is not None:
+                    progress_callback(str(item["directory"]), total, len(layer_info))
+                if IS_LOW_RAM:
+                    time.sleep(0.005)
+                    gc.collect()
+        except (VoicebankLoadCancelled, VoicebankResourceLimitError):
+            if reset:
+                self.clear()
+            raise
+        except MemoryError as exc:
+            if reset:
+                self.clear()
+            raise VoicebankResourceLimitError(
+                "音源のインデックス作成中にメモリ不足が発生しました。"
+            ) from exc
 
         if write_cache and reset:
             try:
                 import json
-                cache_entries = []
-                for alias_key, entry in self._db.items():
-                    cache_entries.append({
-                        "db_key": alias_key,
-                        "alias": entry.alias,
-                        "filename": entry.filename,
-                        "voice_dir": entry.voice_dir,
-                        "search_root": entry.search_root,
-                        "search_roots": list(entry.search_roots),
-                        "left_blank": entry.left_blank,
-                        "fixed_range": entry.fixed_range,
-                        "right_blank": entry.right_blank,
-                        "preutterance": entry.preutterance,
-                        "overlap": entry.overlap,
-                        "layer_priority": entry.layer_priority,
-                    })
-                cache_alias_variants = []
-                for normalized_key, variants in self._alias_variants.items():
-                    for layer_priority, entry in variants:
-                        cache_alias_variants.append({
-                            "key": normalized_key,
-                            "layer_priority": layer_priority,
-                            "alias": entry.alias,
-                            "filename": entry.filename,
-                            "voice_dir": entry.voice_dir,
-                            "search_root": entry.search_root,
-                            "search_roots": list(entry.search_roots),
-                            "left_blank": entry.left_blank,
-                            "fixed_range": entry.fixed_range,
-                            "right_blank": entry.right_blank,
-                            "preutterance": entry.preutterance,
-                            "overlap": entry.overlap,
-                        })
+
                 with open(cache_path, "w", encoding="utf-8") as cache_file:
-                    json.dump(
-                        {
-                            "cache_version": 6,
-                            "entries": cache_entries,
-                            "alias_variants": cache_alias_variants,
-                            "source_signature": source_signature,
-                        },
-                        cache_file,
-                        ensure_ascii=False,
-                    )
+                    cache_file.write('{"cache_version":6,"entries":[')
+                    first_entry = True
+                    for alias_key, entry in self._db.items():
+                        if not first_entry:
+                            cache_file.write(",")
+                        first_entry = False
+                        json.dump(
+                            {
+                                "db_key": alias_key,
+                                "alias": entry.alias,
+                                "filename": entry.filename,
+                                "voice_dir": entry.voice_dir,
+                                "search_root": entry.search_root,
+                                "search_roots": list(entry.search_roots),
+                                "left_blank": entry.left_blank,
+                                "fixed_range": entry.fixed_range,
+                                "right_blank": entry.right_blank,
+                                "preutterance": entry.preutterance,
+                                "overlap": entry.overlap,
+                                "layer_priority": entry.layer_priority,
+                            },
+                            cache_file,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+
+                    cache_file.write('],"alias_variants":[')
+                    first_variant = True
+                    for normalized_key, variants in self._alias_variants.items():
+                        for layer_priority, entry in variants:
+                            if not first_variant:
+                                cache_file.write(",")
+                            first_variant = False
+                            json.dump(
+                                {
+                                    "key": normalized_key,
+                                    "layer_priority": layer_priority,
+                                    "alias": entry.alias,
+                                    "filename": entry.filename,
+                                    "voice_dir": entry.voice_dir,
+                                    "search_root": entry.search_root,
+                                    "search_roots": list(entry.search_roots),
+                                    "left_blank": entry.left_blank,
+                                    "fixed_range": entry.fixed_range,
+                                    "right_blank": entry.right_blank,
+                                    "preutterance": entry.preutterance,
+                                    "overlap": entry.overlap,
+                                },
+                                cache_file,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+                    cache_file.write('],"source_signature":')
+                    json.dump(source_signature, cache_file, ensure_ascii=False)
+                    cache_file.write("}")
                 logger.info("oto.ini レイヤーキャッシュ保存完了: %s", cache_path)
+            except MemoryError:
+                logger.warning("メモリ不足のため oto.ini キャッシュ保存をスキップします: %s", cache_path)
             except (OSError, TypeError, ValueError) as exc:
                 logger.warning("oto.ini キャッシュ保存エラー (%s)", exc)
 

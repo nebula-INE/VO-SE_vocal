@@ -1,6 +1,11 @@
 from typing import Optional, TypeVar
 
-from modules.data.oto_parser import OtoParser, OtoEntry
+from modules.data.oto_parser import (
+    OtoEntry,
+    OtoParser,
+    VoicebankLoadCancelled,
+    VoicebankResourceLimitError,
+)
 import pytest
 
 
@@ -521,3 +526,89 @@ def test_read_safe_prefers_utf8_when_bytes_are_also_valid_cp932(tmp_path):
     path.write_bytes(expected.encode("utf-8"))
 
     assert OtoParser._read_safe(str(path)) == expected
+
+
+
+def test_load_oto_file_streams_without_materializing_full_text(tmp_path, monkeypatch):
+    ini_file = tmp_path / "oto.ini"
+    ini_file.write_text(
+        "a.wav=あ,0,0,0,20,5\nb.wav=い,0,0,0,20,5\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        OtoParser,
+        "_read_safe",
+        staticmethod(lambda _path: pytest.fail("whole-file reader must not be used")),
+    )
+
+    parser = OtoParser()
+    assert parser.load_oto_file(str(ini_file)) == 2
+    assert parser.get("あ") is not None
+    assert parser.get("い") is not None
+
+
+def test_load_oto_file_enforces_file_size_limit(tmp_path, monkeypatch):
+    from modules.data import oto_parser as parser_module
+
+    ini_file = tmp_path / "large.oto"
+    ini_file.write_text("a.wav=あ,0,0,0,0,0\n", encoding="utf-8")
+    monkeypatch.setattr(parser_module, "MAX_OTO_FILE_BYTES", 4)
+
+    with pytest.raises(VoicebankResourceLimitError, match="サイズ上限"):
+        OtoParser().load_oto_file(str(ini_file))
+
+
+def test_load_voice_dir_clears_partial_index_when_entry_limit_is_reached(tmp_path, monkeypatch):
+    from modules.data import oto_parser as parser_module
+
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    (voice_dir / "character.txt").write_text("name=Limit\\n", encoding="utf-8")
+    (voice_dir / "oto.ini").write_text(
+        "a.wav=あ,0,0,0,0,0\nb.wav=い,0,0,0,0,0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(parser_module, "MAX_VOICEBANK_OTO_ENTRIES", 1)
+
+    parser = OtoParser()
+    with pytest.raises(VoicebankResourceLimitError, match="安全な上限"):
+        parser.load_voice_dir(
+            str(voice_dir),
+            use_cache=False,
+            reset=True,
+            write_cache=False,
+        )
+    assert parser.get("あ") is None
+    assert parser.get("い") is None
+
+
+def test_load_oto_file_honors_cancellation(tmp_path):
+    import threading
+
+    ini_file = tmp_path / "oto.ini"
+    ini_file.write_text("a.wav=あ,0,0,0,0,0\n", encoding="utf-8")
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    with pytest.raises(VoicebankLoadCancelled):
+        OtoParser().load_oto_file(str(ini_file), cancel_event=cancel_event)
+
+
+
+def test_layer_coverage_uses_streaming_reader(tmp_path, monkeypatch):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    ini_file = voice_dir / "oto.ini"
+    ini_file.write_text(
+        "a.wav=あ,0,0,0,0,0\nk.wav=か,0,0,0,0,0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        OtoParser,
+        "_read_safe",
+        staticmethod(lambda _path: pytest.fail("coverage must stream oto.ini")),
+    )
+
+    covered, fraction = OtoParser._layer_aliases_and_coverage(str(ini_file))
+    assert covered == {"あ", "か"}
+    assert fraction > 0

@@ -2,12 +2,15 @@
 
 import os
 import platform
-import glob
 import sys
 import logging
 import json
 import tempfile
 
+
+MAX_VOICE_ZIP_ENTRIES = 200_000
+MAX_VOICE_ZIP_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
+MAX_VOICE_ZIP_FILE_BYTES = 1024 * 1024 * 1024
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -52,7 +55,7 @@ class VoiceManager:
         self.internal_voice_dir = os.path.join(self.base_path, "voice_banks")
         self.voices = {}  # { "キャラ名": "絶対パス" }
 
-    def _repair_garbled_names(self) -> None:
+    def _repair_garbled_names(self, cancel_event=None) -> None:
         """アプリの保存先(voice_banks 等)内の、文字化けしたフォルダ名・ファイル名を直す。"""
         from modules.utils.text_encoding import repair_mojibake_tree
         seen = set()
@@ -62,7 +65,11 @@ class VoiceManager:
                 continue
             seen.add(key)
             try:
-                for old, new in repair_mojibake_tree(root):
+                for old, new in repair_mojibake_tree(
+                    root,
+                    cancel_event=cancel_event,
+                    max_entries=200_000,
+                ):
                     self._sync_managed_voice_registry_rename(old, new)
                     print(f"[VoiceManager] 文字化けを修復: {os.path.basename(old)} -> {os.path.basename(new)}")
             except OSError as e:
@@ -107,54 +114,93 @@ class VoiceManager:
             root = os.getenv("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
         return os.path.join(root, "VO-SE", "voices")
 
-    def scan_voices(self):
-        """標準的なUTAU音源パスと内部フォルダをスキャン"""
-        # 以前のバージョンで文字化けしたまま取り込まれた音源（このアプリが作った
-        # 保存先の中だけ）を、正しい名前へ直してからスキャンする。
-        self._repair_garbled_names()
+    def scan_voices(self, cancel_event=None, progress_callback=None):
+        """Scan voicebank folders incrementally with cancellation and traversal limits."""
+        self._repair_garbled_names(cancel_event=cancel_event)
 
         search_paths = []
-        
-        # 1. OSごとの標準パスを追加
-        if self.system == "Darwin": # macOS
+        if self.system == "Darwin":
             search_paths.append(os.path.expanduser("~/Library/Application Support/OpenUTAU/Content/Voices/"))
             search_paths.append(os.path.expanduser("~/Library/Application Support/OpenUTAU/Singers"))
-            search_paths.append(os.path.expanduser("~/Library/Application Support/Vocaloid/Voices/")) # 互換用
+            search_paths.append(os.path.expanduser("~/Library/Application Support/Vocaloid/Voices/"))
         elif self.system == "Windows":
             search_paths.append(r"C:\Program Files (x86)\UTAU\voice")
-            appdata_roaming = os.getenv('APPDATA')
+            appdata_roaming = os.getenv("APPDATA")
             if appdata_roaming:
                 search_paths.append(os.path.join(appdata_roaming, "OpenUTAU", "Content", "Voices"))
                 search_paths.append(os.path.join(appdata_roaming, "OpenUTAU", "Singers"))
-        else: # Linux ほか
+        else:
             data_home = os.getenv("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
             search_paths.append(os.path.join(data_home, "OpenUTAU", "Singers"))
             search_paths.append(os.path.join(data_home, "OpenUTAU", "Content", "Voices"))
 
-        # 2. プロジェクト内部の voice_banks フォルダ、および「音源を追加」の保存先を追加
         search_paths.append(self.internal_voice_dir)
         if os.path.normpath(self.user_voice_dir) != os.path.normpath(self.internal_voice_dir):
             search_paths.append(self.user_voice_dir)
 
         self.voices.clear()
-        for path in search_paths:
-            if not os.path.exists(path):
+        scanned_directories = 0
+        discovered_banks = 0
+        stop_scan = False
+        max_directories = 200_000
+        max_banks = 20_000
+
+        for search_root in search_paths:
+            if stop_scan or (cancel_event is not None and cancel_event.is_set()):
+                break
+            if not os.path.isdir(search_root) or os.path.islink(search_root):
                 continue
-            
-            # 再帰的に oto.ini を検索
-            for ini_path in glob.glob(os.path.join(path, "**/oto.ini"), recursive=True):
-                v_dir = os.path.dirname(ini_path)
-                # キャラ名はフォルダ名、または character.txt があればそこから取得する拡張性
-                v_name = os.path.basename(v_dir)
-                
-                # 重複した場合は、より「深い（個別設定された）」パスを優先
-                self.voices[v_name] = v_dir
-        
-        # 3. 【追加】内蔵音源（公式）をリストに加える
-        # DLL内に焼き込まれているので、物理パスの代わりに特殊なキーワードを入れる
+
+            def _walk_error(error):
+                logging.warning("音源フォルダを走査できません (%s): %s", search_root, error)
+
+            for current, directories, files in os.walk(
+                search_root,
+                topdown=True,
+                followlinks=False,
+                onerror=_walk_error,
+            ):
+                if cancel_event is not None and cancel_event.is_set():
+                    stop_scan = True
+                    break
+                scanned_directories += 1
+                if scanned_directories > max_directories:
+                    logging.warning(
+                        "音源一覧スキャンのディレクトリ上限 (%s) に到達しました。残りはスキップします。",
+                        max_directories,
+                    )
+                    stop_scan = True
+                    break
+
+                directories[:] = sorted(
+                    name for name in directories
+                    if not os.path.islink(os.path.join(current, name))
+                )
+                if any(name.casefold() == "oto.ini" for name in files):
+                    voice_name = os.path.basename(current)
+                    self.voices[voice_name] = current
+                    discovered_banks += 1
+                    if discovered_banks >= max_banks:
+                        logging.warning(
+                            "音源一覧スキャンの登録上限 (%s) に到達しました。残りはスキップします。",
+                            max_banks,
+                        )
+                        stop_scan = True
+                        break
+
+                if progress_callback is not None and scanned_directories % 128 == 0:
+                    try:
+                        progress_callback(scanned_directories)
+                    except Exception:
+                        logging.debug("音源スキャンの進捗通知をスキップ", exc_info=True)
+
         self.voices["VO-SE Official (Embedded)"] = "__INTERNAL__"
-        
-        logging.info(f"VO-SE: {len(self.voices)} 件の音源を検出しました。")
+        logging.info(
+            "VO-SE: %d 件の音源を検出しました (%d directories scanned, cancelled=%s).",
+            len(self.voices),
+            scanned_directories,
+            bool(cancel_event is not None and cancel_event.is_set()),
+        )
         return self.voices
 
     def is_internal(self, voice_name):
@@ -211,6 +257,27 @@ class VoiceManager:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with zipfile.ZipFile(zip_path, 'r') as zf:
+                # ZIP bombs and malformed archives must fail before extraction starts.
+                zip_infos = zf.infolist()
+                if len(zip_infos) > MAX_VOICE_ZIP_ENTRIES:
+                    raise ValueError(
+                        f"ZIP内のファイル数が安全な上限 ({MAX_VOICE_ZIP_ENTRIES:,}) を超えています。"
+                    )
+                total_uncompressed = 0
+                for info in zip_infos:
+                    if info.is_dir():
+                        continue
+                    if info.file_size < 0 or info.file_size > MAX_VOICE_ZIP_FILE_BYTES:
+                        raise ValueError(
+                            f"ZIP内の単一ファイルが安全なサイズ上限を超えています: {info.filename}"
+                        )
+                    total_uncompressed += info.file_size
+                    if total_uncompressed > MAX_VOICE_ZIP_UNCOMPRESSED_BYTES:
+                        raise ValueError(
+                            "ZIP展開後の合計サイズが安全な上限 "
+                            f"({MAX_VOICE_ZIP_UNCOMPRESSED_BYTES:,} bytes) を超えています。"
+                        )
+
                 # Windows 等で作られた ZIP は日本語名を CP932 で保存し UTF-8 フラグを立てない。
                 # そのまま展開するとフォルダ名・wav 名が化けて oto.ini と一致しなくなるため、
                 # 名前を正しく読み直しながら安全に展開する。
