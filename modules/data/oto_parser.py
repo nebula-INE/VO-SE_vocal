@@ -844,7 +844,10 @@ class OtoParser:
                 )
                 entry.layer_priority = int(layer_priority)
                 normalized_alias = unicodedata.normalize("NFKC", entry.alias)
-                existing = self._lookup_alias(entry.alias)
+                existing = (
+                    self._normalized_db.get(normalized_alias)
+                    or self._db.get(entry.alias)
+                )
                 if existing is not None:
                     variants = self._alias_variants.setdefault(
                         normalized_alias,
