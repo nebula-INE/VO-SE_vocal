@@ -106,3 +106,23 @@ def test_set_oto_data_syncs_alias_and_wav_path():
     assert entries[0].cutoff == -30.0
     assert entries[0].preutterance == 40.0
     assert entries[0].overlap == 5.0
+
+
+def test_native_render_error_is_returned_to_python_caller():
+    from modules.audio.vo_se_engine_patch import _read_native_render_error
+
+    class FakeErrorGetter:
+        def __call__(self):
+            return b"Native render ran out of memory"
+
+    fake_lib = type("FakeLib", (), {
+        "get_last_render_error": FakeErrorGetter(),
+    })()
+
+    assert _read_native_render_error(fake_lib) == "Native render ran out of memory"
+
+
+def test_native_render_error_is_empty_for_older_core_without_diagnostic_api():
+    from modules.audio.vo_se_engine_patch import _read_native_render_error
+
+    assert _read_native_render_error(object()) == ""

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from modules.data.oto_parser import OtoParser
+from modules.data.oto_parser import OtoParser, _KANA_TO_ROMAJI
 
 
 HIRAGANA_CV = (
@@ -177,6 +177,105 @@ def test_successful_alias_debug_log_identifies_the_source_layer(tmp_path, caplog
     assert "音源エイリアス解決" in caplog.text
     assert str(selected) in caplog.text
     assert str(entry.wav_path) in caplog.text
+
+
+def test_extra_folder_uses_only_exact_name_matched_main_bank_sibling(tmp_path):
+    voices = tmp_path / "voices"
+    main = voices / "重音テト"
+    extra = voices / "重音テトエクストラ"
+    unrelated = voices / "別音源"
+
+    main_aliases = [
+        romaji for kana, romaji in _KANA_TO_ROMAJI.items() if kana != "じ"
+    ]
+    _write_layer(main, main_aliases)
+    _write_layer(extra, ["じ"])
+    _write_layer(unrelated, ["さ"])
+
+    parser = OtoParser()
+    parser.load_voice_dir(
+        str(extra),
+        use_cache=False,
+        write_cache=False,
+    )
+
+    assert parser.loaded_layers[0] == str(main)
+    assert parser.loaded_layers[1] == str(extra)
+    assert all(str(unrelated) not in layer for layer in parser.loaded_layers)
+
+    main_entry = parser.resolve_alias("さ")
+    extra_entry = parser.resolve_alias("じ")
+    assert main_entry is not None
+    assert extra_entry is not None
+    assert main_entry.voice_dir == str(main)
+    assert extra_entry.voice_dir == str(extra)
+    assert parser.layer_notifications
+    assert "併用しました" in parser.layer_notifications[0]
+
+
+def test_oto_wav_basename_fallback_is_unique_and_stays_inside_bank_root(tmp_path):
+    root = tmp_path / "bank"
+    selected = root / "oto"
+    audio = root / "audio"
+    selected.mkdir(parents=True)
+    audio.mkdir(parents=True)
+    (root / "character.txt").write_text("name=Example", encoding="utf-8")
+    (selected / "oto.ini").write_text(
+        "/old/voice/sample.wav=あ,0,0,0,50,0\n",
+        encoding="utf-8",
+    )
+    actual_wav = audio / "sample.wav"
+    actual_wav.write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(
+        str(selected),
+        use_cache=False,
+        write_cache=False,
+    )
+
+    entry = parser.get("あ")
+    assert entry is not None
+    assert entry.wav_path == str(actual_wav)
+
+
+def test_extra_oto_can_find_unique_wav_in_its_exact_paired_main_bank(tmp_path):
+    voices = tmp_path / "voices"
+    main = voices / "重音テト"
+    extra = voices / "重音テトエクストラ"
+    main_aliases = [alias for alias in HIRAGANA_CV if alias != "じ"]
+    _write_layer(main, main_aliases)
+
+    extra.mkdir(parents=True)
+    (extra / "oto.ini").write_text(
+        "legacy/extra-sample.wav=じ,0,0,0,50,0\n",
+        encoding="utf-8",
+    )
+    shared_wav = main / "audio" / "extra-sample.wav"
+    shared_wav.parent.mkdir(parents=True)
+    shared_wav.write_bytes(b"RIFF")
+
+    parser = OtoParser()
+    parser.load_voice_dir(
+        str(extra),
+        use_cache=True,
+        write_cache=True,
+    )
+
+    entry = parser.get("じ")
+    assert entry is not None
+    assert entry.voice_dir == str(extra)
+    assert entry.wav_path == str(shared_wav)
+
+    cached_parser = OtoParser()
+    cached_parser.load_voice_dir(
+        str(extra),
+        use_cache=True,
+        write_cache=False,
+    )
+    cached_entry = cached_parser.get("じ")
+    assert cached_entry is not None
+    assert cached_entry.wav_path == str(shared_wav)
 
 
 def test_selected_folder_prefix_map_is_used_when_extracted_root_has_none(tmp_path):
