@@ -147,14 +147,14 @@ def test_zip_backslash_member_paths_are_normalized(vm, tmp_path):
 
 
 @pytest.mark.unit
-def test_find_oto_dirs_orders_shallow_first_and_limits_depth(tmp_path):
+def test_find_oto_dirs_orders_shallow_first_without_default_depth_limit(tmp_path):
     _make_voice(str(tmp_path), "top")
     deep = tmp_path / "a" / "b" / "c" / "d" / "e"
     deep.mkdir(parents=True)
     (deep / "oto.ini").write_text("x")
     found = VoiceManager.find_oto_dirs(str(tmp_path))
     assert found[0] == str(tmp_path / "top")
-    assert str(deep) not in found, "max_depth を超えた階層は探さない"
+    assert str(deep) in found
 
 
 @pytest.mark.unit
@@ -330,19 +330,20 @@ def test_scan_voices_reports_progress_without_glob_materialization(vm, tmp_path,
 
 
 @pytest.mark.unit
-def test_zip_install_rejects_excessive_uncompressed_size(vm, tmp_path, monkeypatch):
+def test_zip_install_ignores_legacy_fixed_size_constants(vm, tmp_path, monkeypatch):
     from modules.audio import voice_manager as voice_manager_module
 
-    archive = tmp_path / "oversized.zip"
+    archive = tmp_path / "large-bank.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("LargeVoice/oto.ini", "a.wav=あ,0,0,0,0,0\n")
+        zf.writestr("LargeVoice/oto.ini", "a.wav=あ,0,0,0,0,0\\n")
         zf.writestr("LargeVoice/a.wav", b"x" * 128)
 
+    # A compatibility attribute set by older code must not restore a default cap.
     monkeypatch.setattr(
         voice_manager_module,
         "MAX_VOICE_ZIP_UNCOMPRESSED_BYTES",
         64,
+        raising=False,
     )
-    with pytest.raises(ValueError, match="展開後の合計サイズ"):
-        vm.install_voice_from_zip(str(archive))
-    assert not os.path.exists(vm.user_voice_dir)
+    assert vm.install_voice_from_zip(str(archive)) == "LargeVoice"
+    assert os.path.exists(os.path.join(vm.user_voice_dir, "LargeVoice", "a.wav"))
