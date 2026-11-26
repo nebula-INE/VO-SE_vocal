@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import {
   normalizeVoicebankName,
@@ -74,6 +76,12 @@ test('realpath checks reject symlinks that escape a voicebank root', (t) => {
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('server.js has valid Node.js module syntax', () => {
+  const serverPath = fileURLToPath(new URL('../server.js', import.meta.url));
+  const result = spawnSync(process.execPath, ['--check', serverPath], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout || 'node --check failed');
 });
 
 test('server never shells out for ZIP extraction or reports fake test success', () => {
