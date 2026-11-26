@@ -187,7 +187,13 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
         if (!alias) continue;
 
         result.aliasCount += 1;
-        if (alias.includes(' ') || alias.startsWith('-') || /^[aieuon][-_\\s]/i.test(alias)) {
+        const firstChar = alias.charAt(0).toLowerCase();
+        const secondChar = alias.charAt(1);
+        if (
+          alias.includes(' ') ||
+          alias.startsWith('-') ||
+          (['a', 'i', 'e', 'u', 'o', 'n'].includes(firstChar) && ['-', '_', '\t'].includes(secondChar))
+        ) {
           result.hasVcv = true;
         }
         if (result.aliases.length < 100) result.aliases.push(alias);
