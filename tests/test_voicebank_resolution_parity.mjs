@@ -172,6 +172,9 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
   const unrelated = await request(port, sampleUrl(extraName, fixture.expected.unrelated_alias, 60));
   assert.equal(unrelated.status, 404, 'unrelated sibling voicebanks must never be searched');
 
+  const ambiguous = await request(port, sampleUrl(extraName, fixture.expected.ambiguous_alias, 60));
+  assert.equal(ambiguous.status, 404, 'ambiguous WAV basename matches must never be guessed');
+
   const selectedMain = await request(port, sampleUrl(mainName, fixture.expected.extra_only_alias, 60));
   assert.equal(selectedMain.status, 200, startup.stderr);
   assert.deepEqual(
