@@ -82,5 +82,24 @@ test('server never shells out for ZIP extraction or reports fake test success', 
   assert.equal(source.includes('extractAllTo('), false);
   assert.equal(source.includes('res.status(501).json'), true);
   assert.equal(source.includes("process.env.HOST || '127.0.0.1'"), true);
-  assert.equal(source.includes('MAX_ZIP_TOTAL_BYTES'), true);
+});
+
+test('web voicebank imports have no fixed archive, upload, or OTO count ceilings', () => {
+  const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  for (const removedLimit of [
+    'MAX_ZIP_ENTRIES',
+    'MAX_ZIP_MEMBER_BYTES',
+    'MAX_ZIP_TOTAL_BYTES',
+    'MAX_UPLOAD_BYTES',
+    'MAX_INDEXED_ENTRIES',
+    'MAX_CHUNK_BYTES',
+    'totalChunks > 300',
+    "fileSize: 600 * 1024 * 1024"
+  ]) {
+    assert.equal(source.includes(removedLimit), false, `unexpected fixed limit: ${removedLimit}`);
+  }
+  assert.equal(source.includes('fs.promises.statfs'), true);
+  assert.equal(source.includes('readTextFileLines(layer.iniPath)'), true);
+  assert.equal(source.includes('fs.promises.readFile(layer.iniPath)'), false);
+  assert.equal(source.includes("app.use(express.raw"), false);
 });
