@@ -218,7 +218,7 @@ def test_large_note_batch_keeps_native_worker_memory_bounded(
     worker_count_getter = getattr(native_api, "get_last_render_worker_count", None)
     assert callable(worker_count_getter)
     worker_count_getter.restype = ctypes.c_int
-    assert 1 <= int(worker_count_getter()) <= 2
+    assert 1 <= int(cast(Any, worker_count_getter())) <= 2
 
     error_getter = getattr(native_api, "get_last_render_error", None)
     assert callable(error_getter)
