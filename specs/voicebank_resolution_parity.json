@@ -126,6 +126,14 @@
     {
       "filename": "audio/duplicate-a_F4.wav",
       "alias": "同一"
+    },
+    {
+      "filename": "audio/explicit-vcv.wav",
+      "alias": "a き"
+    },
+    {
+      "filename": "audio/explicit-vcv-pitch.wav",
+      "alias": "a き_C4"
     }
   ],
   "extra_entries": [
@@ -168,7 +176,9 @@
     "main/encoding/cp932.wav": "cp932_oto_loaded",
     "main/audio/main-default-a.wav": "main_unqualified_a_must_lose_to_prefix_map",
     "main/audio/duplicate-a_C4.wav": "same_alias_closest_c4",
-    "main/audio/duplicate-a_F4.wav": "same_alias_closest_f4"
+    "main/audio/duplicate-a_F4.wav": "same_alias_closest_f4",
+    "main/audio/explicit-vcv.wav": "explicit_vcv_wins",
+    "main/audio/explicit-vcv-pitch.wav": "mapped_vcv_must_not_override_explicit"
   },
   "expected": {
     "layers_when_extra_selected": [
@@ -191,7 +201,8 @@
     "encoding_alias": "特殊",
     "same_alias": "同一",
     "same_alias_note_60": "same_alias_closest_c4",
-    "same_alias_note_65": "same_alias_closest_f4"
+    "same_alias_note_65": "same_alias_closest_f4",
+    "explicit_vcv_alias": "a き"
   },
   "encoding_case": {
     "alias": "特殊",
