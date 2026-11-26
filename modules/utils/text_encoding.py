@@ -21,6 +21,7 @@ oto.ini（CP932 で書かれた日本語名）と一致しなくなり、音源�
 """
 from __future__ import annotations
 
+import logging
 import os
 import ntpath
 import shutil
@@ -313,13 +314,13 @@ def repair_mojibake_tree(
                 if rename_complete and not _cancelled():
                     _rename(root, entry.name, strict=False)
                 else:
-                    logger.warning(
+                    logging.warning(
                         "文字化け修復を途中で停止しました。再スキャンで残りを修復できます: %s",
                         entry.path,
                     )
                 if _cancelled():
                     break
     except OSError as exc:
-        logger.warning("文字化け修復をスキップしました (%s): %s", root, exc)
+        logging.warning("文字化け修復をスキップしました (%s): %s", root, exc)
 
     return renamed
