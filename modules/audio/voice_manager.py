@@ -55,7 +55,7 @@ class VoiceManager:
         self.internal_voice_dir = os.path.join(self.base_path, "voice_banks")
         self.voices = {}  # { "キャラ名": "絶対パス" }
 
-    def _repair_garbled_names(self) -> None:
+    def _repair_garbled_names(self, cancel_event=None) -> None:
         """アプリの保存先(voice_banks 等)内の、文字化けしたフォルダ名・ファイル名を直す。"""
         from modules.utils.text_encoding import repair_mojibake_tree
         seen = set()
@@ -65,7 +65,11 @@ class VoiceManager:
                 continue
             seen.add(key)
             try:
-                for old, new in repair_mojibake_tree(root):
+                for old, new in repair_mojibake_tree(
+                    root,
+                    cancel_event=cancel_event,
+                    max_entries=200_000,
+                ):
                     self._sync_managed_voice_registry_rename(old, new)
                     print(f"[VoiceManager] 文字化けを修復: {os.path.basename(old)} -> {os.path.basename(new)}")
             except OSError as e:
@@ -112,7 +116,7 @@ class VoiceManager:
 
     def scan_voices(self, cancel_event=None, progress_callback=None):
         """Scan voicebank folders incrementally with cancellation and traversal limits."""
-        self._repair_garbled_names()
+        self._repair_garbled_names(cancel_event=cancel_event)
 
         search_paths = []
         if self.system == "Darwin":
