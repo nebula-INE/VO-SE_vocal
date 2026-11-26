@@ -197,6 +197,18 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
     );
   }
 
+  const explicitVcv = await request(
+    port,
+    sampleUrl(extraName, 'き', 65) + '&prevLyric=' + encodeURIComponent('あ')
+  );
+  assert.equal(explicitVcv.status, 200, startup.stderr);
+  assert.equal(decodeURIComponent(explicitVcv.headers['x-alias-matched']), fixture.expected.explicit_vcv_alias);
+  assert.deepEqual(
+    explicitVcv.body,
+    wavs.get('explicit_vcv_wins'),
+    'explicit VCV alias must win over an automatically pitch-mapped VCV variant'
+  );
+
   const unrelated = await request(port, sampleUrl(extraName, fixture.expected.unrelated_alias, 60));
   assert.equal(unrelated.status, 404, 'unrelated sibling voicebanks must never be searched');
 
