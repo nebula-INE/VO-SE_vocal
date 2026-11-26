@@ -4,7 +4,6 @@ from modules.data.oto_parser import (
     OtoEntry,
     OtoParser,
     VoicebankLoadCancelled,
-    VoicebankResourceLimitError,
 )
 import pytest
 
@@ -553,7 +552,7 @@ def test_load_oto_file_accepts_large_records_without_fixed_size_ceilings(tmp_pat
     ini_file = tmp_path / "large-record.oto"
     long_alias = "あ" * 70_000
     ini_file.write_text(
-        f"large.wav={long_alias},0,0,0,0,0\\n",
+        f"large.wav={long_alias},0,0,0,0,0\n",
         encoding="utf-8",
     )
     # Compatibility names from older releases must not impose a hidden default cap.
@@ -572,7 +571,7 @@ def test_load_voice_dir_has_no_default_oto_entry_ceiling(tmp_path, monkeypatch):
     voice_dir.mkdir()
     (voice_dir / "character.txt").write_text("name=Unlimited\\n", encoding="utf-8")
     (voice_dir / "oto.ini").write_text(
-        "a.wav=あ,0,0,0,0,0\\nb.wav=い,0,0,0,0,0\\n",
+        "a.wav=あ,0,0,0,0,0\nb.wav=い,0,0,0,0,0\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(parser_module, "MAX_VOICEBANK_OTO_ENTRIES", 1, raising=False)
