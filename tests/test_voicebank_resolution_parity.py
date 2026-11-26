@@ -151,6 +151,40 @@ def test_shared_voicebank_resolution_contract_when_main_is_selected(tmp_path: Pa
     assert extra_only.wav_path == str(main / "audio" / "extra-ji.wav")
 
 
+def test_same_alias_pitch_variants_survive_oto_cache_reload(tmp_path: Path) -> None:
+    main, _extra, _unrelated = _materialize_voicebanks(tmp_path)
+
+    first_parser = OtoParser()
+    first_parser.load_voice_dir(
+        str(main),
+        use_cache=True,
+        reset=True,
+        write_cache=True,
+    )
+    first_choice = first_parser.resolve_alias(FIXTURE["expected"]["same_alias"], note_num=65)
+    assert first_choice is not None
+    assert first_choice.wav_path == str(main / "audio" / "duplicate-a_F4.wav")
+
+    # Public get() stays first-wins, while note-aware resolution sees all variants.
+    first_alias = first_parser.get(FIXTURE["expected"]["same_alias"])
+    assert first_alias is not None
+    assert first_alias.wav_path == str(main / "audio" / "duplicate-a_C4.wav")
+
+    cached_parser = OtoParser()
+    cached_parser.load_voice_dir(
+        str(main),
+        use_cache=True,
+        reset=True,
+        write_cache=False,
+    )
+    cached_choice = cached_parser.resolve_alias(
+        FIXTURE["expected"]["same_alias"],
+        note_num=65,
+    )
+    assert cached_choice is not None
+    assert cached_choice.wav_path == str(main / "audio" / "duplicate-a_F4.wav")
+
+
 def test_shared_resolution_fixture_declares_safe_cross_platform_rules() -> None:
     contract = FIXTURE["contract"]
     assert contract["companion_matching"] == "exact_normalized_base_name_only"
