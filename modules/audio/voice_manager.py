@@ -8,11 +8,6 @@ import json
 import tempfile
 
 
-MAX_VOICE_ZIP_ENTRIES = 200_000
-MAX_VOICE_ZIP_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
-MAX_VOICE_ZIP_FILE_BYTES = 1024 * 1024 * 1024
-
-
 def get_resource_path(relative_path: str) -> str:
     """
     リソースファイルの絶対パスを取得する。
@@ -68,7 +63,6 @@ class VoiceManager:
                 for old, new in repair_mojibake_tree(
                     root,
                     cancel_event=cancel_event,
-                    max_entries=200_000,
                 ):
                     self._sync_managed_voice_registry_rename(old, new)
                     print(f"[VoiceManager] 文字化けを修復: {os.path.basename(old)} -> {os.path.basename(new)}")
@@ -115,7 +109,7 @@ class VoiceManager:
         return os.path.join(root, "VO-SE", "voices")
 
     def scan_voices(self, cancel_event=None, progress_callback=None):
-        """Scan voicebank folders incrementally with cancellation and traversal limits."""
+        """Scan all configured voicebank roots incrementally with cancellation/progress."""
         self._repair_garbled_names(cancel_event=cancel_event)
 
         search_paths = []
@@ -140,13 +134,11 @@ class VoiceManager:
 
         self.voices.clear()
         scanned_directories = 0
-        discovered_banks = 0
-        stop_scan = False
-        max_directories = 200_000
-        max_banks = 20_000
+        cancelled = False
 
         for search_root in search_paths:
-            if stop_scan or (cancel_event is not None and cancel_event.is_set()):
+            if cancelled or (cancel_event is not None and cancel_event.is_set()):
+                cancelled = True
                 break
             if not os.path.isdir(search_root) or os.path.islink(search_root):
                 continue
@@ -161,17 +153,9 @@ class VoiceManager:
                 onerror=_walk_error,
             ):
                 if cancel_event is not None and cancel_event.is_set():
-                    stop_scan = True
+                    cancelled = True
                     break
                 scanned_directories += 1
-                if scanned_directories > max_directories:
-                    logging.warning(
-                        "音源一覧スキャンのディレクトリ上限 (%s) に到達しました。残りはスキップします。",
-                        max_directories,
-                    )
-                    stop_scan = True
-                    break
-
                 directories[:] = sorted(
                     name for name in directories
                     if not os.path.islink(os.path.join(current, name))
@@ -179,27 +163,26 @@ class VoiceManager:
                 if any(name.casefold() == "oto.ini" for name in files):
                     voice_name = os.path.basename(current)
                     self.voices[voice_name] = current
-                    discovered_banks += 1
-                    if discovered_banks >= max_banks:
-                        logging.warning(
-                            "音源一覧スキャンの登録上限 (%s) に到達しました。残りはスキップします。",
-                            max_banks,
-                        )
-                        stop_scan = True
-                        break
 
                 if progress_callback is not None and scanned_directories % 128 == 0:
                     try:
                         progress_callback(scanned_directories)
                     except Exception:
                         logging.debug("音源スキャンの進捗通知をスキップ", exc_info=True)
+            if cancelled:
+                break
 
         self.voices["VO-SE Official (Embedded)"] = "__INTERNAL__"
+        if progress_callback is not None:
+            try:
+                progress_callback(scanned_directories)
+            except Exception:
+                logging.debug("音源スキャンの最終進捗通知をスキップ", exc_info=True)
         logging.info(
             "VO-SE: %d 件の音源を検出しました (%d directories scanned, cancelled=%s).",
             len(self.voices),
             scanned_directories,
-            bool(cancel_event is not None and cancel_event.is_set()),
+            cancelled,
         )
         return self.voices
 
@@ -247,48 +230,43 @@ class VoiceManager:
         return config
 
     def install_voice_from_zip(self, zip_path):
-        """ZIP音源を voice_banks に展開して追加する。"""
+        """Import a ZIP voicebank using same-volume staging and an atomic directory move."""
         import zipfile
-        import tempfile
         from modules.utils.text_encoding import safe_extract_zip
 
         if not os.path.exists(zip_path):
             raise FileNotFoundError(f"ZIP not found: {zip_path}")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                # ZIP bombs and malformed archives must fail before extraction starts.
-                zip_infos = zf.infolist()
-                if len(zip_infos) > MAX_VOICE_ZIP_ENTRIES:
-                    raise ValueError(
-                        f"ZIP内のファイル数が安全な上限 ({MAX_VOICE_ZIP_ENTRIES:,}) を超えています。"
-                    )
-                total_uncompressed = 0
-                for info in zip_infos:
-                    if info.is_dir():
-                        continue
-                    if info.file_size < 0 or info.file_size > MAX_VOICE_ZIP_FILE_BYTES:
-                        raise ValueError(
-                            f"ZIP内の単一ファイルが安全なサイズ上限を超えています: {info.filename}"
-                        )
-                    total_uncompressed += info.file_size
-                    if total_uncompressed > MAX_VOICE_ZIP_UNCOMPRESSED_BYTES:
-                        raise ValueError(
-                            "ZIP展開後の合計サイズが安全な上限 "
-                            f"({MAX_VOICE_ZIP_UNCOMPRESSED_BYTES:,} bytes) を超えています。"
-                        )
+        voice_root = self.user_voice_dir
+        root_existed = os.path.isdir(voice_root)
+        os.makedirs(voice_root, exist_ok=True)
+        dest_dir: str
+        try:
+            # Staging under the final voice root keeps extraction and installation
+            # on one filesystem. Moving the completed bank is atomic and avoids
+            # temporarily requiring twice the archive's uncompressed disk space.
+            with tempfile.TemporaryDirectory(
+                prefix=".vose-import-",
+                dir=voice_root,
+            ) as tmp_dir:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    # No fixed archive-size/member-count ceiling: safe_extract_zip
+                    # checks real destination free space and validates every path.
+                    safe_extract_zip(zf, tmp_dir, collect_paths=False)
 
-                # Windows 等で作られた ZIP は日本語名を CP932 で保存し UTF-8 フラグを立てない。
-                # そのまま展開するとフォルダ名・wav 名が化けて oto.ini と一致しなくなるため、
-                # 名前を正しく読み直しながら安全に展開する。
-                safe_extract_zip(zf, tmp_dir)
+                candidates = self.find_oto_dirs(tmp_dir)
+                if not candidates:
+                    raise ValueError("oto.ini が見つからないため、UTAU音源として認識できません。")
 
-            candidates = self.find_oto_dirs(tmp_dir)
-            if not candidates:
-                raise ValueError('oto.ini が見つからないため、UTAU音源として認識できません。')
-
-            src_dir = candidates[0]
-            dest_dir = self._copy_voice_dir(src_dir)
+                dest_dir = self._move_voice_dir(candidates[0])
+        except Exception:
+            if not root_existed:
+                try:
+                    if os.path.isdir(voice_root) and not os.listdir(voice_root):
+                        os.rmdir(voice_root)
+                except OSError:
+                    pass
+            raise
 
         self.scan_voices()
         return os.path.basename(dest_dir)
@@ -297,15 +275,21 @@ class VoiceManager:
     # フォルダからの取り込み
     # ------------------------------------------------------------------
     @staticmethod
-    def find_oto_dirs(root_dir, max_depth=4):
-        """root_dir 以下（max_depth 階層まで）で oto.ini を含むフォルダを浅い順に返す。"""
+    def find_oto_dirs(root_dir, max_depth=None):
+        """root_dir 以下から oto.ini を探す。既定では深さの固定上限を設けない。"""
         found = []
         root_dir = os.path.normpath(root_dir)
         base_depth = root_dir.count(os.sep)
-        for cur, dirs, files in os.walk(root_dir):
-            if cur.count(os.sep) - base_depth >= max_depth:
+        for cur, dirs, files in os.walk(root_dir, topdown=True, followlinks=False):
+            depth = cur.count(os.sep) - base_depth
+            if max_depth is not None and depth >= max_depth:
                 dirs[:] = []
-            if any(f.lower() == 'oto.ini' for f in files):
+            else:
+                dirs[:] = sorted(
+                    name for name in dirs
+                    if not os.path.islink(os.path.join(cur, name))
+                )
+            if any(f.casefold() == "oto.ini" for f in files):
                 found.append(cur)
         return sorted(found, key=lambda p: (p.count(os.sep), p))
 
@@ -347,28 +331,49 @@ class VoiceManager:
                 installed_name = next(iter(added_names))
         return installed_name
 
-    def _copy_voice_dir(self, src_dir):
-        """src_dir を user_voice_dir 配下へ重複しない名前でコピーし、コピー先パスを返す。"""
-        import shutil
-
-        voice_name = os.path.basename(src_dir.rstrip(os.sep)) or 'ImportedVoice'
-        safe_name = ''.join(ch for ch in voice_name if ch not in '<>:"/\\|?*').strip() or 'ImportedVoice'
+    def _unique_voice_destination(self, src_dir):
+        voice_name = os.path.basename(src_dir.rstrip(os.sep)) or "ImportedVoice"
+        safe_name = "".join(
+            ch for ch in voice_name if ch not in '<>:"/\\\\|?*'
+        ).strip() or "ImportedVoice"
 
         os.makedirs(self.user_voice_dir, exist_ok=True)
-        dest_dir = os.path.join(self.user_voice_dir, safe_name)
-        base = dest_dir
+        base = os.path.join(self.user_voice_dir, safe_name)
+        dest_dir = base
         idx = 1
-        while os.path.exists(dest_dir):
+        while os.path.lexists(dest_dir):
             dest_dir = f"{base}_{idx}"
             idx += 1
+        return dest_dir
 
+    def _move_voice_dir(self, src_dir):
+        """Move a staged same-volume voicebank into place without duplicating its data."""
+        import shutil
+
+        dest_dir = self._unique_voice_destination(src_dir)
+        try:
+            os.replace(src_dir, dest_dir)
+            self._register_managed_voice(dest_dir)
+        except Exception:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            try:
+                self._unregister_managed_voice(dest_dir)
+            except OSError:
+                logging.exception("Failed to clean up Voicebank ownership registry")
+            raise
+        return dest_dir
+
+    def _copy_voice_dir(self, src_dir):
+        """src_dir を user_voice_dir 配下へコピーし、コピー先パスを返す。"""
+        import shutil
+
+        dest_dir = self._unique_voice_destination(src_dir)
         try:
             shutil.copytree(src_dir, dest_dir)
             # Register only folders that VO-SE itself copied. Keep this index
             # outside the voicebank so its original file list is not modified.
             self._register_managed_voice(dest_dir)
         except Exception:
-            # 途中まで作られたコピーを残さない（次回スキャンで壊れた音源として出るため）
             shutil.rmtree(dest_dir, ignore_errors=True)
             try:
                 self._unregister_managed_voice(dest_dir)

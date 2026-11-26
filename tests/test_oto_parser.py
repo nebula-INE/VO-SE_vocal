@@ -4,7 +4,6 @@ from modules.data.oto_parser import (
     OtoEntry,
     OtoParser,
     VoicebankLoadCancelled,
-    VoicebankResourceLimitError,
 )
 import pytest
 
@@ -547,39 +546,55 @@ def test_load_oto_file_streams_without_materializing_full_text(tmp_path, monkeyp
     assert parser.get("い") is not None
 
 
-def test_load_oto_file_enforces_file_size_limit(tmp_path, monkeypatch):
+def test_load_oto_file_accepts_large_records_without_fixed_size_ceilings(tmp_path, monkeypatch):
     from modules.data import oto_parser as parser_module
 
-    ini_file = tmp_path / "large.oto"
-    ini_file.write_text("a.wav=あ,0,0,0,0,0\n", encoding="utf-8")
-    monkeypatch.setattr(parser_module, "MAX_OTO_FILE_BYTES", 4)
+    ini_file = tmp_path / "large-record.oto"
+    long_alias = "あ" * 70_000
+    ini_file.write_text(
+        f"large.wav={long_alias},0,0,0,0,0\n",
+        encoding="utf-8",
+    )
+    # Compatibility names from older releases must not impose a hidden default cap.
+    monkeypatch.setattr(parser_module, "MAX_OTO_FILE_BYTES", 4, raising=False)
+    monkeypatch.setattr(parser_module, "MAX_OTO_LINE_CHARS", 4, raising=False)
 
-    with pytest.raises(VoicebankResourceLimitError, match="サイズ上限"):
-        OtoParser().load_oto_file(str(ini_file))
+    parser = OtoParser()
+    assert parser.load_oto_file(str(ini_file)) == 1
+    assert parser.get(long_alias) is not None
 
 
-def test_load_voice_dir_clears_partial_index_when_entry_limit_is_reached(tmp_path, monkeypatch):
+def test_load_voice_dir_has_no_default_oto_entry_ceiling(tmp_path, monkeypatch):
     from modules.data import oto_parser as parser_module
 
     voice_dir = tmp_path / "voice"
     voice_dir.mkdir()
-    (voice_dir / "character.txt").write_text("name=Limit\\n", encoding="utf-8")
+    (voice_dir / "character.txt").write_text("name=Unlimited\\n", encoding="utf-8")
     (voice_dir / "oto.ini").write_text(
         "a.wav=あ,0,0,0,0,0\nb.wav=い,0,0,0,0,0\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(parser_module, "MAX_VOICEBANK_OTO_ENTRIES", 1)
+    monkeypatch.setattr(parser_module, "MAX_VOICEBANK_OTO_ENTRIES", 1, raising=False)
 
     parser = OtoParser()
-    with pytest.raises(VoicebankResourceLimitError, match="安全な上限"):
-        parser.load_voice_dir(
-            str(voice_dir),
-            use_cache=False,
-            reset=True,
-            write_cache=False,
-        )
-    assert parser.get("あ") is None
-    assert parser.get("い") is None
+    count = parser.load_voice_dir(
+        str(voice_dir),
+        use_cache=False,
+        reset=True,
+        write_cache=False,
+    )
+    assert count == 2
+    assert parser.get("あ") is not None
+    assert parser.get("い") is not None
+
+
+def test_find_voice_root_searches_deep_parent_chain_by_default(tmp_path):
+    bank_root = tmp_path / "nested-bank"
+    selected = bank_root / "a" / "b" / "c" / "d" / "selected"
+    selected.mkdir(parents=True)
+    (bank_root / "character.txt").write_text("name=DeepBank", encoding="utf-8")
+
+    assert OtoParser.find_voice_root(str(selected)) == str(bank_root)
 
 
 def test_load_oto_file_honors_cancellation(tmp_path):

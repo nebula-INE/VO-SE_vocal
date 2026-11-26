@@ -6,7 +6,6 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import { pipeline } from 'stream/promises';
-import { Transform } from 'stream';
 import yauzl from 'yauzl';
 import multer from 'multer';
 import {
@@ -65,15 +64,15 @@ const storage = multer.diskStorage({
   }
 });
 
-const uploadMiddleware = multer({
-  storage,
-  limits: { fileSize: 600 * 1024 * 1024 } // 600MB
-});
+// Multer streams uploaded files to disk; archive capacity is checked against
+// the extraction volume's actual free space before any voicebank files are written.
+const uploadMiddleware = multer({ storage });
 
 // JSON and text parsers for API payloads
 app.use(express.json({ limit: '100mb' }));
 app.use(express.text({ limit: '100mb' }));
-app.use(express.raw({ limit: '500mb', type: ['application/octet-stream', 'application/zip'] }));
+// Raw ZIP endpoints intentionally remain unparsed so routes can stream the
+// request body directly to disk instead of buffering hundreds of MiB in RAM.
 
 // ============================================================
 // Memory Guard
@@ -93,6 +92,42 @@ function checkMemoryAndClean() {
 }
 
 // Native Node.js Helper for decoding Shift-JIS / UTF-8
+async function detectTextFileEncoding(filePath) {
+  const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+  try {
+    // Validate incrementally, keeping only the current stream chunk in memory.
+    for await (const chunk of fs.createReadStream(filePath)) {
+      utf8Decoder.decode(chunk, { stream: true });
+    }
+    utf8Decoder.decode();
+    return 'utf-8';
+  } catch {
+    return 'shift-jis';
+  }
+}
+
+async function* readTextFileLines(filePath) {
+  const encoding = await detectTextFileEncoding(filePath);
+  const decoder = new TextDecoder(encoding);
+  let pending = '';
+
+  for await (const chunk of fs.createReadStream(filePath)) {
+    pending += decoder.decode(chunk, { stream: true });
+    let newlineIndex = pending.indexOf('\n');
+    while (newlineIndex !== -1) {
+      let line = pending.slice(0, newlineIndex);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      yield line;
+      pending = pending.slice(newlineIndex + 1);
+      newlineIndex = pending.indexOf('\n');
+    }
+  }
+
+  pending += decoder.decode();
+  if (pending.endsWith('\r')) pending = pending.slice(0, -1);
+  if (pending.length > 0) yield pending;
+}
+
 function decodeTextBuffer(buffer) {
   try {
     const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
@@ -113,11 +148,8 @@ function decodeTextBuffer(buffer) {
 // ★修正点:
 //   1. エイリアス毎の fs.existsSync（同期I/O）を撤廃。
 //      wav の存在確認は再生・サンプル要求時にのみ行う。
-//   2. entries 配列に上限を設け、巨大音源（数万エイリアス）で
-//      メモリが際限なく膨張しないようにする。
-//      上限超過分は aliasMap のみに保持（検索・単体参照は可能）。
-const MAX_INDEXED_ENTRIES = 20000;
-
+//   2. oto.ini は TextDecoder + ReadStream で逐次解析し、
+//      巨大ファイル全体や split() による行配列をRAMへ展開しない。
 // ★追加: メインスレッド（iPad Safari等のサンドボックスを含む）を
 //         ブロックし続けないよう、一定件数ごとにイベントループへ制御を返す。
 function yieldToEventLoop() {
@@ -132,7 +164,7 @@ const YIELD_EVERY_FILES = 20;    // oto.iniファイル自体、この件数ご�
 //   1. fs.readFileSync / fs.readdirSync → fs.promises 版に変更
 //   2. 一定件数ごとに yieldToEventLoop() を挟み、長時間の連続実行を避ける
 //   3. エイリアス毎の existsSync は行わない（前回の修正を維持）
-//   4. entries に上限を設定（前回の修正を維持）
+//   4. aliasMap / entries は全エントリを保持し、マルチピッチ候補を欠落させない
 async function parseOtoIniFull(dirPath, resolutionPlan) {
   const plan = resolutionPlan || await collectVoicebankResolutionPlan(
     dirPath,
@@ -166,17 +198,20 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
     const layer = plan.layerInfo[layerIndex];
     const currentDir = layer.directory;
     try {
-      const buf = await fs.promises.readFile(layer.iniPath);
-      const content = decodeTextBuffer(buf);
-      const lines = content.split(/\r?\n/);
       const relativeDir = path.relative(layer.root, currentDir);
       const subdirPrefix = relativeDir && relativeDir !== '.'
         ? relativeDir.split(path.sep).join('\\') + '\\'
         : '';
 
       let linesSinceYield = 0;
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index].trim();
+      for await (const rawLine of readTextFileLines(layer.iniPath)) {
+        linesSinceYield += 1;
+        if (linesSinceYield >= YIELD_EVERY_LINES) {
+          linesSinceYield = 0;
+          await yieldToEventLoop();
+        }
+
+        const line = rawLine.trim();
         if (!line || !line.includes('=')) continue;
 
         const separator = line.indexOf('=');
@@ -222,9 +257,7 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
           overlap
         };
 
-        if (result.entries.length < MAX_INDEXED_ENTRIES) {
-          result.entries.push(entryObj);
-        }
+        result.entries.push(entryObj);
         // The first complete/main layer wins duplicate aliases. All pitch variants
         // remain in entries so same-layer multi-pitch selection can choose by MIDI.
         if (!result.aliasMap.has(alias)) result.aliasMap.set(alias, entryObj);
@@ -242,12 +275,6 @@ async function parseOtoIniFull(dirPath, resolutionPlan) {
             const scopedBaseName = subdirPrefix + baseNameNoExt;
             if (!result.aliasMap.has(scopedBaseName)) result.aliasMap.set(scopedBaseName, entryObj);
           }
-        }
-
-        linesSinceYield += 1;
-        if (linesSinceYield >= YIELD_EVERY_LINES) {
-          linesSinceYield = 0;
-          await yieldToEventLoop();
         }
       }
     } catch (error) {
@@ -394,30 +421,12 @@ function decodeZipFilename(bufOrStr) {
   }
 }
 
-const MAX_ZIP_ENTRIES = 100_000;
-const MAX_ZIP_MEMBER_BYTES = 2 * 1024 ** 3;
-const MAX_ZIP_TOTAL_BYTES = 8 * 1024 ** 3;
-const MAX_UPLOAD_BYTES = 600 * 1024 * 1024;
-const MAX_CHUNK_BYTES = 2 * 1024 * 1024;
-
-function createByteLimitTransform(maxBytes, message) {
-  let totalBytes = 0;
-  return new Transform({
-    transform(chunk, encoding, callback) {
-      totalBytes += chunk.length;
-      if (totalBytes > maxBytes) {
-        callback(new Error(message));
-        return;
-      }
-      callback(null, chunk);
-    }
-  });
-}
-
-function extractWithYauzl(zipPath, targetDir) {
-  return new Promise((resolve, reject) => {
-    fs.mkdirSync(targetDir, { recursive: true });
-
+// Chunk size is a transport detail only; it does not limit total upload size.
+async function preflightZipForDiskSpace(zipPath, targetDir) {
+  // First pass validates every archive path and computes the expanded payload
+  // size without extracting. This replaces fixed per-member/archive byte/count
+  // ceilings with the real capacity of the destination filesystem.
+  const expandedBytes = await new Promise((resolve, reject) => {
     yauzl.open(zipPath, {
       lazyEntries: true,
       autoClose: false,
@@ -427,8 +436,7 @@ function extractWithYauzl(zipPath, targetDir) {
       if (openError) return reject(openError);
 
       let settled = false;
-      let entryCount = 0;
-      let totalExpandedBytes = 0;
+      let totalExpandedBytes = 0n;
 
       const fail = (error) => {
         if (settled) return;
@@ -438,12 +446,7 @@ function extractWithYauzl(zipPath, targetDir) {
       };
 
       zipfile.on('entry', (entry) => {
-        (async () => {
-          entryCount += 1;
-          if (entryCount > MAX_ZIP_ENTRIES) {
-            throw new Error('ZIP内のファイル数が上限を超えています。');
-          }
-
+        try {
           const rawName = decodeZipFilename(entry.fileName);
           const entryPath = resolveZipEntryPath(targetDir, rawName);
           if (!entryPath) {
@@ -455,20 +458,97 @@ function extractWithYauzl(zipPath, targetDir) {
             throw new Error(`ZIP内のシンボリックリンクは許可されていません: ${rawName}`);
           }
 
-          const isDirectory = rawName.endsWith('/') || rawName.endsWith(String.fromCharCode(92)) || (unixMode & 0xf000) === 0x4000;
+          const isDirectory = rawName.endsWith('/') ||
+            rawName.endsWith(String.fromCharCode(92)) ||
+            (unixMode & 0xf000) === 0x4000;
+          if (!isDirectory) {
+            const size = Number(entry.uncompressedSize);
+            if (!Number.isSafeInteger(size) || size < 0) {
+              throw new Error(`ZIP内に不正なファイルサイズがあります: ${rawName}`);
+            }
+            totalExpandedBytes += BigInt(size);
+          }
+          zipfile.readEntry();
+        } catch (error) {
+          fail(error);
+        }
+      });
+
+      zipfile.on('end', () => {
+        if (settled) return;
+        settled = true;
+        try { zipfile.close(); } catch {}
+        resolve(totalExpandedBytes);
+      });
+      zipfile.on('error', fail);
+      zipfile.readEntry();
+    });
+  });
+
+  if (typeof fs.promises.statfs === 'function') {
+    try {
+      const stats = await fs.promises.statfs(targetDir, { bigint: true });
+      const freeBytes = BigInt(stats.bavail) * BigInt(stats.bsize);
+      if (expandedBytes > freeBytes) {
+        throw new Error(
+          'ZIPを展開する空き容量が不足しています ' +
+          `(必要 ${expandedBytes.toString()} bytes / 空き ${freeBytes.toString()} bytes)。`
+        );
+      }
+    } catch (error) {
+      if (error && ['ENOSYS', 'ENOTSUP', 'EINVAL'].includes(error.code)) {
+        console.warn('[VO-SE] Destination free-space check is unavailable; write-time ENOSPC handling remains active.');
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  return expandedBytes;
+}
+
+async function extractWithYauzl(zipPath, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  await preflightZipForDiskSpace(zipPath, targetDir);
+
+  return new Promise((resolve, reject) => {
+    yauzl.open(zipPath, {
+      lazyEntries: true,
+      autoClose: false,
+      decodeStrings: false,
+      validateEntrySizes: true
+    }, (openError, zipfile) => {
+      if (openError) return reject(openError);
+
+      let settled = false;
+
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        try { zipfile.close(); } catch {}
+        reject(error);
+      };
+
+      zipfile.on('entry', (entry) => {
+        (async () => {
+          const rawName = decodeZipFilename(entry.fileName);
+          const entryPath = resolveZipEntryPath(targetDir, rawName);
+          if (!entryPath) {
+            throw new Error(`不正なZIPパスです: ${rawName}`);
+          }
+
+          const unixMode = (entry.externalFileAttributes >>> 16) & 0xffff;
+          if ((unixMode & 0xf000) === 0xa000) {
+            throw new Error(`ZIP内のシンボリックリンクは許可されていません: ${rawName}`);
+          }
+
+          const isDirectory = rawName.endsWith('/') ||
+            rawName.endsWith(String.fromCharCode(92)) ||
+            (unixMode & 0xf000) === 0x4000;
           if (isDirectory) {
             await fs.promises.mkdir(entryPath, { recursive: true });
             zipfile.readEntry();
             return;
-          }
-
-          const size = Number(entry.uncompressedSize);
-          if (!Number.isSafeInteger(size) || size < 0 || size > MAX_ZIP_MEMBER_BYTES) {
-            throw new Error(`ZIP内のファイルサイズが上限を超えています: ${rawName}`);
-          }
-          totalExpandedBytes += size;
-          if (totalExpandedBytes > MAX_ZIP_TOTAL_BYTES) {
-            throw new Error('ZIP展開後の合計サイズが上限を超えています。');
           }
 
           await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
@@ -480,6 +560,7 @@ function extractWithYauzl(zipPath, targetDir) {
           });
 
           // 'wx' prevents duplicate ZIP members from overwriting a prior entry.
+          // The stream is bounded by backpressure, not by an arbitrary file-size cap.
           await pipeline(readStream, fs.createWriteStream(entryPath, { flags: 'wx' }));
           zipfile.readEntry();
         })().catch(fail);
@@ -498,7 +579,7 @@ function extractWithYauzl(zipPath, targetDir) {
 }
 
 async function extractZipStreaming(zipPath, targetDir) {
-  // The only extractor is the bounded, path-validating streaming implementation.
+  // The only extractor is the streaming, path-validating implementation.
   // There is deliberately no shell/unzip or whole-archive fallback.
   await extractWithYauzl(zipPath, targetDir);
   return true;
@@ -2057,7 +2138,6 @@ app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
     !Number.isSafeInteger(chunkIndex) ||
     !Number.isSafeInteger(totalChunks) ||
     totalChunks < 1 ||
-    totalChunks > 300 ||
     chunkIndex < 0 ||
     chunkIndex >= totalChunks
   ) {
@@ -2079,15 +2159,10 @@ app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
 
   try {
     fs.mkdirSync(chunksDir, { recursive: true });
-    if (Buffer.isBuffer(req.body)) {
-      if (req.body.length > MAX_CHUNK_BYTES) {
-        return res.status(413).json({ success: false, error: 'Upload chunk exceeds the 2 MiB limit' });
-      }
-      fs.writeFileSync(chunkFilePath, req.body);
-    } else {
-      const writeStream = fs.createWriteStream(chunkFilePath, { flags: 'wx' });
-      await pipeline(req, createByteLimitTransform(MAX_CHUNK_BYTES, 'Upload chunk exceeds the 2 MiB limit'), writeStream);
-    }
+    // Stream each request chunk to disk with backpressure. CHUNK_SIZE is a
+    // client-side transport choice, not a server-enforced file-size ceiling.
+    const writeStream = fs.createWriteStream(chunkFilePath, { flags: 'wx' });
+    await pipeline(req, writeStream);
 
     const receivedCount = fs.readdirSync(chunksDir).filter((file) => /^part_\d+$/.test(file)).length;
     if (receivedCount < totalChunks) {
@@ -2110,9 +2185,6 @@ app.post('/api/py/upload-voicebank-chunk', async (req, res) => {
         assembledStream.once('finish', resolve);
         assembledStream.once('error', reject);
       });
-      if (fs.statSync(assembledZipPath).size > MAX_UPLOAD_BYTES) {
-        throw new Error('Voicebank ZIP exceeds the 600 MiB upload limit');
-      }
     } catch (error) {
       assembledStream.destroy();
       throw error;
@@ -2144,15 +2216,8 @@ app.post('/api/py/upload-voicebank-stream', async (req, res) => {
 
   try {
     fs.mkdirSync(voicebanksDir, { recursive: true });
-    if (Buffer.isBuffer(req.body)) {
-      if (req.body.length > MAX_UPLOAD_BYTES) {
-        return res.status(413).json({ success: false, error: 'Voicebank ZIP exceeds the 600 MiB upload limit' });
-      }
-      fs.writeFileSync(tmpZipPath, req.body);
-    } else {
-      const writeStream = fs.createWriteStream(tmpZipPath, { flags: 'wx' });
-      await pipeline(req, createByteLimitTransform(MAX_UPLOAD_BYTES, 'Voicebank ZIP exceeds the 600 MiB upload limit'), writeStream);
-    }
+    const writeStream = fs.createWriteStream(tmpZipPath, { flags: 'wx' });
+    await pipeline(req, writeStream);
     await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
   } catch (err) {
     fs.unlink(tmpZipPath, () => {});
@@ -2182,9 +2247,6 @@ app.post('/api/py/upload-voicebank', async (req, res) => {
     // base64ルートは呼び出し側の都合上避けられないが、
     // デコード後は即ディスクに書き出し、以降はストリーミング解凍に合流させる
     const buffer = Buffer.from(fileData, 'base64');
-    if (buffer.length > MAX_UPLOAD_BYTES) {
-      return res.status(413).json({ success: false, error: 'Voicebank ZIP exceeds the 600 MiB upload limit' });
-    }
     fs.writeFileSync(tmpZipPath, buffer);
     await processZipStreamToDir(tmpZipPath, targetDir, baseName, res);
   } catch (err) {

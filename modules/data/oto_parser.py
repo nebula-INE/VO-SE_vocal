@@ -106,15 +106,10 @@ def get_system_ram_gb() -> float:
 
 IS_LOW_RAM = get_system_ram_gb() <= 8.5
 
-# Guardrails for malformed or unusually large third-party voicebanks.
-MAX_OTO_FILE_BYTES = 32 * 1024 * 1024 if IS_LOW_RAM else 128 * 1024 * 1024
-MAX_OTO_LINE_CHARS = 64 * 1024
-MAX_VOICEBANK_OTO_ENTRIES = 100_000 if IS_LOW_RAM else 300_000
+# The cache has a separate optional-read budget because it is a disposable
+# optimization; an oversized cache is skipped and the source oto.ini is still
+# streamed normally. Source files and valid voicebank layers have no fixed cap.
 MAX_OTO_CACHE_BYTES = 16 * 1024 * 1024 if IS_LOW_RAM else 64 * 1024 * 1024
-MAX_LAYER_SCAN_DIRECTORIES = 100_000 if IS_LOW_RAM else 300_000
-MAX_LAYER_OTO_FILES = 2_048
-MAX_WAV_FALLBACK_SCAN_ENTRIES = 100_000 if IS_LOW_RAM else 250_000
-MAX_WAV_FALLBACK_SCAN_DIRECTORIES = 20_000 if IS_LOW_RAM else 50_000
 
 
 class VoicebankResourceLimitError(RuntimeError):
@@ -137,8 +132,6 @@ def _find_unique_voicebank_file_by_name(
 ) -> Tuple[Optional[str], bool]:
     """Find a unique file with constant memory; stop immediately on ambiguity."""
     matches: set[str] = set()
-    scanned_entries = 0
-    scanned_directories = 0
     target = basename.casefold()
 
     for root in roots:
@@ -147,20 +140,15 @@ def _find_unique_voicebank_file_by_name(
         pending = [root]
         while pending:
             current = pending.pop()
-            scanned_directories += 1
-            if scanned_directories > MAX_WAV_FALLBACK_SCAN_DIRECTORIES:
-                return None, False
             try:
                 with os.scandir(current) as iterator:
+                    subdirectories = []
                     for item in iterator:
-                        scanned_entries += 1
-                        if scanned_entries > MAX_WAV_FALLBACK_SCAN_ENTRIES:
-                            return None, False
                         try:
                             if item.is_symlink():
                                 continue
                             if item.is_dir(follow_symlinks=False):
-                                pending.append(item.path)
+                                subdirectories.append(item.path)
                             elif (
                                 item.is_file(follow_symlinks=False)
                                 and item.name.casefold() == target
@@ -171,6 +159,7 @@ def _find_unique_voicebank_file_by_name(
                                     return None, True
                         except OSError:
                             continue
+                pending.extend(sorted(subdirectories, reverse=True))
             except OSError:
                 continue
 
@@ -466,29 +455,33 @@ class OtoParser:
         cls,
         start: str,
         voices_dir: Optional[str] = None,
-        max_up: int = 3,
+        max_up: Optional[int] = None,
     ) -> str:
-        """Find the extracted bank root without walking into unrelated voicebanks.
+        """Find the extracted bank root without a default parent-depth ceiling.
 
-        Search the selected directory and at most max_up parents for UTAU root
-        markers. If none exists, limit fallback to the direct child of voices/
-        containing the selection. Without a recognizable voices directory, the
-        selected directory itself is the search boundary.
+        Search upward for UTAU root markers, stopping at the configured voices
+        directory when one is known. Callers may still pass max_up explicitly
+        when they need a narrower search. Without a recognizable voices
+        directory, the selected directory remains the fallback boundary.
         """
         selected = os.path.abspath(os.path.expanduser(start))
         voices_root = cls._infer_voices_dir(selected, voices_dir)
         current = selected
-        for _ in range(max(0, int(max_up)) + 1):
+        depth = 0
+        while True:
             if cls._contains_root_marker(current):
                 return current
             if voices_root and os.path.normcase(current) == os.path.normcase(voices_root):
                 break
             if voices_root and not cls._is_within(current, voices_root):
                 break
+            if max_up is not None and depth >= max(0, int(max_up)):
+                break
             parent = os.path.dirname(current)
             if parent == current:
                 break
             current = parent
+            depth += 1
 
         if voices_root and cls._is_within(selected, voices_root):
             relative = os.path.relpath(selected, voices_root)
@@ -509,23 +502,12 @@ class OtoParser:
             "ぱぴぷぺぽぁぃぅぇぉゃゅょゔっ"
         )
         covered: set[str] = set()
-        try:
-            file_size = os.path.getsize(ini_path)
-        except OSError:
+        if not os.path.isfile(ini_path):
             return covered, 0.0
-        if file_size > MAX_OTO_FILE_BYTES:
-            raise VoicebankResourceLimitError(
-                f"oto.ini が安全なサイズ上限を超えています ({file_size:,} bytes): {ini_path}"
-            )
-
         encoding = OtoParser._detect_text_encoding(ini_path)
         try:
             with open(ini_path, "r", encoding=encoding, errors="strict", newline=None) as source:
-                for line_number, raw_line in enumerate(source, start=1):
-                    if len(raw_line) > MAX_OTO_LINE_CHARS:
-                        raise VoicebankResourceLimitError(
-                            f"oto.ini の1行が安全な長さ上限を超えています: {ini_path} (line {line_number})"
-                        )
+                for raw_line in source:
                     if "=" not in raw_line:
                         continue
                     filename, params = raw_line.split("=", 1)
@@ -604,20 +586,14 @@ class OtoParser:
 
         found: List[Tuple[str, str, str]] = []
         seen_roots: set[str] = set()
-        scanned_directories = 0
         for layer_root in root_specs:
             root_key = os.path.normcase(os.path.realpath(layer_root))
             if root_key in seen_roots:
                 continue
             seen_roots.add(root_key)
             for current, dirs, files in os.walk(layer_root, topdown=True, followlinks=False):
-                scanned_directories += 1
                 if cancel_event is not None and cancel_event.is_set():
                     raise VoicebankLoadCancelled("音源フォルダのスキャンはキャンセルされました。")
-                if scanned_directories > MAX_LAYER_SCAN_DIRECTORIES:
-                    raise VoicebankResourceLimitError(
-                        f"音源フォルダの走査数が安全な上限 ({MAX_LAYER_SCAN_DIRECTORIES:,}) を超えました: {layer_root}"
-                    )
                 dirs[:] = sorted(
                     directory for directory in dirs
                     if not os.path.islink(os.path.join(current, directory))
@@ -627,10 +603,6 @@ class OtoParser:
                     ini_path = os.path.join(current, oto_names[0])
                     if not os.path.islink(ini_path):
                         found.append((os.path.abspath(current), ini_path, layer_root))
-                        if len(found) > MAX_LAYER_OTO_FILES:
-                            raise VoicebankResourceLimitError(
-                                f"oto.ini の検出数が安全な上限 ({MAX_LAYER_OTO_FILES:,}) を超えました: {layer_root}"
-                            )
 
         selected_has_layer = any(
             os.path.normcase(os.path.realpath(directory))
@@ -911,22 +883,12 @@ class OtoParser:
         cancel_event: Optional[threading.Event] = None,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> int:
-        """Stream one oto.ini into the alias database under explicit resource limits."""
+        """Stream one oto.ini into the alias database without default size/count caps."""
         if not os.path.isfile(ini_path):
             logger.warning("oto.ini が見つかりません: %s", ini_path)
             return 0
 
-        try:
-            file_size = os.path.getsize(ini_path)
-        except OSError:
-            logger.warning("oto.ini のサイズを取得できません: %s", ini_path)
-            return 0
-        if file_size > MAX_OTO_FILE_BYTES:
-            raise VoicebankResourceLimitError(
-                f"oto.ini が安全なサイズ上限を超えています ({file_size:,} bytes): {ini_path}"
-            )
-
-        limit = MAX_VOICEBANK_OTO_ENTRIES if max_entries is None else max(0, int(max_entries))
+        limit = None if max_entries is None else max(0, int(max_entries))
         voice_dir = os.path.dirname(os.path.abspath(ini_path))
         encoding = self._detect_text_encoding(ini_path)
         count = 0
@@ -936,10 +898,6 @@ class OtoParser:
                 for idx, raw_line in enumerate(source):
                     if idx % 256 == 0 and cancel_event is not None and cancel_event.is_set():
                         raise VoicebankLoadCancelled("音源読み込みはキャンセルされました。")
-                    if len(raw_line) > MAX_OTO_LINE_CHARS:
-                        raise VoicebankResourceLimitError(
-                            f"oto.ini の1行が安全な長さ上限を超えています: {ini_path} (line {idx + 1})"
-                        )
                     line = raw_line.strip()
                     if not line or "=" not in line:
                         continue
@@ -947,9 +905,9 @@ class OtoParser:
                     entry = self._parse_line(line, voice_dir)
                     if entry is None:
                         continue
-                    if count >= limit:
+                    if limit is not None and count >= limit:
                         raise VoicebankResourceLimitError(
-                            f"音源のOTOエントリ数が安全な上限 ({limit:,}) を超えました: {ini_path}"
+                            f"音源のOTOエントリ数が指定上限 ({limit:,}) を超えました: {ini_path}"
                         )
 
                     search_root = os.path.abspath(
@@ -1219,23 +1177,20 @@ class OtoParser:
                 if cancel_event is not None and cancel_event.is_set():
                     raise VoicebankLoadCancelled("音源読み込みはキャンセルされました。")
                 ini_path = str(item["ini_path"])
-                remaining = MAX_VOICEBANK_OTO_ENTRIES - total
                 loaded = self.load_oto_file(
                     ini_path,
                     voice_root=str(item["root"]),
                     wav_search_roots=wav_search_roots,
                     layer_priority=layer_priority,
-                    max_entries=remaining,
                     cancel_event=cancel_event,
                     progress_callback=progress_callback,
                 )
                 total += loaded
                 logger.info(
-                    "oto.ini レイヤー読込: %s (%d エントリ, 合計 %d / %d, CV %.0f%%, %s)",
+                    "oto.ini レイヤー読込: %s (%d エントリ, 合計 %d, CV %.0f%%, %s)",
                     item["directory"],
                     loaded,
                     total,
-                    MAX_VOICEBANK_OTO_ENTRIES,
                     float(item["coverage"]) * 100.0,
                     "補助" if item["supplement"] else "メイン",
                 )

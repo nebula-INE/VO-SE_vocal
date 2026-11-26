@@ -21,10 +21,12 @@ oto.ini（CP932 で書かれた日本語名）と一致しなくなり、音源�
 """
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import ntpath
 import shutil
+import tempfile
 import zipfile
 from typing import Callable, List, Optional, Tuple
 
@@ -91,43 +93,55 @@ def fix_cp437_mojibake(text: str, strict: bool = False) -> str:
 
 
 def detect_zip_name_encoding(infos) -> str:
-    """UTF-8 フラグの無い名前をまとめて見て、ZIP 全体のエンコーディングを決める。
-
-    1 つの名前だけで判断すると偶然の一致で誤判定するため、ZIP 内の
-    「非 ASCII でフラグ無しの名前」がすべて同じエンコーディングで読めるかを確かめる。
-    戻り値: "utf-8" | "cp932" | "cp437"（= zipfile の読みをそのまま使う）
-    """
-    raws = []
-    for info in infos:
-        if info.flag_bits & 0x800 or info.filename.isascii():
-            continue
-        try:
-            raws.append(info.filename.encode("cp437"))
-        except UnicodeEncodeError:
-            return "cp437"       # すでに正しい文字列として読めている
-    if not raws:
-        return "cp437"
+    """Inspect legacy member names without retaining duplicate byte/string lists."""
     for encoding in ("utf-8", "cp932"):
-        try:
-            decoded = [r.decode(encoding) for r in raws]
-        except UnicodeDecodeError:
-            continue
-        if any(_has_japanese(d) for d in decoded):
+        saw_japanese = False
+        valid = True
+        for info in infos:
+            if info.flag_bits & 0x800 or info.filename.isascii():
+                continue
+            try:
+                decoded = info.filename.encode("cp437").decode(encoding)
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                valid = False
+                break
+            saw_japanese = saw_japanese or _has_japanese(decoded)
+        if valid and saw_japanese:
             return encoding
     return "cp437"
 
 
+def _decode_zip_member_name(info: zipfile.ZipInfo, encoding: str) -> str:
+    if info.flag_bits & 0x800 or encoding == "cp437" or info.filename.isascii():
+        return info.filename
+    return info.filename.encode("cp437").decode(encoding)
+
+
+def _zip_member_target(root: str, info: zipfile.ZipInfo, encoding: str):
+    """Return a validated destination, or None for harmless OS metadata files."""
+    name = _decode_zip_member_name(info, encoding).replace(chr(92), "/")
+    if "__MACOSX/" in name or name.endswith(".DS_Store"):
+        return None
+
+    drive, _ = ntpath.splitdrive(name)
+    if drive or ntpath.isabs(name) or os.path.isabs(name) or name.startswith("/"):
+        raise ValueError(f"不正なZIPパスです: {info.filename}")
+
+    destination = os.path.realpath(os.path.join(root, name))
+    try:
+        inside = os.path.commonpath([root, destination]) == root
+    except ValueError:
+        inside = False
+    if not inside:
+        raise ValueError(f"ZIP展開先が対象フォルダ外です: {info.filename}")
+    return name, destination
+
+
 def decode_zip_member_names(infos) -> List[str]:
-    """ZIP メンバーの名前を、正しい日本語に直して返す（infos と同じ順序）。"""
+    """ZIP メンバー名を CP437/UTF-8/CP932 判定に従って復元する。"""
     infos = list(infos)
     encoding = detect_zip_name_encoding(infos)
-    names = []
-    for info in infos:
-        if info.flag_bits & 0x800 or encoding == "cp437" or info.filename.isascii():
-            names.append(info.filename)       # UTF-8 フラグ付き / 判定不能 / ASCII のみ
-        else:
-            names.append(info.filename.encode("cp437").decode(encoding))
-    return names
+    return [_decode_zip_member_name(info, encoding) for info in infos]
 
 
 def safe_extract_zip(
@@ -135,89 +149,145 @@ def safe_extract_zip(
     dest_dir: str,
     progress: Optional[Callable[[int], None]] = None,
     *,
-    max_total_size: int = 8 * 1024**3,
-    max_member_size: int = 2 * 1024**3,
-    max_members: int = 100_000,
+    max_total_size: Optional[int] = None,
+    max_member_size: Optional[int] = None,
+    max_members: Optional[int] = None,
+    cancel_event=None,
+    collect_paths: bool = True,
 ) -> List[str]:
-    """文字化けを直しつつ、dest_dir の外へ書き出さないように ZIP を展開する。
+    """Extract a ZIP incrementally without arbitrary default size/count ceilings.
 
-    不正なパス（絶対パス・`..` で外へ出るもの）は ValueError。
-    戻り値: 展開したファイルの相対パス（正しい名前）の一覧。
+    Optional max_* arguments remain available for callers that intentionally need
+    an application-specific policy. By default, the archive is constrained by the
+    actual free space on the destination volume, not a hard-coded byte/member cap.
+
+    Path traversal and absolute paths are always rejected. File data is copied
+    through a temporary sibling file so an interrupted member is never left as a
+    partially written destination.
     """
     root = os.path.realpath(dest_dir)
     os.makedirs(root, exist_ok=True)
 
-    if max_total_size <= 0 or max_member_size <= 0 or max_members <= 0:
-        raise ValueError("ZIP 展開上限は正の整数で指定してください。")
+    for label, limit in (
+        ("max_total_size", max_total_size),
+        ("max_member_size", max_member_size),
+        ("max_members", max_members),
+    ):
+        if limit is not None and limit <= 0:
+            raise ValueError(f"{label} は正の整数で指定してください。")
 
+    # zipfile reads the central directory into ZipInfo objects when opening the
+    # archive. We do not add another member-count ceiling or retain a second
+    # decoded-name list alongside those objects.
     infos = zf.infolist()
-    if len(infos) > max_members:
+    if max_members is not None and len(infos) > max_members:
         raise ValueError(
-            f"ZIP内のファイル数が上限を超えています: {len(infos)} > {max_members}"
+            f"ZIP内のファイル数が指定上限を超えています: {len(infos)} > {max_members}"
         )
 
-    # Validate the complete archive before creating any extracted files. This
-    # prevents a late oversized member from leaving a partially installed bank.
+    encoding = detect_zip_name_encoding(infos)
     total_size = 0
+
+    # Validate every member path and calculate actual payload size before writing.
+    # This prevents a late path traversal or insufficient-space failure from
+    # leaving a partially installed archive.
     for info in infos:
-        if info.file_size < 0 or info.file_size > max_member_size:
+        if info.file_size < 0:
+            raise ValueError(f"ZIP内に不正なファイルサイズがあります: {info.filename}")
+        target = _zip_member_target(root, info, encoding)
+        if target is None or info.is_dir():
+            continue
+        if max_member_size is not None and info.file_size > max_member_size:
             raise ValueError(
-                f"ZIP内のファイルサイズが上限を超えています: "
+                f"ZIP内の単一ファイルが指定上限を超えています: "
                 f"{info.filename} ({info.file_size} bytes)"
             )
         total_size += info.file_size
-        if total_size > max_total_size:
+        if max_total_size is not None and total_size > max_total_size:
             raise ValueError(
-                f"ZIP展開後の合計サイズが上限を超えています: "
+                f"ZIP展開後の合計サイズが指定上限を超えています: "
                 f"{total_size} > {max_total_size} bytes"
             )
 
-    names = decode_zip_member_names(infos)
+    try:
+        free_space = shutil.disk_usage(root).free
+    except OSError:
+        # Some virtual/network filesystems do not report quota data reliably.
+        # Continue and let the write fail cleanly if the volume is full.
+        free_space = None
+    if free_space is not None and total_size > free_space:
+        raise OSError(
+            "ZIPを展開する空き容量が不足しています "
+            f"(必要 {total_size:,} bytes / 空き {free_space:,} bytes)。"
+        )
+
     total = total_size or 1
     done = 0
     extracted: List[str] = []
 
-    for info, decoded_name in zip(infos, names):
-        # ZIP名は通常POSIX形式だが、Windows形式の区切りも正規化する。
-        # ntpathで検査することで、Linux/macOS上でもWindowsドライブ指定を拒否する。
-        name = decoded_name.replace("\\", "/")
-        if "__MACOSX/" in name or name.endswith(".DS_Store"):
+    for info in infos:
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("ZIP展開はキャンセルされました。")
+
+        target_info = _zip_member_target(root, info, encoding)
+        if target_info is None:
             continue
-        drive, _ = ntpath.splitdrive(name)
-        if (
-            drive
-            or ntpath.isabs(name)
-            or os.path.isabs(name)
-            or name.startswith("/")
-        ):
-            raise ValueError(f"不正なZIPパスです: {info.filename}")
-        destination = os.path.realpath(os.path.join(root, name))
-        try:
-            inside = os.path.commonpath([root, destination]) == root
-        except ValueError:            # ドライブが違う等
-            inside = False
-        if not inside:
-            raise ValueError(f"ZIP展開先が対象フォルダ外です: {info.filename}")
+        name, destination = target_info
 
         if info.is_dir() or name.endswith("/"):
             os.makedirs(destination, exist_ok=True)
             continue
 
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        with zf.open(info) as source, open(destination, "wb") as target:
-            shutil.copyfileobj(source, target)
-        extracted.append(name)
+        parent = os.path.dirname(destination)
+        os.makedirs(parent, exist_ok=True)
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=".vose-extract-",
+            suffix=".part",
+            dir=parent,
+        )
+        try:
+            with zf.open(info) as source, os.fdopen(fd, "wb") as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+            os.replace(temporary_path, destination)
+        except OSError as exc:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                pass
+            if exc.errno == errno.ENOSPC:
+                raise OSError(
+                    "ZIP展開中に保存先の空き容量が不足しました。"
+                ) from exc
+            raise
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                pass
+            raise
+
+        if collect_paths:
+            extracted.append(name)
         done += info.file_size
         if progress is not None:
             progress(min(100, int(done * 100 / total)))
 
     return extracted
 
-
 def repair_mojibake_tree(
     root: str,
     cancel_event=None,
-    max_entries: int = 200_000,
+    max_entries: Optional[int] = None,
 ) -> List[Tuple[str, str]]:
     """Repair garbled names with bounded two-pass traversal and cooperative cancellation."""
     renamed: List[Tuple[str, str]] = []
@@ -270,7 +340,7 @@ def repair_mojibake_tree(
                         ]
                         for child_name in dirnames + filenames:
                             scanned += 1
-                            if scanned > max_entries:
+                            if max_entries is not None and scanned > max_entries:
                                 scan_complete = False
                                 break
                             if fix_cp437_mojibake(child_name, strict=True) != child_name:
@@ -303,7 +373,7 @@ def repair_mojibake_tree(
                         break
                     for child_name in filenames + dirnames:
                         renamed_scan += 1
-                        if renamed_scan > max_entries:
+                        if max_entries is not None and renamed_scan > max_entries:
                             rename_complete = False
                             break
                         if not os.path.islink(os.path.join(dirpath, child_name)):
