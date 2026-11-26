@@ -466,7 +466,7 @@ export function resolveVoicebankWavPath(otoDirectory, filename, voicebankRoots) 
 
   const basename = path.posix.basename(normalized);
   const candidates = [basename];
-  if (!basename.toLowerCase().endsWith('.wav')) candidates.push(\`\${basename}.wav\`);
+  if (!basename.toLowerCase().endsWith('.wav')) candidates.push(basename + '.wav');
   for (const candidate of candidates) {
     const resolved = findUniqueBasename(candidate, roots);
     if (resolved) return resolved;
