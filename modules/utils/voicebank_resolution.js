@@ -362,6 +362,28 @@ function rootContainingPath(candidate, roots) {
   return roots.find((root) => isPathInside(root, candidate)) || null;
 }
 
+function relativePathWithinRoot(candidate, root) {
+  const candidateParts = path.resolve(candidate).split(path.sep).filter(Boolean);
+  const rootParts = path.resolve(root).split(path.sep).filter(Boolean);
+  if (candidateParts.length < rootParts.length) return null;
+  for (let index = 0; index < rootParts.length; index += 1) {
+    if (normalizeName(candidateParts[index]) !== normalizeName(rootParts[index])) {
+      return null;
+    }
+  }
+  return candidateParts.slice(rootParts.length).join(path.sep);
+}
+
+function resolveCaseInsensitiveWithinRoots(candidate, roots) {
+  for (const root of roots) {
+    const relativePath = relativePathWithinRoot(candidate, root);
+    if (relativePath === null) continue;
+    const resolved = resolveCaseInsensitivePath(root, relativePath, roots);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
 function resolveCaseInsensitivePath(startDirectory, relativePath, roots) {
   const components = relativePath.split(/[\\/]/).filter((part) => part && part !== '.');
   let current = path.resolve(startDirectory);
@@ -449,19 +471,12 @@ export function resolveVoicebankWavPath(otoDirectory, filename, voicebankRoots) 
   if (!isAbsolute) {
     const exact = path.resolve(otoDirectory, normalized);
     if (safeFileInsideRoots(exact, roots)) return exact;
-    const caseInsensitive = resolveCaseInsensitivePath(otoDirectory, normalized, roots);
+    const caseInsensitive = resolveCaseInsensitiveWithinRoots(exact, roots);
     if (caseInsensitive) return caseInsensitive;
   } else if (!isWindowsAbsolute) {
     const candidate = path.resolve(normalized);
-    const containingRoot = rootContainingPath(candidate, roots);
-    if (containingRoot) {
-      const caseInsensitive = resolveCaseInsensitivePath(
-        containingRoot,
-        path.relative(containingRoot, candidate),
-        roots
-      );
-      if (caseInsensitive) return caseInsensitive;
-    }
+    const caseInsensitive = resolveCaseInsensitiveWithinRoots(candidate, roots);
+    if (caseInsensitive) return caseInsensitive;
   }
 
   const basename = path.posix.basename(normalized);

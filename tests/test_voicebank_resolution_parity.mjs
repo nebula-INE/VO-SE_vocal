@@ -124,7 +124,20 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
     Buffer.from(fixture.encoding_case.oto_base64_cp932, 'base64')
   );
 
-  await writeFile(join(extraDir, 'oto.ini'), otoLines(fixture.extra_entries).join('\n') + '\n', 'utf8');
+  const crossRoot = fixture.cross_root_case;
+  const crossRootFilename = crossRoot.oto_filename_pattern.replace(
+    '{main_bank_lower}',
+    mainName.toLowerCase()
+  );
+  const extraEntriesWithCrossRoot = [
+    ...fixture.extra_entries,
+    { filename: crossRootFilename, alias: crossRoot.alias }
+  ];
+  await writeFile(
+    join(extraDir, 'oto.ini'),
+    otoLines(extraEntriesWithCrossRoot).join('\n') + '\n',
+    'utf8'
+  );
   await writeFile(join(extraDir, 'prefix.map'), fixture.prefix_map.extra, 'utf8');
 
   await writeFile(
@@ -216,6 +229,14 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
 
   const ambiguous = await request(port, sampleUrl(extraName, fixture.expected.ambiguous_alias, 60));
   assert.equal(ambiguous.status, 404, 'ambiguous WAV basename matches must never be guessed');
+
+  const crossRootEntry = await request(port, sampleUrl(extraName, fixture.cross_root_case.alias, 60));
+  assert.equal(crossRootEntry.status, 200, startup.stderr);
+  assert.deepEqual(
+    crossRootEntry.body,
+    wavs.get(fixture.cross_root_case.wav_payload),
+    'case-insensitive relative paths may resolve into the exact paired main root'
+  );
 
   const boundary = fixture.path_boundary;
   const outsideFilename = suffix + '-' + boundary.outside_filename;

@@ -41,8 +41,16 @@ def _materialize_voicebanks(tmp_path: Path) -> tuple[Path, Path, Path]:
     (main / "oto.ini").write_text("\n".join(main_lines) + "\n", encoding="utf-8")
     (main / "prefix.map").write_text(FIXTURE["prefix_map"]["main"], encoding="utf-8")
 
+    cross_root = FIXTURE["cross_root_case"]
+    cross_root_filename = cross_root["oto_filename_pattern"].replace(
+        "{main_bank_lower}", main_name.casefold()
+    )
+    extra_entries = [
+        *FIXTURE["extra_entries"],
+        {"filename": cross_root_filename, "alias": cross_root["alias"]},
+    ]
     (extra / "oto.ini").write_text(
-        "\n".join(_oto_lines(FIXTURE["extra_entries"])) + "\n",
+        "\n".join(_oto_lines(extra_entries)) + "\n",
         encoding="utf-8",
     )
     (extra / "prefix.map").write_text(FIXTURE["prefix_map"]["extra"], encoding="utf-8")
@@ -132,6 +140,11 @@ def test_shared_voicebank_resolution_contract_when_extra_is_selected(tmp_path: P
     ambiguous = parser.resolve_alias(FIXTURE["expected"]["ambiguous_alias"])
     assert ambiguous is not None
     assert not Path(ambiguous.wav_path).is_file()
+
+    # A case-mismatched relative path can resolve into the exact paired main root.
+    cross_root = parser.get(FIXTURE["cross_root_case"]["alias"])
+    assert cross_root is not None
+    assert cross_root.wav_path == str(main / "audio" / "ambiguous.wav")
 
 
 def test_shared_voicebank_resolution_contract_when_main_is_selected(tmp_path: Path) -> None:

@@ -216,5 +216,10 @@
     "oto_filename": "../../{outside_filename}",
     "outside_filename": "outside.wav",
     "expected_status": 404
+  },
+  "cross_root_case": {
+    "alias": "cross-root-case",
+    "oto_filename_pattern": "../{main_bank_lower}/audio/ambiguous.wav",
+    "wav_payload": "ambiguous_main_candidate"
   }
 }
