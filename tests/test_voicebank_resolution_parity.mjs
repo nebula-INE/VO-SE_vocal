@@ -184,6 +184,19 @@ test('Web and Desktop share Extra pairing, main-first aliases, prefix.map, and p
     'CP932 oto.ini must be decoded and its WAV entry must remain usable'
   );
 
+  for (const [noteNum, payloadKey] of [
+    [60, fixture.expected.same_alias_note_60],
+    [65, fixture.expected.same_alias_note_65]
+  ]) {
+    const sameAlias = await request(port, sampleUrl(extraName, fixture.expected.same_alias, noteNum));
+    assert.equal(sameAlias.status, 200, startup.stderr);
+    assert.deepEqual(
+      sameAlias.body,
+      wavs.get(payloadKey),
+      'same OTO alias must choose the closest pitch-tagged WAV'
+    );
+  }
+
   const unrelated = await request(port, sampleUrl(extraName, fixture.expected.unrelated_alias, 60));
   assert.equal(unrelated.status, 404, 'unrelated sibling voicebanks must never be searched');
 
