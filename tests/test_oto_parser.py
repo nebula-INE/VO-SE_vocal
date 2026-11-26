@@ -592,3 +592,23 @@ def test_load_oto_file_honors_cancellation(tmp_path):
 
     with pytest.raises(VoicebankLoadCancelled):
         OtoParser().load_oto_file(str(ini_file), cancel_event=cancel_event)
+
+
+
+def test_layer_coverage_uses_streaming_reader(tmp_path, monkeypatch):
+    voice_dir = tmp_path / "voice"
+    voice_dir.mkdir()
+    ini_file = voice_dir / "oto.ini"
+    ini_file.write_text(
+        "a.wav=あ,0,0,0,0,0\nk.wav=か,0,0,0,0,0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        OtoParser,
+        "_read_safe",
+        staticmethod(lambda _path: pytest.fail("coverage must stream oto.ini")),
+    )
+
+    covered, fraction = OtoParser._layer_aliases_and_coverage(str(ini_file))
+    assert covered == {"あ", "か"}
+    assert fraction > 0

@@ -309,10 +309,16 @@ def test_scan_voices_supports_cancellation(vm, tmp_path):
 def test_scan_voices_reports_progress_without_glob_materialization(vm, tmp_path, monkeypatch):
     import glob
 
-    _make_voice(str(tmp_path / "source"), "VoiceD")
-    vm.internal_voice_dir = str(tmp_path / "source")
+    root = tmp_path / "source"
+    current = root
+    for index in range(130):
+        current = current / f"nested-{index:03d}"
+        current.mkdir(parents=True, exist_ok=True)
+    (current / "oto.ini").write_text("a.wav=あ,0,0,0,0,0\\n", encoding="utf-8")
+    vm.internal_voice_dir = str(root)
     monkeypatch.setattr(glob, "glob", lambda *_args, **_kwargs: pytest.fail("glob must not be used"))
     progress = []
 
     voices = vm.scan_voices(progress_callback=progress.append)
-    assert "VoiceD" in voices
+    assert "nested-129" in voices
+    assert progress
