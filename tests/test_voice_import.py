@@ -335,7 +335,7 @@ def test_zip_install_ignores_legacy_fixed_size_constants(vm, tmp_path, monkeypat
 
     archive = tmp_path / "large-bank.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("LargeVoice/oto.ini", "a.wav=あ,0,0,0,0,0\\n")
+        zf.writestr("LargeVoice/oto.ini", "a.wav=あ,0,0,0,0,0\n")
         zf.writestr("LargeVoice/a.wav", b"x" * 128)
 
     # A compatibility attribute set by older code must not restore a default cap.
