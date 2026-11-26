@@ -157,7 +157,8 @@ def test_voice_library_initial_and_manual_scans_run_on_worker():
     worker = source.split("class _VoiceScanWorker", 1)[1].split(
         "class VoiceCardGallery", 1
     )[0]
-    assert "voices = self.manager.scan_voices()" in worker
+    assert "cancel_event=self._cancel_event" in worker
+    assert "progress_callback=self.progress.emit" in worker
     assert "self.completed.emit(dict(voices or {}))" in worker
 
     gallery = source.split("def setup_gallery(self, voices=None):", 1)[1].split(

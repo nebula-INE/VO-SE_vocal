@@ -263,7 +263,7 @@ def test_managed_voice_registry_tracks_repaired_top_level_name(vm, tmp_path, mon
 
     src = _make_voice(str(tmp_path / "source"), "BrokenVoice")
 
-    def rename_managed_bank(root):
+    def rename_managed_bank(root, cancel_event=None, max_entries=200_000):
         if os.path.normcase(os.path.abspath(root)) != os.path.normcase(os.path.abspath(vm.user_voice_dir)):
             return []
         old_path = os.path.join(root, "BrokenVoice")
