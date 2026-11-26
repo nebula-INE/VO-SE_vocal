@@ -1268,9 +1268,15 @@ vbRegistry.warmBaseMidiCache = (indexed) => {
     const end = Math.min(entries.length, i + WARM_BATCH_SIZE);
     for (; i < end; i++) {
       const e = entries[i];
-      if (!e || !e.wav_path || !isRealPathInsideVoicebankRoots(e.wav_path, indexed.voicebankRoots)) continue;
+      if (!e || !e.filename) continue;
+      const resolvedWavPath = resolveVoicebankWavPath(
+        e.oto_dir || path.dirname(e.wav_path),
+        e.filename,
+        indexed.voicebankRoots
+      );
+      if (!resolvedWavPath) continue;
       try {
-        detectWavBaseMidi(e.wav_path, e.alias, e.filename);
+        detectWavBaseMidi(resolvedWavPath, e.alias, e.filename);
       } catch (err) {
         // ウォームアップの失敗は無視（実リクエスト時に通常経路で再試行される）
       }
