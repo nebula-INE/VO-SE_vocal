@@ -176,12 +176,12 @@
     "unrelated_alias_resolves": false,
     "ambiguous_alias": "曖昧",
     "ambiguous_resolves": false,
-    "encoding_alias": "ね"
+    "encoding_alias": "特殊"
   },
   "encoding_case": {
-    "alias": "ね",
+    "alias": "特殊",
     "filename": "cp932.wav",
-    "oto_base64_cp932": "Y3A5MzIud2F2PYLLLDAsMCwwLDIwLDUK",
+    "oto_base64_cp932": "Y3A5MzIud2F2PZPBjuosMCwwLDAsMjAsNQo=",
     "wav_path_under_main": "encoding/cp932.wav",
     "wav_payload": "cp932_oto_loaded"
   }
