@@ -240,7 +240,7 @@ class VoiceManager:
         voice_root = self.user_voice_dir
         root_existed = os.path.isdir(voice_root)
         os.makedirs(voice_root, exist_ok=True)
-        dest_dir = None
+        dest_dir: str
         try:
             # Staging under the final voice root keeps extraction and installation
             # on one filesystem. Moving the completed bank is atomic and avoids
