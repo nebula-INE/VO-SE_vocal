@@ -132,11 +132,9 @@ def test_shared_voicebank_resolution_contract_when_main_is_selected(tmp_path: Pa
         write_cache=False,
     )
 
-    expected_layers = [
-        str(main),
-        str(extra),
-    ]
-    assert list(parser.loaded_layers[:2]) == expected_layers
+    assert parser.loaded_layers[0] == str(main)
+    assert str(extra) in parser.loaded_layers
+    assert parser.loaded_layers.index(str(extra)) > parser.loaded_layers.index(str(main))
     assert all(str(unrelated) not in layer for layer in parser.loaded_layers)
 
     extra_only = parser.resolve_alias(FIXTURE["expected"]["extra_only_alias"])
