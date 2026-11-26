@@ -40,7 +40,7 @@ class ZipHandler:
             backup_created = False
             try:
                 with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                    safe_extract_zip(zip_ref, staging_path)
+                    safe_extract_zip(zip_ref, staging_path, collect_paths=False)
 
                 if os.path.lexists(extract_path):
                     if os.path.islink(extract_path) or not os.path.isdir(extract_path):
