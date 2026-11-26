@@ -156,6 +156,34 @@ def test_safe_extract_rejects_too_many_members(tmp_path):
         safe_extract_zip(zf, str(tmp_path / "out"), max_members=1)
 
 
+def test_safe_extract_has_no_fixed_size_or_member_defaults():
+    import inspect
+
+    parameters = inspect.signature(safe_extract_zip).parameters
+    assert parameters["max_total_size"].default is None
+    assert parameters["max_member_size"].default is None
+    assert parameters["max_members"].default is None
+
+
+def test_safe_extract_checks_real_free_space_before_writing(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from modules.utils import text_encoding
+
+    archive = tmp_path / "needs-space.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Voice/oto.ini", "a.wav=あ,0,0,0,0,0\\n")
+
+    monkeypatch.setattr(
+        text_encoding.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=1024, used=1024, free=0),
+    )
+    output = tmp_path / "out"
+    with zipfile.ZipFile(archive) as zf, pytest.raises(OSError, match="空き容量"):
+        safe_extract_zip(zf, str(output))
+    assert not (output / "Voice" / "oto.ini").exists()
+
+
 def test_path_traversal_still_rejected_with_legacy_names(tmp_path):
     archive = tmp_path / "evil.zip"
     make_legacy_zip(archive, {"../../悪.txt": b"x"})
