@@ -155,7 +155,8 @@
     "extra/audio/extra-f4.wav": "extra_prefix_map_loses",
     "unrelated/unrelated.wav": "unrelated_must_not_be_visible",
     "main/audio/ambiguous.wav": "ambiguous_main_candidate",
-    "extra/audio/ambiguous.wav": "ambiguous_extra_candidate"
+    "extra/audio/ambiguous.wav": "ambiguous_extra_candidate",
+    "main/encoding/cp932.wav": "cp932_oto_loaded"
   },
   "expected": {
     "layers_when_extra_selected": [
@@ -181,6 +182,7 @@
     "alias": "ね",
     "filename": "cp932.wav",
     "oto_base64_cp932": "Y3A5MzIud2F2PYLLLDAsMCwwLDIwLDUK",
-    "wav_path_under_main": "encoding/cp932.wav"
+    "wav_path_under_main": "encoding/cp932.wav",
+    "wav_payload": "cp932_oto_loaded"
   }
 }
