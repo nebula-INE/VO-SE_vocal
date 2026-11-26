@@ -280,7 +280,7 @@ def repair_mojibake_tree(
                             break
 
                 if not scan_complete:
-                    logger.warning(
+                    logging.warning(
                         "文字化け修復の検査をキャンセルまたは上限で停止しました: %s",
                         entry.path,
                     )
