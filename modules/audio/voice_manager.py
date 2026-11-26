@@ -2,7 +2,6 @@
 
 import os
 import platform
-import glob
 import sys
 import logging
 import json
@@ -107,54 +106,93 @@ class VoiceManager:
             root = os.getenv("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
         return os.path.join(root, "VO-SE", "voices")
 
-    def scan_voices(self):
-        """標準的なUTAU音源パスと内部フォルダをスキャン"""
-        # 以前のバージョンで文字化けしたまま取り込まれた音源（このアプリが作った
-        # 保存先の中だけ）を、正しい名前へ直してからスキャンする。
+    def scan_voices(self, cancel_event=None, progress_callback=None):
+        """Scan voicebank folders incrementally with cancellation and traversal limits."""
         self._repair_garbled_names()
 
         search_paths = []
-        
-        # 1. OSごとの標準パスを追加
-        if self.system == "Darwin": # macOS
+        if self.system == "Darwin":
             search_paths.append(os.path.expanduser("~/Library/Application Support/OpenUTAU/Content/Voices/"))
             search_paths.append(os.path.expanduser("~/Library/Application Support/OpenUTAU/Singers"))
-            search_paths.append(os.path.expanduser("~/Library/Application Support/Vocaloid/Voices/")) # 互換用
+            search_paths.append(os.path.expanduser("~/Library/Application Support/Vocaloid/Voices/"))
         elif self.system == "Windows":
             search_paths.append(r"C:\Program Files (x86)\UTAU\voice")
-            appdata_roaming = os.getenv('APPDATA')
+            appdata_roaming = os.getenv("APPDATA")
             if appdata_roaming:
                 search_paths.append(os.path.join(appdata_roaming, "OpenUTAU", "Content", "Voices"))
                 search_paths.append(os.path.join(appdata_roaming, "OpenUTAU", "Singers"))
-        else: # Linux ほか
+        else:
             data_home = os.getenv("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
             search_paths.append(os.path.join(data_home, "OpenUTAU", "Singers"))
             search_paths.append(os.path.join(data_home, "OpenUTAU", "Content", "Voices"))
 
-        # 2. プロジェクト内部の voice_banks フォルダ、および「音源を追加」の保存先を追加
         search_paths.append(self.internal_voice_dir)
         if os.path.normpath(self.user_voice_dir) != os.path.normpath(self.internal_voice_dir):
             search_paths.append(self.user_voice_dir)
 
         self.voices.clear()
-        for path in search_paths:
-            if not os.path.exists(path):
+        scanned_directories = 0
+        discovered_banks = 0
+        stop_scan = False
+        max_directories = 200_000
+        max_banks = 20_000
+
+        for search_root in search_paths:
+            if stop_scan or (cancel_event is not None and cancel_event.is_set()):
+                break
+            if not os.path.isdir(search_root) or os.path.islink(search_root):
                 continue
-            
-            # 再帰的に oto.ini を検索
-            for ini_path in glob.glob(os.path.join(path, "**/oto.ini"), recursive=True):
-                v_dir = os.path.dirname(ini_path)
-                # キャラ名はフォルダ名、または character.txt があればそこから取得する拡張性
-                v_name = os.path.basename(v_dir)
-                
-                # 重複した場合は、より「深い（個別設定された）」パスを優先
-                self.voices[v_name] = v_dir
-        
-        # 3. 【追加】内蔵音源（公式）をリストに加える
-        # DLL内に焼き込まれているので、物理パスの代わりに特殊なキーワードを入れる
+
+            def _walk_error(error):
+                logging.warning("音源フォルダを走査できません (%s): %s", search_root, error)
+
+            for current, directories, files in os.walk(
+                search_root,
+                topdown=True,
+                followlinks=False,
+                onerror=_walk_error,
+            ):
+                if cancel_event is not None and cancel_event.is_set():
+                    stop_scan = True
+                    break
+                scanned_directories += 1
+                if scanned_directories > max_directories:
+                    logging.warning(
+                        "音源一覧スキャンのディレクトリ上限 (%s) に到達しました。残りはスキップします。",
+                        max_directories,
+                    )
+                    stop_scan = True
+                    break
+
+                directories[:] = sorted(
+                    name for name in directories
+                    if not os.path.islink(os.path.join(current, name))
+                )
+                if any(name.casefold() == "oto.ini" for name in files):
+                    voice_name = os.path.basename(current)
+                    self.voices[voice_name] = current
+                    discovered_banks += 1
+                    if discovered_banks >= max_banks:
+                        logging.warning(
+                            "音源一覧スキャンの登録上限 (%s) に到達しました。残りはスキップします。",
+                            max_banks,
+                        )
+                        stop_scan = True
+                        break
+
+                if progress_callback is not None and scanned_directories % 128 == 0:
+                    try:
+                        progress_callback(scanned_directories)
+                    except Exception:
+                        logging.debug("音源スキャンの進捗通知をスキップ", exc_info=True)
+
         self.voices["VO-SE Official (Embedded)"] = "__INTERNAL__"
-        
-        logging.info(f"VO-SE: {len(self.voices)} 件の音源を検出しました。")
+        logging.info(
+            "VO-SE: %d 件の音源を検出しました (%d directories scanned, cancelled=%s).",
+            len(self.voices),
+            scanned_directories,
+            bool(cancel_event is not None and cancel_event.is_set()),
+        )
         return self.voices
 
     def is_internal(self, voice_name):

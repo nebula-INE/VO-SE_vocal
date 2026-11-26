@@ -1104,51 +1104,66 @@ class OtoParser:
         if write_cache and reset:
             try:
                 import json
-                cache_entries = []
-                for alias_key, entry in self._db.items():
-                    cache_entries.append({
-                        "db_key": alias_key,
-                        "alias": entry.alias,
-                        "filename": entry.filename,
-                        "voice_dir": entry.voice_dir,
-                        "search_root": entry.search_root,
-                        "search_roots": list(entry.search_roots),
-                        "left_blank": entry.left_blank,
-                        "fixed_range": entry.fixed_range,
-                        "right_blank": entry.right_blank,
-                        "preutterance": entry.preutterance,
-                        "overlap": entry.overlap,
-                        "layer_priority": entry.layer_priority,
-                    })
-                cache_alias_variants = []
-                for normalized_key, variants in self._alias_variants.items():
-                    for layer_priority, entry in variants:
-                        cache_alias_variants.append({
-                            "key": normalized_key,
-                            "layer_priority": layer_priority,
-                            "alias": entry.alias,
-                            "filename": entry.filename,
-                            "voice_dir": entry.voice_dir,
-                            "search_root": entry.search_root,
-                            "search_roots": list(entry.search_roots),
-                            "left_blank": entry.left_blank,
-                            "fixed_range": entry.fixed_range,
-                            "right_blank": entry.right_blank,
-                            "preutterance": entry.preutterance,
-                            "overlap": entry.overlap,
-                        })
+
                 with open(cache_path, "w", encoding="utf-8") as cache_file:
-                    json.dump(
-                        {
-                            "cache_version": 6,
-                            "entries": cache_entries,
-                            "alias_variants": cache_alias_variants,
-                            "source_signature": source_signature,
-                        },
-                        cache_file,
-                        ensure_ascii=False,
-                    )
+                    cache_file.write('{"cache_version":6,"entries":[')
+                    first_entry = True
+                    for alias_key, entry in self._db.items():
+                        if not first_entry:
+                            cache_file.write(",")
+                        first_entry = False
+                        json.dump(
+                            {
+                                "db_key": alias_key,
+                                "alias": entry.alias,
+                                "filename": entry.filename,
+                                "voice_dir": entry.voice_dir,
+                                "search_root": entry.search_root,
+                                "search_roots": list(entry.search_roots),
+                                "left_blank": entry.left_blank,
+                                "fixed_range": entry.fixed_range,
+                                "right_blank": entry.right_blank,
+                                "preutterance": entry.preutterance,
+                                "overlap": entry.overlap,
+                                "layer_priority": entry.layer_priority,
+                            },
+                            cache_file,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+
+                    cache_file.write('],"alias_variants":[')
+                    first_variant = True
+                    for normalized_key, variants in self._alias_variants.items():
+                        for layer_priority, entry in variants:
+                            if not first_variant:
+                                cache_file.write(",")
+                            first_variant = False
+                            json.dump(
+                                {
+                                    "key": normalized_key,
+                                    "layer_priority": layer_priority,
+                                    "alias": entry.alias,
+                                    "filename": entry.filename,
+                                    "voice_dir": entry.voice_dir,
+                                    "search_root": entry.search_root,
+                                    "search_roots": list(entry.search_roots),
+                                    "left_blank": entry.left_blank,
+                                    "fixed_range": entry.fixed_range,
+                                    "right_blank": entry.right_blank,
+                                    "preutterance": entry.preutterance,
+                                    "overlap": entry.overlap,
+                                },
+                                cache_file,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+                    cache_file.write('],"source_signature":')
+                    json.dump(source_signature, cache_file, ensure_ascii=False)
+                    cache_file.write("}")
                 logger.info("oto.ini レイヤーキャッシュ保存完了: %s", cache_path)
+            except MemoryError:
+                logger.warning("メモリ不足のため oto.ini キャッシュ保存をスキップします: %s", cache_path)
             except (OSError, TypeError, ValueError) as exc:
                 logger.warning("oto.ini キャッシュ保存エラー (%s)", exc)
 

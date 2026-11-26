@@ -337,3 +337,25 @@ def test_close_event_waits_for_voice_delete_worker():
     assert 'voice_delete_worker = getattr(gallery, "_delete_worker", None)' in close_handler
     assert '"音源削除終了待ち"' in close_handler
     assert "voice_delete_worker," in close_handler
+
+
+
+def test_voice_scan_worker_supports_cooperative_cancellation_and_progress():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    worker = source.split("class _VoiceScanWorker", 1)[1].split(
+        "class VoiceCardGallery", 1
+    )[0]
+    assert "self._cancel_event = threading.Event()" in worker
+    assert "def request_cancel(self)" in worker
+    assert "cancel_event=self._cancel_event" in worker
+    assert "progress_callback=self.progress.emit" in worker
+    assert "self.cancelled.emit()" in worker
+
+
+def test_close_requests_voice_scan_cancellation_before_waiting():
+    source = (ROOT / "modules" / "gui" / "main_window.py").read_text(encoding="utf-8")
+    close_handler = source.split("def closeEvent(self, event):", 1)[1].split(
+        "# レリタリング実行メゾット", 1
+    )[0]
+    assert "if running and worker is voice_scan_worker:" in close_handler
+    assert "request_cancel()" in close_handler

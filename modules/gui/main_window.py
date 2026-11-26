@@ -1455,21 +1455,41 @@ class _VoiceDeleteWorker(QThread):
 
 
 class _VoiceScanWorker(QThread):
-    """Run the recursive VoiceManager scan without blocking the GUI."""
+    """Run the recursive VoiceManager scan without blocking the UI."""
 
     completed = Signal(object)
     failed = Signal(str)
+    progress = Signal(int)
+    cancelled = Signal()
 
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self):
+        self._cancel_event.set()
 
     def run(self):
         try:
-            voices = self.manager.scan_voices()
-            self.completed.emit(dict(voices or {}))
+            voices = self.manager.scan_voices(
+                cancel_event=self._cancel_event,
+                progress_callback=self.progress.emit,
+            )
+        except MemoryError:
+            self.failed.emit(
+                "音源一覧のスキャン中にメモリ不足が発生しました。"
+                "不要なアプリを閉じてから再試行してください。"
+            )
+            return
         except Exception as exc:
             self.failed.emit(str(exc) or exc.__class__.__name__)
+            return
+
+        if self._cancel_event.is_set():
+            self.cancelled.emit()
+            return
+        self.completed.emit(dict(voices or {}))
 
 
 class VoiceCardGallery(QWidget):
@@ -1884,6 +1904,8 @@ class VoiceCardGallery(QWidget):
             worker = _VoiceScanWorker(self.manager, self)
             worker.completed.connect(self._on_voice_scan_completed)
             worker.failed.connect(self._on_voice_scan_failed)
+            worker.progress.connect(self._on_voice_scan_progress)
+            worker.cancelled.connect(self._on_voice_scan_cancelled)
             worker.finished.connect(worker.deleteLater)
             self._scan_worker = worker
             status_bar = getattr(owner, "statusBar", lambda: None)()
@@ -1953,6 +1975,19 @@ class VoiceCardGallery(QWidget):
             status_bar = getattr(self.window(), "statusBar", lambda: None)()
             if status_bar is not None:
                 status_bar.showMessage(f"音源一覧を更新しました: {len(voices)} 件", 3000)
+
+    @Slot(int)
+    def _on_voice_scan_progress(self, scanned_directories: int) -> None:
+        status_bar = getattr(self.window(), "statusBar", lambda: None)()
+        if status_bar is not None:
+            status_bar.showMessage(
+                f"音源一覧をスキャン中... {scanned_directories:,} フォルダ確認済み",
+                0,
+            )
+
+    @Slot()
+    def _on_voice_scan_cancelled(self) -> None:
+        self._scan_worker = None
 
     @Slot(str)
     def _on_voice_scan_failed(self, error_message: str) -> None:
@@ -7613,6 +7648,10 @@ class MainWindow(
             except RuntimeError:
                 # Qt object already deleted; it is no longer a live worker.
                 running = False
+            if running and worker is voice_scan_worker:
+                request_cancel = getattr(worker, "request_cancel", None)
+                if callable(request_cancel):
+                    request_cancel()
             if running and not worker.wait(15000):
                 QMessageBox.warning(self, title, message)
                 event.ignore()

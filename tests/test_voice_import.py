@@ -289,3 +289,30 @@ def test_managed_voice_registry_tracks_repaired_top_level_name(vm, tmp_path, mon
     assert vm.is_managed_voice(installed_path)
     assert vm.delete_user_voice(installed_path) == "FixedVoice"
     assert os.path.exists(os.path.join(src, "oto.ini"))
+
+
+
+@pytest.mark.unit
+def test_scan_voices_supports_cancellation(vm, tmp_path):
+    import threading
+
+    _make_voice(str(tmp_path / "source"), "VoiceC")
+    vm.internal_voice_dir = str(tmp_path / "source")
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    voices = vm.scan_voices(cancel_event=cancel_event)
+    assert voices == {"VO-SE Official (Embedded)": "__INTERNAL__"}
+
+
+@pytest.mark.unit
+def test_scan_voices_reports_progress_without_glob_materialization(vm, tmp_path, monkeypatch):
+    import glob
+
+    _make_voice(str(tmp_path / "source"), "VoiceD")
+    vm.internal_voice_dir = str(tmp_path / "source")
+    monkeypatch.setattr(glob, "glob", lambda *_args, **_kwargs: pytest.fail("glob must not be used"))
+    progress = []
+
+    voices = vm.scan_voices(progress_callback=progress.append)
+    assert "VoiceD" in voices
