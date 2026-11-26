@@ -305,6 +305,9 @@ class OtoParser:
         # alias → OtoEntry の辞書（読み込み順で first-wins）
         self._db: Dict[str, OtoEntry] = {}
         self._normalized_db: Dict[str, OtoEntry] = {}
+        # Keep pitch-tagged duplicates for note-aware selection while the public
+        # alias dictionary remains first-wins for compatibility/native metadata.
+        self._alias_variants: Dict[str, List[Tuple[int, OtoEntry]]] = {}
         self._prefix_map: List[PrefixMapEntry] = []
         self.loaded_layers: Tuple[str, ...] = ()
         self.loaded_oto_ini_paths: Tuple[str, ...] = ()
@@ -704,6 +707,55 @@ class OtoParser:
                     return existing_entry
         return None
 
+    def _lookup_alias_for_note(
+        self,
+        alias: str,
+        note_num: Optional[int],
+    ) -> Optional[OtoEntry]:
+        """Resolve same-alias multi-pitch WAV variants without changing first-wins get()."""
+        key = str(alias)
+        for candidate in self._alias_equivalent_spellings(key):
+            normalized = unicodedata.normalize("NFKC", candidate)
+            variants = self._alias_variants.get(normalized, [])
+            if not variants:
+                entry = self._lookup_alias(candidate)
+                if entry is not None:
+                    return entry
+                continue
+
+            preferred_layer = min(layer_index for layer_index, _entry in variants)
+            preferred_entries: List[OtoEntry] = []
+            seen_entries: set[int] = set()
+            for layer_index, entry in variants:
+                if layer_index != preferred_layer or id(entry) in seen_entries:
+                    continue
+                seen_entries.add(id(entry))
+                preferred_entries.append(entry)
+
+            if not preferred_entries:
+                continue
+            if note_num is None:
+                return preferred_entries[0]
+
+            pitch_entries: List[Tuple[int, OtoEntry]] = []
+            for entry in preferred_entries:
+                pitch_midi = _extract_pitch_midi(
+                    entry.alias,
+                    entry.filename,
+                    entry.voice_dir,
+                )
+                if pitch_midi is not None:
+                    pitch_entries.append((pitch_midi, entry))
+            if pitch_entries:
+                requested = int(round(float(note_num)))
+                return min(
+                    pitch_entries,
+                    key=lambda item: abs(item[0] - requested),
+                )[1]
+            return preferred_entries[0]
+
+        return None
+
     def _warn_unresolved(
         self,
         lyric: str,
@@ -756,6 +808,7 @@ class OtoParser:
         ini_path: str,
         voice_root: Optional[str] = None,
         wav_search_roots: Optional[List[str]] = None,
+        layer_priority: int = 0,
     ) -> int:
         """
         oto.ini を 1 ファイル読み込んでデータベースに追加する (8GB以下環境対応スロットリング)。
@@ -788,14 +841,17 @@ class OtoParser:
                         for root in (wav_search_roots or [search_root])
                     )
                 )
-                # 複数 oto.ini を再帰ロードしたとき、同名 alias を
-                # 後から読んだファイルで上書きしない。Web 側も同じ
-                # first-wins 方針なので、3経路の解決結果を一致させる。
                 normalized_alias = unicodedata.normalize("NFKC", entry.alias)
+                variants = self._alias_variants.setdefault(normalized_alias, [])
+                variants.append((int(layer_priority), entry))
+
+                # Public alias lookup and native metadata remain first-wins.
+                # Rendering can use the complete same-layer list above to select
+                # the closest pitch-tagged WAV, matching the Web resolver.
                 if entry.alias in self._db or normalized_alias in self._normalized_db:
                     existing = self._lookup_alias(entry.alias)
                     logger.warning(
-                        "重複 alias をスキップ (first-wins): %s (%s) / 既存=%s",
+                        "重複 alias を保持 (first-wins metadata / note-aware pitch): %s (%s) / 既存=%s",
                         entry.alias,
                         entry.wav_path,
                         existing.wav_path if existing is not None else "<unknown>",
@@ -822,10 +878,13 @@ class OtoParser:
                         prefix = rel_dir.replace(os.sep, "/").strip("/") + "/"
                         scoped_key = prefix + entry.alias
                         self._db.setdefault(scoped_key, entry)
+                        scoped_normalized = unicodedata.normalize("NFKC", scoped_key)
                         self._normalized_db.setdefault(
-                            unicodedata.normalize("NFKC", scoped_key),
+                            scoped_normalized,
                             self._db[scoped_key],
                         )
+                        scoped_variants = self._alias_variants.setdefault(scoped_normalized, [])
+                        scoped_variants.append((int(layer_priority), entry))
 
                 count += 1
 
@@ -936,7 +995,7 @@ class OtoParser:
                 with open(cache_path, "r", encoding="utf-8") as cache_file:
                     cached_data = json.load(cache_file)
                 if (
-                    cached_data.get("cache_version") == 5
+                    cached_data.get("cache_version") == 6
                     and cached_data.get("source_signature") == source_signature
                 ):
                     for item in cached_data.get("entries", []):
@@ -963,6 +1022,29 @@ class OtoParser:
                         self._normalized_db.setdefault(
                             unicodedata.normalize("NFKC", db_key), entry
                         )
+                    for item in cached_data.get("alias_variants", []):
+                        entry = OtoEntry(
+                            alias=item["alias"],
+                            filename=item["filename"],
+                            voice_dir=item.get("voice_dir", selected),
+                            search_root=item.get("search_root", item.get("voice_dir", selected)),
+                            search_roots=tuple(
+                                str(root)
+                                for root in item.get(
+                                    "search_roots",
+                                    [item.get("search_root", item.get("voice_dir", selected))],
+                                )
+                            ),
+                            left_blank=float(item.get("left_blank", 0)),
+                            fixed_range=float(item.get("fixed_range", 0)),
+                            right_blank=float(item.get("right_blank", 0)),
+                            preutterance=float(item.get("preutterance", 0)),
+                            overlap=float(item.get("overlap", 0)),
+                        )
+                        normalized_key = unicodedata.normalize("NFKC", item["key"])
+                        self._alias_variants.setdefault(normalized_key, []).append(
+                            (int(item.get("layer_priority", 0)), entry)
+                        )
                     logger.info(
                         "oto.ini レイヤーキャッシュからロード (%d alias / %d 層): %s",
                         len(self._db),
@@ -974,12 +1056,13 @@ class OtoParser:
                 logger.warning("oto.ini キャッシュ読み込みをスキップ (%s)", exc)
 
         total = 0
-        for item in layer_info:
+        for layer_priority, item in enumerate(layer_info):
             ini_path = str(item["ini_path"])
             loaded = self.load_oto_file(
                 ini_path,
                 voice_root=str(item["root"]),
                 wav_search_roots=wav_search_roots,
+                layer_priority=layer_priority,
             )
             total += loaded
             logger.info(
@@ -1011,11 +1094,29 @@ class OtoParser:
                         "preutterance": entry.preutterance,
                         "overlap": entry.overlap,
                     })
+                cache_alias_variants = []
+                for normalized_key, variants in self._alias_variants.items():
+                    for layer_priority, entry in variants:
+                        cache_alias_variants.append({
+                            "key": normalized_key,
+                            "layer_priority": layer_priority,
+                            "alias": entry.alias,
+                            "filename": entry.filename,
+                            "voice_dir": entry.voice_dir,
+                            "search_root": entry.search_root,
+                            "search_roots": list(entry.search_roots),
+                            "left_blank": entry.left_blank,
+                            "fixed_range": entry.fixed_range,
+                            "right_blank": entry.right_blank,
+                            "preutterance": entry.preutterance,
+                            "overlap": entry.overlap,
+                        })
                 with open(cache_path, "w", encoding="utf-8") as cache_file:
                     json.dump(
                         {
-                            "cache_version": 5,
+                            "cache_version": 6,
                             "entries": cache_entries,
+                            "alias_variants": cache_alias_variants,
                             "source_signature": source_signature,
                         },
                         cache_file,
@@ -1058,7 +1159,7 @@ class OtoParser:
         # VCV/CV normalization so another pitch folder cannot be selected.
         scoped_lyric = str(lyric).strip().replace("\\\\", "/").replace("\\", "/")
         if "/" in scoped_lyric:
-            exact_scoped = self._lookup_alias(scoped_lyric)
+            exact_scoped = self._lookup_alias_for_note(scoped_lyric, note_num)
             if exact_scoped is not None:
                 return self._log_resolution(exact_scoped, lyric)
 
@@ -1094,7 +1195,7 @@ class OtoParser:
 
         def match_pref(prefix: str) -> Optional[OtoEntry]:
             attempted_keys.append(prefix)
-            entry = self._lookup_alias(prefix)
+            entry = self._lookup_alias_for_note(prefix, note_num)
             if entry is not None:
                 return entry
 
@@ -1151,7 +1252,7 @@ class OtoParser:
             if mapped == alias:
                 return None
             attempted_keys.append(mapped)
-            return self._lookup_alias(mapped)
+            return self._lookup_alias_for_note(mapped, note_num)
 
         # When no prefix.map range covers this note, use only exact aliases
         # from the voicebank's unmarked/default layer. Do not run the broader
@@ -1161,7 +1262,7 @@ class OtoParser:
         if note_num is not None and self._prefix_map:
             from modules.data.prefix_map import select_prefix_map
             explicit_alias = (
-                self._lookup_alias(str(lyric)) is not None
+                self._lookup_alias_for_note(str(lyric), note_num) is not None
                 and (" " in str(lyric) or "_" in str(lyric) or str(lyric).startswith("-"))
             )
             if select_prefix_map(self._prefix_map, int(note_num)) is None and not explicit_alias:
@@ -1180,7 +1281,7 @@ class OtoParser:
                     str(lyric),
                 ))
                 for candidate in dict.fromkeys(exact_candidates):
-                    entry = self._lookup_alias(candidate)
+                    entry = self._lookup_alias_for_note(candidate, note_num)
                     if entry is not None:
                         return self._log_resolution(entry, lyric)
                 # No exact default alias exists. Keep the pitch-layer boundary
@@ -1189,10 +1290,10 @@ class OtoParser:
                 return None
 
         # 明示的な VCV/CV alias はそのまま優先する。
-        if self._lookup_alias(lyric) is not None and (
+        if self._lookup_alias_for_note(lyric, note_num) is not None and (
             " " in lyric or "_" in lyric or lyric.startswith("-")
         ):
-            return self._log_resolution(self._lookup_alias(lyric), lyric)
+            return self._log_resolution(self._lookup_alias_for_note(lyric, note_num), lyric)
 
         if prev_vowel:
             entry = (
@@ -1218,7 +1319,7 @@ class OtoParser:
         if entry is not None:
             return self._log_resolution(entry, lyric)
 
-        exact_entry = self._lookup_alias(lyric)
+        exact_entry = self._lookup_alias_for_note(lyric, note_num)
         if exact_entry is not None:
             return self._log_resolution(exact_entry, lyric)
 
@@ -1265,6 +1366,7 @@ class OtoParser:
         """ロード済み oto.ini データをすべて破棄する。"""
         self._db.clear()
         self._normalized_db.clear()
+        self._alias_variants.clear()
         self._prefix_map = []
         self.loaded_layers = ()
         self.loaded_oto_ini_paths = ()
