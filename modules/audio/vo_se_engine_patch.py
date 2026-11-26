@@ -27,7 +27,7 @@ import ctypes
 import logging
 import threading
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple, cast
 import re
 
 import numpy as np
@@ -522,7 +522,7 @@ def _read_native_render_error(native_lib: Any) -> str:
     if isinstance(raw, str):
         return raw.strip()
     try:
-        return ctypes.string_at(raw).decode("utf-8", errors="replace").strip()
+        return ctypes.string_at(cast(Any, raw)).decode("utf-8", errors="replace").strip()
     except (TypeError, ValueError, OSError):
         return ""
 
@@ -537,7 +537,7 @@ def _log_native_render_worker_count(native_lib: Any) -> None:
             getter.restype = ctypes.c_int
         except (AttributeError, TypeError):
             pass
-        worker_count = int(getter())
+        worker_count = int(cast(Any, getter()))
     except Exception as exc:
         logger.debug("ネイティブレンダラーのワーカー数取得に失敗: %s", exc)
         return
