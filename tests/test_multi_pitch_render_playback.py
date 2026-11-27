@@ -232,7 +232,7 @@ def test_eight_second_timeline_renders_with_safe_default_worker_count(
     worker_count_getter = getattr(native_api, "get_last_render_worker_count", None)
     assert callable(worker_count_getter)
     worker_count_getter.restype = ctypes.c_int
-    assert int(worker_count_getter()) == 1
+    assert int(cast(Any, worker_count_getter)()) == 1
 
 
 def test_large_note_batch_keeps_native_worker_memory_bounded(
