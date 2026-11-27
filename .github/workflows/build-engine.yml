@@ -452,8 +452,27 @@ jobs:
           ASSEMBLE
           chmod +x release_assets/VO-SE_PRO_Linux_assemble.sh
 
-          mapfile -t parts < <(printf '%s\\n' release_assets/VO-SE_PRO_Linux.part-* | sort)
-          test "${#parts[@]}" -gt 0
+          cat > release_assets/VO-SE_PRO_Linux_README.txt <<'README'
+          VO-SE PRO - Linux portable build
+
+          1. Download every VO-SE_PRO_Linux.part-* file, plus:
+             - VO-SE_PRO_Linux.sha256
+             - VO-SE_PRO_Linux_assemble.sh
+          2. Put all downloaded files in the same directory. Do not rename the parts.
+          3. Run: bash VO-SE_PRO_Linux_assemble.sh
+          4. The script joins the parts, verifies SHA-256, and creates the executable.
+          5. Run: ./VO-SE_PRO_Linux
+
+          All parts are required. The original executable is preserved byte-for-byte.
+          README
+
+          bash -n release_assets/VO-SE_PRO_Linux_assemble.sh
+          shopt -s nullglob
+          parts=( release_assets/VO-SE_PRO_Linux.part-* )
+          if (( ${#parts[@]} == 0 )); then
+            echo "::error::No Linux release parts were generated."
+            exit 1
+          fi
           for part in "${parts[@]}"; do
             size="$(stat -c '%s' "$part")"
             if (( size >= 2147483648 )); then
@@ -477,7 +496,7 @@ jobs:
           existing_assets="$(gh release view latest --json assets --jq '.assets[].name' 2>/dev/null || true)"
           while IFS= read -r asset; do
             case "$asset" in
-              VO-SE_PRO_Linux|VO-SE_PRO_Linux.part-*|VO-SE_PRO_Linux.sha256|VO-SE_PRO_Linux_assemble.sh)
+              VO-SE_PRO_Linux|VO-SE_PRO_Linux.part-*|VO-SE_PRO_Linux.sha256|VO-SE_PRO_Linux_assemble.sh|VO-SE_PRO_Linux_README.txt)
                 echo "Removing stale Linux release asset: $asset"
                 gh release delete-asset latest "$asset" --yes
                 ;;
@@ -497,6 +516,7 @@ jobs:
             release_assets/VO-SE_PRO_Linux.part-*
             release_assets/VO-SE_PRO_Linux.sha256
             release_assets/VO-SE_PRO_Linux_assemble.sh
+            release_assets/VO-SE_PRO_Linux_README.txt
             release_assets/*.so
           fail_on_unmatched_files: false
           generate_release_notes: true
