@@ -7784,7 +7784,10 @@ class MainWindow(
             if callable(stop_timer):
                 stop_timer()
 
-            if timeline is not None and hasattr(timeline, "auto_scroll_enabled"):
+            if timeline is not None:
+                # TimelineWidget defaults this option through getattr() rather
+                # than declaring it in __init__. Always materialize the default
+                # here so the render freeze also works on a fresh timeline.
                 self._render_previous_auto_scroll_enabled = bool(
                     getattr(timeline, "auto_scroll_enabled", True)
                 )
