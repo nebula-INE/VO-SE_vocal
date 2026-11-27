@@ -28,6 +28,56 @@ def test_file_menu_wav_export_uses_same_async_render_pipeline():
     assert "start_render(" in export_handler
     assert "play_after_success=False" in export_handler
     assert "export_to_wav_v2(" not in export_handler
+    # Do not kick off asynchronous mixer shutdown and native rendering together.
+    assert "stop_playback()" not in export_handler
+
+
+def test_async_render_refuses_active_playback_and_audio_device_commands():
+    from types import SimpleNamespace
+
+    from modules.gui.main_window import MainWindow
+
+    class FakeStatusBar:
+        def __init__(self):
+            self.messages = []
+
+        def showMessage(self, message, *_args):
+            self.messages.append(str(message))
+
+    class FakeWorker:
+        def __init__(self, running):
+            self.running = running
+
+        def isRunning(self):
+            return self.running
+
+    cases = (
+        (True, False, "再生中"),
+        (False, True, "音声デバイス"),
+    )
+    for mixer_playing, command_running, expected_message in cases:
+        status_bar = FakeStatusBar()
+        window = SimpleNamespace(
+            current_worker=None,
+            _playback_preparing=False,
+            _playback_prepare_thread=None,
+            _audio_mixer_command_thread=FakeWorker(command_running),
+            audio_mixer=SimpleNamespace(is_playing=mixer_playing),
+            is_playing=mixer_playing,
+            statusBar=lambda: status_bar,
+        )
+
+        started = MainWindow._start_async_render(
+            window,
+            [],
+            {},
+            "must_not_be_created.wav",
+            play_after_success=False,
+        )
+
+        assert started is False
+        assert status_bar.messages
+        assert expected_message in status_bar.messages[-1]
 
 
 def test_render_outputs_are_staged_before_replacing_user_file():
