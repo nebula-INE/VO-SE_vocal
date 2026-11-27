@@ -170,11 +170,6 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
     os.environ.get("VOSE_RUN_NATIVE_RENDER_TEST") != "1",
     reason="native render integration tests are opt-in; CI enables them after building vose_core",
 )
-
-@pytest.mark.skipif(
-    os.environ.get("VOSE_RUN_NATIVE_RENDER_TEST") != "1",
-    reason="native render integration tests are opt-in; CI enables them after building vose_core",
-)
 def test_eight_second_timeline_renders_with_safe_default_worker_count(
     multi_pitch_voicebank: Path,
     tmp_path: Path,
@@ -235,6 +230,10 @@ def test_eight_second_timeline_renders_with_safe_default_worker_count(
     assert int(cast(Any, worker_count_getter)()) == 1
 
 
+@pytest.mark.skipif(
+    os.environ.get("VOSE_RUN_NATIVE_RENDER_TEST") != "1",
+    reason="native render integration tests are opt-in; CI enables them after building vose_core",
+)
 def test_large_note_batch_keeps_native_worker_memory_bounded(
     multi_pitch_voicebank: Path,
     tmp_path: Path,
