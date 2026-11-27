@@ -393,6 +393,115 @@ jobs:
           echo "--- sizes ---"
           find release_assets -maxdepth 2 -type f -exec ls -lh {} \;
 
+      # GitHub Release assets are limited to less than 2 GiB each.
+      # Keep the executable byte-for-byte identical; only split the transport file.
+      - name: "🧩 Split Linux Release Asset Under GitHub's 2 GiB Limit"
+        shell: bash
+        run: |
+          set -euo pipefail
+          linux_binary="release_assets/VO-SE_PRO_Linux"
+          test -s "$linux_binary"
+
+          split --bytes=1800M --numeric-suffixes=1 --suffix-length=2 \
+            "$linux_binary" "$linux_binary.part-"
+
+          (
+            cd release_assets
+            sha256sum VO-SE_PRO_Linux > VO-SE_PRO_Linux.sha256
+          )
+
+          cat > release_assets/VO-SE_PRO_Linux_assemble.sh <<'ASSEMBLE'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+          output="$script_dir/VO-SE_PRO_Linux"
+          checksum_file="$script_dir/VO-SE_PRO_Linux.sha256"
+
+          if [[ ! -s "$checksum_file" ]]; then
+            echo "Missing VO-SE_PRO_Linux.sha256" >&2
+            exit 1
+          fi
+
+          shopt -s nullglob
+          parts=( "$script_dir"/VO-SE_PRO_Linux.part-* )
+          if (( ${#parts[@]} == 0 )); then
+            echo "No VO-SE_PRO_Linux.part-* files found beside this script." >&2
+            exit 1
+          fi
+
+          temp_file="$(mktemp "$script_dir/.VO-SE_PRO_Linux.XXXXXX")"
+          cleanup() {
+            rm -f "$temp_file"
+          }
+          trap cleanup EXIT
+
+          cat "${parts[@]}" > "$temp_file"
+          expected="$(awk 'NR == 1 { print $1 }' "$checksum_file")"
+          actual="$(sha256sum "$temp_file" | awk '{ print $1 }')"
+          if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$actual" != "$expected" ]]; then
+            echo "SHA-256 verification failed; the executable was not installed." >&2
+            exit 1
+          fi
+
+          chmod 755 "$temp_file"
+          mv -f "$temp_file" "$output"
+          trap - EXIT
+          echo "Created and verified: $output"
+          echo "Run it with: ./VO-SE_PRO_Linux"
+          ASSEMBLE
+          chmod +x release_assets/VO-SE_PRO_Linux_assemble.sh
+
+          cat > release_assets/VO-SE_PRO_Linux_README.txt <<'README'
+          VO-SE PRO Linux版（ポータブル）
+
+          1. VO-SE_PRO_Linux.part-* のファイルをすべてダウンロードします。
+             あわせて VO-SE_PRO_Linux.sha256 と VO-SE_PRO_Linux_assemble.sh も保存してください。
+          2. ダウンロードしたファイルをすべて同じフォルダーに置きます。パーツ名は変更しないでください。
+          3. そのフォルダーで次を実行します: bash VO-SE_PRO_Linux_assemble.sh
+          4. パーツが結合され、SHA-256 検証に成功すると実行ファイルが作成されます。
+          5. 起動します: ./VO-SE_PRO_Linux
+
+          すべてのパーツが必要です。実行ファイルの内容は変更されません。
+          README
+
+          bash -n release_assets/VO-SE_PRO_Linux_assemble.sh
+          shopt -s nullglob
+          parts=( release_assets/VO-SE_PRO_Linux.part-* )
+          if (( ${#parts[@]} == 0 )); then
+            echo "::error::No Linux release parts were generated."
+            exit 1
+          fi
+          for part in "${parts[@]}"; do
+            size="$(stat -c '%s' "$part")"
+            if (( size >= 2147483648 )); then
+              echo "::error::Release part exceeds GitHub's 2 GiB asset limit: $part ($size bytes)"
+              exit 1
+            fi
+          done
+
+          # Confirm the ordered parts reconstruct the exact original executable.
+          cat "${parts[@]}" | cmp -s - "$linux_binary"
+          echo "Split parts: ${#parts[@]}"
+          ls -lh release_assets/VO-SE_PRO_Linux.part-*
+          rm "$linux_binary"
+
+      - name: "🧹 Remove stale Linux single-file release assets"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing_assets="$(gh release view latest --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          while IFS= read -r asset; do
+            case "$asset" in
+              VO-SE_PRO_Linux|VO-SE_PRO_Linux.part-*|VO-SE_PRO_Linux.sha256|VO-SE_PRO_Linux_assemble.sh|VO-SE_PRO_Linux_README.txt)
+                echo "Removing stale Linux release asset: $asset"
+                gh release delete-asset latest "$asset" --yes
+                ;;
+            esac
+          done <<< "$existing_assets"
+
       - name: "🚀 [Step 9] Publish GitHub Release"
         uses: softprops/action-gh-release@v2
         with:
@@ -403,7 +512,10 @@ jobs:
             release_assets/*.dll
             release_assets/VO-SE_PRO_Mac.zip
             release_assets/*.dylib
-            release_assets/VO-SE_PRO_Linux
+            release_assets/VO-SE_PRO_Linux.part-*
+            release_assets/VO-SE_PRO_Linux.sha256
+            release_assets/VO-SE_PRO_Linux_assemble.sh
+            release_assets/VO-SE_PRO_Linux_README.txt
             release_assets/*.so
           fail_on_unmatched_files: false
           generate_release_notes: true
