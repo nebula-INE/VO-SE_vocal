@@ -321,15 +321,49 @@ jobs:
           echo "--- bin content ---"
           find bin -maxdepth 2 -type f -print
 
+      # Stage only the distributable files. On macOS, dist_out also contains the
+      # expanded .app bundle (17k+ files); the ZIP created above is the release
+      # deliverable, so uploading both needlessly bloats artifact registration.
+      - name: "📦 Stage distributable artifacts"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact_staging
+
+          case "${{ matrix.os }}" in
+            windows-latest)
+              cp dist_out/VO-SE_PRO_Win.exe artifact_staging/
+              compgen -G 'bin/*.dll' > /dev/null
+              cp bin/*.dll artifact_staging/
+              ;;
+            macos-15)
+              test -s dist_out/VO-SE_PRO_Mac.zip
+              cp dist_out/VO-SE_PRO_Mac.zip artifact_staging/
+              compgen -G 'bin/*.dylib' > /dev/null
+              cp bin/*.dylib artifact_staging/
+              ;;
+            ubuntu-22.04)
+              cp dist_out/VO-SE_PRO_Linux artifact_staging/
+              compgen -G 'bin/*.so' > /dev/null
+              cp bin/*.so artifact_staging/
+              ;;
+            *)
+              echo "::error::Unsupported release matrix target: ${{ matrix.os }}"
+              exit 1
+              ;;
+          esac
+
+          echo "=== Staged distributables ==="
+          find artifact_staging -maxdepth 1 -type f -print
+          test -n "$(find artifact_staging -maxdepth 1 -type f -print -quit)"
+
       - name: "📦 Upload Artifacts for Workflow"
         uses: actions/upload-artifact@v4
         with:
           name: VO-SE-Build-${{ matrix.os }}
-          path: |
-            dist_out/*
-            bin/*.dll
-            bin/*.dylib
-            bin/*.so
+          path: artifact_staging/
+          if-no-files-found: error
+          retention-days: 7
 
   # =============================================================================
   # [FIX] リリース公開を独立したジョブに分離。
