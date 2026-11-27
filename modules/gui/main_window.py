@@ -7773,7 +7773,36 @@ class MainWindow(
     # ==============================================================================
 
     def _set_render_controls_enabled(self, rendering: bool) -> None:
-        """Freeze mutable render inputs for the duration of an export."""
+        """Freeze render inputs and transport-driven timeline motion during export."""
+        timeline = getattr(self, "timeline_widget", None)
+        if rendering:
+            # A stale Qt timer can keep moving the playhead/auto-scroll even
+            # after audio output has stopped. The native render must operate on
+            # a frozen snapshot, so stop transport UI ticks for the whole job.
+            playback_timer = getattr(self, "playback_timer", None)
+            stop_timer = getattr(playback_timer, "stop", None)
+            if callable(stop_timer):
+                stop_timer()
+
+            if timeline is not None and hasattr(timeline, "auto_scroll_enabled"):
+                self._render_previous_auto_scroll_enabled = bool(
+                    getattr(timeline, "auto_scroll_enabled", True)
+                )
+                timeline.auto_scroll_enabled = False
+            else:
+                self._render_previous_auto_scroll_enabled = None
+        else:
+            previous_auto_scroll = getattr(
+                self, "_render_previous_auto_scroll_enabled", None
+            )
+            if previous_auto_scroll is not None and timeline is not None:
+                try:
+                    timeline.auto_scroll_enabled = bool(previous_auto_scroll)
+                except RuntimeError:
+                    # The timeline may already have been destroyed during shutdown.
+                    pass
+            self._render_previous_auto_scroll_enabled = None
+
         control_names = (
             "timeline_widget",
             "graph_editor_widget",
