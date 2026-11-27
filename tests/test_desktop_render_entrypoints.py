@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 from modules.gui.mixins.project_io_mixin import _ExternalProjectLoadWorker
 
@@ -68,7 +69,7 @@ def test_async_render_refuses_active_playback_and_audio_device_commands():
         )
 
         started = MainWindow._start_async_render(
-            window,
+            cast(Any, window),
             [],
             {},
             "must_not_be_created.wav",
