@@ -170,6 +170,70 @@ def test_multi_pitch_render_generates_wav_and_playback_uses_it(
     os.environ.get("VOSE_RUN_NATIVE_RENDER_TEST") != "1",
     reason="native render integration tests are opt-in; CI enables them after building vose_core",
 )
+def test_eight_second_timeline_renders_with_safe_default_worker_count(
+    multi_pitch_voicebank: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: long, moving timelines must finish through the desktop native renderer."""
+    from modules.audio.vo_se_engine import VO_SE_Engine
+    from modules.audio.vo_se_engine_patch import apply_patch
+
+    # Do not inherit a developer's opt-in parallelism override in this regression.
+    monkeypatch.delenv("VOSE_RENDER_WORKERS", raising=False)
+    engine = VO_SE_Engine(voice_lib_dir=str(multi_pitch_voicebank))
+    apply_patch(type(engine))
+    engine.refresh_voice_library_v2()
+
+    notes = [
+        NoteEvent(
+            note_number=60 if index % 2 == 0 else 65,
+            start_time=index * 0.45,
+            duration=0.5,
+            lyric="あ",
+        )
+        for index in range(18)
+    ]
+    output = tmp_path / "eight_second_timeline.wav"
+    params = {
+        "Pitch": [],
+        "Gender": [],
+        "Tension": [],
+        "Breath": [],
+    }
+
+    rendered = engine.export_to_wav_v2(
+        notes,
+        params,
+        str(output),
+        tempo_bpm=120.0,
+    )
+
+    assert rendered == str(output.resolve())
+    assert output.is_file()
+    assert output.stat().st_size > 44
+
+    import soundfile as sf
+
+    audio, sample_rate = sf.read(str(output), dtype="float32", always_2d=True)
+    assert sample_rate == 44100
+    assert audio.shape[0] / sample_rate >= 8.0
+    assert np.isfinite(audio).all()
+    assert float(np.max(np.abs(audio))) > 1e-4
+
+    native_lib = engine.lib
+    assert native_lib is not None
+    native_api = cast(Any, native_lib)
+    worker_count_getter = getattr(native_api, "get_last_render_worker_count", None)
+    assert callable(worker_count_getter)
+    worker_count_getter.restype = ctypes.c_int
+    assert int(cast(Any, worker_count_getter)()) == 1
+
+
+@pytest.mark.skipif(
+    os.environ.get("VOSE_RUN_NATIVE_RENDER_TEST") != "1",
+    reason="native render integration tests are opt-in; CI enables them after building vose_core",
+)
 def test_large_note_batch_keeps_native_worker_memory_bounded(
     multi_pitch_voicebank: Path,
     tmp_path: Path,

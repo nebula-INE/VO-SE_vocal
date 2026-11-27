@@ -7773,7 +7773,39 @@ class MainWindow(
     # ==============================================================================
 
     def _set_render_controls_enabled(self, rendering: bool) -> None:
-        """Freeze mutable render inputs for the duration of an export."""
+        """Freeze render inputs and transport-driven timeline motion during export."""
+        timeline = getattr(self, "timeline_widget", None)
+        if rendering:
+            # A stale Qt timer can keep moving the playhead/auto-scroll even
+            # after audio output has stopped. The native render must operate on
+            # a frozen snapshot, so stop transport UI ticks for the whole job.
+            playback_timer = getattr(self, "playback_timer", None)
+            stop_timer = getattr(playback_timer, "stop", None)
+            if callable(stop_timer):
+                stop_timer()
+
+            if timeline is not None:
+                # TimelineWidget defaults this option through getattr() rather
+                # than declaring it in __init__. Always materialize the default
+                # here so the render freeze also works on a fresh timeline.
+                self._render_previous_auto_scroll_enabled = bool(
+                    getattr(timeline, "auto_scroll_enabled", True)
+                )
+                timeline.auto_scroll_enabled = False
+            else:
+                self._render_previous_auto_scroll_enabled = None
+        else:
+            previous_auto_scroll = getattr(
+                self, "_render_previous_auto_scroll_enabled", None
+            )
+            if previous_auto_scroll is not None and timeline is not None:
+                try:
+                    timeline.auto_scroll_enabled = bool(previous_auto_scroll)
+                except RuntimeError:
+                    # The timeline may already have been destroyed during shutdown.
+                    pass
+            self._render_previous_auto_scroll_enabled = None
+
         control_names = (
             "timeline_widget",
             "graph_editor_widget",
@@ -7832,6 +7864,32 @@ class MainWindow(
         playback_worker = getattr(self, "_playback_prepare_thread", None)
         if playback_worker is not None and playback_worker.isRunning():
             self.statusBar().showMessage("再生用レンダリングの完了後に書き出してください。", 4000)
+            return False
+
+        # Native rendering and audio-device lifecycle operations must never
+        # overlap. The file-menu export path used to request an asynchronous
+        # mixer stop and immediately start this worker, creating a race during
+        # active playback; the toolbar RENDER path could also start while the
+        # mixer was already playing.
+        mixer_command_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if mixer_command_worker is not None:
+            try:
+                mixer_command_running = bool(mixer_command_worker.isRunning())
+            except (AttributeError, RuntimeError):
+                mixer_command_running = False
+            if mixer_command_running:
+                self.statusBar().showMessage(
+                    "音声デバイスの処理が完了してから書き出してください。", 4000
+                )
+                return False
+
+        mixer = getattr(self, "audio_mixer", None)
+        if bool(getattr(self, "is_playing", False)) or bool(
+            getattr(mixer, "is_playing", False)
+        ):
+            self.statusBar().showMessage(
+                "再生中は書き出しできません。再生を停止してから実行してください。", 5000
+            )
             return False
 
         engine = getattr(self, "vo_se_engine", None)

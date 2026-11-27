@@ -2814,10 +2814,11 @@ static void execute_render_impl(NoteEvent* notes, int note_count, const char* ou
     const unsigned int hardware_threads = std::max(
         1u, std::thread::hardware_concurrency());
 
-    // WORLD keeps multiple large spectrogram buffers per worker. Capping
-    // concurrency avoids multiplying scratch memory by every logical CPU.
-    // Default: two workers. Explicit override: 1..4 workers.
-    int configured_worker_limit = 2;
+    // WORLD analysis/synthesis uses sizeable per-thread scratch buffers and
+    // the native renderer has had intermittent memory-corruption reports under
+    // parallel desktop workloads. Prefer deterministic single-worker rendering
+    // by default; power users can opt in to 2..4 workers explicitly.
+    int configured_worker_limit = 1;
     if (const char* configured = std::getenv("VOSE_RENDER_WORKERS")) {
         char* end = nullptr;
         errno = 0;

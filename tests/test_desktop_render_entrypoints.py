@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 from modules.gui.mixins.project_io_mixin import _ExternalProjectLoadWorker
 
@@ -28,6 +29,111 @@ def test_file_menu_wav_export_uses_same_async_render_pipeline():
     assert "start_render(" in export_handler
     assert "play_after_success=False" in export_handler
     assert "export_to_wav_v2(" not in export_handler
+    # Do not kick off asynchronous mixer shutdown and native rendering together.
+    assert "stop_playback()" not in export_handler
+
+
+def test_async_render_refuses_active_playback_and_audio_device_commands():
+    from types import SimpleNamespace
+
+    from modules.gui.main_window import MainWindow
+
+    class FakeStatusBar:
+        def __init__(self):
+            self.messages = []
+
+        def showMessage(self, message, *_args):
+            self.messages.append(str(message))
+
+    class FakeWorker:
+        def __init__(self, running):
+            self.running = running
+
+        def isRunning(self):
+            return self.running
+
+    cases = (
+        (True, False, "再生中"),
+        (False, True, "音声デバイス"),
+    )
+    for mixer_playing, command_running, expected_message in cases:
+        status_bar = FakeStatusBar()
+        window = SimpleNamespace(
+            current_worker=None,
+            _playback_preparing=False,
+            _playback_prepare_thread=None,
+            _audio_mixer_command_thread=FakeWorker(command_running),
+            audio_mixer=SimpleNamespace(is_playing=mixer_playing),
+            is_playing=mixer_playing,
+            statusBar=lambda: status_bar,
+        )
+
+        started = MainWindow._start_async_render(
+            cast(Any, window),
+            [],
+            {},
+            "must_not_be_created.wav",
+            play_after_success=False,
+        )
+
+        assert started is False
+        assert status_bar.messages
+        assert expected_message in status_bar.messages[-1]
+
+
+
+def test_render_freezes_playback_timer_and_timeline_auto_scroll():
+    from types import SimpleNamespace
+
+    from modules.gui.main_window import MainWindow
+
+    class FakeWidget:
+        def __init__(self):
+            self.enabled = True
+            self.auto_scroll_enabled = True
+
+        def setEnabled(self, value):
+            self.enabled = bool(value)
+
+        def isEnabled(self):
+            return self.enabled
+
+    class FakeTimer:
+        def __init__(self):
+            self.active = True
+
+        def stop(self):
+            self.active = False
+
+        def isActive(self):
+            return self.active
+
+    timeline = FakeWidget()
+    timer = FakeTimer()
+    window = SimpleNamespace(
+        timeline_widget=timeline,
+        playback_timer=timer,
+        graph_editor_widget=None,
+        voice_gallery=None,
+        character_selector=None,
+        track_list_widget=None,
+        tempo_input=None,
+        play_btn=None,
+        play_button=None,
+        record_button=None,
+        loop_btn=None,
+        undo_action=None,
+        redo_action=None,
+    )
+
+    MainWindow._set_render_controls_enabled(cast(Any, window), True)
+    assert timer.isActive() is False
+    assert timeline.auto_scroll_enabled is False
+    assert timeline.enabled is False
+
+    MainWindow._set_render_controls_enabled(cast(Any, window), False)
+    assert timeline.auto_scroll_enabled is True
+    assert timeline.enabled is True
 
 
 def test_render_outputs_are_staged_before_replacing_user_file():

@@ -2589,10 +2589,6 @@ class ProjectIOMixin:
             )
             return
 
-        stop_playback = getattr(self, "stop_and_clear_playback", None)
-        if callable(stop_playback):
-            stop_playback()
-
         start_render = getattr(self, "_start_async_render", None)
         if not callable(start_render):
             QMessageBox.critical(
