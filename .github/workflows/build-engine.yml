@@ -453,17 +453,16 @@ jobs:
           chmod +x release_assets/VO-SE_PRO_Linux_assemble.sh
 
           cat > release_assets/VO-SE_PRO_Linux_README.txt <<'README'
-          VO-SE PRO - Linux portable build
+          VO-SE PRO Linux版（ポータブル）
 
-          1. Download every VO-SE_PRO_Linux.part-* file, plus:
-             - VO-SE_PRO_Linux.sha256
-             - VO-SE_PRO_Linux_assemble.sh
-          2. Put all downloaded files in the same directory. Do not rename the parts.
-          3. Run: bash VO-SE_PRO_Linux_assemble.sh
-          4. The script joins the parts, verifies SHA-256, and creates the executable.
-          5. Run: ./VO-SE_PRO_Linux
+          1. VO-SE_PRO_Linux.part-* のファイルをすべてダウンロードします。
+             あわせて VO-SE_PRO_Linux.sha256 と VO-SE_PRO_Linux_assemble.sh も保存してください。
+          2. ダウンロードしたファイルをすべて同じフォルダーに置きます。パーツ名は変更しないでください。
+          3. そのフォルダーで次を実行します: bash VO-SE_PRO_Linux_assemble.sh
+          4. パーツが結合され、SHA-256 検証に成功すると実行ファイルが作成されます。
+          5. 起動します: ./VO-SE_PRO_Linux
 
-          All parts are required. The original executable is preserved byte-for-byte.
+          すべてのパーツが必要です。実行ファイルの内容は変更されません。
           README
 
           bash -n release_assets/VO-SE_PRO_Linux_assemble.sh
