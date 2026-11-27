@@ -199,7 +199,7 @@ def safe_extract_zip(
             continue
         if max_member_size is not None and info.file_size > max_member_size:
             raise ValueError(
-                f"ZIP内の単一ファイルが指定上限を超えています: "
+                f"ZIP内の単一ファイルサイズが指定上限を超えています: "
                 f"{info.filename} ({info.file_size} bytes)"
             )
         total_size += info.file_size
