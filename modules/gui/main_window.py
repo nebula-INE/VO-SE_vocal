@@ -7834,6 +7834,32 @@ class MainWindow(
             self.statusBar().showMessage("再生用レンダリングの完了後に書き出してください。", 4000)
             return False
 
+        # Native rendering and audio-device lifecycle operations must never
+        # overlap. The file-menu export path used to request an asynchronous
+        # mixer stop and immediately start this worker, creating a race during
+        # active playback; the toolbar RENDER path could also start while the
+        # mixer was already playing.
+        mixer_command_worker = getattr(self, "_audio_mixer_command_thread", None)
+        if mixer_command_worker is not None:
+            try:
+                mixer_command_running = bool(mixer_command_worker.isRunning())
+            except (AttributeError, RuntimeError):
+                mixer_command_running = False
+            if mixer_command_running:
+                self.statusBar().showMessage(
+                    "音声デバイスの処理が完了してから書き出してください。", 4000
+                )
+                return False
+
+        mixer = getattr(self, "audio_mixer", None)
+        if bool(getattr(self, "is_playing", False)) or bool(
+            getattr(mixer, "is_playing", False)
+        ):
+            self.statusBar().showMessage(
+                "再生中は書き出しできません。再生を停止してから実行してください。", 5000
+            )
+            return False
+
         engine = getattr(self, "vo_se_engine", None)
         if engine is None:
             self.statusBar().showMessage("エンジンがロードされていません。", 5000)
