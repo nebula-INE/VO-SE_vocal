@@ -50,6 +50,41 @@ logger = logging.getLogger(__name__)
 _NATIVE_ENGINE_LOCK = threading.RLock()
 
 
+def _build_native_render_callbacks(
+    progress_state: Dict[str, Any],
+    cancel_check: Any,
+) -> Tuple[Any, Any]:
+    """Create ctypes callbacks that only touch plain Python state.
+
+    ctypes may enter Python from a native worker thread. Do not emit Qt signals,
+    call UI-facing progress handlers, or let exceptions cross this ABI boundary.
+    """
+    def _on_native_progress(native_pct: int) -> None:
+        try:
+            pct = max(0, min(100, int(native_pct)))
+            previous = int(progress_state.get("native_pct", 0))
+            pct = max(previous, pct)
+            progress_state["native_pct"] = pct
+            progress_state["overall_pct"] = 20 + int(pct * 0.8)
+        except BaseException:
+            # Never propagate Python exceptions through a C callback frame.
+            return
+
+    def _on_native_cancel() -> int:
+        try:
+            return 1 if callable(cancel_check) and bool(cancel_check()) else 0
+        except BaseException:
+            # Fail closed: an unexpected cancellation-check failure stops render.
+            return 1
+
+    progress_callback_type = ctypes.CFUNCTYPE(None, ctypes.c_int)
+    cancel_callback_type = ctypes.CFUNCTYPE(ctypes.c_int)
+    return (
+        progress_callback_type(_on_native_progress),
+        cancel_callback_type(_on_native_cancel),
+    )
+
+
 @contextmanager
 def voice_library_transaction(engine: Any, voice_path: Optional[str] = None) -> Iterator[None]:
     """Temporarily route one render through a Voicebank under the native-state lock."""
@@ -988,19 +1023,21 @@ def _render_to_wav_v2(
     execute_cancelable = getattr(self.lib, "execute_render_cancelable", None)
 
     if callable(execute_cancelable):
-        ProgressCallback = ctypes.CFUNCTYPE(None, ctypes.c_int)
-        CancelCheckCallback = ctypes.CFUNCTYPE(ctypes.c_int)
-
-        # ctypes callbackはネイティブ呼び出しが終わるまで参照を保持する。
-        progress_cb_ref = ProgressCallback(
-            lambda native_pct: report_progress(20 + int(
-                max(0, min(100, int(native_pct))) * 0.8
-            ))
+        # The native callback stores integers only. The GUI thread polls this
+        # dictionary with QTimer; no Qt signal or widget is touched from ctypes.
+        native_progress = {
+            "active": True,
+            "native_pct": 0,
+            "overall_pct": 20,
+        }
+        self._native_render_progress = native_progress
+        progress_cb_ref, cancel_cb_ref = _build_native_render_callbacks(
+            native_progress,
+            cancel_check,
         )
-        cancel_cb_ref = CancelCheckCallback(
-            lambda: 1 if callable(cancel_check) and cancel_check() else 0
-        )
 
+        # Keep normal Python-side progress reporting on the render worker.
+        report_progress(20)
         try:
             execute_cancelable(
                 c_notes_array,
@@ -1011,6 +1048,7 @@ def _render_to_wav_v2(
                 cancel_cb_ref,
             )
         finally:
+            native_progress["active"] = False
             self._temp_refs = []
     else:
         # 古いDLLとの互換性。cancelable APIが無い場合でもレンダー自体は
