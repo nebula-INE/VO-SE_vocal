@@ -59,3 +59,47 @@ def test_desktop_render_rejects_stale_output_and_validates_audio():
     assert "_validate_rendered_wav(output_path_abs, expected_duration_sec)" in source
     assert "完全な無音です" in source
     assert "WAV長がタイムラインと一致しません" in source
+
+
+def test_native_progress_callback_only_updates_plain_state_and_clamps_values():
+    from modules.audio.vo_se_engine_patch import _build_native_render_callbacks
+
+    state = {"active": True, "native_pct": 0, "overall_pct": 20}
+    progress_callback, cancel_callback = _build_native_render_callbacks(
+        state, lambda: False
+    )
+
+    progress_callback(75)
+    progress_callback(20)  # Native progress must remain monotonic.
+
+    assert state["native_pct"] == 75
+    assert state["overall_pct"] == 80
+    assert cancel_callback() == 0
+
+
+def test_native_cancel_callback_contains_python_exceptions():
+    from modules.audio.vo_se_engine_patch import _build_native_render_callbacks
+
+    def fail_cancel_check():
+        raise RuntimeError("cancel state unavailable")
+
+    _progress_callback, cancel_callback = _build_native_render_callbacks(
+        {"active": True}, fail_cancel_check
+    )
+
+    # Fail closed without allowing an exception through the C callback ABI.
+    assert cancel_callback() == 1
+
+
+def test_desktop_native_progress_is_polled_by_gui_timers():
+    main_window = (ROOT / "modules" / "gui" / "main_window.py").read_text(
+        encoding="utf-8"
+    )
+    project_io = (
+        ROOT / "modules" / "gui" / "mixins" / "project_io_mixin.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _start_native_render_progress_polling" in main_window
+    assert "timer.setInterval(100)" in main_window
+    assert "def poll_native_mixdown_progress" in project_io
+    assert "progress_timer.setInterval(100)" in project_io

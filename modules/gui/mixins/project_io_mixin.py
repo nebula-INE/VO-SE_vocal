@@ -21,7 +21,7 @@ import threading
 from typing import Any, Dict, List, Optional, cast
 from copy import copy, deepcopy
 
-from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from modules.data.data_models import NoteEvent, PitchEvent
@@ -387,6 +387,7 @@ class _ProjectMixdownWorker(QThread):
         self.mode_flag = int(mode_flag)
         self.effect_chain = normalize_effect_chain(effect_chain or [])
         self._cancel_event = threading.Event()
+        self._native_progress_context = None
 
     def request_cancel(self) -> None:
         self._cancel_event.set()
@@ -421,6 +422,11 @@ class _ProjectMixdownWorker(QThread):
                         )
 
                     track_name = str(getattr(track, "name", f"Vocal {track_index + 1}"))
+                    self._native_progress_context = {
+                        "offset": job_index,
+                        "total": total_vocals,
+                        "message": f"{track_name} を個別レンダリング中...",
+                    }
                     self.progress.emit(
                         int(job_index * 65 / total_vocals),
                         f"{track_name} を個別レンダリング中...",
@@ -454,6 +460,7 @@ class _ProjectMixdownWorker(QThread):
                             cancel_check=self._cancel_event.is_set,
                             tempo_bpm=self.tempo,
                         )
+                    self._native_progress_context = None
                     # Some renderers signal cancellation by returning None.
                     # Check the event before classifying a missing path as a
                     # render failure, so the UI reports a normal cancellation.
@@ -2766,6 +2773,36 @@ class ProjectIOMixin:
         worker.finished.connect(self._on_project_mixdown_thread_finished)
         worker.finished.connect(worker.deleteLater)
         self._project_mixdown_worker = worker
+
+        # ctypes callbacks only write plain integers. Poll those values here,
+        # on the GUI thread, so progress UI is never updated from native code.
+        progress_timer = QTimer(self)
+        progress_timer.setInterval(100)
+
+        def poll_native_mixdown_progress() -> None:
+            state = getattr(worker.engine, "_native_render_progress", None)
+            context = getattr(worker, "_native_progress_context", None)
+            if (
+                not isinstance(state, dict)
+                or not bool(state.get("active", False))
+                or not isinstance(context, dict)
+            ):
+                return
+            try:
+                phase_percent = max(
+                    0, min(100, int(state.get("overall_pct", 20)))
+                )
+                offset = max(0, int(context.get("offset", 0)))
+                total = max(1, int(context.get("total", 1)))
+                overall = int(((offset + phase_percent / 100.0) / total) * 65)
+                message = str(context.get("message") or "個別レンダリング中...")
+                self._on_project_mixdown_progress(overall, message)
+            except (RuntimeError, TypeError, ValueError):
+                progress_timer.stop()
+
+        progress_timer.timeout.connect(poll_native_mixdown_progress)
+        self._project_mixdown_progress_timer = progress_timer
+        progress_timer.start()
         self._set_playback_preparation_ui(True)
         cancel_button = getattr(self, "cancel_render_btn", None)
         if cancel_button is not None:
@@ -2779,6 +2816,9 @@ class ProjectIOMixin:
         try:
             worker.start()
         except Exception as exc:
+            progress_timer.stop()
+            progress_timer.deleteLater()
+            self._project_mixdown_progress_timer = None
             self._project_mixdown_worker = None
             self._set_playback_preparation_ui(False)
             cancel_button = getattr(self, "cancel_render_btn", None)
@@ -2840,6 +2880,15 @@ class ProjectIOMixin:
 
     @Slot()
     def _on_project_mixdown_thread_finished(self: Any) -> None:
+        progress_timer = getattr(self, "_project_mixdown_progress_timer", None)
+        if progress_timer is not None:
+            try:
+                progress_timer.stop()
+                progress_timer.deleteLater()
+            except RuntimeError:
+                pass
+            self._project_mixdown_progress_timer = None
+
         worker = getattr(self, "_project_mixdown_worker", None)
         if worker is not None:
             try:
