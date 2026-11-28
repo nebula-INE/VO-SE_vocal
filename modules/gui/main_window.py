@@ -8051,7 +8051,11 @@ class MainWindow(
 
     def on_render_success(self, output_wav):
         """レンダリング成功時に一時WAVを正式な保存先へ公開する。"""
-        self._stop_native_render_progress_polling()
+        stop_progress_polling = getattr(
+            self, "_stop_native_render_progress_polling", None
+        )
+        if callable(stop_progress_polling):
+            stop_progress_polling()
         produced_path = os.path.abspath(os.fsdecode(os.fspath(output_wav)))
         final_path = str(getattr(self, "_render_target_path", "") or "")
         play_after_success = bool(getattr(self, "_render_play_after_success", True))
@@ -8095,7 +8099,11 @@ class MainWindow(
 
     def on_render_failed(self, error_msg):
         """レンダリング失敗・キャンセル時に一時ファイルとUI状態を整理する。"""
-        self._stop_native_render_progress_polling()
+        stop_progress_polling = getattr(
+            self, "_stop_native_render_progress_polling", None
+        )
+        if callable(stop_progress_polling):
+            stop_progress_polling()
         temporary_path = str(getattr(self, "_render_temp_path", "") or "")
         if temporary_path:
             try:
