@@ -7844,6 +7844,38 @@ class MainWindow(
                     set_enabled(bool(was_enabled))
             self._render_control_enabled_states = []
 
+    def _start_native_render_progress_polling(self, engine: Any) -> None:
+        """Poll plain native progress state from the GUI thread every 100 ms."""
+        self._stop_native_render_progress_polling()
+        timer = QTimer(self)
+        timer.setInterval(100)
+
+        def poll_native_progress() -> None:
+            state = getattr(engine, "_native_render_progress", None)
+            if not isinstance(state, dict) or not bool(state.get("active", False)):
+                return
+            try:
+                percent = max(0, min(100, int(state.get("overall_pct", 20))))
+                self.on_render_progress(percent, 0.0)
+            except (RuntimeError, TypeError, ValueError):
+                # A widget may be closing while a worker is finishing.
+                timer.stop()
+
+        timer.timeout.connect(poll_native_progress)
+        self._native_render_progress_timer = timer
+        timer.start()
+
+    def _stop_native_render_progress_polling(self) -> None:
+        timer = getattr(self, "_native_render_progress_timer", None)
+        if timer is None:
+            return
+        try:
+            timer.stop()
+            timer.deleteLater()
+        except RuntimeError:
+            pass
+        self._native_render_progress_timer = None
+
     def _start_async_render(
         self,
         notes: list,
@@ -7950,6 +7982,7 @@ class MainWindow(
             worker.signals.error.connect(self.on_render_failed)
             worker.signals.progress.connect(self.on_render_progress)
             QThreadPool.globalInstance().start(worker)
+            self._start_native_render_progress_polling(engine)
             return True
         except Exception as exc:
             self.current_worker = None
@@ -8018,6 +8051,7 @@ class MainWindow(
 
     def on_render_success(self, output_wav):
         """レンダリング成功時に一時WAVを正式な保存先へ公開する。"""
+        self._stop_native_render_progress_polling()
         produced_path = os.path.abspath(os.fsdecode(os.fspath(output_wav)))
         final_path = str(getattr(self, "_render_target_path", "") or "")
         play_after_success = bool(getattr(self, "_render_play_after_success", True))
@@ -8061,6 +8095,7 @@ class MainWindow(
 
     def on_render_failed(self, error_msg):
         """レンダリング失敗・キャンセル時に一時ファイルとUI状態を整理する。"""
+        self._stop_native_render_progress_polling()
         temporary_path = str(getattr(self, "_render_temp_path", "") or "")
         if temporary_path:
             try:
